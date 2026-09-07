@@ -1,0 +1,7 @@
+# The vendored openpgp fork is verified by checksum against two sibling copies
+# (onlykey.github.io and python-onlykey), which are required to stay
+# byte-identical to each other. This repo has core.autocrlf active, and a line
+# -ending rewrite on checkout would change the file's bytes and break that
+# check on every machine but the one that committed it. Keep it exactly as
+# stored.
+src/vendor/openpgp/openpgp.js -text

@@ -7,12 +7,22 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./transport": "./src/transport/index.js",
+    "./bytes": "./src/bytes.js",
     "./protocol": "./src/protocol/index.js",
-    "./crypto": "./src/crypto/index.js"
+    "./transport": "./src/transport/index.js",
+    "./device": "./src/device/index.js",
+    "./crypto": "./src/crypto/index.js",
+    "./crypto/pgp": "./src/crypto/pgp.js",
+    "./plugins/host": "./plugins/host/index.js",
+    "./plugins/session": "./plugins/session/index.js",
+    "./plugins/transport/memory": "./plugins/transport/memory.js",
+    "./package.json": "./package.json"
   },
   "files": [
-    "src"
+    "src",
+    "plugins",
+    "FINDINGS.md",
+    "FINDING-*.md"
   ],
   "scripts": {
     "test": "node --test test/*.test.js"
