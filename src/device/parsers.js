@@ -10,7 +10,7 @@
 'use strict';
 
 const { sha256 } = require('@noble/hashes/sha2.js');
-const { toHex, concat } = require('../bytes');
+const { toHex, concat, fromBase64 } = require('../bytes');
 
 const BACKUP_BEGIN = '-----BEGIN ONLYKEY BACKUP-----';
 const BACKUP_END = '-----END ONLYKEY BACKUP-----';
@@ -26,16 +26,15 @@ function isMarker(line) {
   return line.indexOf('--') === 0;
 }
 
+/*
+ * Was a runtime branch: atob when present, Buffer otherwise. Under Hermes
+ * NEITHER exists - older React Native has no atob and no Buffer at all - so
+ * the fallback was not a fallback, and a backup file would have failed to
+ * parse on the one platform this library was written for. bytes.fromBase64 is
+ * the same twenty lines with no platform question in them.
+ */
 function base64ToBytes(b64) {
-  const clean = String(b64).trim();
-  if (typeof atob === 'function') {
-    const binary = atob(clean);
-    const out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i) & 0xff;
-    return out;
-  }
-  /* eslint-disable-next-line no-undef */
-  return new Uint8Array(Buffer.from(clean, 'base64'));
+  return fromBase64(String(b64).trim());
 }
 
 /**

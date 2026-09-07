@@ -122,7 +122,69 @@ function equalConstantTime(a, b) {
   return diff === 0;
 }
 
+/*
+ * UTF-8, distinct from latin1 above and not interchangeable with it.
+ *
+ * The device's own strings are latin1 - single bytes, and binary payloads that
+ * must survive a round trip. But a derived-identity LABEL is UTF-8, and that
+ * choice is load-bearing: the label tag is SHA-256 over these bytes, and
+ * python-onlykey derives the same tag from the same label. Encoding a
+ * non-ASCII label as latin1 would produce a different tag, a different
+ * recipient, and a decryption that fails much later with "no identity
+ * matched" rather than anything about encodings.
+ *
+ * Delegated to @noble, which is already a dependency and handles surrogate
+ * pairs correctly.
+ */
+const { utf8ToBytes, bytesToUtf8 } = require('@noble/ciphers/utils.js');
+
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * base64, implemented rather than taken from the platform.
+ *
+ * Node has Buffer, browsers have btoa, and React Native has neither reliably -
+ * atob/btoa only landed in recent versions and Hermes has no Buffer at all.
+ * Twenty lines is cheaper than a polyfill dependency or a runtime branch.
+ */
+function toBase64(bytes) {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i];
+    const b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    out += B64[a >> 2];
+    out += B64[((a & 3) << 4) | (b >> 4)];
+    out += i + 1 < bytes.length ? B64[((b & 15) << 2) | (c >> 6)] : '=';
+    out += i + 2 < bytes.length ? B64[c & 63] : '=';
+  }
+  return out;
+}
+
+function fromBase64(text) {
+  const clean = String(text).replace(/[^A-Za-z0-9+/]/g, '');
+  const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
+  let at = 0;
+  let acc = 0;
+  let bits = 0;
+  for (const ch of clean) {
+    const v = B64.indexOf(ch);
+    if (v === -1) throw new Error(`invalid base64 character "${ch}"`);
+    acc = (acc << 6) | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[at++] = (acc >> bits) & 0xff;
+    }
+  }
+  return out.subarray(0, at);
+}
+
 module.exports = {
+  utf8ToBytes,
+  bytesToUtf8,
+  toBase64,
+  fromBase64,
   toHex,
   fromHex,
   formatHex,
