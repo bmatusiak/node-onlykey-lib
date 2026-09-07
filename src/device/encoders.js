@@ -102,56 +102,124 @@ function hexToModhex(hex) {
 /**
  * Yubico OTP field limits, in hex characters.
  *
- * There are two encoders in OnlyKey-App and they disagree. This one follows
- * OnlyKeyWizard.js:1038-1067, which is spec-correct: Yubico defines the public
- * id as 1-16 bytes, the private id as exactly 6, and the AES key as exactly
- * 16.
+ * OnlyKey-App has two Yubikey encoders with different constants, and the
+ * obvious reading - that one is a stale copy of the other - is wrong. They are
+ * two different device features, and libraries/onlykey/okcore.cpp:5772-5825
+ * settles it:
  *
- * OnlyKeyComm.js:1687 uses maxPublicIdLength = 12, which silently truncates
- * any public id longer than 6 bytes - fine for the common Yubico-issued
- * prefix, wrong for anything else - and its "// 64 bytes" comment on the
- * secret is simply incorrect (32 hex chars is 16 bytes).
+ *   SLOT 0, the deprecated EEPROM path behind setYubiAuth():
+ *     memcpy(pubID, temp, 6);   // "Old Yubikey method only supports default
+ *                               //  6 len pubkey"
+ *   exactly 6 bytes, no more and no less.
  *
- * One encoder, two entry points: writing a slot, and writing the device-global
- * validator identity.
+ *   SLOTS 1-24, the per-slot flash path the wizard writes:
+ *     uint8_t publen = 16;                       // Max public size
+ *     for (int i = 37; i > 1; i--) { ... }       // Public ID 2-16 bytes
+ *   variable, 2 to 16 bytes, recovered by trimming trailing zeros.
+ *
+ * So collapsing them into one encoder breaks whichever path loses. They also
+ * differ in what they take: the per-slot form is given MODHEX, as Yubico
+ * prints it, and converts; the slot-0 form is given hex and concatenates it
+ * unchanged. Two entry points over one assembler.
+ *
+ * Neither bound is discoverable from any client - both hardcode a single
+ * number and neither matches both paths - so this is written up in
+ * FINDING-yubikey-public-id-bounds.md.
  */
 const YUBI = {
-  PUBLIC_ID_HEX: 32,   // 16 bytes
+  /** Per-slot public id: 2-16 bytes. */
+  PUBLIC_ID_MIN_HEX: 4,
+  PUBLIC_ID_MAX_HEX: 32,
+  /** Slot 0 public id: exactly 6 bytes. */
+  PUBLIC_ID_GLOBAL_HEX: 12,
   PRIVATE_ID_HEX: 12,  // 6 bytes
   SECRET_HEX: 32,      // 16 bytes
 };
 
 /**
- * Encode a Yubico OTP credential for the YUBIAUTH field.
+ * The common tail: private id and secret, which are the same on both paths.
+ *
+ * Lengths are checked rather than sliced. The originals slice and move on, so
+ * a short private id shifts the secret and produces a credential the device
+ * accepts and which then never authenticates - a very expensive thing to
+ * diagnose from the far side of a one-way OTP.
+ */
+function yubiTail(privateId, secretKey) {
+  const priv = String(privateId).trim().toLowerCase();
+  const secret = String(secretKey).trim().toLowerCase();
+
+  if (priv.length !== YUBI.PRIVATE_ID_HEX) {
+    throw new Error(
+      `Yubikey private id must be ${YUBI.PRIVATE_ID_HEX} hex chars (6 bytes), got ${priv.length}`,
+    );
+  }
+  if (secret.length !== YUBI.SECRET_HEX) {
+    throw new Error(
+      `Yubikey secret must be ${YUBI.SECRET_HEX} hex chars (16 bytes), got ${secret.length}`,
+    );
+  }
+  return priv + secret;
+}
+
+/**
+ * Encode a Yubico OTP credential for a SLOT (1-24).
+ *
+ * The public id arrives as modhex, the way a Yubikey prints it, and is
+ * converted here. Length is variable: the firmware recovers it by trimming
+ * trailing zeros, so anything from 2 to 16 bytes round-trips.
  *
  * @param {object} spec
- * @param {string} spec.publicId   modhex, as Yubico presents it
+ * @param {string} spec.publicId   modhex, 2-16 bytes
  * @param {string} spec.privateId  hex, 6 bytes
  * @param {string} spec.secretKey  hex, 16 bytes
  * @returns {Uint8Array}
  */
 function yubiCredential({ publicId, privateId, secretKey }) {
-  const pub = modhexToHex(String(publicId).slice(0, YUBI.PUBLIC_ID_HEX));
-  const priv = String(privateId).toLowerCase().slice(0, YUBI.PRIVATE_ID_HEX);
-  const secret = String(secretKey).toLowerCase().slice(0, YUBI.SECRET_HEX);
+  const pub = modhexToHex(String(publicId).trim());
 
-  /*
-   * Length is checked rather than assumed. The originals slice and move on, so
-   * a short private id shifts the secret and produces a credential that is
-   * accepted by the device and simply never authenticates - which is a very
-   * expensive thing to debug from the far side.
-   */
-  if (priv.length !== YUBI.PRIVATE_ID_HEX) {
-    throw new Error(`Yubikey private id must be ${YUBI.PRIVATE_ID_HEX} hex chars (6 bytes), got ${priv.length}`);
-  }
-  if (secret.length !== YUBI.SECRET_HEX) {
-    throw new Error(`Yubikey secret must be ${YUBI.SECRET_HEX} hex chars (16 bytes), got ${secret.length}`);
-  }
-  if (!pub.length || pub.length % 2 !== 0) {
+  if (pub.length % 2 !== 0) {
     throw new Error(`Yubikey public id must be a whole number of bytes, got ${pub.length} hex chars`);
   }
+  /*
+   * Refused rather than truncated. The original slices to its limit, so an
+   * over-long public id is silently shortened and the credential authenticates
+   * against nothing.
+   */
+  if (pub.length < YUBI.PUBLIC_ID_MIN_HEX || pub.length > YUBI.PUBLIC_ID_MAX_HEX) {
+    throw new Error(
+      `Yubikey public id must be ${YUBI.PUBLIC_ID_MIN_HEX}-${YUBI.PUBLIC_ID_MAX_HEX} ` +
+      `hex chars (2-16 bytes), got ${pub.length}`,
+    );
+  }
 
-  return fromHex(pub + priv + secret);
+  return fromHex(pub + yubiTail(privateId, secretKey));
+}
+
+/**
+ * Encode the device-global Yubico credential, for slot 0.
+ *
+ * Different in three ways from the per-slot form, none of them cosmetic: the
+ * public id must be EXACTLY 6 bytes because the firmware memcpys that many, it
+ * is supplied as hex rather than modhex because setYubiAuth concatenates it
+ * unchanged, and it lands on the device-global pseudo-slot.
+ *
+ * @param {object} spec
+ * @param {string} spec.publicId   hex, exactly 6 bytes
+ * @param {string} spec.privateId  hex, 6 bytes
+ * @param {string} spec.secretKey  hex, 16 bytes
+ * @returns {Uint8Array}
+ */
+function yubiGlobalCredential({ publicId, privateId, secretKey }) {
+  const pub = String(publicId).trim().toLowerCase();
+
+  if (pub.length !== YUBI.PUBLIC_ID_GLOBAL_HEX) {
+    throw new Error(
+      `slot 0 Yubikey public id must be exactly ${YUBI.PUBLIC_ID_GLOBAL_HEX} hex chars ` +
+      `(6 bytes) - the firmware copies 6 and ignores the rest - got ${pub.length}`,
+    );
+  }
+
+  return fromHex(pub + yubiTail(privateId, secretKey));
 }
 
 /* ------------------------------------------------------------------- TFATYPE */
@@ -178,4 +246,5 @@ module.exports = {
   modhexToHex,
   hexToModhex,
   yubiCredential,
+  yubiGlobalCredential,
 };

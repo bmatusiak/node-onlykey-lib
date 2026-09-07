@@ -17,6 +17,7 @@ defects, and the first one is a live property of shipping firmware.
 |---|---|---|
 | [The transit box is not authenticated encryption](FINDING-transit-box-unauthenticated.md) | high | Zero IV, no tag, plaintext command selector, no replay protection. One keystream per session. Needs a coordinated firmware + client fix. |
 | [The opt3 high-water mark has no timeout](FINDING-opt3-highwater-no-timeout.md) | medium | An aborted multi-chunk request can wedge the channel until reboot. Corrects a claim in the plan that blamed the wrong line. |
+| [Yubikey public-id bounds are undiscoverable from any client](FINDING-yubikey-public-id-bounds.md) | medium | Slot 0 takes exactly 6 bytes, slots 1-24 take 2-16; the two client encoders each hardcode one number. Includes a 1-in-256 mis-split when the AES key ends in 0x00. |
 
 ## Client defects fixed in the port
 
@@ -65,12 +66,14 @@ No `var`/`let`/`const`, so all three land on `window` and outlive the wizard.
 `secKey` is the Yubikey AES secret. Two lines above, `console.info("secret", secret)`
 also writes it to the console.
 
-**6. Two divergent Yubikey encoders** — `OnlyKeyWizard.js:1038` uses 32/12/32
-(spec-correct); `OnlyKeyComm.js:1687` truncates the public ID to 6 bytes and
-its `// 64 bytes` comment does not match what it produces. The library has one
-encoder on the former's constants, with two entry points over it, and refuses a
-short credential rather than padding it.
-→ `yubiCredential()` in `src/device/encoders.js`
+**6. Two Yubikey encoders that are NOT divergent copies** — this entry
+previously said `OnlyKeyWizard.js:1038`'s 32/12/32 was spec-correct and
+`OnlyKeyComm.js:1687` was a stale truncation. That was wrong: they are two
+different device features with genuinely different firmware limits, and picking
+either one breaks the other's path. Promoted to its own write-up above, with
+the firmware evidence and a further consequence — a Yubico AES key ending in
+`0x00` is mis-split on read, roughly 1 credential in 256.
+→ `yubiCredential()` and `yubiGlobalCredential()` in `src/device/encoders.js`
 
 ## Behaviours reproduced deliberately, not defects
 

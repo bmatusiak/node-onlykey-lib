@@ -15,6 +15,8 @@
 
 const pin = require('../../src/device/pin');
 const slots = require('../../src/device/slots');
+const slotConfig = require('../../src/device/slotConfig');
+const okmsg = require('../../src/protocol/okmsg');
 const { DeviceConsole, pressLine } = require('../../src/device/console');
 const { IFACE } = require('../../src/transport/contract');
 
@@ -152,6 +154,66 @@ function setup(imports, register) {
     },
 
     slotNumber(slotId) { return slots.slotNumber(slotId, deviceType); },
+
+    /**
+     * Write fields to a slot, one at a time, WAITING for each.
+     *
+     * The original does not wait. Its callback is the HID write's callback
+     * plus a fixed 100 ms sleep - there is no listenforvalue on this path,
+     * unlike setYubiAuth or setLockout - so a device-side error is discarded
+     * after the form field has already been cleared, and the user is shown
+     * success over a slot that is wrong.
+     *
+     * The firmware does acknowledge every field: okcore.cpp's SETSLOT handler
+     * hidprint()s "Successfully set Label", "Successfully set URL" and so on
+     * through send_transport_response, which is a vendor report. The wording
+     * varies per field and contains at least one typo ("Additonal"), so
+     * matching the exact strings would be brittle; the test is the one the app
+     * itself uses in pollForInput - a message beginning "Error" is an error,
+     * anything else is the acknowledgement.
+     *
+     * The whole plan is built BEFORE the first write. An invalid tenth field
+     * therefore fails with nothing sent, rather than leaving nine fields
+     * written and the slot half configured.
+     */
+    async setSlot(slotId, values, { timeoutMs = 3000 } = {}) {
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, deviceType);
+      const writes = slotConfig.planSlotWrites(values, slot);
+      const applied = [];
+
+      for (const write of writes) {
+        const reply = await transport.request({
+          iface: IFACE.VENDOR,
+          data: write.frame,
+          timeoutMs,
+        });
+        const text = okmsg.text(reply);
+        if (/^Error/i.test(text)) {
+          throw new Error(`${write.name}: ${text}`);
+        }
+        applied.push({ name: write.name, response: text });
+        progress('field', { slot, field: write.name, response: text });
+      }
+
+      return applied;
+    },
+
+    /** Wipe one field, or the whole slot when no field is named. */
+    async wipeSlot(slotId, field = null, { timeoutMs = 3000 } = {}) {
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, deviceType);
+      const reply = await transport.request({
+        iface: IFACE.VENDOR,
+        data: slotConfig.wipeMessage(slot, field),
+        timeoutMs,
+      });
+      const text = okmsg.text(reply);
+      if (/^Error/i.test(text)) throw new Error(text);
+      return text;
+    },
+
+    /** Build the field pair for a second factor, without sending it. */
+    totpFields: slotConfig.totpFields,
+    yubikeyFields: slotConfig.yubikeyFields,
 
     /* ---- events -------------------------------------------------------- */
 

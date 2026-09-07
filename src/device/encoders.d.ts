@@ -1,7 +1,9 @@
 export const BASE32_ALPHABET: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 export const MODHEX_ALPHABET: "cbdefghijklnrtuv";
 export namespace YUBI {
-    let PUBLIC_ID_HEX: number;
+    let PUBLIC_ID_MIN_HEX: number;
+    let PUBLIC_ID_MAX_HEX: number;
+    let PUBLIC_ID_GLOBAL_HEX: number;
     let PRIVATE_ID_HEX: number;
     let SECRET_HEX: number;
 }
@@ -40,15 +42,38 @@ export function base32ToHex(secret: any): string;
 export function modhexToHex(modhex: any): string;
 export function hexToModhex(hex: any): string;
 /**
- * Encode a Yubico OTP credential for the YUBIAUTH field.
+ * Encode a Yubico OTP credential for a SLOT (1-24).
+ *
+ * The public id arrives as modhex, the way a Yubikey prints it, and is
+ * converted here. Length is variable: the firmware recovers it by trimming
+ * trailing zeros, so anything from 2 to 16 bytes round-trips.
  *
  * @param {object} spec
- * @param {string} spec.publicId   modhex, as Yubico presents it
+ * @param {string} spec.publicId   modhex, 2-16 bytes
  * @param {string} spec.privateId  hex, 6 bytes
  * @param {string} spec.secretKey  hex, 16 bytes
  * @returns {Uint8Array}
  */
 export function yubiCredential({ publicId, privateId, secretKey }: {
+    publicId: string;
+    privateId: string;
+    secretKey: string;
+}): Uint8Array;
+/**
+ * Encode the device-global Yubico credential, for slot 0.
+ *
+ * Different in three ways from the per-slot form, none of them cosmetic: the
+ * public id must be EXACTLY 6 bytes because the firmware memcpys that many, it
+ * is supplied as hex rather than modhex because setYubiAuth concatenates it
+ * unchanged, and it lands on the device-global pseudo-slot.
+ *
+ * @param {object} spec
+ * @param {string} spec.publicId   hex, exactly 6 bytes
+ * @param {string} spec.privateId  hex, 6 bytes
+ * @param {string} spec.secretKey  hex, 16 bytes
+ * @returns {Uint8Array}
+ */
+export function yubiGlobalCredential({ publicId, privateId, secretKey }: {
     publicId: string;
     privateId: string;
     secretKey: string;

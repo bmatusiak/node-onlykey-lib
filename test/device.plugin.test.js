@@ -221,6 +221,96 @@ test('a timed-out label read still reports what did arrive', async () => {
   await app.destroy();
 });
 
+/* ------------------------------------------------------------ slot config */
+
+test('every field write is awaited, not fired and forgotten', async () => {
+  /*
+   * The defect this replaces: the original's callback reports only whether the
+   * HID write succeeded, plus a fixed 100 ms sleep. A device-side error is
+   * discarded AFTER the form field has been cleared, so the user is shown
+   * success over a slot that is wrong.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  const applied = await app.services.device.setSlot(1, {
+    label: 'GitHub',
+    username: 'someone',
+    password: 'hunter2',
+  });
+
+  assert.equal(applied.length, 3);
+  for (const one of applied) {
+    assert.match(one.response, /^Successfully/, 'each write was acknowledged');
+  }
+  await app.destroy();
+});
+
+test('a device error on one field aborts the rest', async () => {
+  const pipe = fakeFirmware({ slotError: 'Error MFA already enabled on this slot, device PIN required' });
+  const app = await start(pipe);
+
+  await assert.rejects(
+    () => app.services.device.setSlot(1, { label: 'a', password: 'b' }),
+    /label: Error MFA already enabled/,
+  );
+
+  const setSlots = pipe.writes.filter((w) => w.data[4] === MSG.OKSETSLOT);
+  assert.equal(setSlots.length, 1, 'it stopped at the failing field');
+  await app.destroy();
+});
+
+test('an invalid field means NOTHING is sent, not a half-written slot', async () => {
+  /*
+   * The plan is built before the first write, so a bad tenth field fails with
+   * the slot untouched. The original validates as it goes and stops mid-way,
+   * leaving the slot partly configured with no way to tell how far it got.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  await assert.rejects(
+    () => app.services.device.setSlot(1, { label: 'ok', typeSpeed: '' }),
+    /must be a byte 0-255/,
+  );
+  assert.equal(pipe.writes.length, 0, 'not even the valid first field went out');
+  await app.destroy();
+});
+
+test('a slot id is resolved through the device type', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  await app.services.device.setSlot('3b', { label: 'x' });
+
+  const write = pipe.writes.find((w) => w.data[4] === MSG.OKSETSLOT);
+  assert.equal(write.data[5], 9, "classic '3b' is slot 9");
+  await app.destroy();
+});
+
+test('a silent device times out rather than reporting success', async () => {
+  const pipe = fakeFirmware({ slotSilent: true });
+  const app = await start(pipe);
+
+  await assert.rejects(
+    () => app.services.device.setSlot(1, { label: 'x' }, { timeoutMs: 60 }),
+    /no reply on interface 2/,
+  );
+  await app.destroy();
+});
+
+test('wiping a whole slot omits the field byte', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  await app.services.device.wipeSlot(2);
+
+  const wipe = pipe.writes.find((w) => w.data[4] === MSG.OKWIPESLOT);
+  assert.equal(wipe.data[5], 2);
+  assert.equal(wipe.data[6], 0, 'no field byte - that is what makes it whole-slot');
+  await app.destroy();
+});
+
 test('slot numbering follows the device type', async () => {
   const app = await start(fakeFirmware());
   const { device } = app.services;

@@ -238,8 +238,9 @@ test('a Yubikey credential is public||private||secret', () => {
 });
 
 test('a public id longer than 6 bytes is kept, not truncated', () => {
-  // OnlyKeyComm.js:1687 caps this at 12 hex chars and silently drops the rest.
-  // Yubico allows up to 16 bytes.
+  // Correct for a SLOT. okcore.cpp:5814-5821 recovers a 2-16 byte public id by
+  // trimming trailing zeros, so 8 bytes round-trips. OnlyKeyComm.js:1687 caps
+  // at 12 hex chars, which is right for slot 0 and wrong here.
   const out = enc.yubiCredential({
     publicId: 'cccccccccccccccc',       // 8 bytes
     privateId: '010203040506',
@@ -258,6 +259,76 @@ test('a short private id or secret is refused rather than shifting the fields', 
   assert.throws(
     () => enc.yubiCredential({ publicId: 'cccc', privateId: '010203040506', secretKey: '0011' }),
     /secret must be/,
+  );
+});
+
+test('the per-slot public id has the bounds the FIRMWARE enforces', () => {
+  /*
+   * Not a guess and not the Yubico spec: okcore.cpp:5814 is
+   * `for (int i = 37; i > 1; i--) { // Public ID 2-16 bytes`, trimming
+   * trailing zeros to recover the length. One byte cannot be represented, and
+   * seventeen does not fit.
+   */
+  const priv = '010203040506';
+  const secret = '00'.repeat(16);
+
+  assert.equal(
+    enc.yubiCredential({ publicId: 'cccc', privateId: priv, secretKey: secret }).length,
+    2 + 6 + 16,
+    'two bytes is the firmware minimum and is accepted',
+  );
+  assert.throws(
+    () => enc.yubiCredential({ publicId: 'cc', privateId: priv, secretKey: secret }),
+    /2-16 bytes/,
+    'one byte cannot be stored',
+  );
+  assert.throws(
+    () => enc.yubiCredential({ publicId: 'c'.repeat(34), privateId: priv, secretKey: secret }),
+    /2-16 bytes/,
+    'seventeen bytes does not fit',
+  );
+});
+
+test('an over-long public id is refused, never silently shortened', () => {
+  // The original slices to its own limit, so a credential is built from a
+  // truncated identity and then authenticates against nothing.
+  assert.throws(
+    () => enc.yubiCredential({
+      publicId: 'c'.repeat(40),
+      privateId: '010203040506',
+      secretKey: '00'.repeat(16),
+    }),
+    /got 40/,
+    'the actual length is in the message',
+  );
+});
+
+test('slot 0 is a DIFFERENT encoder, not the same one with another limit', () => {
+  /*
+   * Three differences, all load-bearing:
+   *
+   *   length   - okcore.cpp:5808 does `memcpy(pubID, temp, 6)` with the
+   *              comment "Old Yubikey method only supports default 6 len
+   *              pubkey". Exactly six bytes.
+   *   encoding - setYubiAuth concatenates publicId unchanged, so it is hex.
+   *              The per-slot path converts from modhex.
+   *   target   - the device-global pseudo-slot rather than a real one.
+   */
+  const priv = '010203040506';
+  const secret = '00'.repeat(16);
+
+  const out = enc.yubiGlobalCredential({ publicId: 'aabbccddeeff', privateId: priv, secretKey: secret });
+  assert.equal(toHex(out), 'aabbccddeeff' + priv + secret, 'hex in, unconverted');
+  assert.equal(out.length, 6 + 6 + 16);
+
+  assert.throws(
+    () => enc.yubiGlobalCredential({ publicId: 'aabbcc', privateId: priv, secretKey: secret }),
+    /exactly 12 hex chars/,
+  );
+  assert.throws(
+    () => enc.yubiGlobalCredential({ publicId: 'aabbccddeeff00', privateId: priv, secretKey: secret }),
+    /the firmware copies 6 and ignores the rest/,
+    'longer is refused rather than quietly clipped',
   );
 });
 

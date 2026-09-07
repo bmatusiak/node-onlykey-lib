@@ -37,6 +37,8 @@ const PIN_REPLIES = ['Enter PIN\n', 'Storing PIN\n', 'Confirm PIN\n', 'Both PINs
  */
 function fakeFirmware(opts = {}) {
   const {
+    slotError = null,
+    slotSilent = false,
     pinFailAt = -1,
     pinError = 'Error PIN is not between 7 - 10 digits',
     labels = null,
@@ -65,6 +67,21 @@ function fakeFirmware(opts = {}) {
       return undefined;
     }
 
+    if (msg === MSG.OKSETSLOT || msg === MSG.OKWIPESLOT) {
+      /*
+       * Acknowledged as a VENDOR report, which is what hidprint() produces -
+       * it calls send_transport_response, not the debug console. The wording
+       * varies per field in the real firmware and one of them is misspelled,
+       * so a host must not match the exact strings; only the "Error" prefix is
+       * load-bearing.
+       */
+      if (slotSilent) return undefined;
+      const text = slotError || (msg === MSG.OKSETSLOT
+        ? 'Successfully set Label'
+        : 'Successfully wiped slot');
+      return pipe.deliver(reportText(text));
+    }
+
     if (msg === MSG.OKGETLABELS) {
       /*
        * The priming response first. The device sends one before the list
@@ -84,6 +101,13 @@ function fakeFirmware(opts = {}) {
     }
 
     return undefined;
+  }
+
+  /** A 64-byte vendor report carrying text, padded the way hidprint() pads. */
+  function reportText(text) {
+    const bytes = new Uint8Array(64);
+    for (let i = 0; i < text.length && i < 64; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+    return bytes;
   }
 
   function handleSeremu(frame) {
