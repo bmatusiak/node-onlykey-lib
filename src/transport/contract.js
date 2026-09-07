@@ -32,6 +32,21 @@ const { IFACE } = require('../protocol/msg');
 const REPORT_SIZE = 64;
 
 /**
+ * Which way a report was travelling.
+ *
+ * A transport that multiplexes both directions onto one callback - the
+ * in-process emulator does, and so does any packet-capture view of a real bus -
+ * has to tell them apart before anything else. Mistaking the echo of our own
+ * write for the device's answer makes every request resolve with its own
+ * payload, which looks like a device that mirrors rather than one that never
+ * replied.
+ *
+ * The numbering is the emulator's (ok_hal.h:65-66), so it can be passed through
+ * without translation.
+ */
+const DIR = { OUT: 0, IN: 1 };  /* OUT = device -> host, IN = host -> device */
+
+/**
  * The methods a transport must implement.
  *
  * Kept as a list rather than a base class: a transport is often a thin wrapper
@@ -116,6 +131,7 @@ function withReportId(bytes, reportId = 0x00) {
 
 module.exports = {
   IFACE,
+  DIR,
   REPORT_SIZE,
   REQUIRED,
   assertTransport,

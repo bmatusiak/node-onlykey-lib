@@ -26,6 +26,7 @@ const memoryTransport = require('../plugins/transport/memory');
 const sessionPlugin = require('../plugins/session');
 const transit = require('../src/session/transit');
 const { toHex } = require('../src/bytes');
+const { REPORT_SIZE } = require('../src/transport/contract');
 
 /** Build and start an app, resolving once every plugin has registered. */
 function start(plugins) {
@@ -135,7 +136,21 @@ test('the OKCONNECT payload goes out unencrypted', async () => {
       [0xff, 0xff, 0xff, 0xff, 0xe4],
       'the frame header is in the clear',
     );
-    assert.equal(writes[0].length, 43);
+    /*
+     * One full report on the wire, 43 bytes of it meaningful.
+     *
+     * This used to assert length === 43, which conflated the payload with the
+     * frame: connectPayload builds 43 bytes and the transport pads them to a
+     * report, because the firmware's read is a fixed 64-byte descriptor. The
+     * old assertion passed only while transport/memory forwarded short frames
+     * unchanged - which was itself the bug test/parity.test.js caught.
+     */
+    assert.equal(writes[0].length, REPORT_SIZE, 'padded to one report');
+    assert.equal(
+      writes[0].subarray(43).every((b) => b === 0),
+      true,
+      'and everything past the 43-byte payload is padding',
+    );
   } finally {
     await app.destroy();
   }

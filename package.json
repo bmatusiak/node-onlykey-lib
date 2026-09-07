@@ -16,6 +16,7 @@
     "./plugins/host": "./plugins/host/index.js",
     "./plugins/session": "./plugins/session/index.js",
     "./plugins/transport/memory": "./plugins/transport/memory.js",
+    "./plugins/transport/embedded": "./plugins/transport/embedded.js",
     "./package.json": "./package.json"
   },
   "files": [

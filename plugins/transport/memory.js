@@ -80,9 +80,34 @@ function setup(imports, register) {
     isOpen() { return open; },
 
     async write(iface, data) {
-      const frame = Uint8Array.from(data);
+      /*
+       * Padded here, like every other transport. This used to forward the
+       * caller's bytes unchanged, which made memory the odd one out: a short
+       * frame reached the fake device as a short frame, while the same call
+       * over the embedded transport arrived as a full 64-byte report. Any test
+       * that passed here could still fail against a device whose read is a
+       * fixed-size descriptor - which is the divergence test/parity.test.js
+       * exists to catch, and did.
+       */
+      const frame = iface === IFACE.SEREMU ? Uint8Array.from(data) : toReport(data);
       events.emit('write', { iface, data: frame });
-      const reply = handle(iface, frame);
+
+      /*
+       * The fake device's failure is not the transport's failure.
+       *
+       * handle() does real crypto - that is the point of it - so a malformed
+       * frame can make @noble throw, and that used to reject write() itself. No
+       * real transport behaves that way: a write succeeds once the bytes are on
+       * the bus, whatever the device makes of them. A device that cannot parse
+       * a message simply does not answer, so that is what happens here.
+       */
+      let reply = null;
+      try {
+        reply = handle(iface, frame);
+      } catch (err) {
+        events.emit('device-error', { iface, error: err });
+      }
+
       if (reply) {
         // Asynchronous, like a real device - so a caller that subscribes
         // after writing still misses it, exactly as it would on hardware.

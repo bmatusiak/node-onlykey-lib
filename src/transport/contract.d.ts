@@ -1,4 +1,8 @@
 import { IFACE } from "../protocol/msg";
+export namespace DIR {
+    let OUT: number;
+    let IN: number;
+}
 /** One vendor report. Not negotiable - the firmware's buffers are this size. */
 export const REPORT_SIZE: 64;
 /**
