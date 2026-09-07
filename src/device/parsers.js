@@ -1,0 +1,153 @@
+/*
+ * parsers.js - backup and firmware file formats.
+ *
+ * From OnlyKeyComm.js (parseBackupData:2624, parseFirmwareData:2419,
+ * verifyBackupFile:1968). The two file formats look alike - armoured text with
+ * BEGIN/END markers - and are not interchangeable: a backup is base64 and
+ * becomes ONE hex stream, firmware is already hex and stays as SEPARATE
+ * blocks.
+ */
+'use strict';
+
+const { sha256 } = require('@noble/hashes/sha2.js');
+const { toHex, concat } = require('../bytes');
+
+const BACKUP_BEGIN = '-----BEGIN ONLYKEY BACKUP-----';
+const BACKUP_END = '-----END ONLYKEY BACKUP-----';
+const FIRMWARE_BEGIN = '-----BEGIN SIGNED FIRMWARE-----';
+
+/**
+ * Lines beginning with '--' are structural, not data.
+ *
+ * That covers the BEGIN and END markers AND the trailing '--<base64 digest>'
+ * line, which is why the test is a prefix rather than an exact match.
+ */
+function isMarker(line) {
+  return line.indexOf('--') === 0;
+}
+
+function base64ToBytes(b64) {
+  const clean = String(b64).trim();
+  if (typeof atob === 'function') {
+    const binary = atob(clean);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i) & 0xff;
+    return out;
+  }
+  /* eslint-disable-next-line no-undef */
+  return new Uint8Array(Buffer.from(clean, 'base64'));
+}
+
+/**
+ * A backup file to the hex stream the device restores from.
+ *
+ * Every non-marker line is base64; decoded and concatenated they form one
+ * continuous stream, which the restore chunker then splits at 57 bytes.
+ */
+function parseBackup(text) {
+  const lines = String(text).split('\n').map((l) => l.trim()).filter(Boolean);
+  const data = lines.filter((l) => !isMarker(l)).map(base64ToBytes);
+  if (!data.length) {
+    throw new Error('no backup data found: every line was a marker or blank');
+  }
+  return toHex(concat(data));
+}
+
+/**
+ * Verify a backup file's trailing digest.
+ *
+ * A rolling hash: start from 32 zero bytes and, for each data line, hash the
+ * previous digest concatenated with that line's decoded bytes. The expected
+ * value is the base64 on the '--' line that is not the BEGIN/END marker.
+ *
+ * Chained rather than a hash over the whole file, so a reordering is caught as
+ * well as a modification.
+ */
+function verifyBackup(text) {
+  const lines = String(text).split('\n').map((l) => l.trim()).filter(Boolean);
+
+  let digest = new Uint8Array(32);
+  let expected = null;
+
+  for (const line of lines) {
+    if (isMarker(line)) {
+      // The digest line is a marker that is neither BEGIN nor END.
+      if (!/BACKUP/.test(line)) expected = line.replace(/^--/, '').trim();
+      continue;
+    }
+    digest = sha256(concat([digest, base64ToBytes(line)]));
+  }
+
+  if (!expected) {
+    return { ok: false, reason: 'no digest line found', digest: toHex(digest) };
+  }
+
+  const want = toHex(base64ToBytes(expected));
+  const got = toHex(digest);
+  return { ok: want === got, expected: want, digest: got };
+}
+
+/**
+ * A firmware file to its blocks.
+ *
+ * NOT the same shape as a backup: these lines are already hex, there is no
+ * base64 step, and each line stays a SEPARATE block that is chunked and
+ * acknowledged on its own. Concatenating them - which the backup path does -
+ * would destroy the block structure the loader depends on.
+ *
+ * The first line is the BEGIN marker and the last is the END footer; the
+ * original drops both by shifting and by iterating to length - 1.
+ */
+function parseFirmware(text) {
+  const lines = String(text).split('\n').map((l) => l.trim()).filter(Boolean);
+  const blocks = lines.filter((l) => !isMarker(l));
+  if (!blocks.length) {
+    throw new Error('no firmware blocks found: every line was a marker or blank');
+  }
+  for (const block of blocks) {
+    if (!/^[0-9a-fA-F]+$/.test(block)) {
+      throw new Error('firmware blocks must be hex; this file may be a backup');
+    }
+    if (block.length % 2 !== 0) {
+      throw new Error(`firmware block has odd length ${block.length}`);
+    }
+  }
+  return blocks;
+}
+
+/**
+ * A firmware block's structure, per the loader's own comments.
+ *
+ *   [0..63]    this block's signature   (32 bytes)
+ *   [64]       block info               (one nibble)
+ *   [65..128]  the next block's signature
+ */
+function describeFirmwareBlock(block) {
+  if (block.length < 65) return null;
+  return {
+    signature: block.slice(0, 64),
+    info: block.slice(64, 65),
+    nextSignature: block.length >= 129 ? block.slice(65, 129) : null,
+  };
+}
+
+/**
+ * The literal string that bounces a config-mode device into the bootloader.
+ *
+ * Sent through the firmware upload path before any real firmware. Four
+ * characters, so its packet header is (4/2).toString(16) = '2'. It appears
+ * three times in the original, inline and unexplained.
+ */
+const BOOTLOADER_KICK = '1234';
+
+module.exports = {
+  BACKUP_BEGIN,
+  BACKUP_END,
+  FIRMWARE_BEGIN,
+  BOOTLOADER_KICK,
+  isMarker,
+  parseBackup,
+  verifyBackup,
+  parseFirmware,
+  describeFirmwareBlock,
+};
