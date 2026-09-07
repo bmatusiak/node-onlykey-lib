@@ -1,0 +1,30 @@
+{
+  // Types are GENERATED from the JSDoc already in the source, not hand-written.
+  //
+  // This package is plain CommonJS with no build step, and it is consumed by a
+  // React Native app whose tsconfig sets `strict: true` - so without
+  // declarations every import there is an implicit-any error. Hand-written
+  // .d.ts would be a second copy of the API that nothing checks and that drifts
+  // the first time a signature changes. Generated declarations cannot drift.
+  //
+  // They are emitted NEXT TO the sources rather than into a types/ directory:
+  // package.json's exports map uses plain string targets, and TypeScript finds
+  // `src/bytes.d.ts` for a target of `./src/bytes.js` by sibling lookup. A
+  // separate directory would need a typesVersions table mirroring all eleven
+  // subpaths by hand - which is the drift this avoids.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "skipLibCheck": true,
+    "module": "node18",
+    "moduleResolution": "node16",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "outDir": "src",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.js"],
+  "exclude": ["src/vendor/**"]
+}

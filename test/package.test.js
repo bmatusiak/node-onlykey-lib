@@ -100,8 +100,6 @@ test('the session plugin does not re-export transit through its own surface', ()
 
 test('the root index does not re-export the session either', () => {
   // Closing the subpath is pointless if the default export hands it over.
-  const source = fs.readFileSync(path.join(ROOT, 'src/index.js'), 'utf8');
-  assert.equal(/require\(['"]\.\/session/.test(source), false);
   assert.equal('session' in require('../src'), false);
 });
 
@@ -136,13 +134,32 @@ test('requiring the package loads neither the PGP fork nor post-quantum', () => 
   assert.deepEqual(hit, [], `eagerly loaded: ${hit.join(', ')}`);
 });
 
-test('touching the crypto getter does load post-quantum', () => {
-  // The negative above would also pass if the export were simply broken.
-  const hit = loadedModulesAfter(
-    "const lib = require('./src'); if (typeof lib.crypto.pqc.mlkemKeypairFromSeed !== 'function') throw new Error('missing')",
-  );
-  assert.ok(hit.some((f) => f.includes('post-quantum')), 'the getter did not reach it');
-  assert.equal(hit.some((f) => f.includes('openpgp')), false, 'but still not openpgp');
+test('the heavy subtrees are not even REACHABLE from the root module', () => {
+  /*
+   * Stronger than the load check above, and the reason `crypto` is not a lazy
+   * getter on the root barrel.
+   *
+   * A getter defers resolution AND execution under Node, so the load check
+   * passed while `crypto` still hung off src/index.js. But Metro resolves
+   * every require() it can see, wherever it sits, so in a React Native bundle
+   * the getter deferred only evaluation - @noble/post-quantum shipped anyway.
+   * Measured: ML-KEM appeared in a bundle whose entry imported nothing but
+   * bytes, protocol and device.
+   *
+   * Node cannot observe that, so this asserts the property Metro actually
+   * keys off: the module's own dependency graph.
+   */
+  const source = fs.readFileSync(path.join(ROOT, 'src/index.js'), 'utf8');
+  assert.equal(/require\(['"]\.\/crypto/.test(source), false, 'crypto is subpath-only');
+  assert.equal(/require\(['"]\.\/session/.test(source), false, 'session is not exported at all');
+  assert.equal('crypto' in require('../src'), false);
+});
+
+test('the crypto subpath does load post-quantum, and still not openpgp', () => {
+  // The negatives above would also pass if the subpath were simply broken.
+  const hit = loadedModulesAfter("require('./src/crypto')");
+  assert.ok(hit.some((f) => f.includes('post-quantum')), 'the subpath must reach it');
+  assert.equal(hit.some((f) => f.includes('openpgp')), false, 'but PGP is a further subpath');
 });
 
 test('the PGP subpath is the only thing that loads the fork', () => {

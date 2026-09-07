@@ -21,11 +21,14 @@
   "files": [
     "src",
     "plugins",
+    "scripts",
+    "tsconfig.json",
     "FINDINGS.md",
     "FINDING-*.md"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "npm run types && node --test test/*.test.js",
+    "types": "node scripts/gen-types.js"
   },
   "dependencies": {
     "@bmatusiak/rectify": "github:bmatusiak/rectify",
@@ -34,5 +37,8 @@
     "@noble/hashes": "^2.4.0",
     "@noble/post-quantum": "^0.7.1",
     "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
   }
 }

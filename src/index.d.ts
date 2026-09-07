@@ -1,0 +1,86 @@
+export let bytes: typeof import("./bytes");
+export let protocol: {
+    msg: typeof import("./protocol/msg");
+    okmsg: typeof import("./protocol/okmsg");
+    ctap: typeof import("./protocol/ctap");
+    chunk: typeof import("./protocol/chunk");
+    MSG: {
+        OKPIN: number;
+        OKPINSD: number;
+        OKPINSEC: number;
+        OKCONNECT: number;
+        OKGETLABELS: number;
+        OKSETSLOT: number;
+        OKWIPESLOT: number;
+        OKGETPUBKEY: number;
+        OKSIGN: number;
+        OKWIPEPRIV: number;
+        OKSETPRIV: number;
+        OKDECRYPT: number;
+        OKRESTORE: number;
+        OKGETRESPONSE: number;
+        OKPING: number;
+        OKFWUPDATE: number;
+        OKHMAC: number;
+        OKWEBAUTHN: number;
+    };
+    FIELD: {
+        LABEL: number;
+        USERNAME: number;
+        NEXTKEY2: number;
+        DELAY2: number;
+        PASSWORD: number;
+        NEXTKEY3: number;
+        DELAY3: number;
+        TFATYPE: number;
+        TFAUSERNAME: number;
+        YUBIAUTH: number;
+        LOCKOUT: number;
+        WIPEMODE: number;
+        TYPESPEED: number;
+        KBDLAYOUT: number;
+        URL: number;
+        NEXTKEY1: number;
+        DELAY1: number;
+        NEXTKEY4: number;
+        NEXTKEY5: number;
+        BACKUPKEYMODE: number;
+        derivedchallengeMode: number;
+        storedchallengeMode: number;
+        SECPROFILEMODE: number;
+        LEDBRIGHTNESS: number;
+        LOCKBUTTON: number;
+        hmacchallengeMode: number;
+        modkeyMode: number;
+        YUBIANDHMAC: number;
+    };
+    IFACE: {
+        KEYBOARD: number;
+        FIDO: number;
+        VENDOR: number;
+        SEREMU: number;
+    };
+    KEYTYPE: {
+        NACL: number;
+        P256R1: number;
+        P256K1: number;
+        CURVE25519: number;
+    };
+    KEYACTION: {
+        DERIVE_PUBLIC_KEY: number;
+        DERIVE_SHARED_SECRET: number;
+        DERIVE_PUBLIC_KEY_REQ_PRESS: number;
+        DERIVE_SHARED_SECRET_REQ_PRESS: number;
+    };
+    messageId: typeof import("./protocol/msg").messageId;
+    fieldId: typeof import("./protocol/msg").fieldId;
+};
+export let transport: typeof import("./transport/contract");
+export let device: {
+    slots: typeof import("./device/slots");
+    pin: typeof import("./device/pin");
+    keys: typeof import("./device/keys");
+    chunker: typeof import("./device/chunker");
+    parsers: typeof import("./device/parsers");
+    encoders: typeof import("./device/encoders");
+};
