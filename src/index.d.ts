@@ -4,6 +4,9 @@ export let protocol: {
     okmsg: typeof import("./protocol/okmsg");
     ctap: typeof import("./protocol/ctap");
     chunk: typeof import("./protocol/chunk");
+    cbor: typeof import("./protocol/cbor");
+    ctaphid: typeof import("./protocol/ctaphid");
+    tunnel: typeof import("./protocol/tunnel");
     MSG: {
         OKPIN: number;
         OKPINSD: number;

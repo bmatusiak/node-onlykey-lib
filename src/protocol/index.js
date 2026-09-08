@@ -17,12 +17,18 @@ const msg = require('./msg');
 const okmsg = require('./okmsg');
 const ctap = require('./ctap');
 const chunk = require('./chunk');
+const cbor = require('./cbor');
+const ctaphid = require('./ctaphid');
+const tunnel = require('./tunnel');
 
 module.exports = {
   msg,
   okmsg,
   ctap,
   chunk,
+  cbor,
+  ctaphid,
+  tunnel,
 
   MSG: msg.MSG,
   FIELD: msg.FIELD,
