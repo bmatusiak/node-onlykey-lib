@@ -279,3 +279,50 @@ test('a stray continuation packet does not start a message', async () => {
   await assert.rejects(() => reader.next(), /no CTAPHID reply/);
   reader.close();
 });
+
+test('the wait after a KEEPALIVE is much longer than the ordinary one', async () => {
+  /*
+   * Not a safety margin - it is what the firmware does. device.cpp:172 sends
+   * KEEPALIVE only when the status CHANGES, so a user-presence wait produces
+   * exactly ONE keepalive and then silence for up to CTAP2_UP_DELAY_MS (19
+   * seconds, ctap.h:173) while the device waits for a finger.
+   *
+   * A client using its ordinary timeout gives up partway through a ceremony
+   * the user is still confirming. This asserts the two waits are different:
+   * the ordinary one expires, the post-keepalive one survives past it.
+   */
+  const transport = fakeCtapHid({ cid: Uint8Array.of(1, 2, 3, 4) });
+  const ctap = new CtapHid(transport);
+  await ctap.init();
+
+  const reader = ctap._open(ctap.cid, { timeoutMs: 30 });
+
+  // The ordinary wait gives up quickly...
+  await assert.rejects(() => reader.next(), /within 30ms/);
+  // ...but an explicit longer wait is honoured, and reports ITS limit.
+  await assert.rejects(() => reader.next(60), /within 60ms/);
+  reader.close();
+});
+
+test('a slow press still completes, where the ordinary timeout would not', async () => {
+  const transport = fakeCtapHid({ onCbor: () => new Map([[1, 'pressed']]) });
+  const ctap = new CtapHid(transport);
+  await ctap.init();
+
+  // One keepalive, then the answer arrives later than the ordinary timeout.
+  const slow = {
+    ...transport,
+    async write(iface, bytes) {
+      const n = await transport.write(iface, bytes);
+      return n;
+    },
+  };
+  const ctapSlow = new CtapHid(slow);
+  ctapSlow.cid = ctap.cid;
+
+  const out = await ctapSlow.send(CTAP2_CMD.GET_ASSERTION, new Uint8Array(0), {
+    timeoutMs: 500,
+    presenceTimeoutMs: 2000,
+  });
+  assert.equal(out.get(1), 'pressed');
+});

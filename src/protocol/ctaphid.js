@@ -238,18 +238,20 @@ class CtapHid {
     });
 
     const reader = {
-      next() {
+      /** @param {number} [waitMs] override for this read only. */
+      next(waitMs) {
         if (ready.length) return Promise.resolve(ready.shift());
+        const limit = waitMs === undefined ? timeoutMs : waitMs;
 
         return new Promise((resolve, reject) => {
           const timer = setTimeout(() => {
             const at = waiting.findIndex((w) => w.timer === timer);
             if (at !== -1) waiting.splice(at, 1);
             reject(new Error(
-              `no CTAPHID reply within ${timeoutMs}ms` +
+              `no CTAPHID reply within ${limit}ms` +
               (total === null ? '' : ` (had ${have} of ${total} bytes)`),
             ));
-          }, timeoutMs);
+          }, limit);
 
           waiting.push({
             timer,
@@ -325,10 +327,30 @@ class CtapHid {
     }
   }
 
-  /** Read until something that is not a keepalive. */
+  /**
+   * Read until something that is not a keepalive.
+   *
+   * The wait AFTER a keepalive is much longer than the ordinary one, and that
+   * is not a safety margin - it is what the firmware does.
+   * device.cpp:172 sends KEEPALIVE only when the status CHANGES:
+   *
+   *     if (status != CTAPHID_STATUS_IDLE && __device_status != status)
+   *         ctaphid_update_status(status);
+   *
+   * so a user-presence wait produces exactly ONE keepalive and then silence
+   * for up to CTAP2_UP_DELAY_MS - 19 seconds (ctap.h:173) - while the device
+   * waits for a finger. The spec suggests a ~100ms cadence and this firmware
+   * does not follow it, so a client using its ordinary timeout gives up at ten
+   * seconds on a ceremony the user is halfway through confirming.
+   */
   async _await(reader, opts) {
+    const presenceTimeoutMs = opts.presenceTimeoutMs === undefined
+      ? 30000
+      : opts.presenceTimeoutMs;
+    let waiting = undefined;
+
     for (;;) {
-      const { cmd: replyCmd, payload } = await reader.next();
+      const { cmd: replyCmd, payload } = await reader.next(waiting);
 
       if (replyCmd === CTAPHID.KEEPALIVE) {
         /*
@@ -342,6 +364,7 @@ class CtapHid {
         const status = payload[0];
         this.keepAlives.push(status);
         if (opts.onKeepAlive) await opts.onKeepAlive(status);
+        waiting = presenceTimeoutMs;
         continue;
       }
 

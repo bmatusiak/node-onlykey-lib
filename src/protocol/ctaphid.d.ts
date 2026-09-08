@@ -57,7 +57,22 @@ export class CtapHid {
      * @returns {Promise<*>} the decoded response, or undefined for an empty one
      */
     send(cmd: number, data?: Uint8Array, opts?: object): Promise<any>;
-    /** Read until something that is not a keepalive. */
+    /**
+     * Read until something that is not a keepalive.
+     *
+     * The wait AFTER a keepalive is much longer than the ordinary one, and that
+     * is not a safety margin - it is what the firmware does.
+     * device.cpp:172 sends KEEPALIVE only when the status CHANGES:
+     *
+     *     if (status != CTAPHID_STATUS_IDLE && __device_status != status)
+     *         ctaphid_update_status(status);
+     *
+     * so a user-presence wait produces exactly ONE keepalive and then silence
+     * for up to CTAP2_UP_DELAY_MS - 19 seconds (ctap.h:173) - while the device
+     * waits for a finger. The spec suggests a ~100ms cadence and this firmware
+     * does not follow it, so a client using its ordinary timeout gives up at ten
+     * seconds on a ceremony the user is halfway through confirming.
+     */
     _await(reader: any, opts: any): Promise<any>;
     getInfo(opts?: {}): Promise<any>;
     makeCredential(params: any, opts?: {}): Promise<any>;

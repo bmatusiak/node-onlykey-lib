@@ -127,7 +127,33 @@ function encodeRequest({ cmd, opt1 = 0, opt2 = 0, opt3 = 0, data }) {
     );
   }
 
-  const pad = payload.length < MIN_DATA ? MIN_DATA - payload.length : 0;
+  let pad = payload.length < MIN_DATA ? MIN_DATA - payload.length : 0;
+
+  /*
+   * TWO LENGTHS ARE POISONED, and the failure is silent.
+   *
+   * parse_credential_descriptor (ctap_parse.cpp:906-948) classifies an
+   * allowList entry by its LENGTH before it looks at anything else:
+   *
+   *     48 == U2F_KEY_HANDLE_SIZE   -> PUB_KEY_CRED_CTAP1
+   *     70 == sizeof(CredentialId)  -> a real FIDO2 credential
+   *     anything else               -> PUB_KEY_CRED_CUSTOM, which is the only
+   *                                    type is_extension_request() ever sees
+   *
+   * So a request that happens to encode to exactly 48 or 70 bytes is never
+   * offered to the tunnel at all - it is parsed as somebody's credential,
+   * fails to match one, and the assertion comes back "no credentials". The
+   * magic bytes are never even reached.
+   *
+   * With a 10-byte header that is a 38- or 60-byte payload: an OKSETSLOT with
+   * a 38-character password, say. One extra pad byte moves it out of the way,
+   * and trailing padding is already known-harmless - the firmware slices the
+   * payload at fixed offsets and the shipped client has always padded to
+   * MIN_DATA.
+   */
+  const POISONED = [48, 70];
+  if (POISONED.includes(HEADER + payload.length + pad)) pad += 1;
+
   const out = new Uint8Array(HEADER + payload.length + pad);
   out[0] = cmd & 0xff;
   out[1] = opt1 & 0xff;
