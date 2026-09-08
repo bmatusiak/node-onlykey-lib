@@ -45,10 +45,20 @@ function fakeFirmware(opts = {}) {
     labelSlots = 12,
     dropTerminal = false,
     ackDigits = true,
+    pin = null,          // when set, the device starts LOCKED and this unlocks it
+    version = 'v3.0.4-prod',
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
   let pinStep = 0;
+
+  /*
+   * The lock state, modelled because it gates almost everything. A locked
+   * device answers "Error device locked" rather than failing to answer, which
+   * is a distinction a client has to get right.
+   */
+  let unlocked = pin === null;
+  let entered = '';
 
   /** Slot number -> the two-character token the device prints. */
   function token(slot) {
@@ -82,6 +92,10 @@ function fakeFirmware(opts = {}) {
       return pipe.deliver(reportText(text));
     }
 
+    if (msg === MSG.OKGETLABELS && !unlocked) {
+      return pipe.deliver(reportText('Error device locked'));
+    }
+
     if (msg === MSG.OKGETLABELS) {
       /*
        * The priming response first. The device sends one before the list
@@ -111,14 +125,47 @@ function fakeFirmware(opts = {}) {
   }
 
   function handleSeremu(frame) {
-    if (!ackDigits) return;
-    /*
-     * One acknowledgement per digit, exactly as the firmware prints them. The
-     * trailing newline is not a digit.
-     */
     const line = toLatin1(frame).replace(/\n$/, '');
-    for (const digit of line) {
-      pipe.deliverText(`password appended with ${digit}\n`);
+
+    /*
+     * A hold - "6!" - is the device's clear gesture: the >= 72 duration band at
+     * OnlyKey.ino:914 that calls password.reset(). Without it a failed
+     * attempt's digits stay in the buffer and the next attempt appends to them.
+     */
+    if (line.indexOf('!') !== -1) {
+      entered = '';
+      return;
+    }
+
+    if (ackDigits) {
+      // One acknowledgement per digit, exactly as the firmware prints them.
+      for (const digit of line) {
+        pipe.deliverText(`password appended with ${digit}\n`);
+      }
+    }
+
+    /*
+     * The firmware evaluates the hash after EVERY press, so unlocking needs no
+     * submit and there is nothing to acknowledge until it matches. Announced on
+     * both interfaces, as the firmware announces it.
+     */
+    if (!unlocked && pin !== null) {
+      entered += line;
+      /*
+       * EXACT match on the whole accumulated buffer, not a suffix.
+       *
+       * profile1hashevaluate() hashes everything entered since the last reset
+       * and compares, so a wrong attempt does not slide out of a window - it
+       * stays, and the correct PIN typed after it hashes to something else
+       * entirely. Modelling this as endsWith() made a poisoned buffer look
+       * recoverable, which is precisely the confusion the real device causes.
+       */
+      if (entered === pin) {
+        unlocked = true;
+        entered = '';
+        pipe.deliver(reportText(`UNLOCKED${version}`));
+        pipe.deliverText('UNLOCKED\n');
+      }
     }
   }
 
@@ -140,6 +187,7 @@ function fakeFirmware(opts = {}) {
     },
     /** How many OKPIN messages have been received. */
     get pinStep() { return pinStep; },
+    get unlocked() { return unlocked; },
   };
 
   return wrapped;

@@ -117,15 +117,29 @@ class LabelReader {
 
     const text = typeof report === 'string' ? report : okmsg.text(report);
 
-    if (!this.primed) {
-      this.primed = true;
-      return 'primed';
-    }
-
+    /*
+     * ERRORS ARE CHECKED BEFORE THE PRIMING DISCARD, and the order is the whole
+     * point.
+     *
+     * The device's refusals arrive INSTEAD of the list, not after it, so a
+     * refusal IS the first response. Discarding it as priming - which is what
+     * this did - swallows the one message that explains what went wrong, and
+     * the caller waits out its deadline against a device that answered
+     * immediately and clearly.
+     *
+     * Found the first time a locked device was asked for labels: the reply is
+     * "Error device locked" (okcore.cpp:385-399), and the read timed out
+     * instead of saying so.
+     */
     if (/^Error/i.test(text)) {
       this.error = text;
       this.done = true;
       return 'error';
+    }
+
+    if (!this.primed) {
+      this.primed = true;
+      return 'primed';
     }
 
     // Exactly two characters before the pipe, or it is not a label line.

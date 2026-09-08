@@ -123,6 +123,88 @@ function setup(imports, register) {
       return runPinSequence(kind, digits, { timeoutMs });
     },
 
+    /**
+     * Unlock a provisioned device by entering its PIN.
+     *
+     * Different from setPin in kind, not just in sequence. setPin brackets the
+     * device's own capture mode with four OKPIN messages; unlocking sends no
+     * message at all. The digits go in as button presses and the firmware
+     * evaluates the hash after EVERY one (OnlyKey.ino:697) - there is no
+     * submit, and nothing to acknowledge until it either matches or does not.
+     *
+     * This is the gate on almost everything. okcore.cpp guards its vendor
+     * dispatch on `unlocked == true`, so a locked device answers
+     * "Error device locked" to a label read; CTAPHID packets are dropped with
+     * no error frame at all (okcore.cpp:639,651); and U2Finit() only runs here
+     * (OnlyKey.ino:716), so FIDO does not exist until this succeeds.
+     *
+     * Success is announced twice - hidprint(HW_MODEL(UNLOCKED)) on the vendor
+     * interface and "UNLOCKED" on the debug console - so either arriving is
+     * enough. Both are watched because the SEREMU one is DEBUG-build-only.
+     */
+    async unlock(digits, { timeoutMs = 15000 } = {}) {
+      const problems = pin.validatePin(digits);
+      if (problems.length) throw new Error(problems.join(' '));
+
+      const seen = await new Promise((resolve, reject) => {
+        const offs = [];
+        const done = (fn) => {
+          clearTimeout(timer);
+          for (const off of offs) off();
+          fn();
+        };
+
+        const timer = setTimeout(() => {
+          /*
+           * There is no rejection message to wait for. A wrong digit is simply
+           * appended and the device stays quiet, so a timeout is the ONLY
+           * signal that the PIN was wrong - and it cannot be distinguished
+           * from a device that is not listening. Both possibilities go in the
+           * message rather than guessing between them.
+           */
+          done(() => reject(new Error(
+            `the device did not unlock within ${timeoutMs}ms - the PIN may be wrong, ` +
+            'or a previous attempt may still be in its buffer (see clearPinEntry). ' +
+            `console tail: ${JSON.stringify(console_.text.slice(-120))}`,
+          )));
+        }, timeoutMs);
+
+        offs.push(transport.on('report', (event) => {
+          if (event.iface !== IFACE.VENDOR) return;
+          const state = okmsg.parseState(event.data);
+          if (state && state.state === 'unlocked') done(() => resolve(state.raw));
+        }));
+
+        offs.push(transport.on('log', (event) => {
+          if (/UNLOCKED/.test(event.text)) done(() => resolve(event.text.trim()));
+        }));
+
+        /*
+         * Pressed AFTER both subscriptions are up. The firmware answers within
+         * a loop iteration of the last digit, which on an in-process bus is
+         * faster than a caller that writes first can start listening.
+         */
+        pressLine(transport, digits).catch((err) => done(() => reject(err)));
+      });
+
+      progress('unlocked', { status: seen });
+      events.emit('unlocked', { status: seen });
+      return seen;
+    },
+
+    /**
+     * Discard a half-entered PIN.
+     *
+     * A failed attempt is not cleared: the digits stay in the firmware's
+     * `password` buffer and the next attempt APPENDS to them, so a second try
+     * with the correct PIN fails too. The device's own way out is a long press,
+     * which is what this sends - button 6 held, the `>= 72` band at
+     * OnlyKey.ino:914 that calls password.reset().
+     */
+    clearPinEntry() {
+      return pressLine(transport, '6!');
+    },
+
     /** Validate without sending, so a GUI can gate its own button. */
     validatePin: pin.validatePin,
     validateDuoPins: pin.validateDuoPins,

@@ -336,3 +336,29 @@ test('TFATYPE values are the literal strings the device compares', () => {
   assert.equal(enc.TFA_TYPE.GOOGLE_AUTH, 'googleAuthOtp');
   assert.equal(enc.TFA_TYPE.YUBIKEY, 'YubikeyOtp');
 });
+
+test('a refusal is reported even though it arrives first', () => {
+  /*
+   * The priming discard and the error check are ordered, and the order matters.
+   *
+   * The device's refusals arrive INSTEAD of the list, not after it, so a
+   * refusal IS the first response. Discarding it as the priming message
+   * swallows the one thing that explains the failure, and the caller waits out
+   * its deadline against a device that answered immediately and clearly.
+   *
+   * Found by asking a LOCKED device for labels: okcore.cpp:385-399 answers
+   * "Error device locked", and the read timed out instead of saying so.
+   */
+  const reader = new slots.LabelReader();
+  assert.equal(reader.push('Error device locked'), 'error');
+  assert.equal(reader.result().error, 'Error device locked');
+});
+
+test('the priming discard still applies to a normal list', () => {
+  // The discard is real and must survive the fix above: the device sends one
+  // message before the list, and counting it as a label drops slot 1.
+  const reader = new slots.LabelReader();
+  assert.equal(reader.push(''), 'primed');
+  assert.equal(reader.push('01|first'), 'stored');
+  assert.equal(reader.result().labels[0], 'first');
+});

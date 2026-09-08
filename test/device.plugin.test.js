@@ -340,3 +340,99 @@ test('destroy detaches the console from the transport', async () => {
   pipe.deliverText('ignored\n');
   assert.equal(device.console.text, 'after teardown');
 });
+
+/* ----------------------------------------------------------------- unlock */
+
+test('unlock enters the PIN and waits for the device to say so', async () => {
+  /*
+   * Unlocking is not setPin. No message is sent at all: the digits go in as
+   * button presses and the firmware evaluates the hash after every one
+   * (OnlyKey.ino:697), so there is no submit and nothing to acknowledge until
+   * it matches.
+   */
+  const pipe = fakeFirmware({ pin: PIN });
+  const app = await start(pipe);
+
+  assert.equal(pipe.unlocked, false, 'starts locked');
+  const status = await app.services.device.unlock(PIN);
+
+  assert.match(status, /UNLOCKED/);
+  assert.equal(pipe.unlocked, true);
+  await app.destroy();
+});
+
+test('unlock sends NO vendor message, unlike setPin', async () => {
+  const pipe = fakeFirmware({ pin: PIN });
+  const app = await start(pipe);
+
+  await app.services.device.unlock(PIN);
+
+  assert.equal(
+    pipe.writes.filter((w) => w.iface === IFACE.VENDOR).length,
+    0,
+    'the whole exchange is button presses',
+  );
+  await app.destroy();
+});
+
+test('a locked device refuses a label read, and unlocking fixes it', async () => {
+  /*
+   * The reason unlock had to exist before anything else could be trusted:
+   * okcore.cpp guards its dispatch on `unlocked == true` and answers
+   * "Error device locked" otherwise. Every device-management call written so
+   * far would have failed this way against a real device.
+   */
+  const pipe = fakeFirmware({ pin: PIN, labels: ['github', 'email'] });
+  const app = await start(pipe);
+
+  await assert.rejects(() => app.services.device.readLabels({ timeoutMs: 500 }), /locked/i);
+
+  await app.services.device.unlock(PIN);
+  const { labels } = await app.services.device.readLabels();
+  assert.equal(labels[0], 'github');
+
+  await app.destroy();
+});
+
+test('a wrong PIN times out, and says both things it could mean', async () => {
+  // There is no rejection message to wait for - a wrong digit is appended and
+  // the device stays quiet - so a timeout is the only signal there is.
+  const pipe = fakeFirmware({ pin: PIN });
+  const app = await start(pipe);
+
+  await assert.rejects(
+    () => app.services.device.unlock('6543216', { timeoutMs: 80 }),
+    /PIN may be wrong.*previous attempt/s,
+  );
+  await app.destroy();
+});
+
+test('a failed attempt poisons the next one until it is cleared', async () => {
+  /*
+   * The firmware does not reset its buffer on a wrong PIN; the digits stay and
+   * the next attempt APPENDS. So a second try with the CORRECT PIN also fails,
+   * which is a genuinely confusing thing to debug from a phone. The way out is
+   * the device's own long-press gesture.
+   */
+  const pipe = fakeFirmware({ pin: PIN });
+  const app = await start(pipe);
+  const { device } = app.services;
+
+  await assert.rejects(() => device.unlock('6543216', { timeoutMs: 60 }), /did not unlock/);
+
+  // The correct PIN now lands after the failed digits, so it still fails.
+  await assert.rejects(() => device.unlock(PIN, { timeoutMs: 60 }), /did not unlock/);
+
+  await device.clearPinEntry();
+  assert.match(await device.unlock(PIN), /UNLOCKED/, 'cleared, so it takes');
+  await app.destroy();
+});
+
+test('an invalid PIN never reaches the device', async () => {
+  const pipe = fakeFirmware({ pin: PIN });
+  const app = await start(pipe);
+
+  await assert.rejects(() => app.services.device.unlock('12'), /7-10 digits/);
+  assert.equal(pipe.writes.length, 0);
+  await app.destroy();
+});
