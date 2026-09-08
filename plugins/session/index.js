@@ -66,14 +66,32 @@ function setup(imports, register) {
       });
 
       /*
-       * Derive before parsing: the status tail is boxed on current firmware,
-       * so parseConnectReply needs the key to read it.
+       * Derive from a PROBE parse first, then keep the key only if the reply
+       * actually carried a key exchange.
+       *
+       * Over the vendor interface OKCONNECT is not a key exchange at all -
+       * okcore.cpp dispatches it to set_time(), which replies with a plaintext
+       * status string and no public key. Deriving unconditionally, as this used
+       * to, produced a transit key from the ASCII of that status: `established`
+       * went true, box() returned confident nonsense, and the failure appeared
+       * later somewhere with no connection to the cause.
+       *
+       * So a session is established only by an exchange. On the vendor path
+       * connect() still succeeds and still reports the device's status - that
+       * is genuinely what it is for there - but the session stays unkeyed, and
+       * box() says so rather than guessing.
        */
-      const devicePublic = reply.subarray(0, 32);
-      key = transit.transitKey(devicePublic, keys.secretKey);
-      device = transit.parseConnectReply(reply, key);
+      const probe = transit.parseConnectReply(reply, null);
 
-      return { status: device.status, sealed: device.sealed };
+      if (probe.kind === 'exchange') {
+        key = transit.transitKey(probe.devicePublic, keys.secretKey);
+        device = transit.parseConnectReply(reply, key);
+      } else {
+        key = null;
+        device = probe;
+      }
+
+      return { status: device.status, sealed: device.sealed, kind: device.kind };
     },
 
     /**

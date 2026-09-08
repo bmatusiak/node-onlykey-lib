@@ -188,8 +188,6 @@ function parseConnectReply(reply, key) {
   if (reply.length < 33) {
     throw new Error(`OKCONNECT reply is ${reply.length} bytes, expected at least 33`);
   }
-  const devicePublic = reply.subarray(0, 32);
-  const tail = reply.subarray(32);
 
   const printable = (bytes) => {
     let text = '';
@@ -201,9 +199,53 @@ function parseConnectReply(reply, key) {
     return text.length ? text : null;
   };
 
+  /*
+   * TWO DIFFERENT REPLIES SHARE THIS MESSAGE ID, and telling them apart is not
+   * optional.
+   *
+   * Over the CTAP path, bridge_to_onlykey() answers OKCONNECT with a real key
+   * exchange: 32 bytes of X25519 public key followed by the status string
+   * boxed under the derived transit key.
+   *
+   * Over the VENDOR path it does not. okcore.cpp's dispatch is
+   * `case OKCONNECT: set_time(recv_buffer); return;`, and set_time() answers
+   * with hidprint(HW_MODEL(UNLOCKED)) - a PLAINTEXT status string starting at
+   * byte 0. There is no public key and no key exchange at all.
+   *
+   * Reading the second as the first derives a "transit key" from the ASCII of
+   * a status string. Nothing errors: the session reports itself established,
+   * box() produces confident garbage, and the first real command fails
+   * somewhere unrelated. So the form is detected rather than assumed.
+   *
+   * The test is that the whole reply, once its trailing NUL padding is
+   * removed, is printable ASCII. A 32-byte X25519 public key satisfying that
+   * has probability about (95/256)^32, which is on the order of 1e-18.
+   */
+  let end = reply.length;
+  while (end > 0 && reply[end - 1] === 0x00) end -= 1;
+  const body = reply.subarray(0, end);
+  const asPlainStatus = end > 0 ? printable(body) : null;
+
+  if (asPlainStatus !== null && asPlainStatus.length === end) {
+    return {
+      kind: 'status',
+      devicePublic: null,
+      status: asPlainStatus,
+      sealed: false,
+    };
+  }
+
+  const devicePublic = reply.subarray(0, 32);
+  const tail = reply.subarray(32);
   const opened = key ? printable(box(key, tail)) : null;
   const asIs = printable(tail);
-  return { devicePublic, status: opened || asIs || '', sealed: Boolean(opened) };
+
+  return {
+    kind: 'exchange',
+    devicePublic,
+    status: opened || asIs || '',
+    sealed: Boolean(opened),
+  };
 }
 
 /* ------------------------------------------------------------- self tests */

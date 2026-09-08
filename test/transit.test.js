@@ -14,7 +14,7 @@ const assert = require('node:assert');
 const path = require('path');
 
 const transit = require('../src/session/transit');
-const { toHex, fromHex } = require('../src/bytes');
+const { toHex, fromHex, fromLatin1 } = require('../src/bytes');
 
 let reference = null;
 try {
@@ -146,4 +146,58 @@ test('connectPayload matches the reference from offset 5', { skip: !reference },
 
 test('the reference self-test still passes', { skip: !referenceHasNoble }, () => {
   assert.doesNotThrow(() => reference.selfTest());
+});
+
+/* -------------------------------------------- the two OKCONNECT replies */
+
+test('a plaintext status reply is recognised as NOT a key exchange', () => {
+  /*
+   * Measured on a real device: over the vendor interface okcore.cpp dispatches
+   * OKCONNECT to set_time(), which answers hidprint(HW_MODEL(UNLOCKED)) - a
+   * plaintext status from byte 0, with no public key anywhere in it.
+   *
+   * Read as an exchange, its first 32 characters become a "device public key"
+   * and the session derives a transit key from ASCII text. Nothing errors; the
+   * session simply reports itself established and every later box() is
+   * nonsense.
+   */
+  const reply = new Uint8Array(64);
+  reply.set(fromLatin1('UNLOCKEDv3.0.4-testc'), 0);
+
+  const out = transit.parseConnectReply(reply, null);
+  assert.equal(out.kind, 'status');
+  assert.equal(out.status, 'UNLOCKEDv3.0.4-testc');
+  assert.equal(out.devicePublic, null, 'there is no key to derive from');
+  assert.equal(out.sealed, false);
+});
+
+test('a real key exchange is still read as one', () => {
+  // 32 bytes of key material then a boxed tail. The discriminator must not
+  // mistake this for text just because some bytes happen to be printable.
+  const keys = transit.keypair();
+  const key = transit.transitKey(keys.publicKey, keys.secretKey);
+  const tail = transit.box(key, fromLatin1('UNLOCKEDv3.0.4-testc'));
+
+  const reply = new Uint8Array(32 + tail.length);
+  reply.set(keys.publicKey, 0);
+  reply.set(tail, 32);
+
+  const out = transit.parseConnectReply(reply, key);
+  assert.equal(out.kind, 'exchange');
+  assert.equal(out.sealed, true);
+  assert.equal(out.status, 'UNLOCKEDv3.0.4-testc');
+});
+
+test('an all-printable public key would be astronomically unlikely', () => {
+  /*
+   * The discriminator's one assumption, stated so it is not mistaken for a
+   * guess: a 32-byte X25519 public key that is entirely printable ASCII has
+   * probability (95/256)^32, around 1e-14. This asserts the rule rather than
+   * the odds - a reply whose key half contains ANY non-printable byte is an
+   * exchange.
+   */
+  const reply = new Uint8Array(64);
+  reply.set(fromLatin1('UNLOCKED'), 0);
+  reply[8] = 0xff; // one non-printable byte inside the first 32
+  assert.equal(transit.parseConnectReply(reply, null).kind, 'exchange');
 });

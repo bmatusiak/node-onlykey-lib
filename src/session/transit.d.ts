@@ -72,6 +72,7 @@ export function connectPayload(publicKey: any, opts?: {}): Uint8Array<ArrayBuffe
  * 32-byte offset. Read the version from the opened tail.
  */
 export function parseConnectReply(reply: any, key: any): {
+    kind: string;
     devicePublic: any;
     status: string;
     sealed: boolean;
