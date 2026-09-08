@@ -20,6 +20,7 @@ const chunk = require('./chunk');
 const cbor = require('./cbor');
 const ctaphid = require('./ctaphid');
 const tunnel = require('./tunnel');
+const challenge = require('./challenge');
 
 module.exports = {
   msg,
@@ -29,6 +30,7 @@ module.exports = {
   cbor,
   ctaphid,
   tunnel,
+  challenge,
 
   MSG: msg.MSG,
   FIELD: msg.FIELD,

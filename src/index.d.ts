@@ -7,6 +7,7 @@ export let protocol: {
     cbor: typeof import("./protocol/cbor");
     ctaphid: typeof import("./protocol/ctaphid");
     tunnel: typeof import("./protocol/tunnel");
+    challenge: typeof import("./protocol/challenge");
     MSG: {
         OKPIN: number;
         OKPINSD: number;

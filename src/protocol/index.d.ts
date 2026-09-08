@@ -5,6 +5,7 @@ import chunk = require("./chunk");
 import cbor = require("./cbor");
 import ctaphid = require("./ctaphid");
 import tunnel = require("./tunnel");
+import challenge = require("./challenge");
 export declare let MSG: {
     OKPIN: number;
     OKPINSD: number;
@@ -75,4 +76,4 @@ export declare let KEYACTION: {
 };
 export declare let messageId: typeof import("./msg").messageId;
 export declare let fieldId: typeof import("./msg").fieldId;
-export { msg, okmsg, ctap, chunk, cbor, ctaphid, tunnel };
+export { msg, okmsg, ctap, chunk, cbor, ctaphid, tunnel, challenge };
