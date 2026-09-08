@@ -201,3 +201,35 @@ test('an all-printable public key would be astronomically unlikely', () => {
   reply[8] = 0xff; // one non-printable byte inside the first 32
   assert.equal(transit.parseConnectReply(reply, null).kind, 'exchange');
 });
+
+test('a status reply shorter than a key exchange is still valid', () => {
+  /*
+   * From the device: hidprint() sends strlen bytes, so the vendor reply to
+   * OKCONNECT is 11 bytes of "INITIALIZED" - not 64. The emulator pads its
+   * reports, which is the only reason a universal 33-byte minimum ever passed
+   * here; a transport reporting the true length would have rejected a
+   * perfectly good reply with a message about a size the vendor path never
+   * promised.
+   */
+  const out = transit.parseConnectReply(fromLatin1('INITIALIZED'), null);
+  assert.equal(out.kind, 'status');
+  assert.equal(out.status, 'INITIALIZED');
+});
+
+test('a short reply that is NOT text is still refused', () => {
+  // The minimum still applies to the exchange form, where it is real.
+  assert.throws(
+    () => transit.parseConnectReply(Uint8Array.from([0xff, 0x01, 0x02]), null),
+    /a key exchange needs at least 33/,
+  );
+});
+
+test('the exact bytes the device sent are parsed as status', () => {
+  // Captured from a Samsung SM-S136DL running the emulated firmware:
+  // "Sending transport response data 49 4E 49 54 49 41 4C 49 5A 45 44 0 ..."
+  const observed = fromHex('494e495449414c495a4544' + '00'.repeat(13));
+  const out = transit.parseConnectReply(observed, null);
+  assert.equal(out.kind, 'status');
+  assert.equal(out.status, 'INITIALIZED');
+  assert.equal(out.sealed, false, 'and no session key was invented from it');
+});

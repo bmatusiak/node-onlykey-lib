@@ -185,10 +185,6 @@ function connectPayload(publicKey, opts = {}) {
  * 32-byte offset. Read the version from the opened tail.
  */
 function parseConnectReply(reply, key) {
-  if (reply.length < 33) {
-    throw new Error(`OKCONNECT reply is ${reply.length} bytes, expected at least 33`);
-  }
-
   const printable = (bytes) => {
     let text = '';
     for (const b of bytes) {
@@ -233,6 +229,23 @@ function parseConnectReply(reply, key) {
       status: asPlainStatus,
       sealed: false,
     };
+  }
+
+  /*
+   * The 33-byte minimum belongs to the EXCHANGE form only, and is checked here
+   * rather than at the top for that reason.
+   *
+   * A plaintext status is as long as the string: hidprint() sends strlen bytes,
+   * so "INITIALIZED" is 11. The emulator happens to pad its reports to 64,
+   * which is why a universal guard passed on this device - but a transport
+   * that reports the true length would have rejected a perfectly good reply
+   * with a message about a size the vendor path never promised.
+   */
+  if (reply.length < 33) {
+    throw new Error(
+      `OKCONNECT reply is ${reply.length} bytes and is not printable status; ` +
+      'a key exchange needs at least 33',
+    );
   }
 
   const devicePublic = reply.subarray(0, 32);
