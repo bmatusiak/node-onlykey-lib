@@ -314,6 +314,34 @@ class CtapHid {
    * @returns {Promise<*>} the decoded response, or undefined for an empty one
    */
   async send(cmd, data = new Uint8Array(0), opts = {}) {
+    const payload = await this.sendRaw(cmd, data, opts);
+
+    /* First byte is the status, the rest is CBOR - or nothing. */
+    const status = payload[0];
+    if (status !== 0x00) throw new Ctap2Error(status);
+    return payload.length > 1 ? cbor.decode(payload.subarray(1)) : undefined;
+  }
+
+  /**
+   * The same exchange, handed back UNDECODED: the status byte followed by
+   * whatever CBOR came with it.
+   *
+   * This exists for BRIDGING. A bridge carries bytes between a host and an
+   * authenticator and must not develop opinions about them - it has to forward
+   * the device's own error rather than throw its own, because the host is the
+   * thing entitled to interpret CTAP2 status codes. send() throwing on a
+   * non-zero status is right for a caller acting on the result and wrong for
+   * one relaying it: a browser told "the request failed" learns nothing, where
+   * CTAP2_ERR_NO_CREDENTIALS tells it to try another authenticator.
+   *
+   * Decoding and re-encoding the CBOR would be worse still. A round trip is
+   * not guaranteed to be byte-identical, and the response is SIGNED - authData
+   * and the attestation cover exact bytes, so a re-encoded map that differs by
+   * one integer width verifies as a forgery at the relying party.
+   *
+   * @returns {Promise<Uint8Array>} status byte followed by the CBOR body
+   */
+  async sendRaw(cmd, data = new Uint8Array(0), opts = {}) {
     if (!this.cid) throw new Error('no CTAPHID channel - call init() first');
 
     const request = concat([Uint8Array.of(cmd), data]);
@@ -378,10 +406,11 @@ class CtapHid {
         );
       }
 
-      /* First byte is the status, the rest is CBOR - or nothing. */
-      const status = payload[0];
-      if (status !== 0x00) throw new Ctap2Error(status);
-      return payload.length > 1 ? cbor.decode(payload.subarray(1)) : undefined;
+      /*
+       * Returned whole - status byte and all - and decoded a layer up. A
+       * bridge needs these bytes exactly as they arrived; see sendRaw().
+       */
+      return payload;
     }
   }
 

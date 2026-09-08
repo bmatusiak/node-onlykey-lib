@@ -8,6 +8,7 @@ export let protocol: {
     ctaphid: typeof import("./protocol/ctaphid");
     tunnel: typeof import("./protocol/tunnel");
     challenge: typeof import("./protocol/challenge");
+    bridge: typeof import("./protocol/bridge");
     MSG: {
         OKPIN: number;
         OKPINSD: number;

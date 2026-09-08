@@ -21,6 +21,7 @@ const cbor = require('./cbor');
 const ctaphid = require('./ctaphid');
 const tunnel = require('./tunnel');
 const challenge = require('./challenge');
+const bridge = require('./bridge');
 
 module.exports = {
   msg,
@@ -31,6 +32,7 @@ module.exports = {
   ctaphid,
   tunnel,
   challenge,
+  bridge,
 
   MSG: msg.MSG,
   FIELD: msg.FIELD,
