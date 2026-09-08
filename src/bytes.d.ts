@@ -1,5 +1,7 @@
-import { utf8ToBytes } from "@noble/ciphers/utils.js";
-import { bytesToUtf8 } from "@noble/ciphers/utils.js";
+/** @param {string} text */
+export function utf8ToBytes(text: string): Uint8Array<ArrayBuffer>;
+/** @param {Uint8Array} bytes */
+export function bytesToUtf8(bytes: Uint8Array): string;
 /**
  * base64, implemented rather than taken from the platform.
  *
@@ -47,4 +49,3 @@ export function concat(chunks: Array<Uint8Array>): Uint8Array<ArrayBuffer>;
  * secret, so returning early on it is fine.
  */
 export function equalConstantTime(a: any, b: any): boolean;
-export { utf8ToBytes, bytesToUtf8 };

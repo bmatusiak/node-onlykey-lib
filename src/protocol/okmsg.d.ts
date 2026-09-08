@@ -14,7 +14,7 @@ export function build({ msg, slot, field, payload }: {
     msg: number | string;
     slot?: number | undefined;
     field?: string | number | undefined;
-    payload?: string | Uint8Array<ArrayBufferLike> | number[] | undefined;
+    payload?: string | number[] | Uint8Array<ArrayBufferLike> | undefined;
 }): Uint8Array;
 /**
  * OKCONNECT's payload: the epoch seconds as hex digit PAIRS, one byte each.

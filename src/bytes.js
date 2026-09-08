@@ -133,10 +133,88 @@ function equalConstantTime(a, b) {
  * recipient, and a decryption that fails much later with "no identity
  * matched" rather than anything about encodings.
  *
- * Delegated to @noble, which is already a dependency and handles surrogate
- * pairs correctly.
+ * WRITTEN OUT, not delegated. These used to come from @noble/ciphers/utils,
+ * which uses TextEncoder and TextDecoder - and Hermes has NEITHER. It crashed
+ * the first time CBOR decoded a text string on the phone:
+ *
+ *     ReferenceError: Property 'TextDecoder' doesn't exist
+ *         at bytesToUtf8 ... at decodeAt ... at decode
+ *
+ * which is every authenticatorGetInfo, since its versions are text. The same
+ * class of mistake as reaching for crypto.getRandomValues: a global that is
+ * ordinary everywhere except the one platform this library was written for.
  */
-const { utf8ToBytes, bytesToUtf8 } = require('@noble/ciphers/utils.js');
+
+/** @param {string} text */
+function utf8ToBytes(text) {
+  const str = String(text);
+  const out = [];
+  for (let i = 0; i < str.length; i++) {
+    let code = str.charCodeAt(i);
+
+    // A surrogate pair is one code point in two units; combine before encoding
+    // or every emoji becomes two replacement characters.
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < str.length) {
+      const low = str.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+        i++;
+      }
+    }
+
+    if (code < 0x80) {
+      out.push(code);
+    } else if (code < 0x800) {
+      out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+      out.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    } else {
+      out.push(
+        0xf0 | (code >> 18),
+        0x80 | ((code >> 12) & 0x3f),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f),
+      );
+    }
+  }
+  return Uint8Array.from(out);
+}
+
+/** @param {Uint8Array} bytes */
+function bytesToUtf8(bytes) {
+  let out = '';
+  for (let i = 0; i < bytes.length; ) {
+    const b = bytes[i];
+    let code;
+    let size;
+
+    if (b < 0x80) { code = b; size = 1; }
+    else if ((b & 0xe0) === 0xc0) { code = b & 0x1f; size = 2; }
+    else if ((b & 0xf0) === 0xe0) { code = b & 0x0f; size = 3; }
+    else if ((b & 0xf8) === 0xf0) { code = b & 0x07; size = 4; }
+    else { out += '�'; i += 1; continue; }
+
+    if (i + size > bytes.length) { out += '�'; break; }
+
+    for (let k = 1; k < size; k++) {
+      const cont = bytes[i + k];
+      if ((cont & 0xc0) !== 0x80) { code = -1; break; }
+      code = (code << 6) | (cont & 0x3f);
+    }
+    i += size;
+
+    if (code < 0) { out += '�'; continue; }
+
+    if (code > 0xffff) {
+      // Back to a surrogate pair, which is how JS holds anything above the BMP.
+      code -= 0x10000;
+      out += String.fromCharCode(0xd800 + (code >> 10), 0xdc00 + (code & 0x3ff));
+    } else {
+      out += String.fromCharCode(code);
+    }
+  }
+  return out;
+}
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
