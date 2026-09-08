@@ -18,6 +18,7 @@
     "./plugins/transport/memory": "./plugins/transport/memory.js",
     "./plugins/transport/embedded": "./plugins/transport/embedded.js",
     "./plugins/device": "./plugins/device/index.js",
+    "./plugins/okcrypto": "./plugins/okcrypto/index.js",
     "./package.json": "./package.json"
   },
   "files": [
