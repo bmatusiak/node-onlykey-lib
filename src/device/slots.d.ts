@@ -68,6 +68,7 @@ export class LabelReader {
     primed: boolean;
     done: boolean;
     error: string | null;
+    statusReports: number;
     /**
      * Feed one vendor report.
      * @returns {'primed'|'stored'|'ignored'|'done'|'error'}

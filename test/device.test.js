@@ -61,32 +61,69 @@ test('label tokens 1a-1e are a lookup table, NOT hex', () => {
   assert.equal(slots.labelSlotNumber('19'), 19);
 });
 
-test('the first label response is discarded as priming', () => {
-  // Consuming it as a label drops label #1 and shifts everything after it.
+/** One label report exactly as get_slot_labels() sends it on the HID path. */
+function labelReport(slot, text) {
+  const bytes = new Uint8Array(18);
+  bytes[0] = slot <= 9 ? slot : slot + 6;   // the firmware's i+6 for 10 and up
+  bytes[1] = 0x7c;
+  for (let i = 0; i < text.length && 2 + i < 18; i++) {
+    bytes[2 + i] = text.charCodeAt(i) & 0xff;
+  }
+  return bytes;
+}
+
+test('a label is read from the BYTES, not from a decoded string', () => {
+  /*
+   * The wire is [slot byte][0x7C][text], and the slot byte is raw - 1 for slot
+   * 1, not the character "1". OnlyKey-App never sees that: readBytes() drops
+   * non-printable bytes except at index 0, where it substitutes two hex
+   * characters, so by the time its parser runs the pipe has moved to index 2
+   * and slot 20 has become the string "1a".
+   *
+   * Porting that string form without the conversion that produces it is why a
+   * real device timed out: the pipe was at index 1, nothing matched, and all
+   * twelve labels were discarded.
+   */
   const r = new slots.LabelReader();
-  assert.equal(r.push(fromLatin1('01|first')), 'primed');
-  assert.equal(r.push(fromLatin1('01|first')), 'stored');
-  assert.equal(r.result().labels[0], 'first');
+  assert.equal(r.push(labelReport(1, 'github')), 'stored');
+  assert.equal(r.result().labels[0], 'github');
 });
 
-test('a label line needs its pipe at index 2', () => {
+test('slots above 9 carry i + 6, which is where "1a" came from', () => {
+  // Slot 20 is byte 26, and 26 in hex is "1a" - the app's table is not a table
+  // at all, it is the hex of a byte it could not print.
+  const r = new slots.LabelReader(slots.DEVICE_TYPE.DUO);
+  assert.equal(r.push(labelReport(20, 'twenty')), 'stored');
+  assert.equal(r.result().labels[19], 'twenty');
+  assert.equal(0x1a, 26, 'and 0x1a is 26, which is 20 + 6');
+});
+
+test('a report without the pipe in place is ignored', () => {
   const r = new slots.LabelReader();
-  r.push(fromLatin1('priming'));
-  assert.equal(r.push(fromLatin1('1|short')), 'ignored');
-  assert.equal(r.push(fromLatin1('001|long')), 'ignored');
-  assert.equal(r.push(fromLatin1('02|ok')), 'stored');
+  const notALabel = new Uint8Array(18);
+  notALabel[0] = 1;
+  notALabel[1] = 0x41; // an "A", not a pipe
+  assert.equal(r.push(notALabel), 'ignored');
 });
 
 test('the read completes at the last slot for the device type', () => {
   const r = new slots.LabelReader(slots.DEVICE_TYPE.CLASSIC);
-  r.push(fromLatin1('priming'));
   for (let i = 1; i <= 11; i++) {
-    assert.equal(r.push(fromLatin1(`${String(i).padStart(2, '0')}|s${i}`)), 'stored');
+    assert.equal(r.push(labelReport(i, `s${i}`)), 'stored');
   }
-  assert.equal(r.push(fromLatin1('12|last')), 'done');
+  assert.equal(r.push(labelReport(12, 'last')), 'done');
   const out = r.result();
   assert.equal(out.complete, true);
   assert.equal(out.labels[11], 'last');
+});
+
+test('the string form is still accepted, for a caller that took the app route', () => {
+  // Kept because a caller holding the app's reconstructed strings should still
+  // be able to use this - the priming rule belongs to that path, not the wire.
+  const r = new slots.LabelReader();
+  assert.equal(r.push('01|first'), 'primed');
+  assert.equal(r.push('01|first'), 'stored');
+  assert.equal(r.result().labels[0], 'first');
 });
 
 test('a device error ends the read', () => {

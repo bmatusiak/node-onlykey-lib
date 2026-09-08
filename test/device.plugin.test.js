@@ -436,3 +436,46 @@ test('an invalid PIN never reaches the device', async () => {
   assert.equal(pipe.writes.length, 0);
   await app.destroy();
 });
+
+test('a status broadcast is not mistaken for a slot acknowledgement', async () => {
+  /*
+   * Measured on the device: a locked OnlyKey runs
+   * Task taskInitialized(1000, sendInitialized) (OnlyKey.ino:213) and
+   * broadcasts its status once a second. A request() that takes the next
+   * report therefore races that timer, and a slot write came back acknowledged
+   * "INITIALIZED".
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  // A broadcast lands between the write and the real answer.
+  const original = pipe.write.bind(pipe);
+  pipe.write = async (iface, bytes) => {
+    if (iface === IFACE.VENDOR && bytes[4] === MSG.OKSETSLOT) {
+      pipe.deliverText('');
+      const status = new Uint8Array(64);
+      const text = 'INITIALIZED';
+      for (let i = 0; i < text.length; i++) status[i] = text.charCodeAt(i);
+      pipe.deliver(status);
+    }
+    return original(iface, bytes);
+  };
+
+  const [applied] = await app.services.device.setSlot(1, { label: 'x' });
+  assert.match(applied.response, /^Successfully/, 'the broadcast was skipped');
+  await app.destroy();
+});
+
+test('an error IS an answer, and is not filtered out as chatter', async () => {
+  // "Error device locked" is the device refusing clearly. Treating it as
+  // chatter turns that into a silent timeout - the same defect the label
+  // reader had when it discarded its first response.
+  const pipe = fakeFirmware({ slotError: 'Error device locked' });
+  const app = await start(pipe);
+
+  await assert.rejects(
+    () => app.services.device.setSlot(1, { label: 'x' }, { timeoutMs: 800 }),
+    /Error device locked/,
+  );
+  await app.destroy();
+});

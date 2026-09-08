@@ -116,7 +116,7 @@ function setup(imports, register) {
       return frame.length;
     },
 
-    async request({ iface, data, timeoutMs = 3000 }) {
+    async request({ iface, data, timeoutMs = 3000, match = null }) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           off();
@@ -125,6 +125,7 @@ function setup(imports, register) {
 
         const onReport = (event) => {
           if (event.iface !== iface) return;
+          if (match && !match(event.data)) return;
           clearTimeout(timer);
           off();
           resolve(event.data);

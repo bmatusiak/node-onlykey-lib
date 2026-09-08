@@ -60,12 +60,6 @@ function fakeFirmware(opts = {}) {
   let unlocked = pin === null;
   let entered = '';
 
-  /** Slot number -> the two-character token the device prints. */
-  function token(slot) {
-    if (slot <= 19) return String(slot).padStart(2, '0');
-    return `1${'abcde'[slot - 20]}`;
-  }
-
   function handleVendor(frame) {
     const msg = frame[4];
 
@@ -98,17 +92,22 @@ function fakeFirmware(opts = {}) {
 
     if (msg === MSG.OKGETLABELS) {
       /*
-       * The priming response first. The device sends one before the list
-       * proper; a reader that counts it as a label drops slot 1 and shifts
-       * every one after it.
+       * The wire format, not the app's reconstruction of it.
+       *
+       * get_slot_labels() sends 18 bytes per slot on the HID path: the slot as
+       * a RAW BYTE (i for 1..9, i+6 above that), then 0x7C, then the text.
+       * There is no priming message and no terminator - it simply sends
+       * maxslots of them and returns.
        */
-      pipe.deliver(new Uint8Array(64));
-
       const last = dropTerminal ? labelSlots - 1 : labelSlots;
       for (let slot = 1; slot <= last; slot++) {
-        const text = `${token(slot)}|${(labels && labels[slot - 1]) || `slot${slot}`}`;
-        const bytes = new Uint8Array(64);
-        for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+        const text = (labels && labels[slot - 1]) || `slot${slot}`;
+        const bytes = new Uint8Array(18);
+        bytes[0] = slot <= 9 ? slot : slot + 6;
+        bytes[1] = 0x7c;
+        for (let i = 0; i < text.length && 2 + i < 18; i++) {
+          bytes[2 + i] = text.charCodeAt(i) & 0xff;
+        }
         pipe.deliver(bytes);
       }
       return undefined;

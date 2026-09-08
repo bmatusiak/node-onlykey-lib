@@ -157,7 +157,7 @@ function setup(imports, register, config) {
       return pipe.write(iface, frame);
     },
 
-    async request({ iface, data, timeoutMs = 3000 }) {
+    async request({ iface, data, timeoutMs = 3000, match = null }) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           off();
@@ -171,6 +171,13 @@ function setup(imports, register, config) {
            * otherwise resolve the caller with a fragment of log text.
            */
           if (event.iface !== iface) return;
+          /*
+           * An unsolicited broadcast is not an answer. A locked device emits
+           * its status every second, so without this the reply to a write is
+           * whichever arrives first - and the caller is told a slot write was
+           * acknowledged "INITIALIZED".
+           */
+          if (match && !match(event.data)) return;
           clearTimeout(timer);
           off();
           resolve(event.data);

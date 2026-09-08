@@ -60,12 +60,22 @@ const REQUIRED = [
   /** write(iface, bytes) - fire and forget. */
   'write',
   /**
-   * request({iface, data, timeoutMs}) - write and wait for the reply.
+   * request({iface, data, timeoutMs, match}) - write and wait for the reply.
    *
    * A single method rather than write-then-wait at the caller, because the
    * subscription has to be in place BEFORE the write goes out. A fast device
    * answers before a caller that writes first can start listening, and the
    * reply is lost with no error - just a timeout somewhere unrelated.
+   *
+   * `match` is optional and exists because this bus carries UNSOLICITED
+   * traffic. A locked device runs `Task taskInitialized(1000, sendInitialized)`
+   * (OnlyKey.ino:213), broadcasting its status once a second until it unlocks,
+   * so the next report after a write is very often that broadcast rather than
+   * the answer. Measured: a slot write came back acknowledged "INITIALIZED".
+   *
+   * Without a filter every request is a race against a timer, and the caller
+   * cannot tell. A caller that knows what its answer looks like passes a
+   * predicate; one that does not still gets the first report, as before.
    */
   'request',
   'on',

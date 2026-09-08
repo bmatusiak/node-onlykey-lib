@@ -69,6 +69,18 @@ function slotNumber(slotId, deviceType = DEVICE_TYPE.CLASSIC) {
  */
 const LABEL_TOKENS = { '1a': 20, '1b': 21, '1c': 22, '1d': 23, '1e': 24 };
 
+/** The pipe the firmware puts between the slot byte and the label. */
+const PIPE = 0x7c;
+
+/**
+ * Slots above 9 are sent as `i + 6`.
+ *
+ * Which is also why the app's tokens look like "1a".."1e": slot 20 is byte 26,
+ * and 26 in hex is 1a. They are not a lookup table at all - they are the hex of
+ * a byte, reconstructed by a client that could not print it.
+ */
+const LABEL_CODE_OFFSET = 6;
+
 function labelSlotNumber(token) {
   if (Object.prototype.hasOwnProperty.call(LABEL_TOKENS, token)) {
     return LABEL_TOKENS[token];
@@ -106,6 +118,15 @@ class LabelReader {
     this.primed = false;
     this.done = false;
     this.error = null;
+    /*
+     * Counted so a timeout can say something useful. Measured on the device: a
+     * LOCKED OnlyKey answers OKGETLABELS with nothing at all - only its
+     * once-a-second status broadcast keeps arriving. The firmware source has an
+     * `else { hidprint("Error device locked"); }` for this case and it does not
+     * reach the wire, so from the host "locked" and "not listening" look
+     * identical unless the broadcasts are noticed.
+     */
+    this.statusReports = 0;
   }
 
   /**
@@ -115,21 +136,76 @@ class LabelReader {
   push(report) {
     if (this.done) return 'done';
 
-    const text = typeof report === 'string' ? report : okmsg.text(report);
+    /*
+     * PARSED FROM BYTES, not from a decoded string, and that distinction is
+     * the whole of this method.
+     *
+     * get_slot_labels() sends 18 bytes per slot on the HID path
+     * (okcore.cpp, the `output != 1` branch):
+     *
+     *     [0]    the slot, as a RAW BYTE - i for 1..9, i+6 for 10 and above
+     *     [1]    0x7C, a pipe
+     *     [2..]  the label text
+     *
+     * OnlyKey-App never sees that layout. Its readBytes() drops every
+     * non-printable byte EXCEPT at index 0, where it substitutes two hex
+     * characters - so by the time its parser runs, slot 20 (byte 0x1A) has
+     * become the string "1a" and the pipe has moved to index 2. Its whole
+     * parse, the "1a".."1e" table included, describes that reconstruction
+     * rather than the wire.
+     *
+     * Porting the string form without the conversion that produces it is why
+     * this timed out against a real device: the pipe was at index 1, no line
+     * ever matched, and the read waited out its deadline while the firmware
+     * sent all twelve labels correctly.
+     */
+    if (typeof report !== 'string') {
+      const bytes = report;
+
+      // An error arrives as text INSTEAD of the list, so it has no slot byte
+      // and must be recognised before anything else - see the note below.
+      const asText = okmsg.text(bytes);
+      if (/^Error/i.test(asText)) {
+        this.error = asText;
+        this.done = true;
+        return 'error';
+      }
+
+      if (/^(UNINITIALIZED|INITIALIZED|UNLOCKED)/.test(asText)) {
+        this.statusReports += 1;
+        return 'ignored';
+      }
+
+      if (bytes.length < 3 || bytes[1] !== PIPE) return 'ignored';
+
+      const code = bytes[0];
+      const slot = code <= 9 ? code : code - LABEL_CODE_OFFSET;
+      if (slot < 1 || slot > this.total) return 'ignored';
+
+      let label = '';
+      for (let i = 2; i < bytes.length; i++) {
+        const b = bytes[i];
+        if (b === 0x00) break;
+        if (b >= 0x20 && b <= 0x7e) label += String.fromCharCode(b);
+      }
+
+      this.labels[slot - 1] = label;
+      if (slot >= this.total) this.done = true;
+      return this.done ? 'done' : 'stored';
+    }
 
     /*
-     * ERRORS ARE CHECKED BEFORE THE PRIMING DISCARD, and the order is the whole
-     * point.
-     *
-     * The device's refusals arrive INSTEAD of the list, not after it, so a
-     * refusal IS the first response. Discarding it as priming - which is what
-     * this did - swallows the one message that explains what went wrong, and
-     * the caller waits out its deadline against a device that answered
-     * immediately and clearly.
-     *
-     * Found the first time a locked device was asked for labels: the reply is
-     * "Error device locked" (okcore.cpp:385-399), and the read timed out
-     * instead of saying so.
+     * The string form is still accepted, because that is what a caller has if
+     * it took the app's route - and because the priming rule below only makes
+     * sense there.
+     */
+    const text = report;
+
+    /*
+     * Errors are checked BEFORE the priming discard. The device's refusals
+     * arrive INSTEAD of the list, not after it, so a refusal IS the first
+     * response; discarding it as priming swallows the one message that
+     * explains the failure and leaves the caller to time out.
      */
     if (/^Error/i.test(text)) {
       this.error = text;
@@ -142,7 +218,6 @@ class LabelReader {
       return 'primed';
     }
 
-    // Exactly two characters before the pipe, or it is not a label line.
     if (text.indexOf('|') !== 2) return 'ignored';
 
     const slot = labelSlotNumber(text.slice(0, 2));
@@ -175,9 +250,21 @@ async function readLabels(transport, opts = {}) {
       // Partial results rather than nothing: knowing which slots answered is
       // more useful than a bare timeout when a device is misbehaving.
       const partial = reader.result();
+      /*
+       * If the ONLY thing that arrived was the status broadcast, the device is
+       * almost certainly locked - it answers this message with silence, not
+       * with the refusal its source suggests. Saying so turns a bare timeout
+       * into the actual diagnosis.
+       */
+      const looksLocked = reader.statusReports > 0 && !partial.labels.some(Boolean);
       reject(Object.assign(
-        new Error(`label read timed out after ${timeoutMs}ms`),
-        { partial },
+        new Error(
+          `label read timed out after ${timeoutMs}ms` +
+          (looksLocked
+            ? ` - the device sent only status broadcasts (${reader.statusReports}), so it is probably locked; call unlock() first`
+            : ''),
+        ),
+        { partial, looksLocked },
       ));
     }, timeoutMs);
 

@@ -29,6 +29,42 @@ function setup(imports, register) {
 
   let deviceType = slots.DEVICE_TYPE.CLASSIC;
 
+  /**
+   * Is this report the device talking to itself rather than answering us?
+   *
+   * A locked device runs Task taskInitialized(1000, sendInitialized)
+   * (OnlyKey.ino:213) and broadcasts its status once a second until it
+   * unlocks. Any request() that takes the next report therefore has a good
+   * chance of taking that instead of its answer - measured on the device, a
+   * slot write came back acknowledged "INITIALIZED".
+   */
+  function isStatusBroadcast(report) {
+    /*
+     * The specific lock states, NOT "parseState returned something" - it always
+     * does, falling back to {state:'unknown'}, so a truthiness test here
+     * rejected every real answer including "Successfully set Label".
+     *
+     * An ERROR is deliberately not a broadcast. "Error device locked" is a
+     * genuine answer to a slot write, and filtering it out would turn a device
+     * that refused clearly into one that timed out silently - the same bug the
+     * label reader had.
+     */
+    const { state } = okmsg.parseState(report);
+    return state === 'locked' || state === 'unlocked' || state === 'uninitialized';
+  }
+
+  /**
+   * The shape of an answer to a slot write.
+   *
+   * okcore.cpp's SETSLOT handler hidprint()s "Successfully set Label" and its
+   * siblings, and refuses with "Error ...". Anything else on the bus at that
+   * moment - a status broadcast, a straggling label report - is traffic, not a
+   * reply.
+   */
+  function isSlotAcknowledgement(report) {
+    return /^(Success|Error)/i.test(okmsg.text(report));
+  }
+
   /** Progress is emitted, not logged: a GUI needs to render these steps. */
   function progress(step, detail) {
     events.emit('progress', { step, ...detail });
@@ -193,13 +229,25 @@ function setup(imports, register) {
     },
 
     /**
-     * Discard a half-entered PIN.
+     * Attempt to discard a half-entered PIN. UNRELIABLE, and measured to be.
      *
-     * A failed attempt is not cleared: the digits stay in the firmware's
-     * `password` buffer and the next attempt APPENDS to them, so a second try
-     * with the correct PIN fails too. The device's own way out is a long press,
-     * which is what this sends - button 6 held, the `>= 72` band at
-     * OnlyKey.ino:914 that calls password.reset().
+     * A failed attempt is not cleared on its own: the digits stay in the
+     * firmware's `password` buffer and the next attempt APPENDS to them, so a
+     * second try with the correct PIN fails too.
+     *
+     * The device's own way out is a long press on button 6 - the `>= 72` band
+     * at OnlyKey.ino:914 that calls password.reset(). But that branch sits at
+     * the end of a long else-if chain guarded on `!isfade`, while
+     * password.append() runs unconditionally 220 lines earlier at :694. So when
+     * the LED happens to be fading - which on a locked device pulsing its
+     * status is much of the time - the press is APPENDED and never reset, and
+     * the gesture makes the buffer worse rather than empty.
+     *
+     * Observed on the device: "6!" followed by a 7-digit PIN produced EIGHT
+     * appends and no unlock.
+     *
+     * The reliable reset is a firmware restart, since the buffer is RAM. See
+     * FINDING-pin-buffer-cannot-be-cleared.md.
      */
     clearPinEntry() {
       return pressLine(transport, '6!');
@@ -268,6 +316,19 @@ function setup(imports, register) {
           iface: IFACE.VENDOR,
           data: write.frame,
           timeoutMs,
+          /*
+           * Positively matched, not merely filtered.
+           *
+           * The bus carries the once-a-second status broadcast AND, right after
+           * a write, label reports left over from a list the device is still
+           * sending. Excluding only the broadcast let one of those through: a
+           * slot write came back acknowledged with the bytes 01 7C 'e2e4344',
+           * which is slot 1's label, not an acknowledgement.
+           *
+           * The firmware's acknowledgements are all "Successfully ..." or
+           * "Error ...", so that is what is waited for.
+           */
+          match: isSlotAcknowledgement,
         });
         const text = okmsg.text(reply);
         if (/^Error/i.test(text)) {
@@ -287,6 +348,7 @@ function setup(imports, register) {
         iface: IFACE.VENDOR,
         data: slotConfig.wipeMessage(slot, field),
         timeoutMs,
+        match: isSlotAcknowledgement,
       });
       const text = okmsg.text(reply);
       if (/^Error/i.test(text)) throw new Error(text);
