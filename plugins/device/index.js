@@ -433,9 +433,39 @@ const PREFERENCES = {
      * interface and "UNLOCKED" on the debug console - so either arriving is
      * enough. Both are watched because the SEREMU one is DEBUG-build-only.
      */
-    async unlock(digits, { timeoutMs = 15000 } = {}) {
+    async unlock(digits, { timeoutMs = 15000, enterDigits } = {}) {
       const problems = pin.validatePin(digits);
       if (problems.length) throw new Error(problems.join(' '));
+
+      /*
+       * HOW the digits are entered is the caller's business, not this
+       * function's.
+       *
+       * The default writes them to the debug console, which is a DEBUG-build
+       * feature: the whole simulated-press command interface sits inside
+       * `#ifdef DEBUG` in okcore.cpp, so on a production build the firmware
+       * never reads what pressLine writes. It does not refuse - it says
+       * nothing, and this call times out after fifteen seconds with a message
+       * about the PIN possibly being wrong. The PIN was fine; there was no
+       * listener.
+       *
+       * So a host that can press buttons passes `enterDigits`, and gets a path
+       * that works on either build. runPinSequence has accepted this hook since
+       * it was written; unlock() not taking it is why ok-rn's PIN screen
+       * reimplemented the flow instead of using this.
+       *
+       * When the device is known to be a production build and no hook was
+       * given, say so immediately rather than waiting out the timeout - a
+       * message naming the real cause is worth more than fifteen seconds.
+       */
+      const caps = session.capabilities;
+      if (!enterDigits && caps && caps.debugConsole === false) {
+        throw new Error(
+          'this is a production firmware build, which has no debug console to ' +
+          'accept typed digits - pass enterDigits to press the buttons instead',
+        );
+      }
+      const enter = enterDigits || ((line) => pressLine(transport, line));
 
       const seen = await new Promise((resolve, reject) => {
         const offs = [];
@@ -475,7 +505,7 @@ const PREFERENCES = {
          * a loop iteration of the last digit, which on an in-process bus is
          * faster than a caller that writes first can start listening.
          */
-        pressLine(transport, digits).catch((err) => done(() => reject(err)));
+        Promise.resolve(enter(digits)).catch((err) => done(() => reject(err)));
       });
 
       progress('unlocked', { status: seen });
