@@ -336,6 +336,21 @@ function setup(imports, register) {
       return composite.registerCompositeHooks(openpgp, okcrypto, slot);
     },
 
+    /**
+     * Encrypt, decrypt, sign and verify messages and files.
+     *
+     * The four pages the desktop app links out to. Re-exported rather than
+     * wrapped: every one of these takes the openpgp instance as its first
+     * argument, so wrapping them here would mean either importing the 1.2 MB
+     * fork into this plugin - which the whole shape of this file avoids - or
+     * inventing a second way to pass it.
+     *
+     * A caller that wants DEVICE-BACKED decryption calls registerPgpHooks
+     * first; from then on `messages.decryptMessage` routes the private-key
+     * half to the key without knowing it has.
+     */
+    messages: require('../../src/crypto/pgp_messages'),
+
     /* ---- device operations --------------------------------------------- */
 
     /**
