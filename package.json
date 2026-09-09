@@ -19,7 +19,9 @@
     "./plugins/transport/embedded": "./plugins/transport/embedded.js",
     "./plugins/device": "./plugins/device/index.js",
     "./plugins/okcrypto": "./plugins/okcrypto/index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./webcrypto": "./src/webcrypto/subtle.js",
+    "./webcrypto/text": "./src/webcrypto/text.js"
   },
   "files": [
     "src",
