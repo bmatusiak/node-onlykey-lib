@@ -79,6 +79,33 @@ const CTAP2_CMD = {
   GET_NEXT_ASSERTION: 0x08,
 };
 
+/**
+ * Status codes a RESPONDER sends, by name.
+ *
+ * CTAP2_ERROR below maps a byte to its spec name, which is what a client needs
+ * when it RECEIVES one. Answering a request needs the other direction, and
+ * having only the first is how ok-rn came to keep its own table with
+ * `NOT_ALLOWED: 0x30` in it - a byte the spec does not define at all - and
+ * `UNSUPPORTED_OPTION: 0x2b`, which is really NO_CREDENTIALS. Every rejected
+ * BLE request went out as an undefined status.
+ *
+ * Kept honest by a test asserting every value here is a key of CTAP2_ERROR, so
+ * a code that is not in the spec cannot be added to this one either.
+ */
+const CTAP2_STATUS = {
+  OK: 0x00,
+  INVALID_COMMAND: 0x01,
+  INVALID_PARAMETER: 0x02,
+  INVALID_LENGTH: 0x03,
+  MISSING_PARAMETER: 0x14,
+  INVALID_CREDENTIAL: 0x22,
+  USER_ACTION_PENDING: 0x23,
+  OPERATION_DENIED: 0x27,
+  NO_CREDENTIALS: 0x2b,
+  NOT_ALLOWED: 0x2d,
+  UNSUPPORTED_OPTION: 0x6a,
+};
+
 const CTAP2_ERROR = {
   0x00: 'CTAP2_OK',
   0x01: 'CTAP1_ERR_INVALID_COMMAND',
@@ -129,32 +156,164 @@ function sameCid(packet, cid) {
 }
 
 /**
- * Split a message into 64-byte CTAPHID packets.
+ * A channel id as four bytes, from either four bytes or a number.
+ *
+ * This file is bytes-oriented, but a channel id reads naturally as a number -
+ * BROADCAST is "0xffffffff", and that is how it appears in a log line. Both
+ * spellings arrive here, so both are accepted and one is stored.
+ */
+function cidBytes(cid) {
+  if (cid instanceof Uint8Array) return cid.subarray(0, 4);
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, cid >>> 0, false);
+  return out;
+}
+
+/** The same id as a number, for logs and for comparing against BROADCAST. */
+function cidNumber(cid) {
+  if (typeof cid === 'number') return cid >>> 0;
+  return view(cid).getUint32(0, false);
+}
+
+/**
+ * Split a message into packets of `packetSize` bytes.
  *
  * Pure, so it can be tested against the reference without a device.
+ *
+ * `packetSize` is a parameter rather than the constant because a USB endpoint
+ * reports its own packet size on connect, and the descriptor is what decides
+ * how much fits in a report - not our assumption about it.
  */
-function frame(cid, cmd, payload) {
+function frame(cid, cmd, payload, packetSize = PACKET_SIZE) {
+  const initPayload = packetSize - 7;
+  const contPayload = packetSize - 5;
+  const id = cidBytes(cid);
+
+  /*
+   * The length field is two bytes. Anything longer cannot be described, and a
+   * caller finding out by receiving a truncated message at the other end is
+   * worse than finding out here.
+   */
+  if (payload.length > 0xffff) {
+    throw new Error(`frame: payload ${payload.length} exceeds 65535 bytes`);
+  }
+
   const packets = [];
 
-  const init = new Uint8Array(PACKET_SIZE);
-  init.set(cid.subarray(0, 4), 0);
+  const init = new Uint8Array(packetSize);
+  init.set(id, 0);
   init[4] = cmd | TYPE_INIT;
   view(init).setUint16(5, payload.length, false);
-  init.set(payload.subarray(0, Math.min(payload.length, INIT_PAYLOAD)), 7);
+  init.set(payload.subarray(0, Math.min(payload.length, initPayload)), 7);
   packets.push(init);
 
-  let offset = INIT_PAYLOAD;
+  let offset = initPayload;
   let seq = 0;
   while (offset < payload.length) {
-    const cont = new Uint8Array(PACKET_SIZE);
-    cont.set(cid.subarray(0, 4), 0);
+    // The sequence byte's high bit marks an INIT packet, so it counts to 0x7f.
+    if (seq > 0x7f) {
+      throw new Error('frame: sequence overflow (payload too large)');
+    }
+    const cont = new Uint8Array(packetSize);
+    cont.set(id, 0);
     cont[4] = seq++; // sequence, high bit clear
-    cont.set(payload.subarray(offset, offset + CONT_PAYLOAD), 5);
+    cont.set(payload.subarray(offset, offset + contPayload), 5);
     packets.push(cont);
-    offset += CONT_PAYLOAD;
+    offset += contPayload;
   }
 
   return packets;
+}
+
+/**
+ * Reassembles inbound packets into whole messages.
+ *
+ * Stateful on purpose: a continuation packet is meaningless without the
+ * initialization packet before it, so the buffer has to outlive one callback.
+ *
+ * ## On an unexpected continuation, the packet is dropped and the message kept
+ *
+ * ok-rn carried a second copy of this that ABANDONED the whole message when a
+ * continuation arrived with the wrong sequence or the wrong channel, on the
+ * reasoning that splicing corrupt bytes together is worse. The two copies are
+ * now one, and this is the behaviour that survived, for three reasons:
+ *
+ *   - Neither version splices the bad packet, so the choice is only about the
+ *     good bytes already collected. Throwing those away because something
+ *     unrelated arrived turns one stray packet into a lost message.
+ *   - A stray packet on this bus is usually a LEFTOVER from the previous
+ *     exchange, not corruption of this one - the emulator's report queue can
+ *     deliver one after the next message has started.
+ *   - When a message really is lost, waiting produces a timeout that names how
+ *     many of how many bytes arrived. Abandoning produces silence.
+ *
+ * A fresh initialization packet always resets, so both recover at the same
+ * point either way: the next message.
+ *
+ * The spec's own rule for the case with no state at all - CTAP §11.2.4,
+ * "spurious continuation packets will be ignored" - is what both copies already
+ * did, and still do.
+ */
+class Assembler {
+  constructor({ packetSize = PACKET_SIZE } = {}) {
+    this.packetSize = packetSize;
+    this.initPayload = packetSize - 7;
+    this.contPayload = packetSize - 5;
+    this.reset();
+  }
+
+  reset() {
+    this.cid = null;
+    this.cmd = null;
+    this.total = null;
+    this.chunks = [];
+    this.have = 0;
+    this.seq = 0;
+  }
+
+  /** How much of a message is outstanding, for a timeout message to quote. */
+  get progress() {
+    return this.total === null ? null : { have: this.have, total: this.total };
+  }
+
+  /**
+   * @param {Uint8Array} packet
+   * @returns {{cid: Uint8Array, cmd: number, payload: Uint8Array}|null}
+   */
+  push(packet) {
+    if (packet.length < 5) return null;
+
+    if (this.total === null) {
+      // Only an init packet starts a message; reading a continuation's
+      // sequence byte as a command would invent one.
+      if ((packet[4] & TYPE_INIT) === 0) return null;
+      this.cid = packet.slice(0, 4);
+      this.cmd = packet[4] & 0x7f;
+      this.total = view(packet).getUint16(5, false);
+      const n = Math.min(this.total, this.initPayload);
+      this.chunks = [packet.subarray(7, 7 + n)];
+      this.have = n;
+      this.seq = 0;
+    } else if ((packet[4] & TYPE_INIT) !== 0) {
+      // A new message starting on top of an unfinished one. The old one is
+      // never coming; take the new one rather than dropping both.
+      this.reset();
+      return this.push(packet);
+    } else {
+      if (!sameCid(packet, this.cid) || packet[4] !== this.seq) return null;
+      const n = Math.min(this.total - this.have, this.contPayload);
+      this.chunks.push(packet.subarray(5, 5 + n));
+      this.have += n;
+      this.seq++;
+    }
+
+    if (this.have >= this.total) {
+      const message = { cid: this.cid, cmd: this.cmd, payload: concat(this.chunks) };
+      this.reset();
+      return message;
+    }
+    return null;
+  }
 }
 
 /**
@@ -198,43 +357,19 @@ class CtapHid {
     const ready = [];      // complete messages nobody has asked for yet
     const waiting = [];    // askers with nothing to give them yet
 
-    let chunks = [];
-    let cmd = null;
-    let total = null;
-    let have = 0;
-    let seq = 0;
+    const assembler = new Assembler();
 
     const off = this.transport.on('report', (event) => {
       if (event.iface !== this.iface) return;
       const packet = event.data;
+      // The reader is bound to ONE channel, so another channel's traffic is
+      // filtered before the assembler ever sees it.
       if (packet.length < 5 || !sameCid(packet, cid)) return;
 
-      if (total === null) {
-        // Only an init packet starts a message; a stray continuation is not
-        // ours to reassemble, and reading its sequence byte as a command would
-        // invent one.
-        if ((packet[4] & TYPE_INIT) === 0) return;
-        cmd = packet[4] & 0x7f;
-        total = view(packet).getUint16(5, false);
-        const n = Math.min(total, INIT_PAYLOAD);
-        chunks = [packet.subarray(7, 7 + n)];
-        have = n;
-        seq = 0;
-      } else {
-        if (packet[4] !== seq) return;
-        const n = Math.min(total - have, CONT_PAYLOAD);
-        chunks.push(packet.subarray(5, 5 + n));
-        have += n;
-        seq++;
-      }
-
-      if (have >= total) {
-        const message = { cmd, payload: concat(chunks) };
-        total = null;
-        chunks = [];
-        if (waiting.length) waiting.shift().resolve(message);
-        else ready.push(message);
-      }
+      const message = assembler.push(packet);
+      if (!message) return;
+      if (waiting.length) waiting.shift().resolve(message);
+      else ready.push(message);
     });
 
     const reader = {
@@ -247,9 +382,10 @@ class CtapHid {
           const timer = setTimeout(() => {
             const at = waiting.findIndex((w) => w.timer === timer);
             if (at !== -1) waiting.splice(at, 1);
+            const at2 = assembler.progress;
             reject(new Error(
               `no CTAPHID reply within ${limit}ms` +
-              (total === null ? '' : ` (had ${have} of ${total} bytes)`),
+              (at2 === null ? '' : ` (had ${at2.have} of ${at2.total} bytes)`),
             ));
           }, limit);
 
@@ -434,10 +570,14 @@ class CtapHid {
 
 module.exports = {
   CtapHid,
+  Assembler,
+  cidBytes,
+  cidNumber,
   Ctap2Error,
   frame,
   CTAPHID,
   CTAP2_CMD,
+  CTAP2_STATUS,
   CTAP2_ERROR,
   KEEPALIVE,
   BROADCAST_CID,

@@ -100,17 +100,89 @@ export class CtapHid {
     /** Did the device ask for a finger during the last exchange? */
     get askedForUserPresence(): boolean;
 }
+/**
+ * Reassembles inbound packets into whole messages.
+ *
+ * Stateful on purpose: a continuation packet is meaningless without the
+ * initialization packet before it, so the buffer has to outlive one callback.
+ *
+ * ## On an unexpected continuation, the packet is dropped and the message kept
+ *
+ * ok-rn carried a second copy of this that ABANDONED the whole message when a
+ * continuation arrived with the wrong sequence or the wrong channel, on the
+ * reasoning that splicing corrupt bytes together is worse. The two copies are
+ * now one, and this is the behaviour that survived, for three reasons:
+ *
+ *   - Neither version splices the bad packet, so the choice is only about the
+ *     good bytes already collected. Throwing those away because something
+ *     unrelated arrived turns one stray packet into a lost message.
+ *   - A stray packet on this bus is usually a LEFTOVER from the previous
+ *     exchange, not corruption of this one - the emulator's report queue can
+ *     deliver one after the next message has started.
+ *   - When a message really is lost, waiting produces a timeout that names how
+ *     many of how many bytes arrived. Abandoning produces silence.
+ *
+ * A fresh initialization packet always resets, so both recover at the same
+ * point either way: the next message.
+ *
+ * The spec's own rule for the case with no state at all - CTAP §11.2.4,
+ * "spurious continuation packets will be ignored" - is what both copies already
+ * did, and still do.
+ */
+export class Assembler {
+    constructor({ packetSize }?: {
+        packetSize?: number | undefined;
+    });
+    packetSize: number;
+    initPayload: number;
+    contPayload: number;
+    reset(): void;
+    cid: Uint8Array<ArrayBuffer> | null | undefined;
+    cmd: number | null | undefined;
+    total: number | null | undefined;
+    chunks: any[] | Uint8Array<ArrayBufferLike>[] | undefined;
+    have: number | undefined;
+    seq: number | undefined;
+    /** How much of a message is outstanding, for a timeout message to quote. */
+    get progress(): {
+        have: number | undefined;
+        total: number | undefined;
+    } | null;
+    /**
+     * @param {Uint8Array} packet
+     * @returns {{cid: Uint8Array, cmd: number, payload: Uint8Array}|null}
+     */
+    push(packet: Uint8Array): {
+        cid: Uint8Array;
+        cmd: number;
+        payload: Uint8Array;
+    } | null;
+}
+/**
+ * A channel id as four bytes, from either four bytes or a number.
+ *
+ * This file is bytes-oriented, but a channel id reads naturally as a number -
+ * BROADCAST is "0xffffffff", and that is how it appears in a log line. Both
+ * spellings arrive here, so both are accepted and one is stored.
+ */
+export function cidBytes(cid: any): Uint8Array<ArrayBufferLike>;
+/** The same id as a number, for logs and for comparing against BROADCAST. */
+export function cidNumber(cid: any): number;
 export class Ctap2Error extends Error {
     constructor(code: any);
     code: any;
     ctapName: any;
 }
 /**
- * Split a message into 64-byte CTAPHID packets.
+ * Split a message into packets of `packetSize` bytes.
  *
  * Pure, so it can be tested against the reference without a device.
+ *
+ * `packetSize` is a parameter rather than the constant because a USB endpoint
+ * reports its own packet size on connect, and the descriptor is what decides
+ * how much fits in a report - not our assumption about it.
  */
-export function frame(cid: any, cmd: any, payload: any): Uint8Array<ArrayBuffer>[];
+export function frame(cid: any, cmd: any, payload: any, packetSize?: number): Uint8Array<ArrayBuffer>[];
 export namespace CTAPHID {
     let PING: number;
     let MSG: number;
@@ -129,6 +201,19 @@ export namespace CTAP2_CMD {
     let CLIENT_PIN: number;
     let RESET: number;
     let GET_NEXT_ASSERTION: number;
+}
+export namespace CTAP2_STATUS {
+    let OK: number;
+    let INVALID_COMMAND: number;
+    let INVALID_PARAMETER: number;
+    let INVALID_LENGTH: number;
+    let MISSING_PARAMETER: number;
+    let INVALID_CREDENTIAL: number;
+    let USER_ACTION_PENDING: number;
+    let OPERATION_DENIED: number;
+    let NO_CREDENTIALS: number;
+    let NOT_ALLOWED: number;
+    let UNSUPPORTED_OPTION: number;
 }
 export const CTAP2_ERROR: {
     0: string;

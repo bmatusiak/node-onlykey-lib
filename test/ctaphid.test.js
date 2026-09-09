@@ -14,8 +14,8 @@ const assert = require('node:assert');
 const path = require('path');
 
 const {
-  CtapHid, Ctap2Error, frame,
-  CTAPHID, CTAP2_CMD, KEEPALIVE, BROADCAST_CID,
+  CtapHid, Ctap2Error, frame, Assembler, cidBytes, cidNumber,
+  CTAPHID, CTAP2_CMD, CTAP2_STATUS, CTAP2_ERROR, KEEPALIVE, BROADCAST_CID,
   PACKET_SIZE, INIT_PAYLOAD, CONT_PAYLOAD,
 } = require('../src/protocol/ctaphid');
 const { fakeCtapHid } = require('./helpers/fake-ctaphid');
@@ -325,4 +325,143 @@ test('a slow press still completes, where the ordinary timeout would not', async
     presenceTimeoutMs: 2000,
   });
   assert.equal(out.get(1), 'pressed');
+});
+
+test('every status we can send is one the spec defines', () => {
+  /*
+   * CTAP2_ERROR answers "what did the device send me". CTAP2_STATUS answers
+   * "what may I send back", and until it existed, callers that needed the
+   * second direction wrote their own - ok-rn's copy had NOT_ALLOWED as 0x30,
+   * which is not a CTAP2 status at all, and UNSUPPORTED_OPTION as 0x2b, which
+   * is NO_CREDENTIALS. Every rejected BLE request carried an undefined byte.
+   *
+   * Asserting one table against the other is what stops the pair drifting
+   * apart again: a name here without a code there is a code nobody defined.
+   */
+  for (const [name, code] of Object.entries(CTAP2_STATUS)) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(CTAP2_ERROR, code),
+      `CTAP2_STATUS.${name} = 0x${code.toString(16)} is not a defined CTAP2 status`,
+    );
+  }
+
+  /* And the two that were wrong, pinned by value so a typo cannot pass. */
+  assert.equal(CTAP2_STATUS.NOT_ALLOWED, 0x2d);
+  assert.equal(CTAP2_STATUS.NO_CREDENTIALS, 0x2b);
+  assert.equal(CTAP2_STATUS.UNSUPPORTED_OPTION, 0x6a);
+  assert.equal(CTAP2_ERROR[0x2d], 'CTAP2_ERR_NOT_ALLOWED');
+});
+
+/*
+ * ## Assembler
+ *
+ * These came from ok-rn's `src/transport/framing.ts`, a second implementation
+ * of this framing that the app kept for its USB path. That file is gone; its
+ * tests are here, against the one implementation, with the two that asserted
+ * the OTHER answer to an unexpected continuation rewritten to assert this one.
+ * See the class comment for why this behaviour is the one that survived.
+ */
+
+const CID = Uint8Array.of(0x11, 0x22, 0x33, 0x44);
+const filler = (n) => Uint8Array.from({ length: n }, (_, i) => i & 0xff);
+
+test('a channel id round-trips between four bytes and a number', () => {
+  assert.deepEqual(Array.from(cidBytes(0xffffffff)), [0xff, 0xff, 0xff, 0xff]);
+  assert.equal(cidNumber(CID), 0x11223344);
+  // The high bit set must not come back negative, which a bare << 24 would.
+  assert.equal(cidNumber(cidBytes(0xffffffff)), 0xffffffff);
+});
+
+test('frame refuses a payload longer than the length field can describe', () => {
+  assert.throws(
+    () => frame(CID, CTAPHID.MSG, new Uint8Array(0x10000)),
+    /exceeds 65535/,
+    'a truncated message discovered at the other end is worse than throwing',
+  );
+});
+
+test('the assembler puts a fragmented message back together', () => {
+  const data = filler(400);
+  const packets = frame(CID, CTAPHID.CBOR, data);
+  const assembler = new Assembler();
+
+  const done = packets.map((p) => assembler.push(p)).filter(Boolean);
+  assert.equal(done.length, 1, 'exactly one message, on the last packet');
+  assert.equal(done[0].cmd, CTAPHID.CBOR);
+  assert.deepEqual(Array.from(done[0].payload), Array.from(data));
+});
+
+test('a continuation with no init before it is ignored', () => {
+  const assembler = new Assembler();
+  const stray = new Uint8Array(PACKET_SIZE);
+  stray.set(CID, 0);
+  stray[4] = 0x00; // a sequence byte, not a command
+  assert.equal(assembler.push(stray), null);
+});
+
+test('an out-of-order continuation is dropped, the message is not', () => {
+  /*
+   * ok-rn's copy abandoned the message here and returned null for the rest of
+   * it. Dropping the one bad packet keeps the good bytes, so the message still
+   * completes when the packet it was actually waiting for arrives.
+   */
+  const data = filler(400);
+  const packets = frame(CID, CTAPHID.CBOR, data);
+  const assembler = new Assembler();
+
+  assembler.push(packets[0]);
+  assert.equal(assembler.push(packets[3]), null, 'seq 2 while seq 0 is due');
+  assert.equal(assembler.progress.have, INIT_PAYLOAD, 'the init payload is still held');
+
+  for (const p of packets.slice(1)) {
+    const message = assembler.push(p);
+    if (message) {
+      assert.deepEqual(Array.from(message.payload), Array.from(data));
+      return;
+    }
+  }
+  assert.fail('the message never completed');
+});
+
+test('a continuation on another channel is dropped, the message is not', () => {
+  const data = filler(200);
+  const packets = frame(CID, CTAPHID.CBOR, data);
+  const assembler = new Assembler();
+
+  assembler.push(packets[0]);
+  const wrongChannel = Uint8Array.from(packets[1]);
+  wrongChannel[0] = 0x99;
+  assert.equal(assembler.push(wrongChannel), null);
+  assert.equal(assembler.progress.have, INIT_PAYLOAD, 'and took nothing from it');
+
+  const done = packets.slice(1).map((p) => assembler.push(p)).filter(Boolean);
+  assert.equal(done.length, 1, 'the real continuations still complete it');
+  assert.deepEqual(Array.from(done[0].payload), Array.from(data));
+});
+
+test('a fresh init replaces a message that was left unfinished', () => {
+  const assembler = new Assembler();
+  assembler.push(frame(CID, CTAPHID.CBOR, filler(400))[0]); // start, then walk away
+
+  const data = filler(10);
+  const [init] = frame(CID, CTAPHID.PING, data);
+  const message = assembler.push(init);
+
+  assert.ok(message, 'the new message is not held up by the abandoned one');
+  assert.equal(message.cmd, CTAPHID.PING);
+  assert.deepEqual(Array.from(message.payload), Array.from(data));
+});
+
+test('both ends honour a report size that is not 64', () => {
+  /*
+   * A USB endpoint reports its own packet size on connect. This is the reason
+   * `packetSize` is a parameter and not the constant.
+   */
+  const data = filler(100);
+  const packets = frame(CID, CTAPHID.CBOR, data, 32);
+  assert.ok(packets.every((p) => p.length === 32));
+
+  const assembler = new Assembler({ packetSize: 32 });
+  const done = packets.map((p) => assembler.push(p)).filter(Boolean);
+  assert.deepEqual(Array.from(done[0].payload), Array.from(data));
 });
