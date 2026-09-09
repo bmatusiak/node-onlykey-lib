@@ -24,6 +24,16 @@ const SLOT_COUNT = { [DEVICE_TYPE.CLASSIC]: 12, [DEVICE_TYPE.DUO]: 24 };
  * that coercion is how a refactor silently changes which slot gets written, so
  * it is named here instead.
  */
+/**
+ * The two HMAC-SHA1 key slots.
+ *
+ * okcore.h:215-216 - RESERVED_KEY_HMACSHA1_1 is 130 and _2 is 129. Named here
+ * because writing either one has a side effect the device does not report: it
+ * clears that slot's button-press requirement. See
+ * onlykey-testing/FINDING-hmac-press-free-on-write.md.
+ */
+const HMAC_SLOTS = [129, 130];
+
 const GLOBAL_SLOT = 0;
 const GLOBAL_SLOT_ID = 'XX';
 
@@ -305,6 +315,7 @@ async function readLabels(transport, opts = {}) {
 module.exports = {
   DEVICE_TYPE,
   SLOT_COUNT,
+  HMAC_SLOTS,
   GLOBAL_SLOT,
   GLOBAL_SLOT_ID,
   LABEL_TOKENS,

@@ -1,3 +1,47 @@
+/**
+ * The two-factor mode, sent as a LITERAL ASCII STRING.
+ *
+ * Not a numeric code. The device compares the text, and the values come
+ * straight from the radio buttons in the original UI. Turning these into an
+ * enum on the wire would be a silent protocol change.
+ */
+/**
+ * Check a Yubico credential and report EVERY problem, without throwing.
+ *
+ * The builders above throw on the first thing wrong, which is right for a
+ * caller assembling bytes and wrong for a form. The desktop app shows what
+ * happens otherwise: `submitYubiAuthForm()` converts the public id inline, the
+ * conversion throws on a hex digit where modhex was wanted, the throw escapes
+ * into event dispatch, and the button appears to do nothing at all - no error,
+ * no message, the fields still full, and not one byte sent to the device. See
+ * onlykey-testing/FINDING-app-yubico-silent-discard.md.
+ *
+ * The trap is the form's own shape rather than a missing label. Three adjacent
+ * fields, and the FIRST takes a different alphabet from the other two:
+ *
+ *   Public Identity    6 bytes MODHEX
+ *   Private Identity   6 bytes hex
+ *   Secret Key        16 bytes hex
+ *
+ * Anyone filling all three from one hex dump gets silence. So this names the
+ * field, says which alphabet it wanted, and returns rather than throws.
+ *
+ * @param {object} spec {publicId, privateId, secretKey}
+ * @param {object} [opts]
+ * @param {boolean} [opts.global=false] the device-global slot-0 credential,
+ *   whose public id is HEX and exactly 6 bytes - not modhex, because
+ *   setYubiAuth concatenates it unchanged.
+ * @returns {{ok: boolean, errors: Array<{field: string, message: string}>}}
+ */
+export function validateYubiCredential({ publicId, privateId, secretKey }?: object, { global }?: {
+    global?: boolean | undefined;
+}): {
+    ok: boolean;
+    errors: Array<{
+        field: string;
+        message: string;
+    }>;
+};
 export const BASE32_ALPHABET: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 export const MODHEX_ALPHABET: "cbdefghijklnrtuv";
 export namespace YUBI {

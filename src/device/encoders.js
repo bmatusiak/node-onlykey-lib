@@ -231,12 +231,89 @@ function yubiGlobalCredential({ publicId, privateId, secretKey }) {
  * straight from the radio buttons in the original UI. Turning these into an
  * enum on the wire would be a silent protocol change.
  */
+/**
+ * Check a Yubico credential and report EVERY problem, without throwing.
+ *
+ * The builders above throw on the first thing wrong, which is right for a
+ * caller assembling bytes and wrong for a form. The desktop app shows what
+ * happens otherwise: `submitYubiAuthForm()` converts the public id inline, the
+ * conversion throws on a hex digit where modhex was wanted, the throw escapes
+ * into event dispatch, and the button appears to do nothing at all - no error,
+ * no message, the fields still full, and not one byte sent to the device. See
+ * onlykey-testing/FINDING-app-yubico-silent-discard.md.
+ *
+ * The trap is the form's own shape rather than a missing label. Three adjacent
+ * fields, and the FIRST takes a different alphabet from the other two:
+ *
+ *   Public Identity    6 bytes MODHEX
+ *   Private Identity   6 bytes hex
+ *   Secret Key        16 bytes hex
+ *
+ * Anyone filling all three from one hex dump gets silence. So this names the
+ * field, says which alphabet it wanted, and returns rather than throws.
+ *
+ * @param {object} spec {publicId, privateId, secretKey}
+ * @param {object} [opts]
+ * @param {boolean} [opts.global=false] the device-global slot-0 credential,
+ *   whose public id is HEX and exactly 6 bytes - not modhex, because
+ *   setYubiAuth concatenates it unchanged.
+ * @returns {{ok: boolean, errors: Array<{field: string, message: string}>}}
+ */
+function validateYubiCredential({ publicId, privateId, secretKey } = {}, { global = false } = {}) {
+  const errors = [];
+  const problem = (field, message) => errors.push({ field, message });
+
+  const pub = String(publicId == null ? '' : publicId).trim().toLowerCase();
+  const priv = String(privateId == null ? '' : privateId).trim().toLowerCase();
+  const secret = String(secretKey == null ? '' : secretKey).trim().toLowerCase();
+
+  /* ---- public id: the one that catches people ------------------------- */
+  if (!pub) {
+    problem('publicId', 'required');
+  } else if (global) {
+    if (!/^[0-9a-f]*$/.test(pub)) {
+      problem('publicId', 'the global public id is HEX (0-9, a-f), not modhex');
+    } else if (pub.length !== YUBI.PUBLIC_ID_GLOBAL_HEX) {
+      problem('publicId', `must be exactly ${YUBI.PUBLIC_ID_GLOBAL_HEX} hex characters (6 bytes), got ${pub.length}`);
+    }
+  } else if (!/^[cbdefghijklnrtuv]*$/.test(pub)) {
+    /*
+     * Named specifically when it looks like hex, because that is the actual
+     * mistake and "invalid character" does not point at it.
+     */
+    const looksHex = /^[0-9a-f]+$/.test(pub);
+    problem('publicId', looksHex
+      ? 'this is HEX; the per-slot public id is MODHEX (cbdefghijklnrtuv) - the two fields below take hex'
+      : 'must be modhex (cbdefghijklnrtuv)');
+  } else if (pub.length % 2 !== 0) {
+    problem('publicId', `must be a whole number of bytes, got ${pub.length} characters`);
+  } else if (pub.length < YUBI.PUBLIC_ID_MIN_HEX || pub.length > YUBI.PUBLIC_ID_MAX_HEX) {
+    problem('publicId',
+      `must be ${YUBI.PUBLIC_ID_MIN_HEX}-${YUBI.PUBLIC_ID_MAX_HEX} characters (2-16 bytes), got ${pub.length}`);
+  }
+
+  /* ---- the two hex fields --------------------------------------------- */
+  const hexField = (name, value, want, label) => {
+    if (!value) return problem(name, 'required');
+    if (!/^[0-9a-f]*$/.test(value)) return problem(name, 'must be hex (0-9, a-f)');
+    if (value.length !== want) {
+      problem(name, `must be exactly ${want} hex characters (${want / 2} bytes), got ${value.length}`);
+    }
+    return undefined;
+  };
+  hexField('privateId', priv, YUBI.PRIVATE_ID_HEX, 'private id');
+  hexField('secretKey', secret, YUBI.SECRET_HEX, 'secret key');
+
+  return { ok: errors.length === 0, errors };
+}
+
 const TFA_TYPE = {
   GOOGLE_AUTH: 'googleAuthOtp',
   YUBIKEY: 'YubikeyOtp',
 };
 
 module.exports = {
+  validateYubiCredential,
   BASE32_ALPHABET,
   MODHEX_ALPHABET,
   YUBI,

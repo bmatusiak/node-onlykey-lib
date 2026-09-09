@@ -622,3 +622,57 @@ test('an unrecognised device type is still refused', async () => {
   assert.throws(() => app.services.device.setDeviceType('quantum'), /unknown device type/);
   await app.destroy();
 });
+
+/* ------------------------------------------- the HMAC write's side effect */
+
+test('writing an HMAC key reports that it cleared the press requirement', async () => {
+  /*
+   * The device does not say so. process_setreport() recomputes
+   * hmac_challengemode on the success path (okcore.cpp:7703-7715) so the slot
+   * just written no longer needs a button, and acknowledges the write exactly
+   * as it acknowledges any other. Afterwards anything that can reach the
+   * keyboard interface gets HMAC-SHA1 responses with no physical presence.
+   *
+   * So the library says it instead. A caller may still ignore it, but it is
+   * ignoring something stated rather than never being told. See
+   * onlykey-testing/FINDING-hmac-press-free-on-write.md.
+   */
+  const app = await start(fakeFirmware());
+  const key = new Uint8Array(20).fill(7);
+
+  const events = [];
+  app.services.device.on('progress', (e) => events.push(e));
+
+  const result = await app.services.device.loadKey(130, { type: 1, key });
+  assert.equal(result.clearedPressRequirement, true);
+
+  const warned = events.find((e) => e.step === 'warning');
+  assert.ok(warned, 'no warning was emitted');
+  assert.equal(warned.slot, 130);
+  assert.match(warned.detail, /button-press/);
+
+  await app.destroy();
+});
+
+test('the other HMAC slot behaves the same way', async () => {
+  const app = await start(fakeFirmware());
+  const result = await app.services.device.loadKey(129, { type: 1, key: new Uint8Array(20) });
+  assert.equal(result.clearedPressRequirement, true);
+  await app.destroy();
+});
+
+test('an ordinary key slot reports no such thing', async () => {
+  /*
+   * The claim has to be false somewhere, or it says nothing. Slot 1 is an
+   * ordinary ECC slot and writing it changes no challenge mode.
+   */
+  const app = await start(fakeFirmware());
+  const events = [];
+  app.services.device.on('progress', (e) => events.push(e));
+
+  const result = await app.services.device.loadKey(1, { type: 1, key: new Uint8Array(32) });
+  assert.equal(result.clearedPressRequirement, false);
+  assert.equal(events.filter((e) => e.step === 'warning').length, 0);
+
+  await app.destroy();
+});

@@ -1,14 +1,47 @@
-export namespace CURVE {
-    let NONE: number;
+export namespace KEY_TYPE {
     let ED25519: number;
-    let NIST256P1: number;
+    let P256R1: number;
+    let P256K1: number;
+    let CURVE25519: number;
+    let MLKEM768: number;
+    let XWING: number;
+    let HMACSHA1: number;
+    let ECDH_P256R: number;
+    let ECDH_P256K: number;
+    let ECDH_CURVE25519: number;
+}
+/**
+ * The types a person picks when writing a raw key, in the order a form shows
+ * them, with the byte length each one wants.
+ *
+ * The lengths are checked rather than assumed: the device takes what it is
+ * given, so a 31-byte scalar written as Ed25519 is accepted and then signs
+ * nothing that verifies.
+ */
+export const RAW_KEY_TYPES: ({
+    name: string;
+    type: number;
+    bytes: number;
+    hmacOnly?: undefined;
+} | {
+    name: string;
+    type: number;
+    bytes: number;
+    hmacOnly: boolean;
+})[];
+export namespace CURVE {
+    export let NONE: number;
+    let ED25519_1: number;
+    export { ED25519_1 as ED25519 };
+    export let NIST256P1: number;
 }
 export namespace OID {
-    let ED25519_1: number[];
-    export { ED25519_1 as ED25519 };
+    let ED25519_2: number[];
+    export { ED25519_2 as ED25519 };
     let NIST256P1_1: number[];
     export { NIST256P1_1 as NIST256P1 };
-    export let CURVE25519: number[];
+    let CURVE25519_1: number[];
+    export { CURVE25519_1 as CURVE25519 };
 }
 export namespace MODIFIER {
     let BACKUP: number;

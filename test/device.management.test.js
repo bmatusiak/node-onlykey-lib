@@ -488,3 +488,102 @@ test('a capture that never ends times out with what it has', async () => {
 
   await app.destroy();
 });
+
+/* ------------------------------------------------------- Yubico OTP (legacy) */
+
+/*
+ * The desktop app's Advanced tab discards a wrong-format public id in TOTAL
+ * SILENCE - the conversion throws inside a click handler, the throw escapes
+ * into event dispatch, and the button appears to do nothing. Nothing is sent,
+ * nothing is shown, and the fields keep the values that were rejected. See
+ * onlykey-testing/FINDING-app-yubico-silent-discard.md.
+ *
+ * The trap is the form's shape: three adjacent fields, and only the first takes
+ * modhex. These pin that the mistake is NAMED.
+ */
+
+const encoders = require('../src/device/encoders');
+const { toHex } = require('../src/bytes');
+
+const GOOD = {
+  publicId: 'ccccccbcgujh',                     // modhex, 6 bytes
+  privateId: '0123456789ab',                    // hex, 6 bytes
+  secretKey: '00112233445566778899aabbccddeeff', // hex, 16 bytes
+};
+
+test('a good per-slot credential validates', () => {
+  const result = encoders.validateYubiCredential(GOOD);
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  assert.deepEqual(result.errors, []);
+});
+
+test('hex in the modhex field is named as the mistake it is', () => {
+  /*
+   * The single most likely error - filling all three fields from one hex dump -
+   * and the one the desktop swallows. "invalid character" would be true and
+   * would not point at it.
+   */
+  const result = encoders.validateYubiCredential({ ...GOOD, publicId: '0123456789ab' });
+  assert.equal(result.ok, false);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].field, 'publicId');
+  assert.match(result.errors[0].message, /HEX/);
+  assert.match(result.errors[0].message, /MODHEX/);
+});
+
+test('every problem is reported at once, not just the first', () => {
+  // A form marks all its bad fields. Throwing on the first would mean fixing
+  // them one round trip at a time.
+  const result = encoders.validateYubiCredential({
+    publicId: '', privateId: 'zz', secretKey: 'abcd',
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors.map((e) => e.field).sort(),
+    ['privateId', 'publicId', 'secretKey']);
+});
+
+test('the hex fields are checked for length, not sliced to it', () => {
+  /*
+   * A short private id shifts the secret in the original, producing a
+   * credential the device accepts and which then authenticates against
+   * nothing - expensive to diagnose from the far side of a one-way OTP.
+   */
+  const short = encoders.validateYubiCredential({ ...GOOD, privateId: '0123' });
+  assert.equal(short.ok, false);
+  assert.match(short.errors[0].message, /exactly 12/);
+
+  const long = encoders.validateYubiCredential({ ...GOOD, secretKey: `${GOOD.secretKey}00` });
+  assert.equal(long.ok, false);
+  assert.match(long.errors[0].message, /exactly 32/);
+});
+
+test('the GLOBAL credential wants hex, and exactly six bytes', () => {
+  /*
+   * Different from the per-slot form in all three ways: hex not modhex, exactly
+   * six bytes because the firmware memcpys that many, and the device-global
+   * pseudo-slot. Modhex here is the mirror-image mistake.
+   */
+  const good = encoders.validateYubiCredential(
+    { ...GOOD, publicId: '0123456789ab' }, { global: true },
+  );
+  assert.equal(good.ok, true, JSON.stringify(good.errors));
+
+  const modhex = encoders.validateYubiCredential(GOOD, { global: true });
+  assert.equal(modhex.ok, false);
+  assert.match(modhex.errors[0].message, /HEX/);
+
+  const wrongLength = encoders.validateYubiCredential(
+    { ...GOOD, publicId: '0123' }, { global: true },
+  );
+  assert.equal(wrongLength.ok, false);
+  assert.match(wrongLength.errors[0].message, /exactly 12/);
+});
+
+test('a valid credential encodes to the bytes the firmware reads', () => {
+  // public(6) + private(6) + secret(16) concatenated, nothing else.
+  const bytes = encoders.yubiGlobalCredential({ ...GOOD, publicId: '0123456789ab' });
+  assert.equal(bytes.length, 28);
+  assert.equal(toHex(bytes.subarray(0, 6)), '0123456789ab');
+  assert.equal(toHex(bytes.subarray(6, 12)), GOOD.privateId);
+  assert.equal(toHex(bytes.subarray(12)), GOOD.secretKey);
+});

@@ -20,6 +20,7 @@ const chunker = require('../../src/device/chunker');
 const parsers = require('../../src/device/parsers');
 const deviceKeys = require('../../src/device/keys');
 const keystrokes = require('../../src/device/keystrokes');
+const encoders = require('../../src/device/encoders');
 const { MSG, FIELD } = require('../../src/protocol/msg');
 const okmsg = require('../../src/protocol/okmsg');
 const { DeviceConsole, pressLine } = require('../../src/device/console');
@@ -677,9 +678,88 @@ const PREFERENCES = {
           msg: MSG.OKSETPRIV, slot, field: type, payload: bytes,
         }));
       }
-      progress('key', { slot, type, bytes: bytes.length });
-      return { slot, type, bytes: bytes.length };
+      /*
+       * WRITING AN HMAC KEY REMOVES THAT SLOT'S PRESS REQUIREMENT, and the
+       * device does not say so.
+       *
+       * process_setreport() recomputes hmac_challengemode on the success path
+       * (okcore.cpp:7703-7715) so that the slot just written no longer needs a
+       * button - and if the other HMAC slot was already press-free, both end up
+       * that way. Afterwards any host that can reach the keyboard interface can
+       * get HMAC-SHA1 responses from that key with no physical presence at all.
+       *
+       * The write is acknowledged exactly as any other key write is. So the
+       * consequence is RETURNED rather than left to be discovered: a caller can
+       * show it, and one that ignores it is at least ignoring something stated.
+       * See onlykey-testing/FINDING-hmac-press-free-on-write.md.
+       */
+      const pressFree = slots.HMAC_SLOTS.includes(slot);
+      if (pressFree) {
+        progress('warning', {
+          slot,
+          warning: 'press-free',
+          detail:
+            'writing an HMAC key clears the button-press requirement on that ' +
+            'slot; ' +
+            'the device does not report this',
+        });
+      }
+
+      progress('key', { slot, type, bytes: bytes.length, pressFree });
+      return {
+        slot,
+        type,
+        bytes: bytes.length,
+        /** True when this write also made the slot answer without a press. */
+        clearedPressRequirement: pressFree,
+      };
     },
+
+    /* ---- Yubico OTP ----------------------------------------------------- */
+
+    /**
+     * Write the DEVICE-GLOBAL Yubico credential - the Advanced tab's form.
+     *
+     * Validated first, and every problem is reported at once. The desktop app
+     * converts the public id inline, throws on a hex digit where modhex was
+     * wanted, and lets the throw escape into event dispatch: the button appears
+     * to do nothing, the fields keep their values, and no byte is sent. See
+     * onlykey-testing/FINDING-app-yubico-silent-discard.md.
+     *
+     * The global credential differs from the per-slot one in three ways, none
+     * cosmetic: its public id is HEX rather than modhex, it must be exactly six
+     * bytes because the firmware memcpys that many, and it lands on the
+     * device-global pseudo-slot rather than a real one.
+     *
+     * @returns {Promise<{slot: number, response: string}>}
+     * @throws with every field problem listed, before anything is sent
+     */
+    async setYubiAuth({ publicId, privateId, secretKey }, { timeoutMs = 10000, retries = 2 } = {}) {
+      const check = encoders.validateYubiCredential(
+        { publicId, privateId, secretKey }, { global: true },
+      );
+      if (!check.ok) {
+        throw new Error(
+          `Yubico credential rejected: ${check.errors.map((e) => `${e.field} ${e.message}`).join('; ')}`,
+        );
+      }
+
+      const payload = encoders.yubiGlobalCredential({ publicId, privateId, secretKey });
+      const frame = okmsg.build({
+        msg: MSG.OKSETSLOT,
+        slot: slots.GLOBAL_SLOT,
+        field: FIELD.YUBIAUTH,
+        payload,
+      });
+
+      const { text, attempts } = await sendField({ name: 'yubiAuth', frame }, { timeoutMs, retries });
+      if (/^Error/i.test(text)) throw new Error(`yubiAuth: ${text}`);
+      progress('yubiAuth', { slot: slots.GLOBAL_SLOT, response: text, attempts });
+      return { slot: slots.GLOBAL_SLOT, response: text };
+    },
+
+    /** Check a credential without sending it, so a form can mark its fields. */
+    validateYubiCredential: encoders.validateYubiCredential,
 
     /**
      * Import a PGP private key: extract, assign roles, and load each slot.

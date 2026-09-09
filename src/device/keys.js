@@ -23,6 +23,54 @@ const { fromLatin1 } = require('../bytes');
 const CURVE = { NONE: 0, ED25519: 1, NIST256P1: 2 };
 
 /**
+ * Every key type OKSETPRIV accepts, from okcore.h:218-228.
+ *
+ * A SUPERSET of CURVE above, which only carries the three a PGP key can be.
+ * These are what a caller writing a RAW key picks from, and there is no way to
+ * derive them from the material: 32 bytes is an Ed25519 scalar, a Curve25519
+ * scalar or a P-256 scalar, and the device is told which.
+ *
+ * NACL and ED25519 are both 1 in the firmware - not a mistake here, the same
+ * define twice - so they are one entry.
+ *
+ * HMACSHA1 is 9, and its slots are the two in slots.HMAC_SLOTS. Writing one
+ * clears that slot's button-press requirement without saying so; the device
+ * plugin reports that, since the firmware will not.
+ */
+const KEY_TYPE = {
+  ED25519: 1,
+  P256R1: 2,
+  P256K1: 3,
+  CURVE25519: 4,
+  MLKEM768: 5,
+  XWING: 6,
+  HMACSHA1: 9,
+  ECDH_P256R: 102,
+  ECDH_P256K: 103,
+  ECDH_CURVE25519: 104,
+};
+
+/**
+ * The types a person picks when writing a raw key, in the order a form shows
+ * them, with the byte length each one wants.
+ *
+ * The lengths are checked rather than assumed: the device takes what it is
+ * given, so a 31-byte scalar written as Ed25519 is accepted and then signs
+ * nothing that verifies.
+ */
+const RAW_KEY_TYPES = [
+  { name: 'Ed25519', type: KEY_TYPE.ED25519, bytes: 32 },
+  { name: 'Curve25519', type: KEY_TYPE.CURVE25519, bytes: 32 },
+  { name: 'NIST P-256', type: KEY_TYPE.P256R1, bytes: 32 },
+  { name: 'secp256k1', type: KEY_TYPE.P256K1, bytes: 32 },
+  /*
+   * HMAC-SHA1 keys are 20 bytes, and only the two reserved slots take one.
+   * `slots` names those; repeating the numbers here would be a second copy.
+   */
+  { name: 'HMAC-SHA1', type: KEY_TYPE.HMACSHA1, bytes: 20, hmacOnly: true },
+];
+
+/**
  * OIDs, as the byte arrays a PGP key carries them in.
  *
  * CURVE25519 is present and the original's branch for it is dead: it re-tests
@@ -412,6 +460,8 @@ function backupKeyFromPassphrase(passphrase) {
 }
 
 module.exports = {
+  KEY_TYPE,
+  RAW_KEY_TYPES,
   CURVE,
   OID,
   MODIFIER,
