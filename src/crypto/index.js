@@ -12,4 +12,6 @@ module.exports = {
   age: require('./age_file'),
   pqc: require('./age_pqc'),
   composite: require('./composite_pgp'),
+  vault: require('./vault'),
+  okconnect: require('./okconnect'),
 };
