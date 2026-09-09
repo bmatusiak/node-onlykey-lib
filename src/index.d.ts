@@ -60,10 +60,10 @@ export let protocol: {
         YUBIANDHMAC: number;
     };
     IFACE: {
-        KEYBOARD: number;
-        FIDO: number;
-        VENDOR: number;
-        SEREMU: number;
+        KEYBOARD: 0;
+        FIDO: 1;
+        VENDOR: 2;
+        SEREMU: 3;
     };
     KEYTYPE: {
         NACL: number;

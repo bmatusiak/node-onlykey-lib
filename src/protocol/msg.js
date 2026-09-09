@@ -154,7 +154,26 @@ const KEYACTION = {
  * SEREMU exists only in DEBUG firmware builds - a production device enumerates
  * three interfaces, not four.
  */
-const IFACE = { KEYBOARD: 0, FIDO: 1, VENDOR: 2, SEREMU: 3 };
+/**
+ * usb_desc.h interface numbers. The firmware routes replies by these, so they
+ * are protocol, not an implementation detail.
+ *
+ * SEREMU is the debug console and exists only on a DEBUG build - such a device
+ * enumerates four interfaces, a production one three. That is what makes the
+ * build detectable rather than merely assumed.
+ *
+ * The per-value casts are so the generated .d.ts says `KEYBOARD: 0` rather than
+ * `KEYBOARD: number`. Without them every consumer's interface argument widens to
+ * `number` and passing 7 typechecks.
+ *
+ * @typedef {0|1|2|3} Iface
+ */
+const IFACE = {
+  KEYBOARD: /** @type {0} */ (0),
+  FIDO: /** @type {1} */ (1),
+  VENDOR: /** @type {2} */ (2),
+  SEREMU: /** @type {3} */ (3),
+};
 
 /** Resolve a message by name (either spelling) or by number. */
 function messageId(msg) {

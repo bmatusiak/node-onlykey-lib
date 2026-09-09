@@ -44,7 +44,15 @@ const REPORT_SIZE = 64;
  * The numbering is the emulator's (ok_hal.h:65-66), so it can be passed through
  * without translation.
  */
-const DIR = { OUT: 0, IN: 1 };  /* OUT = device -> host, IN = host -> device */
+/**
+ * OUT = device -> host, IN = host -> device.
+ *
+ * Cast per value for the same reason as IFACE: so a direction argument stays a
+ * direction in the generated types.
+ *
+ * @typedef {0|1} Dir
+ */
+const DIR = { OUT: /** @type {0} */ (0), IN: /** @type {1} */ (1) };
 
 /**
  * The methods a transport must implement.

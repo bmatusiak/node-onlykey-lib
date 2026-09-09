@@ -1,7 +1,14 @@
+/**
+ * OUT = device -> host, IN = host -> device.
+ *
+ * Cast per value for the same reason as IFACE: so a direction argument stays a
+ * direction in the generated types.
+ */
+export type Dir = 0 | 1;
 import { IFACE } from "../protocol/msg";
 export namespace DIR {
-    let OUT: number;
-    let IN: number;
+    let OUT: 0;
+    let IN: 1;
 }
 /** One vendor report. Not negotiable - the firmware's buffers are this size. */
 export const REPORT_SIZE: 64;

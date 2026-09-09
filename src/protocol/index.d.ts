@@ -58,10 +58,10 @@ export declare let FIELD: {
     YUBIANDHMAC: number;
 };
 export declare let IFACE: {
-    KEYBOARD: number;
-    FIDO: number;
-    VENDOR: number;
-    SEREMU: number;
+    KEYBOARD: 0;
+    FIDO: 1;
+    VENDOR: 2;
+    SEREMU: 3;
 };
 export declare let KEYTYPE: {
     NACL: number;

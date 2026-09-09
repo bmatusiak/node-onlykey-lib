@@ -1,3 +1,16 @@
+/**
+ * usb_desc.h interface numbers. The firmware routes replies by these, so they
+ * are protocol, not an implementation detail.
+ *
+ * SEREMU is the debug console and exists only on a DEBUG build - such a device
+ * enumerates four interfaces, a production one three. That is what makes the
+ * build detectable rather than merely assumed.
+ *
+ * The per-value casts are so the generated .d.ts says `KEYBOARD: 0` rather than
+ * `KEYBOARD: number`. Without them every consumer's interface argument widens to
+ * `number` and passing 7 typechecks.
+ */
+export type Iface = 0 | 1 | 2 | 3;
 export namespace MSG {
     let OKPIN: number;
     let OKPINSD: number;
@@ -96,10 +109,10 @@ export namespace KEYACTION {
     let DERIVE_SHARED_SECRET_REQ_PRESS: number;
 }
 export namespace IFACE {
-    let KEYBOARD: number;
-    let FIDO: number;
-    let VENDOR: number;
-    let SEREMU: number;
+    let KEYBOARD: 0;
+    let FIDO: 1;
+    let VENDOR: 2;
+    let SEREMU: 3;
 }
 /** Resolve a message by name (either spelling) or by number. */
 export function messageId(msg: any): any;
