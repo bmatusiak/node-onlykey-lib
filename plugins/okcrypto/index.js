@@ -525,6 +525,23 @@ function setup(imports, register) {
 
       /** Drop a cached key now, wiping its bytes. */
       lock: (label) => vaultKeys.evict(label),
+
+      /**
+       * Forget every cached key at once, zeroing the bytes.
+       *
+       * What a host calls when the DEVICE LOCKS. A cached vault key outliving
+       * the lock is the whole of the protection gone: the key was derived with
+       * a touch, and after a lock there is nobody to have touched anything.
+       * `clear()` overwrites each key rather than dropping the reference,
+       * because an unreachable Uint8Array is still in memory until something
+       * reuses the page.
+       *
+       * Separate from `reap()`, which only drops what has EXPIRED. Expiry is
+       * about a policy running out; this is about the premise of every policy
+       * being gone at once.
+       */
+      lockAll: () => vaultKeys.clear(),
+
       reap: () => vaultKeys.reap(),
 
       /** Whether a key is cached, WITHOUT deriving one to find out. */

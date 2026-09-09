@@ -450,3 +450,36 @@ test('locking drops the key, so the next use touches the device again', async ()
   assert.equal(derives(), 2);
   await app.destroy();
 });
+
+test('locking the device forgets every cached vault key', async () => {
+  /*
+   * The device locking is the end of the premise every cached key rests on:
+   * each was derived with a touch, and after a lock there is nobody who could
+   * have touched anything. A key that outlives the lock is the protection gone
+   * while the UI still says "locked".
+   *
+   * Distinct from reap(), which drops only what has EXPIRED. This drops what is
+   * still valid, because validity is no longer the question.
+   */
+  const app = await start(FULL());
+  const okcrypto = app.services.okcrypto;
+  stubDerives(okcrypto);
+
+  const one = await okcrypto.deviceVault.seal('github.com', 'hunter2');
+  const two = await okcrypto.deviceVault.seal('gitlab.com', 'hunter3');
+  assert.equal(okcrypto.deviceVault.isUnlocked('github.com'), true);
+  assert.equal(okcrypto.deviceVault.isUnlocked('gitlab.com'), true);
+
+  okcrypto.deviceVault.lockAll();
+
+  assert.equal(okcrypto.deviceVault.isUnlocked('github.com'), false);
+  assert.equal(okcrypto.deviceVault.isUnlocked('gitlab.com'), false);
+
+  /*
+   * And the blobs still open afterwards, by deriving again. Forgetting a key
+   * must not be indistinguishable from destroying the data it protects.
+   */
+  assert.equal(await okcrypto.deviceVault.open('github.com', one), 'hunter2');
+  assert.equal(await okcrypto.deviceVault.open('gitlab.com', two), 'hunter3');
+  await app.destroy();
+});
