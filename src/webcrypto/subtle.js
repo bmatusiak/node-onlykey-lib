@@ -25,12 +25,26 @@
  * `install()` once at startup, and `install()` refuses to replace a real one
  * unless told to.
  *
- * ## What is deliberately missing
+ * ## RSA, and what its absence actually costs
  *
- * RSA. @noble has no RSA and this project's PGP is composite post-quantum -
- * Ed25519 with ML-DSA, X25519 with ML-KEM - so an RSA path here would be code
- * nobody runs. The RSA algorithms throw a NotSupportedError naming themselves,
- * which is what a caller can act on; silently returning wrong bytes is not.
+ * @noble has no RSA, so the RSA algorithms throw a NotSupportedError naming
+ * themselves. This used to be justified as "code nobody runs", which is wrong:
+ * RSA slots 1-4 exist, keys.js has a full RSA path, and the app imports RSA
+ * keys.
+ *
+ * What the absence costs is narrower and worth knowing exactly, because it is
+ * not obvious. openpgp's RSA sign and verify wrap their WebCrypto call in
+ * try/catch and fall through to a BigInt implementation
+ * (openpgp.js:6107-6118, 6134-6144), so the refusal here is CAUGHT and RSA
+ * sign, verify, encrypt and decrypt all work - measured, in
+ * test/webcrypto-rsa-fallback.test.js.
+ *
+ * Key GENERATION is the one exception. `generate$b` (openpgp.js:6204) takes the
+ * WebCrypto branch with no try/catch, so the refusal escapes - even though a
+ * complete Miller-Rabin fallback sits twenty lines below it, unreachable
+ * because getWebCrypto() answers truthy.
+ *
+ * So: "no RSA here" means "no RSA key generation", and nothing else.
  *
  * ## Fidelity
  *

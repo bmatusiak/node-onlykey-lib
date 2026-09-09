@@ -11,20 +11,26 @@
  * format, and the hardware-hook wiring that lets ordinary openpgp calls route
  * private-key operations to the device.
  *
- * The DEVICE-SIDE DERIVE operations are not, and that is a boundary rather
- * than an omission. `derive_xwing_recipient` and `derive_xwing_decap` reach the
- * firmware by sending OKCONNECT with a key action in opt1, a key type in opt2
- * and an encrypt-response flag in opt3 - and those three bytes are read by
- * `bridge_to_onlykey()` in libraries/fido2/ok_extension.cpp, which is the CTAP
- * path. okcore.cpp's vendor dispatch has an OKCONNECT case too, and it does
- * not look at them: over the vendor interface a keyhandle's opt bytes have
- * nowhere to go, because that frame is [header|msg|slot|field].
+ * The DEVICE-SIDE DERIVE operations are here too, and this comment used to say
+ * the opposite. It described them as a deliberate boundary needing "a CTAPHID
+ * transport on IFACE.FIDO, which no transport implements yet" - and by the time
+ * anyone read that, `derivePublicKey`, `deriveSharedSecret`,
+ * `deriveSharedSecretFor`, `derivePassword` and the whole `deviceAge` X-Wing
+ * pair were implemented below, over a tunnel that does exactly what the comment
+ * said was missing.
  *
- * So those two operations need a CTAPHID transport on IFACE.FIDO, which no
- * transport implements yet. IFACE.FIDO is already reachable - okemu_hid_deliver
- * accepts it, and src/protocol/ctap.js has the framing - so this is work, not
- * a wall, and it belongs with the FIDO/BLE track rather than being guessed at
- * here.
+ * Left as a warning rather than quietly deleted: a header describing an
+ * architecture the file has outgrown is worse than no header, because it is
+ * read BEFORE the code and believed instead of it.
+ *
+ * How they reach the firmware, which is still worth knowing: OKCONNECT carries
+ * a key action in opt1, a key type in opt2 and an encrypt-response flag in
+ * opt3, and those three bytes are read by `bridge_to_onlykey()` in
+ * libraries/fido2/ok_extension.cpp - the CTAP path. okcore.cpp's vendor
+ * dispatch has an OKCONNECT case too and does NOT look at them, because over
+ * the vendor interface a keyhandle's opt bytes have nowhere to go: that frame
+ * is [header|msg|slot|field]. So these ride the CTAPHID tunnel
+ * (src/protocol/tunnel.js) on IFACE.FIDO, not the vendor path.
  *
  * OKSIGN and OKDECRYPT, by contrast, ARE in okcore.cpp's vendor dispatch, and
  * they now run over the same transport as everything else. Both hazards this
@@ -790,18 +796,22 @@ function setup(imports, register) {
         compositeSign: true,
         compositeDecrypt: true,
         /*
-         * The OKCONNECT key exchange these ride on IS written now, and proven
-         * against the firmware (ok-rn __e2e_tests__/10-derive): a label derives
-         * the same P-256 key twice and two labels of equal length derive
-         * different ones, with the device's own status string coming back
-         * readable through the transit cipher.
+         * All of these are measured against the firmware, not inferred.
          *
-         * X-Wing specifically is still unverified. Wire keytype 5 becomes
-         * opt2 == KEYTYPE_XWING inside the firmware (it does opt2++) and
-         * returns 64 bytes rather than a 65-byte EC point, so the shape is
-         * different from everything tested - and claiming it works on the
-         * strength of the P-256 path having worked is exactly the kind of
-         * inference this field exists to avoid.
+         * The P-256 pair: a label derives the same key twice, two labels derive
+         * different ones, and the shared secret matches an ECDH computed
+         * host-side from a scalar the test holds (ok-rn __e2e_tests__/10-derive
+         * and 13-deriveParity). That last one is what caught a peer key framed
+         * with its 0x04 at the wrong end - determinism alone had passed it.
+         *
+         * X-Wing was listed here as "still unverified" long after it stopped
+         * being so, on the reasoning that its shape differs from everything
+         * tested: wire keytype 5 becomes opt2 == KEYTYPE_XWING in the firmware
+         * (it does opt2++) and 64 bytes come back rather than a 65-byte EC
+         * point. That caution was right at the time and is now answered
+         * directly - 10-derive derives the split-custody pair on device, checks
+         * the two halves differ and are stable, and round-trips a whole age
+         * file through it.
          */
         derivePublicKey: true,
         deriveSharedSecret: true,
