@@ -19,8 +19,15 @@
 
 const { randomBytes } = require('@noble/hashes/utils.js');
 
-function setup(imports, register) {
+function setup(imports, register, config) {
   const { app } = imports;
+  /*
+   * Rectify hands config as the THIRD argument, the same way
+   * plugins/transport/embedded.js takes its pipe:
+   *
+   *     plugins.config = { host: { store: AsyncStorage } };
+   */
+  const settings = (config && config.host) || {};
 
   register(null, {
     host: {
@@ -29,6 +36,21 @@ function setup(imports, register) {
 
       /** Injectable so a test can pin the OKCONNECT timestamp. */
       now: () => Date.now(),
+
+      /*
+       * Persistent key/value storage, or null.
+       *
+       * Supplied by the host for the same reason randomness is: AsyncStorage
+       * on a phone, localStorage in a browser, a Map in Node, and none of
+       * them belong in a platform-free library. Three methods - getItem,
+       * setItem, removeItem - because that is the intersection of what every
+       * platform offers.
+       *
+       * NULL is a legitimate answer. A host with nowhere to persist still
+       * works; what it loses is the vault surviving a relaunch, and the code
+       * that needs it says so rather than failing at a write.
+       */
+      store: settings.store || null,
 
       /*
        * Which runtime this is, taken from rectify rather than re-sniffed.

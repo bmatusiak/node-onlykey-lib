@@ -59,6 +59,7 @@ const age = require('../../src/crypto/age_file');
 const pqc = require('../../src/crypto/age_pqc');
 const composite = require('../../src/crypto/composite_pgp');
 const vault = require('../../src/crypto/vault');
+const vaultStore = require('../../src/crypto/vault_store');
 const okconnect = require('../../src/crypto/okconnect');
 const tunnelling = require('../../src/protocol/tunnel');
 const { CtapHid } = require('../../src/protocol/ctaphid');
@@ -78,6 +79,30 @@ function setup(imports, register) {
    * fails at the point of use on the platform that lacks it.
    */
   const randomBytes = host && host.randomBytes;
+
+  /*
+   * Persistent storage, if the host supplied any.
+   *
+   * Built once, lazily, and null when there is nowhere to persist - a host
+   * without storage still does everything except remember. The methods that
+   * need it say which one is missing rather than failing at a write.
+   */
+  let storeApi = null;
+  function persistence() {
+    if (storeApi) return storeApi;
+    if (!host || !host.store) {
+      throw new Error(
+        'the vault has nowhere to persist: the host supplied no store. Pass one ' +
+        'as plugins.config = { host: { store } } - three methods, getItem, ' +
+        'setItem and removeItem.',
+      );
+    }
+    storeApi = vaultStore.createVaultStore({
+      store: host.store,
+      now: () => (host.now ? host.now() : Date.now()),
+    });
+    return storeApi;
+  }
   const EventEmitter = app.EventEmitter;
 
   const events = new EventEmitter();
@@ -700,6 +725,65 @@ function setup(imports, register) {
         const key = await okcrypto.deviceVault.key(label, opts);
         return vault.open(key, blob);
       },
+
+      /* ---- persistence ------------------------------------------------- */
+
+      /**
+       * Whether anything can be remembered at all.
+       *
+       * Asked rather than discovered by a failed save, so a screen can hide a
+       * button instead of offering one that throws.
+       */
+      get canPersist() {
+        return Boolean(host && host.store);
+      },
+
+      /**
+       * Seal a credential and store it under its service id.
+       *
+       * The blob is what is stored; the KEY is derived from the device and
+       * kept nowhere. So this is safe to back up and impossible to read
+       * without the key that made it.
+       */
+      async save(serviceId, plaintext, opts = {}) {
+        const encrypted = await okcrypto.deviceVault.seal(serviceId, plaintext, opts);
+        return persistence().put({
+          serviceId,
+          encrypted,
+          policy: vaultKeys.getPolicy(serviceId),
+        });
+      },
+
+      /** Read one back, decrypting it. Null when there is no such record. */
+      async load(serviceId, opts = {}) {
+        const record = await persistence().get(serviceId);
+        if (!record) return null;
+        return okcrypto.deviceVault.open(serviceId, record.encrypted, opts);
+      },
+
+      /**
+       * What is stored, WITHOUT opening any of it.
+       *
+       * Listing must not touch the device: a screen showing twelve saved
+       * credentials would otherwise ask for twelve button presses to draw
+       * itself.
+       */
+      list: () => persistence().list(),
+      serviceIds: () => persistence().serviceIds(),
+      forget: (serviceId) => persistence().remove(serviceId),
+
+      /**
+       * Every sealed blob, in the web app's export envelope.
+       *
+       * Still sealed, so this is safe to copy about in the sense that
+       * matters. It is not private, though: the service ids are in the clear,
+       * so an export says which sites someone has accounts on.
+       */
+      exportJSON: () => persistence().exportJSON(),
+      importJSON: (json, opts) => persistence().importJSON(json, opts),
+
+      /** Forget every stored credential. The keys were never stored. */
+      forgetAll: () => persistence().clear(),
     },
     get deviceOperations() {
       return {
