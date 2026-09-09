@@ -27,7 +27,7 @@
 const { hkdf } = require('@noble/hashes/hkdf.js');
 const { sha256 } = require('@noble/hashes/sha2.js');
 const { gcm } = require('@noble/ciphers/aes.js');
-const { utf8ToBytes, toBase64, fromBase64 } = require('../bytes');
+const { utf8ToBytes, bytesToUtf8, toBase64, fromBase64 } = require('../bytes');
 
 /**
  * The HKDF info string, byte for byte from the web app.
@@ -118,7 +118,15 @@ function open(key, blob) {
   const nonce = raw.subarray(0, NONCE_BYTES);
   const body = raw.subarray(NONCE_BYTES);
   const pt = gcm(Uint8Array.from(key), nonce).decrypt(body);
-  return new TextDecoder().decode(pt);
+  /*
+   * bytesToUtf8, not TextDecoder. HERMES HAS NEITHER TextDecoder NOR
+   * TextEncoder, and this is a library whose whole reason for existing is that
+   * one implementation serves the desktop app, the web app and the phone. A
+   * global that exists in Node and not on the target cannot be caught by any
+   * amount of unit testing here - it throws at the point of use, on the one
+   * platform the tests do not run on.
+   */
+  return bytesToUtf8(pt);
 }
 
 /* ------------------------------------------------------------ the cache */

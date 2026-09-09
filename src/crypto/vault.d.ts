@@ -45,7 +45,7 @@ export function seal(key: Uint8Array, plaintext: string, randomBytes: Function):
  * A tag failure throws, and that is the only signal there is: AES-GCM does not
  * distinguish "wrong key" from "tampered blob", and neither should this.
  */
-export function open(key: any, blob: any): any;
+export function open(key: any, blob: any): string;
 /**
  * How long a derived key may be kept, from a policy string.
  *

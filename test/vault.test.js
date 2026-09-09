@@ -319,3 +319,29 @@ test('the default policy applies to a service nobody configured', () => {
   assert.equal(cache.put('unknown', new Uint8Array(32).fill(1)), true);
   assert.ok(cache.get('unknown'), 'the default policy did not cache');
 });
+
+test('a sealed blob opens where there is no TextDecoder', () => {
+  /*
+   * HERMES HAS NO TextDecoder, and open() used one. Every test here passed,
+   * because they run in Node - the failure appeared only on the phone, as
+   * `ReferenceError: Property 'TextDecoder' doesn't exist` thrown from inside
+   * a decrypt, which the caller above it reported as a wrong key.
+   *
+   * Deleting the global is the closest Node can get to the target platform,
+   * and it is enough: it is exactly the condition that was untested.
+   */
+  const saved = globalThis.TextDecoder;
+  const savedEnc = globalThis.TextEncoder;
+  // eslint-disable-next-line no-undef
+  delete globalThis.TextDecoder;
+  // eslint-disable-next-line no-undef
+  delete globalThis.TextEncoder;
+  try {
+    const key = vault.deriveVaultKey(new Uint8Array(32).fill(9));
+    const blob = vault.seal(key, 'hunter2', (n) => new Uint8Array(n).fill(4));
+    assert.equal(vault.open(key, blob), 'hunter2');
+  } finally {
+    globalThis.TextDecoder = saved;
+    globalThis.TextEncoder = savedEnc;
+  }
+});
