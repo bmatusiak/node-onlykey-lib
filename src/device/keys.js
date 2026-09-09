@@ -459,6 +459,53 @@ function backupKeyFromPassphrase(passphrase) {
   return { slot: BACKUP_SLOT, type: BACKUP_TYPE, key: sha256(fromLatin1(String(passphrase))) };
 }
 
+/**
+ * The backup key taken from a PGP private key instead of a passphrase.
+ *
+ * The desktop's Setup Step 9. Same destination as the passphrase form - slot
+ * 131 - and a different source: one of the key's own private scalars, chosen
+ * by the person who owns it.
+ *
+ * ## The type byte is assembled, not a constant
+ *
+ * BACKUP_TYPE is 161, which is 0x80 backup | 0x20 decryption | 1 Ed25519. That
+ * constant is right for a PASSPHRASE, whose sha256 is used as an Ed25519
+ * scalar, and wrong for anything else - a NIST P-256 scalar written as type 161
+ * is accepted by the device and then decrypts nothing. So the curve comes from
+ * the key.
+ *
+ * `alsoSignature` adds 0x40, which is what the desktop's "set as signature key"
+ * checkbox does. It is off by default: a backup key that also signs is a key
+ * whose use in one role is visible in the other.
+ *
+ * @param {Uint8Array} scalar  the chosen private scalar
+ * @param {object} opts
+ * @param {number} opts.curve  CURVE.ED25519 or CURVE.NIST256P1
+ * @param {boolean} [opts.alsoSignature=false]
+ * @returns {{slot: number, type: number, key: Uint8Array}}
+ */
+function backupKeyFromPgp(scalar, { curve, alsoSignature = false } = {}) {
+  if (!(scalar instanceof Uint8Array) || !scalar.length) {
+    throw new Error('a backup key needs the private scalar as bytes');
+  }
+  /*
+   * Refused rather than defaulted. CURVE.NONE is what curveFromOid returns for
+   * a curve it does not know, and writing that as a type gives the device a
+   * key it cannot use - discovered at restore time, which is the worst moment.
+   */
+  if (curve !== CURVE.ED25519 && curve !== CURVE.NIST256P1) {
+    throw new Error(
+      `a backup key must be Ed25519 or NIST P-256, got curve ${curve} - the ` +
+      'device is told the type and cannot infer it from the bytes',
+    );
+  }
+
+  let type = MODIFIER.BACKUP | MODIFIER.DECRYPTION | curve;
+  if (alsoSignature) type |= MODIFIER.SIGNATURE;
+
+  return { slot: BACKUP_SLOT, type, key: Uint8Array.from(scalar) };
+}
+
 module.exports = {
   KEY_TYPE,
   RAW_KEY_TYPES,
@@ -480,4 +527,5 @@ module.exports = {
   assignPgpSlots,
   validateBackupPassphrase,
   backupKeyFromPassphrase,
+  backupKeyFromPgp,
 };

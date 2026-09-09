@@ -504,6 +504,7 @@ test('a capture that never ends times out with what it has', async () => {
 
 const encoders = require('../src/device/encoders');
 const { toHex } = require('../src/bytes');
+const deviceKeys = require('../src/device/keys');
 
 const GOOD = {
   publicId: 'ccccccbcgujh',                     // modhex, 6 bytes
@@ -586,4 +587,51 @@ test('a valid credential encodes to the bytes the firmware reads', () => {
   assert.equal(toHex(bytes.subarray(0, 6)), '0123456789ab');
   assert.equal(toHex(bytes.subarray(6, 12)), GOOD.privateId);
   assert.equal(toHex(bytes.subarray(12)), GOOD.secretKey);
+});
+
+/* ------------------------------------------- the backup key from a PGP key */
+
+test('a PGP-derived backup key lands on the same slot as a passphrase one', () => {
+  /*
+   * Setup Step 9. Same destination, different source - so the useful check is
+   * that the Ed25519 case reproduces the constant the passphrase path uses.
+   * If it did not, one of the two would be writing a type the device reads
+   * differently.
+   */
+  const scalar = new Uint8Array(32).fill(9);
+  const fromPgp = deviceKeys.backupKeyFromPgp(scalar, { curve: 1 });
+
+  assert.equal(fromPgp.slot, deviceKeys.BACKUP_SLOT);
+  assert.equal(fromPgp.type, deviceKeys.BACKUP_TYPE,
+    'Ed25519 must give the same type byte the passphrase path hardcodes');
+});
+
+test('the curve changes the type byte, because the device cannot infer it', () => {
+  const scalar = new Uint8Array(32).fill(9);
+  // 0x80 backup | 0x20 decryption | curve
+  assert.equal(deviceKeys.backupKeyFromPgp(scalar, { curve: 1 }).type, 161);
+  assert.equal(deviceKeys.backupKeyFromPgp(scalar, { curve: 2 }).type, 162);
+});
+
+test('also-signature sets the signature modifier and nothing else', () => {
+  const scalar = new Uint8Array(32).fill(9);
+  const plain = deviceKeys.backupKeyFromPgp(scalar, { curve: 1 });
+  const signing = deviceKeys.backupKeyFromPgp(scalar, { curve: 1, alsoSignature: true });
+  assert.equal(signing.type ^ plain.type, 0x40);
+});
+
+test('an unknown curve is refused rather than defaulted', () => {
+  /*
+   * curveFromOid returns CURVE.NONE for a curve it does not recognise, and
+   * writing that gives the device a key it cannot use - found at restore time,
+   * which is the worst moment to find it.
+   */
+  const scalar = new Uint8Array(32).fill(9);
+  assert.throws(() => deviceKeys.backupKeyFromPgp(scalar, { curve: 0 }), /Ed25519 or NIST P-256/);
+  assert.throws(() => deviceKeys.backupKeyFromPgp(scalar, {}), /Ed25519 or NIST P-256/);
+});
+
+test('a backup key needs actual bytes', () => {
+  assert.throws(() => deviceKeys.backupKeyFromPgp(null, { curve: 1 }), /private scalar/);
+  assert.throws(() => deviceKeys.backupKeyFromPgp(new Uint8Array(0), { curve: 1 }), /private scalar/);
 });

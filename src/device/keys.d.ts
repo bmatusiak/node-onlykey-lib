@@ -206,3 +206,36 @@ export function backupKeyFromPassphrase(passphrase: any): {
     type: number;
     key: Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 };
+/**
+ * The backup key taken from a PGP private key instead of a passphrase.
+ *
+ * The desktop's Setup Step 9. Same destination as the passphrase form - slot
+ * 131 - and a different source: one of the key's own private scalars, chosen
+ * by the person who owns it.
+ *
+ * ## The type byte is assembled, not a constant
+ *
+ * BACKUP_TYPE is 161, which is 0x80 backup | 0x20 decryption | 1 Ed25519. That
+ * constant is right for a PASSPHRASE, whose sha256 is used as an Ed25519
+ * scalar, and wrong for anything else - a NIST P-256 scalar written as type 161
+ * is accepted by the device and then decrypts nothing. So the curve comes from
+ * the key.
+ *
+ * `alsoSignature` adds 0x40, which is what the desktop's "set as signature key"
+ * checkbox does. It is off by default: a backup key that also signs is a key
+ * whose use in one role is visible in the other.
+ *
+ * @param {Uint8Array} scalar  the chosen private scalar
+ * @param {object} opts
+ * @param {number} opts.curve  CURVE.ED25519 or CURVE.NIST256P1
+ * @param {boolean} [opts.alsoSignature=false]
+ * @returns {{slot: number, type: number, key: Uint8Array}}
+ */
+export function backupKeyFromPgp(scalar: Uint8Array, { curve, alsoSignature }?: {
+    curve: number;
+    alsoSignature?: boolean | undefined;
+}): {
+    slot: number;
+    type: number;
+    key: Uint8Array;
+};

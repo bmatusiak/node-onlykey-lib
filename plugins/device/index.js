@@ -864,6 +864,40 @@ const PREFERENCES = {
       return { slot: derived.slot, type: derived.type, response: text, attempts };
     },
 
+    /**
+     * Set the backup key from a PGP private scalar instead of a passphrase.
+     *
+     * The desktop's Setup Step 9. Same slot as the passphrase form and a
+     * different source, so the two share everything below the derivation -
+     * including the wait, which matters for the same reason: OKSETPRIV is
+     * accepted only in config mode or on first use, and the refusal has no else
+     * branch. Writing and returning would report success for a key the device
+     * never took, and the next thing anyone hears is a backup refusing itself.
+     *
+     * The CURVE is required rather than guessed. A NIST P-256 scalar written
+     * with the Ed25519 type is accepted and then decrypts nothing, which is
+     * discovered at restore time.
+     */
+    async setBackupKeyFromPgp(scalar, {
+      curve, alsoSignature = false, timeoutMs = 5000, retries = 1,
+    } = {}) {
+      const derived = deviceKeys.backupKeyFromPgp(scalar, { curve, alsoSignature });
+      const frame = okmsg.build({
+        msg: MSG.OKSETPRIV,
+        slot: derived.slot,
+        field: derived.type,
+        payload: derived.key,
+      });
+
+      const { text, attempts } = await sendField(
+        { name: 'backup key', frame }, { timeoutMs, retries },
+      );
+      if (/^Error/i.test(text)) throw new Error(`backup key: ${text}`);
+
+      progress('backupKey', { slot: derived.slot, response: text, attempts });
+      return { slot: derived.slot, type: derived.type, response: text, attempts };
+    },
+
     /* ---- backup and restore -------------------------------------------- */
 
     /**
