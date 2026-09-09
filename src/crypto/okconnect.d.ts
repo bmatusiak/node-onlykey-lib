@@ -141,8 +141,15 @@ export function publicKeyFrom(payload: any, keytype: any): any;
  */
 export function sharedSecretFrom(payload: any, keytype: any): {
     secret: any;
+    mlkemSeed: any;
     publicKey: any;
+} | {
+    secret: any;
+    publicKey: any;
+    mlkemSeed?: undefined;
 };
 /** An ECC private/shared value is 32 bytes for every supported key type. */
 export const SECRET_BYTES: 32;
+/** X-Wing hands back two 32-byte halves together, for either action. */
+export const XWING_PAIR: 64;
 import nacl = require("tweetnacl");

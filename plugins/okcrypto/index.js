@@ -434,14 +434,91 @@ function setup(imports, register) {
       });
     },
     /**
+     * age files encrypted to an identity the DEVICE holds half of.
+     *
+     * NOT `age`. That name is the pure module, re-exported above, and taking
+     * it for this would silently replace a published API with one that has
+     * different functions of the same shape. `vault` learned that the hard
+     * way: seal(key, plaintext, randomBytes) and seal(label, plaintext, opts)
+     * are indistinguishable at the call site and mean different things.
+     *
+     * X-Wing is split custody by design: the device keeps sk_X and never
+     * emits it, while the ML-KEM half travels as a 32-byte SEED that the host
+     * expands itself. So encryption needs no device at all - a recipient is
+     * public - and decryption needs exactly one round trip, for the X25519
+     * half that the device will not give up.
+     */
+    deviceAge: {
+      /**
+       * The device's X-Wing identity for a label.
+       *
+       * Deterministic, like every other derivation here, so an identity does
+       * not need storing - only its label does.
+       */
+      async identity(label, opts = {}) {
+        const derived = await okcrypto.derivePublicKey(label, {
+          ...opts,
+          keytype: okconnect.KEYTYPE.XWING,
+        });
+        const pkX = derived.publicKey.subarray(0, 32);
+        const mlkemSeed = derived.publicKey.subarray(32);
+        const recipient = pqc.buildRecipient(pkX, mlkemSeed);
+        return {
+          label,
+          pkX,
+          mlkemSeed,
+          recipient,
+          recipientString: pqc.encodeRecipient(recipient),
+        };
+      },
+
+      /**
+       * Encrypt to a recipient. NO DEVICE IS INVOLVED.
+       *
+       * Worth stating because it is the useful half: anyone can encrypt to
+       * this identity with only the recipient string, and the key is needed
+       * solely to read the result.
+       */
+      encrypt(plaintext, recipient) {
+        const pk = typeof recipient === 'string'
+          ? pqc.decodeRecipient(recipient)
+          : recipient;
+        const { ciphertext, sharedSecret } = pqc.xwingEncapsHost(pk);
+        return age.encryptAgeFile(plaintext, { ciphertext, sharedSecret });
+      },
+
+      /**
+       * Decrypt with the device.
+       *
+       * The stanza carries the whole 1120-byte X-Wing ciphertext, but only
+       * ct_X - its last 32 bytes - goes to the device. ct_M never leaves the
+       * host: the ML-KEM half is decapsulated here from the seed, which is
+       * what makes this one round trip rather than a 1120-byte upload.
+       */
+      async decrypt(fileBytes, label, opts = {}) {
+        const id = await okcrypto.deviceAge.identity(label, opts);
+        return age.decryptAgeFile(fileBytes, async (ciphertext) => {
+          const ctX = pqc.ctXOf(ciphertext);
+          const answer = await okcrypto.deriveSharedSecret(label, ctX, {
+            ...opts,
+            keytype: okconnect.KEYTYPE.XWING,
+          });
+          return pqc.splitDecapsulate(answer.secret, ciphertext, id.pkX, id.mlkemSeed);
+        });
+      },
+    },
+    /**
      * Credentials sealed under a key only the device can derive.
+     *
+     * Named deviceVault rather than vault for the reason above: the pure module
+     * is re-exported as `vault` and has a seal() of its own.
      *
      * The key is HKDF over the device's shared secret for a label, so it is
      * reproducible on any host holding the same key and stored on none of
      * them. Losing the phone loses the sealed blobs; losing the KEY loses the
      * ability to open them anywhere, which is the point.
      */
-    vault: {
+    deviceVault: {
       /** Policy vocabulary: always | startup | session:30m | session:2h. */
       getPolicy: (label) => vaultKeys.getPolicy(label),
       setPolicy: (label, policy) => vaultKeys.setPolicy(label, policy),
@@ -474,7 +551,7 @@ function setup(imports, register) {
         if (typeof randomBytes !== 'function') {
           throw new Error('okcrypto needs randomBytes from the host plugin to seal');
         }
-        const key = await okcrypto.vault.key(label, opts);
+        const key = await okcrypto.deviceVault.key(label, opts);
         return vault.seal(key, plaintext, randomBytes);
       },
 
@@ -484,7 +561,7 @@ function setup(imports, register) {
        * an attacker holding the blob whether a guessed key was close.
        */
       async open(label, blob, opts = {}) {
-        const key = await okcrypto.vault.key(label, opts);
+        const key = await okcrypto.deviceVault.key(label, opts);
         return vault.open(key, blob);
       },
     },
@@ -508,10 +585,8 @@ function setup(imports, register) {
          */
         derivePublicKey: true,
         deriveSharedSecret: true,
-        deriveXwing: false,
-        reason: 'derive_public_key and derive_shared_secret are implemented and '
-          + 'proven for P-256; the X-Wing key type returns a different shape and '
-          + 'has not been run against the device yet',
+        deriveXwing: true,
+        reason: '',
       };
     },
 

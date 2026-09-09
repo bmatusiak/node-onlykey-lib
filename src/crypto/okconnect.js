@@ -67,6 +67,9 @@ const KEYACTION = {
 /** The four 0xFF bytes every vendor message opens with. */
 const HEADER = [0xff, 0xff, 0xff, 0xff];
 
+/** X-Wing hands back two 32-byte halves together, for either action. */
+const XWING_PAIR = 64;
+
 /** An ECC private/shared value is 32 bytes for every supported key type. */
 const SECRET_BYTES = 32;
 
@@ -275,6 +278,34 @@ function publicKeyFrom(payload, keytype) {
  * does not vary the way the public one does.
  */
 function sharedSecretFrom(payload, keytype) {
+  /*
+   * X-Wing is a THIRD layout, not a variation on this one. It returns 64 bytes
+   * for both actions and the halves keep their positions
+   * (ok_extension.cpp:275-281):
+   *
+   *   DERIVE_PUBLIC_KEY -> [ pk_X(32) | mlkem_seed(32) ]
+   *   DERIVE_SHAREDSEC  -> [ ss_X(32) | mlkem_seed(32) ]
+   *
+   * so the secret is the FIRST half and the seed is the second - there is no
+   * public key appended in front of it, and the seed is not a secret to
+   * return in its place. Falling through to the EC reading below would demand
+   * 96 bytes and throw, which is at least safe, but it would also be wrong
+   * about why.
+   */
+  if (keytype === KEYTYPE.XWING) {
+    if (payload.length < XWING_PAIR) {
+      throw new Error(
+        `payload is ${payload.length} bytes; an X-Wing pair is ${XWING_PAIR}`,
+      );
+    }
+    const pair = payload.subarray(payload.length - XWING_PAIR);
+    return {
+      secret: pair.subarray(0, SECRET_BYTES),
+      mlkemSeed: pair.subarray(SECRET_BYTES),
+      publicKey: pair,
+    };
+  }
+
   const width = publicKeyWidth(keytype);
   if (payload.length < SECRET_BYTES + width) {
     throw new Error(
@@ -308,4 +339,5 @@ module.exports = {
   publicKeyFrom,
   sharedSecretFrom,
   SECRET_BYTES,
+  XWING_PAIR,
 };

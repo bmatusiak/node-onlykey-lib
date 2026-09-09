@@ -143,17 +143,13 @@ test('the plugin reports what it can do, and why the rest it cannot', async () =
   assert.equal(ops.deriveSharedSecret, true);
 
   /*
-   * X-Wing is still false, and for a stated reason rather than as a leftover.
-   * It returns 64 bytes - [pk_X | mlkem_seed] - not a 65-byte EC point, so it
-   * is a different shape from the one that was tested, and inheriting the
-   * P-256 result would be a guess.
+   * X-Wing works too now, proven on device (10-derive, "the X-Wing key type
+   * returns its split-custody pair"). Nothing here is unavailable, so the
+   * reason is EMPTY rather than a sentence explaining a gap that closed - a
+   * stale explanation is worse than none, because it reads as current.
    */
-  assert.equal(ops.deriveXwing, false);
-  assert.match(ops.reason, /X-Wing/i, `stale reason: ${ops.reason}`);
-  assert.doesNotMatch(
-    ops.reason, /not written yet|CTAPHID transport on IFACE.FIDO/,
-    'the exchange IS written now; the reason must say what is ACTUALLY missing',
-  );
+  assert.equal(ops.deriveXwing, true);
+  assert.equal(ops.reason, '', `nothing is missing, but reason says: ${ops.reason}`);
   await app.destroy();
 });
 
@@ -385,9 +381,9 @@ test('a vault blob round trips through the device-derived key', async () => {
   const okcrypto = app.services.okcrypto;
   stubDerives(okcrypto);
 
-  const blob = await okcrypto.vault.seal('github.com', 'hunter2');
+  const blob = await okcrypto.deviceVault.seal('github.com', 'hunter2');
   assert.notEqual(blob, 'hunter2', 'the blob is not the plaintext');
-  assert.equal(await okcrypto.vault.open('github.com', blob), 'hunter2');
+  assert.equal(await okcrypto.deviceVault.open('github.com', blob), 'hunter2');
   await app.destroy();
 });
 
@@ -401,8 +397,8 @@ test('a different label cannot open it, and says nothing about why', async () =>
   const okcrypto = app.services.okcrypto;
   stubDerives(okcrypto);
 
-  const blob = await okcrypto.vault.seal('github.com', 'hunter2');
-  await assert.rejects(() => okcrypto.vault.open('gitlab.com', blob));
+  const blob = await okcrypto.deviceVault.seal('github.com', 'hunter2');
+  await assert.rejects(() => okcrypto.deviceVault.open('gitlab.com', blob));
   await app.destroy();
 });
 
@@ -411,12 +407,12 @@ test('the key is derived once and reused, because deriving costs a touch', async
   const okcrypto = app.services.okcrypto;
   const derives = stubDerives(okcrypto);
 
-  const blob = await okcrypto.vault.seal('github.com', 'hunter2');
-  await okcrypto.vault.open('github.com', blob);
-  await okcrypto.vault.open('github.com', blob);
+  const blob = await okcrypto.deviceVault.seal('github.com', 'hunter2');
+  await okcrypto.deviceVault.open('github.com', blob);
+  await okcrypto.deviceVault.open('github.com', blob);
 
   assert.equal(derives(), 1, 'the device was touched more than once');
-  assert.equal(okcrypto.vault.isUnlocked('github.com'), true);
+  assert.equal(okcrypto.deviceVault.isUnlocked('github.com'), true);
   await app.destroy();
 });
 
@@ -430,12 +426,12 @@ test("a policy of 'always' caches nothing", async () => {
   const okcrypto = app.services.okcrypto;
   const derives = stubDerives(okcrypto);
 
-  okcrypto.vault.setPolicy('github.com', 'always');
-  const blob = await okcrypto.vault.seal('github.com', 'hunter2');
-  await okcrypto.vault.open('github.com', blob);
+  okcrypto.deviceVault.setPolicy('github.com', 'always');
+  const blob = await okcrypto.deviceVault.seal('github.com', 'hunter2');
+  await okcrypto.deviceVault.open('github.com', blob);
 
   assert.equal(derives(), 2, 'the key was cached despite the policy');
-  assert.equal(okcrypto.vault.isUnlocked('github.com'), false);
+  assert.equal(okcrypto.deviceVault.isUnlocked('github.com'), false);
   await app.destroy();
 });
 
@@ -444,13 +440,13 @@ test('locking drops the key, so the next use touches the device again', async ()
   const okcrypto = app.services.okcrypto;
   const derives = stubDerives(okcrypto);
 
-  const blob = await okcrypto.vault.seal('github.com', 'hunter2');
-  assert.equal(okcrypto.vault.isUnlocked('github.com'), true);
+  const blob = await okcrypto.deviceVault.seal('github.com', 'hunter2');
+  assert.equal(okcrypto.deviceVault.isUnlocked('github.com'), true);
 
-  okcrypto.vault.lock('github.com');
-  assert.equal(okcrypto.vault.isUnlocked('github.com'), false);
+  okcrypto.deviceVault.lock('github.com');
+  assert.equal(okcrypto.deviceVault.isUnlocked('github.com'), false);
 
-  assert.equal(await okcrypto.vault.open('github.com', blob), 'hunter2');
+  assert.equal(await okcrypto.deviceVault.open('github.com', blob), 'hunter2');
   assert.equal(derives(), 2);
   await app.destroy();
 });
