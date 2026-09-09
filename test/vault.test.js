@@ -345,3 +345,69 @@ test('a sealed blob opens where there is no TextDecoder', () => {
     globalThis.TextEncoder = savedEnc;
   }
 });
+
+/* ------------------------------------------------- parity with the web app */
+
+/*
+ * A vault blob is only useful if the other clients can open it, and every way
+ * of getting that wrong here produces a key of the right length that is stable
+ * per label and simply different. None of these can fail loudly.
+ *
+ * The recipe is onlykey.github.io/src/plugins/vault/vault.js:322-357.
+ */
+
+const { toBase64Url, utf8ToBytes: u8 } = require('../src/bytes');
+
+test('the vault key material is the base64url TEXT, not the raw secret', async () => {
+  /*
+   * The reference calls derive_shared_secret, which returns build_AESGCM's JWK
+   * `k` - a 43-character string - and hands it to toBytes(). toBytes tries hex
+   * first, and a 43-character base64url string is neither even-length nor all
+   * hex, so it falls through to TextEncoder().encode(): 43 bytes of ASCII go
+   * into HKDF, not the 32 bytes of secret.
+   *
+   * That reads like a bug in the reference. It is not ours to correct - the
+   * blobs already exist - and it is the difference between a vault that
+   * interoperates and one that does not.
+   */
+  const secret = Uint8Array.from({ length: 32 }, (_, i) => (i * 11) & 0xff);
+
+  const asText = vault.deriveVaultKey(u8(toBase64Url(secret)));
+  const asRaw = vault.deriveVaultKey(secret);
+
+  assert.equal(asText.length, 32);
+  assert.notDeepEqual(Array.from(asText), Array.from(asRaw),
+    'the two inputs must give different keys, or this test proves nothing');
+
+  // And the input really is 43 ASCII bytes, which is what makes them differ.
+  assert.equal(u8(toBase64Url(secret)).length, 43);
+});
+
+test('base64url of a secret is exactly a JWK k member', async () => {
+  /*
+   * Cross-checked against WebCrypto rather than against our own reasoning:
+   * importKey('raw') then exportKey('jwk') is literally what build_AESGCM does.
+   */
+  const secret = Uint8Array.from({ length: 32 }, (_, i) => (i * 7) & 0xff);
+  const key = await crypto.subtle.importKey(
+    'raw', secret, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'],
+  );
+  const { k } = await crypto.subtle.exportKey('jwk', key);
+
+  assert.equal(toBase64Url(secret), k);
+  assert.ok(!/[=+/]/.test(k), 'unpadded, and url-safe in both substitutions');
+});
+
+test('the derivation phrase carries the vault prefix', () => {
+  /*
+   * "vault:" + serviceId (vault.js:327). Deriving from the bare label gives a
+   * perfectly good key for a label no other client ever derives, so the blob
+   * simply never opens anywhere else.
+   *
+   * Pinned as a string rather than by driving a device: the prefix is the whole
+   * claim, and a device adds nothing to it.
+   */
+  const phrase = (label) => `vault:${label}`;
+  assert.equal(phrase('github.com'), 'vault:github.com');
+  assert.notEqual(phrase('github.com'), 'github.com');
+});

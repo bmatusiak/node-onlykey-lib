@@ -239,6 +239,34 @@ function toBase64(bytes) {
   return out;
 }
 
+/**
+ * base64url, unpadded - which is what a JWK `k` member is.
+ *
+ * This is not a formatting preference. The web app turns a derived secret into
+ * a password by importing the raw bytes as an AES-GCM key and exporting the
+ * JWK, then taking `k` (build_AESGCM, onlykey-3rd-party.js:95):
+ *
+ *     crypto.subtle.importKey('raw', secret, {name:'AES-GCM'}, true, ...)
+ *     crypto.subtle.exportKey('jwk', key).then(({k}) => k)
+ *
+ * RFC 7517 says a JWK octet key is base64url with the padding removed, so `k`
+ * is exactly this function's output over the same 32 bytes. Rendering the
+ * secret as hex instead gives a different password for the same site, which is
+ * a silent incompatibility rather than an error - the user simply cannot log
+ * in with the one this app shows.
+ *
+ * It matters twice over: the vault feeds the UTF-8 of this string into HKDF as
+ * its key material, so getting the encoding wrong changes the vault key too.
+ */
+function toBase64Url(bytes) {
+  return toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** The inverse, tolerant of missing padding. */
+function fromBase64Url(text) {
+  return fromBase64(String(text).replace(/-/g, '+').replace(/_/g, '/'));
+}
+
 function fromBase64(text) {
   const clean = String(text).replace(/[^A-Za-z0-9+/]/g, '');
   const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
@@ -263,6 +291,8 @@ module.exports = {
   bytesToUtf8,
   toBase64,
   fromBase64,
+  toBase64Url,
+  fromBase64Url,
   toHex,
   fromHex,
   formatHex,

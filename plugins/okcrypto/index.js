@@ -65,6 +65,7 @@ const { CtapHid } = require('../../src/protocol/ctaphid');
 const chunker = require('../../src/device/chunker');
 const okmsg = require('../../src/protocol/okmsg');
 const { challengeDigits } = require('../../src/protocol/challenge');
+const { toBase64Url, utf8ToBytes } = require('../../src/bytes');
 const { MSG } = require('../../src/protocol/msg');
 const { IFACE } = require('../../src/transport/contract');
 
@@ -383,11 +384,53 @@ function setup(imports, register) {
      * derive_public_key then derive_shared_secret AGAINST THAT KEY. The
      * device is both parties, which looks odd until you see that the point is
      * not agreement with anyone - it is a value only this key can recompute.
+     *
+     * ## The two steps do not want the same press
+     *
+     * The reference asks for the public key WITHOUT a touch and the shared
+     * secret WITH one (vault.js:342-344, and its comment says why): fetching a
+     * public key is not sensitive, computing the ECDH is. Passing one
+     * `requirePress` to both got the UX wrong in both directions - a touch
+     * demanded to fetch a public key, or no touch on the step that actually
+     * derives the secret.
+     *
+     * They also map to different things ON THE DEVICE. The touch-free variants
+     * are gated on an EEPROM bit (derived_key_challenge_mode bit 3), so on a
+     * key without "derived keys per site without touch" enabled they are
+     * REFUSED - as CTAP2_ERR_EXTENSION_NOT_SUPPORTED, which reads like the
+     * firmware has no such feature. The REQ_PRESS variants skip that check and
+     * ask for a finger instead.
+     *
+     * @param {object} [opts]
+     * @param {boolean} [opts.requirePress] both steps, when a caller means both
+     * @param {boolean} [opts.pressForPublicKey] just the public-key step
+     * @param {boolean} [opts.pressForSecret] just the shared-secret step
      */
     async deriveSharedSecretFor(label, opts = {}) {
-      const pub = await okcrypto.derivePublicKey(label, opts);
-      const shared = await okcrypto.deriveSharedSecret(label, pub.publicKey, opts);
+      const { requirePress, pressForPublicKey, pressForSecret, ...rest } = opts;
+      const pub = await okcrypto.derivePublicKey(label, {
+        ...rest,
+        requirePress: pressForPublicKey ?? requirePress ?? false,
+      });
+      const shared = await okcrypto.deriveSharedSecret(label, pub.publicKey, {
+        ...rest,
+        requirePress: pressForSecret ?? requirePress ?? false,
+      });
       return shared.secret;
+    },
+
+    /**
+     * The derived secret as the PASSWORD STRING the other clients show.
+     *
+     * base64url of the 32 bytes, which is what a JWK `k` member is and
+     * therefore what build_AESGCM returns (onlykey-3rd-party.js:95). We
+     * rendered it as hex, so this app showed a different password for the same
+     * site than the web app and the desktop app do - a silent incompatibility,
+     * since both strings look like a perfectly good password.
+     */
+    async derivePassword(label, opts = {}) {
+      const secret = await okcrypto.deriveSharedSecretFor(label, opts);
+      return toBase64Url(secret);
     },
     /** The constants a caller needs to ask for a derivation. */
     KEYTYPE: okconnect.KEYTYPE,
@@ -559,8 +602,68 @@ function setup(imports, register) {
         const cached = vaultKeys.get(label);
         if (cached) return cached;
 
-        const derived = await okcrypto.deriveSharedSecretFor(label, opts);
-        const key = vault.deriveVaultKey(derived);
+        /*
+         * THREE details here decide whether a blob sealed by this app can be
+         * opened by the web app, and every one of them fails silently if it is
+         * wrong - the key is the right length, stable per label, and simply not
+         * the same key. None of them is a preference.
+         *
+         *   1. The phrase is "vault:" + serviceId, not the bare serviceId
+         *      (vault.js:327). Deriving from the bare label produces a valid
+         *      key for a label the other clients never derive.
+         *
+         *   2. The public-key step takes no touch and the secret step does
+         *      (vault.js:342-344) - handled by deriveSharedSecretFor.
+         *
+         *   3. The HKDF input is the UTF-8 of the base64url TEXT, not the raw
+         *      32 bytes. The reference calls derive_shared_secret, which
+         *      returns build_AESGCM's JWK `k` - a 43-character string - and
+         *      hands it to toBytes(), whose hex branch cannot match a 43-char
+         *      base64url string, so it falls through to TextEncoder().encode().
+         *      43 bytes of ASCII go into HKDF, not 32 bytes of secret.
+         *
+         * The third is the one that looks like a bug in the reference and is
+         * not ours to correct: the blobs already exist.
+         */
+        let secret;
+        try {
+          secret = await okcrypto.deriveSharedSecretFor(`vault:${label}`, {
+            ...opts,
+            pressForPublicKey: false,
+            pressForSecret: opts.requirePress ?? true,
+          });
+        } catch (err) {
+          /*
+           * NO FALLBACK TO THE PRESS VARIANT, however tempting.
+           *
+           * The press flag is an INPUT to the derivation, not a permission
+           * check in front of it - ok_extension.cpp:245 sets
+           * additional_data[0] = 1 for the REQ_PRESS variants, and
+           * additional_data is what the key is derived from. Retrying the
+           * public-key step with a press would derive a different key, so the
+           * vault would appear to work while sealing blobs that no other
+           * client can open and that this app could not open either once the
+           * preference was turned on.
+           *
+           * The status is misleading on its own, so it is translated. It says
+           * the extension is unsupported; what is actually true is that an
+           * EEPROM bit is clear.
+           */
+          if (/EXTENSION_NOT_SUPPORTED/.test(String(err && err.message))) {
+            throw new Error(
+              'the vault needs the device preference "derived keys per site ' +
+              'without touch" enabled (derived_key_challenge_mode bit 3). The ' +
+              'firmware refuses the touch-free derive without it, and reports ' +
+              'that as CTAP2_ERR_EXTENSION_NOT_SUPPORTED. Retrying with a touch ' +
+              'is not a workaround: it derives a DIFFERENT key, so the blobs ' +
+              'would not interoperate. Set field 21 to 8 in config mode. See ' +
+              'ok-rn/FINDING-the-press-flag-changes-the-derived-key.md',
+              { cause: err },
+            );
+          }
+          throw err;
+        }
+        const key = vault.deriveVaultKey(utf8ToBytes(toBase64Url(secret)));
         vaultKeys.put(label, key);
         return key;
       },
