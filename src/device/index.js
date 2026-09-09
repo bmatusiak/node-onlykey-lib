@@ -7,6 +7,7 @@
 'use strict';
 
 module.exports = {
+  version: require('./version'),
   slots: require('./slots'),
   pin: require('./pin'),
   keys: require('./keys'),

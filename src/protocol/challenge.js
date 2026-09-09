@@ -49,14 +49,37 @@ const DUO_BUTTONS = 3;
  *   mod 3 rather than mod 6 because it has half the buttons. Getting this wrong
  *   yields digits in 1..6 for a device that can only produce 1..3, so two
  *   thirds of them are unpressable.
+ * @param {string} [opts.formula] 'modern', 'duo' or 'legacy', as
+ *   device/version.js `capabilities().challengeFormula` returns it. Prefer this
+ *   over `duo`, which cannot express the legacy case; `duo: true` is the same
+ *   as `formula: 'duo'`.
  * @returns {number[]} three button numbers, each 1..6 (or 1..3 on a DUO)
  */
 function challengeDigits(packet, opts = {}) {
   if (!(packet instanceof Uint8Array)) {
     throw new TypeError('challengeDigits needs the packet as a Uint8Array');
   }
-  const modulus = opts.duo ? DUO_BUTTONS : BUTTONS;
+  const formula = opts.formula || (opts.duo ? 'duo' : 'modern');
   const hash = sha256(packet);
+
+  /*
+   * The pre-v0.2-beta.9 formula, from onlykey-pgp.js:441-449:
+   *
+   *   if (byte < 6) return 1; else return (byte % 5) + 1;
+   *
+   * Not mod 6. It is a different distribution, not an off-by-one - a byte under
+   * 6 always gives button 1, so button 1 comes up about a third of the time and
+   * button 6 never comes up at all.
+   *
+   * TRANSCRIBED from the reference client and UNVERIFIED against hardware by
+   * this project. See device/version.js.
+   */
+  if (formula === 'legacy') {
+    const legacy = (byte) => (byte < 6 ? 1 : (byte % 5) + 1);
+    return [legacy(hash[0]), legacy(hash[15]), legacy(hash[31])];
+  }
+
+  const modulus = formula === 'duo' ? DUO_BUTTONS : BUTTONS;
   /*
    * The firmware adds '0' + 1 because it compares against button_selected,
    * which is an ASCII digit. These are numbers - the thing a caller presses -

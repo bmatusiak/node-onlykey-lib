@@ -24,6 +24,7 @@ const { MSG, FIELD } = require('../../src/protocol/msg');
 const okmsg = require('../../src/protocol/okmsg');
 const { DeviceConsole, pressLine } = require('../../src/device/console');
 const { IFACE } = require('../../src/transport/contract');
+const version = require('../../src/device/version');
 
 function setup(imports, register) {
   const { app, transport, session } = imports;
@@ -32,7 +33,51 @@ function setup(imports, register) {
   const events = new EventEmitter();
   const console_ = new DeviceConsole().attach(transport);
 
-  let deviceType = slots.DEVICE_TYPE.CLASSIC;
+  /*
+   * What the DEVICE said it is, and what a caller INSISTED it is.
+   *
+   * Kept apart because they answer different questions. `detected` is set from
+   * any status line that names a model - the once-a-second broadcast does, and
+   * so does connect(). `override` is set only by setDeviceType(), and wins,
+   * because a caller who says "this is a DUO" is usually working around
+   * something and should not be argued with.
+   *
+   * This used to be one variable initialised to CLASSIC and never assigned by
+   * anything but setDeviceType(), which ok-rn never called. Against a DUO that
+   * meant setSlot('7a') wrote the wrong slot and readLabels stopped at 12 of
+   * 24 - no error, just half the device missing.
+   */
+  let detectedType = null;
+  let overrideType = null;
+
+  /** What to use right now: what a caller insisted on, else what was detected. */
+  function currentType() {
+    return overrideType || detectedType || slots.DEVICE_TYPE.CLASSIC;
+  }
+
+  /**
+   * Learn the model from a status line, if it names one.
+   *
+   * Called for every status broadcast, so a LOCKED device is identified too:
+   * INITIALIZED-D carries no version but does say DUO, and a locked DUO is
+   * exactly the device a caller is about to enumerate 24 slots on.
+   *
+   * Only a positive identification is recorded. An unknown model leaves what
+   * was already learned alone rather than resetting it to a guess.
+   */
+  function learnModel(status) {
+    const model = version.parseStatus(status).model;
+    if (model === version.MODEL.DUO) detectedType = slots.DEVICE_TYPE.DUO;
+    else if (model === version.MODEL.CLASSIC) detectedType = slots.DEVICE_TYPE.CLASSIC;
+    else if (model === version.MODEL.ORIGINAL) {
+      /*
+       * An Original has the Classic slot layout. It is recorded as CLASSIC for
+       * that reason and not because the two are the same device - the poll
+       * delays differ, and those come from capabilities(), not from here.
+       */
+      detectedType = slots.DEVICE_TYPE.CLASSIC;
+    }
+  }
 
   /**
    * Is this report the device talking to itself rather than answering us?
@@ -54,8 +99,13 @@ function setup(imports, register) {
      * that refused clearly into one that timed out silently - the same bug the
      * label reader had.
      */
-    const { state } = okmsg.parseState(report);
-    return state === 'locked' || state === 'unlocked' || state === 'uninitialized';
+    const { state, raw } = okmsg.parseState(report);
+    const isBroadcast =
+      state === 'locked' || state === 'unlocked' || state === 'uninitialized';
+    // A broadcast is the device naming itself; that is worth keeping, not just
+    // filtering out.
+    if (isBroadcast) learnModel(raw);
+    return isBroadcast;
   }
 
   /**
@@ -297,14 +347,38 @@ const PREFERENCES = {
   const device = {
     /* ---- identity ------------------------------------------------------ */
 
-    get deviceType() { return deviceType; },
+    get deviceType() { return currentType(); },
+
+    /** What was learned from the device itself, or null if it has not said. */
+    get detectedType() { return detectedType; },
+
+    /**
+     * Insist on a device type, overriding detection.
+     *
+     * Pass null to drop the override and go back to what the device says.
+     */
     setDeviceType(next) {
+      if (next === null) {
+        overrideType = null;
+        return currentType();
+      }
       if (!Object.values(slots.DEVICE_TYPE).includes(next)) {
         throw new Error(`unknown device type "${next}"`);
       }
-      deviceType = next;
-      return deviceType;
+      overrideType = next;
+      return overrideType;
     },
+
+    /**
+     * What the device said it is: state, version, model, build.
+     *
+     * Null until connect() has run. `capabilities` is the one to read for a
+     * decision - see src/device/version.js.
+     */
+    get identity() { return session.identity; },
+
+    /** What this device can be asked to do. Null until connect() has run. */
+    get capabilities() { return session.capabilities; },
 
     /** The raw console, for callers that want to watch the device talk. */
     console: console_,
@@ -313,6 +387,12 @@ const PREFERENCES = {
 
     async connect(opts) {
       const result = await session.connect(opts);
+      /*
+       * The connect reply does not pass through isStatusBroadcast - it is an
+       * ANSWER, not a broadcast, so the filter that watches for the device
+       * naming itself never sees the one reply guaranteed to carry a version.
+       */
+      learnModel(result.status || '');
       events.emit('connected', result);
       return result;
     },
@@ -455,10 +535,10 @@ const PREFERENCES = {
     /* ---- slots --------------------------------------------------------- */
 
     readLabels(opts = {}) {
-      return slots.readLabels(transport, { deviceType, ...opts });
+      return slots.readLabels(transport, { deviceType: currentType(), ...opts });
     },
 
-    slotNumber(slotId) { return slots.slotNumber(slotId, deviceType); },
+    slotNumber(slotId) { return slots.slotNumber(slotId, currentType()); },
 
     /**
      * Write fields to a slot, one at a time, WAITING for each.
@@ -482,7 +562,7 @@ const PREFERENCES = {
      * written and the slot half configured.
      */
     async setSlot(slotId, values, { timeoutMs = 3000, retries = 2 } = {}) {
-      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, deviceType);
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
       const writes = slotConfig.planSlotWrites(values, slot);
       const applied = [];
 
@@ -550,7 +630,7 @@ const PREFERENCES = {
      * both live behind one method.
      */
     async loadKey(slotId, { type, key }, { onProgress = null } = {}) {
-      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, deviceType);
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
       const bytes = Uint8Array.from(key);
       const send = (frame) => transport.write(IFACE.VENDOR, frame);
 
@@ -619,7 +699,7 @@ const PREFERENCES = {
 
     /** Erase a key slot. Irreversible; the caller has already confirmed. */
     async wipeKey(slotId) {
-      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, deviceType);
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
       await transport.write(IFACE.VENDOR, okmsg.build({
         msg: MSG.OKWIPEPRIV, slot,
       }));
@@ -798,7 +878,7 @@ const PREFERENCES = {
 
     /** Wipe one field, or the whole slot when no field is named. */
     async wipeSlot(slotId, field = null, { timeoutMs = 3000 } = {}) {
-      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, deviceType);
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
       const reply = await transport.request({
         iface: IFACE.VENDOR,
         data: slotConfig.wipeMessage(slot, field),

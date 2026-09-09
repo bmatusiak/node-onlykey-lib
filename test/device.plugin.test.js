@@ -543,3 +543,82 @@ test('the derived-key challenge mode accepts the bit that matters', async () => 
   );
   await app.destroy();
 });
+
+/* --------------------------------------------------------------- identity */
+
+/*
+ * These are the tests that would have caught "deviceType defaults to CLASSIC
+ * and nothing ever sets it". The failure that bug produced was not an error -
+ * readLabels stopped at 12 of 24 slots and setSlot wrote to the wrong one, both
+ * in silence - so nothing short of asserting the detection catches it.
+ */
+
+test('the device type is detected from what the device says, not defaulted', async () => {
+  const app = await start(fakeFirmware({ version: 'v3.0.4-prodp' }));
+  await app.services.device.connect();
+
+  assert.equal(app.services.device.deviceType, 'duo');
+  assert.equal(app.services.device.detectedType, 'duo');
+  await app.destroy();
+});
+
+test('a Classic is detected as one', async () => {
+  const app = await start(fakeFirmware({ version: 'v3.0.4-prodc' }));
+  await app.services.device.connect();
+  assert.equal(app.services.device.deviceType, 'classic');
+  await app.destroy();
+});
+
+test('connect reports the identity and the capabilities it implies', async () => {
+  const app = await start(fakeFirmware({ version: 'v3.0.4-prodp' }));
+  const result = await app.services.device.connect();
+
+  assert.equal(result.identity.model, 'duo');
+  assert.equal(result.identity.build, 'production');
+  assert.equal(result.capabilities.slots, 24);
+  assert.equal(result.capabilities.buttons, 3);
+  assert.equal(result.capabilities.challengeFormula, 'duo');
+
+  // And the same is readable from the service afterwards.
+  assert.equal(app.services.device.capabilities.slots, 24);
+  await app.destroy();
+});
+
+test('a production build is reported as having no console', async () => {
+  /*
+   * The library's PIN provisioning waits on prompts the serial console prints,
+   * and a production build has no console to print them. Until the build was
+   * detectable there was no way to know before the wait timed out.
+   */
+  const app = await start(fakeFirmware({ version: 'v3.0.4-prodc' }));
+  await app.services.device.connect();
+  assert.equal(app.services.device.capabilities.debugConsole, false);
+  await app.destroy();
+});
+
+test('a debug build is reported as having one', async () => {
+  const app = await start(fakeFirmware({ version: 'v3.0.4-testc' }));
+  await app.services.device.connect();
+  assert.equal(app.services.device.capabilities.debugConsole, true);
+  await app.destroy();
+});
+
+test('setDeviceType still wins, and null gives detection back', async () => {
+  const app = await start(fakeFirmware({ version: 'v3.0.4-prodp' }));
+  await app.services.device.connect();
+  assert.equal(app.services.device.deviceType, 'duo');
+
+  app.services.device.setDeviceType('classic');
+  assert.equal(app.services.device.deviceType, 'classic', 'a caller who insists wins');
+  assert.equal(app.services.device.detectedType, 'duo', 'and detection is not forgotten');
+
+  app.services.device.setDeviceType(null);
+  assert.equal(app.services.device.deviceType, 'duo');
+  await app.destroy();
+});
+
+test('an unrecognised device type is still refused', async () => {
+  const app = await start(fakeFirmware());
+  assert.throws(() => app.services.device.setDeviceType('quantum'), /unknown device type/);
+  await app.destroy();
+});

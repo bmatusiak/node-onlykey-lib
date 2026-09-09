@@ -19,6 +19,7 @@ const transit = require('../../src/session/transit');
 const { assertTransport } = require('../../src/transport/contract');
 const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
+const version = require('../../src/device/version');
 
 function setup(imports, register) {
   const { host, transport } = imports;
@@ -32,6 +33,8 @@ function setup(imports, register) {
   assertTransport(transport, 'transport (consumed by session)');
 
   /* Per-session state. Replaced wholesale by connect(), never mutated. */
+  let identity = null;
+  let caps = null;
   let keys = null;
   let key = null;
   let device = null;
@@ -91,8 +94,36 @@ function setup(imports, register) {
         device = probe;
       }
 
-      return { status: device.status, sealed: device.sealed, kind: device.kind };
+      /*
+       * The status string is the ONLY place a device says what it is, and
+       * connect() is the only call that always sees one. Parsing it here is
+       * what lets anything else branch on firmware version at all - before
+       * this, the sole version parse in the project was a regex in a React
+       * hook, for display.
+       */
+      identity = version.parseStatus(device.status || '');
+      caps = version.capabilities(identity);
+
+      return {
+        status: device.status,
+        sealed: device.sealed,
+        kind: device.kind,
+        identity,
+        capabilities: caps,
+      };
     },
+
+    /**
+     * What the device said it is: state, version, model, build.
+     *
+     * Null before the first connect(). A caller wanting a decision rather than
+     * a version number should read `capabilities` instead - see
+     * src/device/version.js for why nothing outside it compares versions.
+     */
+    get identity() { return identity; },
+
+    /** What this device can be asked to do, derived from `identity`. */
+    get capabilities() { return caps; },
 
     /**
      * Seal or open - the same call, because the operation is its own inverse.

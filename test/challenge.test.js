@@ -97,3 +97,29 @@ test('it is exported from the protocol barrel', () => {
   const protocol = require('../src/protocol');
   assert.equal(typeof protocol.challenge.challengeDigits, 'function');
 });
+
+test('the legacy formula is a different distribution, not an off-by-one', () => {
+  /*
+   * onlykey-pgp.js:441-449 for v0.2-beta.8c: `byte < 6 ? 1 : byte % 5 + 1`.
+   * Button 6 is unreachable under it and button 1 comes up for every byte below
+   * six, so a client using mod 6 against that firmware asks for presses the
+   * device is not expecting.
+   *
+   * TRANSCRIBED from the reference client, UNVERIFIED against hardware here.
+   */
+  const seen = new Set();
+  for (let i = 0; i < 256; i++) {
+    const packet = new Uint8Array([i]);
+    for (const d of challengeDigits(packet, { formula: 'legacy' })) seen.add(d);
+  }
+  assert.ok(!seen.has(6), 'button 6 is unreachable under the legacy formula');
+  assert.ok(seen.has(1) && seen.has(5), 'and 1 through 5 all are');
+});
+
+test('formula: duo and the older duo: true flag agree', () => {
+  const packet = new Uint8Array([1, 2, 3, 4]);
+  assert.deepEqual(
+    challengeDigits(packet, { formula: 'duo' }),
+    challengeDigits(packet, { duo: true }),
+  );
+});

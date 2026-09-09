@@ -1,3 +1,4 @@
+export let version: typeof import("./version");
 export let slots: typeof import("./slots");
 export let pin: typeof import("./pin");
 export let keys: typeof import("./keys");

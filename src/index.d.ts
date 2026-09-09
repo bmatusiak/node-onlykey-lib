@@ -82,6 +82,7 @@ export let protocol: {
 };
 export let transport: typeof import("./transport/contract");
 export let device: {
+    version: typeof import("./device/version");
     slots: typeof import("./device/slots");
     pin: typeof import("./device/pin");
     keys: typeof import("./device/keys");

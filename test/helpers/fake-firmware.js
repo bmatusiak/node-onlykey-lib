@@ -48,7 +48,13 @@ function fakeFirmware(opts = {}) {
     dropTerminal = false,
     ackDigits = true,
     pin = null,          // when set, the device starts LOCKED and this unlocks it
-    version = 'v3.0.4-prod',
+    /*
+     * The model letter is part of this, because HW_MODEL() appends one
+     * unconditionally - 'c' Classic, 'p'/'n' DUO, 'o' Original. A fixture
+     * without it is a device that has never existed, and detection reading
+     * "unknown" from a fixture would hide a real failure to detect.
+     */
+    version = 'v3.0.4-prodc',
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
@@ -64,6 +70,19 @@ function fakeFirmware(opts = {}) {
 
   function handleVendor(frame) {
     const msg = frame[4];
+
+    if (msg === MSG.OKCONNECT) {
+      /*
+       * OKCONNECT over the vendor interface is set_time(), and set_time replies
+       * with the status string - a plaintext announcement, no key exchange
+       * (okcore.cpp:1348-1375). That string is where the version, the model and
+       * the build come from, so a fixture that stayed silent here left every
+       * caller of connect() looking at a device that had never said what it is.
+       */
+      return pipe.deliver(reportText(
+        unlocked ? `UNLOCKED${version}` : 'INITIALIZED',
+      ));
+    }
 
     if (msg === MSG.OKPIN) {
       const at = pinStep++;
