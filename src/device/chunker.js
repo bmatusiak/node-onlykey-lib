@@ -86,6 +86,87 @@ function buildHexPacket(msg, packet) {
 }
 
 /**
+ * Split raw bytes into crypto packets.
+ *
+ * Same 57-byte chunking as hexPackets, over bytes rather than hex, because
+ * what gets signed is a digest and what gets decrypted is ciphertext - neither
+ * arrives as a hex string.
+ */
+function bytePackets(bytes) {
+  const data = Uint8Array.from(bytes);
+  if (!data.length) return [];
+
+  const packets = [];
+  for (let at = 0; at < data.length; at += CHUNK_BYTES) {
+    const slice = data.subarray(at, at + CHUNK_BYTES);
+    const isFinal = at + CHUNK_BYTES >= data.length;
+    packets.push({
+      header: isFinal ? slice.length : MORE_FOLLOW,
+      data: slice,
+      final: isFinal,
+    });
+  }
+  return packets;
+}
+
+/**
+ * One 64-byte frame for a crypto packet.
+ *
+ * THE SLOT BYTE IS THE WHOLE DIFFERENCE, and it is one byte in a place that
+ * makes the two framings look interchangeable:
+ *
+ *     restore/firmware   [header|msg     |0xFF-or-len|57 bytes]
+ *     sign/decrypt       [header|msg|slot|0xFF-or-len|57 bytes]
+ *
+ * process_packets() reads buffer[4] as the command, buffer[5] as the SLOT,
+ * buffer[6] as 0xFF-or-length and buffer[7..] as the data
+ * (okcore.cpp:7472-7519). Reusing buildHexPacket here would put the length
+ * byte where the firmware reads the slot and start the data one byte early -
+ * so the device would look up a key in whatever slot the length happened to
+ * name, and sign the wrong bytes with it. Both halves fail silently.
+ *
+ * The 57 is not a coincidence between the two: 4 header + msg + chunk-header
+ * is 6, and 4 + msg + slot + chunk-header is 7 - but OKSETPRIV also spends
+ * its seventh byte on a type, so all three leave 57. That is exactly why the
+ * wrong frame is the same length as the right one and passes every check
+ * except the device.
+ */
+function buildSlotPacket(msg, slot, packet) {
+  const payload = new Uint8Array(1 + packet.data.length);
+  payload[0] = packet.header;
+  payload.set(packet.data, 1);
+  return okmsg.build({ msg, slot, payload });
+}
+
+/**
+ * Stream bytes to a slot-addressed command: OKSIGN, OKDECRYPT.
+ *
+ * Returns the packets sent, because the CHALLENGE the device then asks for is
+ * derived from exactly these bytes - sha256 over the accumulated payload
+ * (okcore.cpp:7577-7587) - and the caller has to be able to compute the same
+ * digits to know which buttons to press.
+ *
+ * @param {object}   spec
+ * @param {number}   spec.msg    MSG.OKSIGN or MSG.OKDECRYPT
+ * @param {number}   spec.slot
+ * @param {Uint8Array} spec.data
+ * @param {function} spec.send   async (frame) => void
+ * @param {function} [spec.onProgress]
+ */
+async function sendSlotStream({ msg, slot, data, send, onProgress = null }) {
+  const packets = bytePackets(data);
+  if (!packets.length) {
+    throw new Error('nothing to send: the payload is empty');
+  }
+
+  for (let i = 0; i < packets.length; i++) {
+    await send(buildSlotPacket(msg, slot, packets[i]));
+    if (onProgress) onProgress({ packet: i + 1, of: packets.length });
+  }
+  return { packets: packets.length, bytes: Uint8Array.from(data) };
+}
+
+/**
  * Send a hex payload as restore or firmware packets.
  *
  * @param {object}   spec
@@ -171,6 +252,9 @@ function rsaKeyLength(type) {
 
 module.exports = {
   CHUNK_BYTES,
+  bytePackets,
+  buildSlotPacket,
+  sendSlotStream,
   CHUNK_HEX,
   MORE_FOLLOW,
   hexPackets,

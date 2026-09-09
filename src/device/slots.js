@@ -241,7 +241,7 @@ class LabelReader {
  * @param {object} [opts] {deviceType, timeoutMs}
  */
 async function readLabels(transport, opts = {}) {
-  const { deviceType = DEVICE_TYPE.CLASSIC, timeoutMs = 15000 } = opts;
+  const { deviceType = DEVICE_TYPE.CLASSIC, timeoutMs = 15000, settleMs = 60 } = opts;
   const reader = new LabelReader(deviceType);
 
   return new Promise((resolve, reject) => {
@@ -275,7 +275,24 @@ async function readLabels(transport, opts = {}) {
         clearTimeout(timer);
         off();
         const out = reader.result();
-        if (out.error) reject(new Error(out.error));
+        if (out.error) { reject(new Error(out.error)); return; }
+        /*
+         * Resolve a beat AFTER the last label, not on it.
+         *
+         * The last report is not the end of the operation. get_slot_labels()
+         * still owes a delay(20) and the walk back out of recvmsg()
+         * (okcore.cpp:1578-1583) before the main loop services HID again, and a
+         * caller that writes into that window gets NOTHING back - no
+         * acknowledgement, no status broadcast, not even a debug line, because
+         * the frame is never looked at. Measured at roughly 40% of writes issued
+         * about 12ms after this resolved.
+         *
+         * setSlot() retries an unacknowledged frame and so recovers anyway, but
+         * it recovers by waiting out a full timeout. Not creating the window is
+         * cheaper than surviving it. See
+         * ok-rn/FINDING-slot-write-after-a-label-read-is-lost.md.
+         */
+        if (settleMs > 0) setTimeout(() => resolve(out), settleMs);
         else resolve(out);
       }
     });

@@ -88,4 +88,5 @@ export let device: {
     chunker: typeof import("./device/chunker");
     parsers: typeof import("./device/parsers");
     encoders: typeof import("./device/encoders");
+    keystrokes: typeof import("./device/keystrokes");
 };

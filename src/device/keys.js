@@ -89,6 +89,18 @@ function stripSignPad(bytes) {
 /**
  * Extract key material from an sshpk-parsed key.
  *
+ * WORKS, AND IS CURRENTLY UNREACHABLE FROM MOBILE. This reads an already-
+ * parsed key, the same way fromPgpKey does, so nothing here depends on sshpk.
+ * The gap is the PARSER: the desktop app deliberately loads sshpk through a
+ * runtime `require` rather than bundling it (ok-app-rewrite
+ * src/api/device/sshpkNode.ts:14) because it is a Node library, and it will
+ * not run under Hermes as-is.
+ *
+ * So SSH import is deferred rather than half-ported. When a Hermes-safe parser
+ * exists, this is the whole of what it has to feed - there is no second half
+ * waiting to be written. PGP has one already (fromPgpKey), which is why that
+ * path shipped first.
+ *
  * @returns {{kind, curve, scalar}|{kind, p, q}}
  */
 function fromSshpk(key) {
@@ -120,6 +132,36 @@ function fromSshpk(key) {
  * @param {boolean} isSubkey
  */
 function fromPgpPacket(packet, isSubkey = false) {
+  if (!packet) throw new Error('no key packet');
+
+  /*
+   * TWO PACKET SHAPES, because two generations of OpenPGP.js are in play.
+   *
+   * v4 - what the desktop app parses with - exposes a flat `params` array of
+   * MPI objects, and which entry holds the secret scalar depends on whether
+   * the packet is a subkey:
+   *
+   *     params[0].oid            the curve
+   *     params[2].data           primary ECC scalar
+   *     params[3].data           subkey ECC scalar
+   *     params[3], params[4]     RSA p and q
+   *
+   * v5 and later - which the vendored PQC fork is - splits them into named
+   * objects and drops the positional guessing entirely:
+   *
+   *     publicParams.oid         the curve
+   *     privateParams.seed       Ed25519 (algorithm 22)
+   *     privateParams.d          ECDH and NIST (algorithms 18, 19)
+   *     privateParams.p / .q     RSA
+   *
+   * Both are read here rather than making callers normalise, because the
+   * choice is not theirs: it is whichever OpenPGP.js the host app already
+   * has, and a mobile app and a desktop app do not have the same one.
+   */
+  if (packet.privateParams || packet.publicParams) {
+    return fromModernPacket(packet);
+  }
+
   const params = packet.params || [];
   const oid = params[0] && params[0].oid;
 
@@ -146,6 +188,88 @@ function fromPgpPacket(packet, isSubkey = false) {
   };
 }
 
+/** The v5+ shape: named params, no positional guessing. */
+function fromModernPacket(packet) {
+  const pub = packet.publicParams || {};
+  const priv = packet.privateParams;
+
+  /*
+   * A locked key has no privateParams at all - the field is null until
+   * decryptKey() has run. Saying so is the difference between "your
+   * passphrase is wrong" and a TypeError three frames deeper.
+   */
+  if (!priv) {
+    throw new Error(
+      'this key is still encrypted; decrypt it with its passphrase first',
+    );
+  }
+
+  if (pub.oid) {
+    /* An OID object carries a length prefix in write(); .oid is the bare
+     * bytes, which is the same thing the v4 shape exposes. */
+    const bytes = pub.oid.oid || pub.oid;
+    const curve = curveFromOid(bytes);
+    if (curve === CURVE.NONE) {
+      throw new Error('unsupported ECC curve; expected Ed25519, NIST P-256 or Curve25519');
+    }
+    const scalar = priv.seed || priv.d;
+    if (!scalar) {
+      throw new Error(
+        `ECC secret missing; privateParams has [${Object.keys(priv).join(', ')}]`,
+      );
+    }
+    return { kind: 'ecc', curve, scalar: Uint8Array.from(scalar) };
+  }
+
+  if (!priv.p || !priv.q) {
+    throw new Error(
+      `unsupported key: no curve and no RSA primes; privateParams has ` +
+      `[${Object.keys(priv).join(', ')}]`,
+    );
+  }
+  /*
+   * Stripped the same way as v4. An RSA prime is generated with its top bit
+   * set, so it never legitimately begins with a zero byte and this cannot
+   * eat a real one - and if it somehow did, prepareKey() rejects a length
+   * that is not an exact multiple of 64 rather than sending a short key.
+   */
+  return { kind: 'rsa', p: stripSignPad(priv.p), q: stripSignPad(priv.q) };
+}
+
+/**
+ * Every usable key in a parsed PGP private key, primary first.
+ *
+ * The order is the contract: assignPgpSlots() reads index 0 as the primary,
+ * index 1 as the decryption subkey and index 2 as the signing subkey. So a
+ * subkey this cannot read is an ERROR rather than something to skip - dropping
+ * it would silently shift every later key into the wrong role, and the result
+ * is a device that signs with the decryption key.
+ *
+ * Takes the already-parsed key object rather than armored text, so this file
+ * stays free of OpenPGP.js. The fork is 1.2 MB parsed and deliberately not
+ * reachable from the package root; the caller that already has it passes what
+ * it produced.
+ */
+function fromPgpKey(key) {
+  if (!key || !key.keyPacket) {
+    throw new Error('not a parsed PGP key: no keyPacket');
+  }
+
+  const packets = [
+    { packet: key.keyPacket, label: 'primary key' },
+    ...(key.subkeys || []).map((sub, i) => ({
+      packet: sub.keyPacket, label: `subkey ${i + 1}`,
+    })),
+  ];
+
+  return packets.map(({ packet, label }, index) => {
+    try {
+      return fromPgpPacket(packet, index > 0);
+    } catch (err) {
+      throw new Error(`${label}: ${err.message}`);
+    }
+  });
+}
 /**
  * Turn extracted material into what OKSETPRIV needs.
  *
@@ -301,6 +425,7 @@ module.exports = {
   stripSignPad,
   fromSshpk,
   fromPgpPacket,
+  fromPgpKey,
   prepareKey,
   assignPgpSlots,
   validateBackupPassphrase,

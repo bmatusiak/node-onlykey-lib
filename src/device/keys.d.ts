@@ -56,6 +56,18 @@ export function stripSignPad(bytes: any): Uint8Array<ArrayBuffer>;
 /**
  * Extract key material from an sshpk-parsed key.
  *
+ * WORKS, AND IS CURRENTLY UNREACHABLE FROM MOBILE. This reads an already-
+ * parsed key, the same way fromPgpKey does, so nothing here depends on sshpk.
+ * The gap is the PARSER: the desktop app deliberately loads sshpk through a
+ * runtime `require` rather than bundling it (ok-app-rewrite
+ * src/api/device/sshpkNode.ts:14) because it is a Node library, and it will
+ * not run under Hermes as-is.
+ *
+ * So SSH import is deferred rather than half-ported. When a Hermes-safe parser
+ * exists, this is the whole of what it has to feed - there is no second half
+ * waiting to be written. PGP has one already (fromPgpKey), which is why that
+ * path shipped first.
+ *
  * @returns {{kind, curve, scalar}|{kind, p, q}}
  */
 export function fromSshpk(key: any): {
@@ -91,6 +103,33 @@ export function fromPgpPacket(packet: object, isSubkey?: boolean): {
     curve?: undefined;
     scalar?: undefined;
 };
+/**
+ * Every usable key in a parsed PGP private key, primary first.
+ *
+ * The order is the contract: assignPgpSlots() reads index 0 as the primary,
+ * index 1 as the decryption subkey and index 2 as the signing subkey. So a
+ * subkey this cannot read is an ERROR rather than something to skip - dropping
+ * it would silently shift every later key into the wrong role, and the result
+ * is a device that signs with the decryption key.
+ *
+ * Takes the already-parsed key object rather than armored text, so this file
+ * stays free of OpenPGP.js. The fork is 1.2 MB parsed and deliberately not
+ * reachable from the package root; the caller that already has it passes what
+ * it produced.
+ */
+export function fromPgpKey(key: any): ({
+    kind: string;
+    curve: number;
+    scalar: Uint8Array<ArrayBuffer>;
+    p?: undefined;
+    q?: undefined;
+} | {
+    kind: string;
+    p: Uint8Array<ArrayBuffer>;
+    q: Uint8Array<ArrayBuffer>;
+    curve?: undefined;
+    scalar?: undefined;
+})[];
 /**
  * Turn extracted material into what OKSETPRIV needs.
  *

@@ -479,3 +479,67 @@ test('an error IS an answer, and is not filtered out as chatter', async () => {
   );
   await app.destroy();
 });
+
+test('a host can enter the digits itself instead of using the debug console', async () => {
+  /*
+   * pressLine writes the PIN as TEXT to the DEBUG console, which is a stand-in
+   * for a finger and exists only on a debug build
+   * (FINDING-provisioning-needs-a-debug-build.md). A host that can press the
+   * device's own buttons - the emulator, a soft key - is doing the real thing,
+   * and should not be forced through a debug channel to do it.
+   *
+   * The bracket is unchanged either way: the firmware appends whatever arrives
+   * while entry is open, and does not care which way it got there.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  const pressed = [];
+  await app.services.device.setPin(PIN, {
+    enterDigits: async (digits) => {
+      pressed.push(digits);
+      /* Stand in for the acks the firmware prints per digit. */
+      pipe.ackPresses(digits);
+    },
+  });
+
+  assert.deepEqual(pressed, [PIN, PIN], 'entered once, confirmed once');
+  assert.equal(
+    pipe.writes.filter((w) => w.iface === IFACE.SEREMU).length, 0,
+    'nothing went to the debug console',
+  );
+  assert.equal(
+    pipe.writes.filter((w) => w.iface === IFACE.VENDOR).length, 4,
+    'the four-message bracket is unchanged',
+  );
+  await app.destroy();
+});
+
+test('the derived-key challenge mode accepts the bit that matters', async () => {
+  /*
+   * It was capped at 1, so value 8 - bit 3, the one the firmware tests before
+   * it will derive a per-site key without a touch - was rejected by our own
+   * validation before it ever reached the device
+   * (FINDING-a-preference-bit-masquerades-as-an-unsupported-feature.md).
+   *
+   * The firmware's setter takes the raw byte with no range check
+   * (okcore.cpp:2021), so a cap here was ours alone.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const device = app.services.device;
+
+  const spec = device.preferences().find((p) => p.name === 'derivedChallengeMode');
+  assert.ok(spec, 'the preference is still in the table');
+  assert.ok(spec.max >= 8, `max is ${spec.max}, which cannot express bit 3`);
+  assert.ok(spec.bits && spec.bits[3], 'the bits are named, not left as a number');
+
+  await assert.doesNotReject(() => device.setPreference('derivedChallengeMode', 8));
+
+  /* And it is still bounded - a byte is a byte. */
+  await assert.rejects(
+    () => device.setPreference('derivedChallengeMode', 256),
+    RangeError,
+  );
+  await app.destroy();
+});

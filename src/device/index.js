@@ -13,4 +13,5 @@ module.exports = {
   chunker: require('./chunker'),
   parsers: require('./parsers'),
   encoders: require('./encoders'),
+  keystrokes: require('./keystrokes'),
 };

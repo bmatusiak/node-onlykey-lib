@@ -39,6 +39,8 @@ function fakeFirmware(opts = {}) {
   const {
     slotError = null,
     slotSilent = false,
+    /* The real firmware drops OKSETPRIV outside config mode, saying nothing. */
+    setPrivSilent = false,
     pinFailAt = -1,
     pinError = 'Error PIN is not between 7 - 10 digits',
     labels = null,
@@ -84,6 +86,23 @@ function fakeFirmware(opts = {}) {
         ? 'Successfully set Label'
         : 'Successfully wiped slot');
       return pipe.deliver(reportText(text));
+    }
+
+    if (msg === MSG.OKSETPRIV) {
+      /*
+       * ecc_priv_flash acknowledges, and which sentence depends on the slot
+       * (okcore.cpp:5399,5413). Modelled because setBackupPassphrase now WAITS
+       * for it - the real firmware drops this frame entirely outside config
+       * mode, so a client that did not wait reported success for a passphrase
+       * the device never took.
+       */
+      if (setPrivSilent) return undefined;
+      const slot = frame[5];
+      return pipe.deliver(reportText(
+        slot === 131
+          ? 'Successfully set Backup Passphrase'
+          : 'Successfully set ECC Key',
+      ));
     }
 
     if (msg === MSG.OKGETLABELS && !unlocked) {
@@ -184,6 +203,21 @@ function fakeFirmware(opts = {}) {
       else if (iface === IFACE.SEREMU) handleSeremu(frame);
       return n;
     },
+    /**
+     * Acknowledge presses the way the firmware does, one line per digit.
+     *
+     * For hosts that enter a PIN by pressing the device's BUTTONS rather than
+     * by writing to the debug console. The firmware prints the same line
+     * either way - it is acknowledging an append, not a channel - but this
+     * fake only sees writes, and a button press is not one.
+     */
+    ackPresses(digits) {
+      for (const digit of String(digits)) {
+        pipe.deliverText(`password appended with ${digit}
+`);
+      }
+    },
+
     /** How many OKPIN messages have been received. */
     get pinStep() { return pinStep; },
     get unlocked() { return unlocked; },
