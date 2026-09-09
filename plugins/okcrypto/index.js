@@ -262,6 +262,7 @@ function setup(imports, register) {
       transitPublicKey: app.publicKey,
       label,
       publicKey,
+      keytype,
     });
 
     const bound = await openTunnel();

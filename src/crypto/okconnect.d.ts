@@ -58,8 +58,14 @@ export function epochBytes(seconds?: number): Uint8Array<ArrayBuffer>;
  *   DERIVE_SHARED_SECRET. Its absence is what makes the same frame a
  *   DERIVE_PUBLIC_KEY request - the key action in opt1 says which, and the
  *   trailing key is simply not read for the first.
+ *
+ *   FRAMED HERE, by peerKeyWire, rather than by the caller. A caller holding a
+ *   65-byte SEC1 point has no reason to suspect it needs reshaping, and the
+ *   consequence of not reshaping it is a wrong secret rather than an error -
+ *   so the conversion belongs at the one place every request passes through.
+ * @param {number} [keytype]  which curve, so the peer key can be framed for it
  */
-export function buildMessage({ transitPublicKey, label, browser, os, epochSeconds, publicKey, }?: Uint8Array): Uint8Array<ArrayBuffer>;
+export function buildMessage({ transitPublicKey, label, browser, os, epochSeconds, publicKey, keytype, }?: Uint8Array): Uint8Array<ArrayBuffer>;
 /** A fresh ephemeral box keypair for one exchange. */
 export function newTransitKeypair(): nacl.BoxKeyPair;
 /**
@@ -148,6 +154,45 @@ export function sharedSecretFrom(payload: any, keytype: any): {
     publicKey: any;
     mlkemSeed?: undefined;
 };
+/**
+ * A peer public key in the form the FIRMWARE reads it.
+ *
+ * The device hands the key straight to micro-ecc:
+ *
+ *     uECC_shared_secret(pub, ecc_private_key, secret, curve)   okcrypto.cpp:955
+ *
+ * and micro-ecc's convention is a RAW 64-byte point, `x || y`, with no 0x04
+ * prefix. Everything else about this is a consequence of that one fact.
+ *
+ * It matters because the device emits its OWN derived key the other way round.
+ * ok_extension.cpp:330 does
+ *
+ *     memmove(ecc_public_key+1, ecc_public_key, 64);
+ *     ecc_public_key[0] = 4;
+ *
+ * so what comes back is SEC1 uncompressed, `04 || x || y`. Echoing that 65-byte
+ * value back as the peer key hands micro-ecc `04 || x[0..62]` - a point shifted
+ * one byte along, which is still a valid-looking point and still produces a
+ * perfectly stable 32-byte answer. It is simply the wrong answer, and no test
+ * that checks determinism can see it. That is what this project shipped, and
+ * __e2e_tests__/13-deriveParity.e2e.js is what caught it: an ECDH computed
+ * host-side from a scalar we hold disagreed with the device's.
+ *
+ * The trailing byte matches the reference. onlykey-3rd-party.js:102 builds the
+ * peer key as `x || y || 04` - the 0x04 at the END - which reads like a typo
+ * and is not: micro-ecc takes the first 64 bytes and never looks at the 65th.
+ * Emitting the same 65 bytes keeps us byte-identical to the client that is
+ * proven against hardware, rather than merely equivalent.
+ *
+ * Only SEC1 (65 bytes, leading 0x04) and raw (64 bytes) are accepted. A 65-byte
+ * value with 0x04 at the end would be ambiguous against a SEC1 point whose x
+ * happens to start with 0x04, so it is refused rather than guessed at.
+ *
+ * @param {Uint8Array} publicKey
+ * @param {number} keytype
+ * @returns {Uint8Array} the bytes to append to the OKCONNECT message
+ */
+export function peerKeyWire(publicKey: Uint8Array, keytype: number): Uint8Array;
 /** An ECC private/shared value is 32 bytes for every supported key type. */
 export const SECRET_BYTES: 32;
 /** X-Wing hands back two 32-byte halves together, for either action. */

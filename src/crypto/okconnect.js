@@ -133,9 +133,16 @@ function epochBytes(seconds = Math.round(Date.now() / 1000)) {
  *   DERIVE_SHARED_SECRET. Its absence is what makes the same frame a
  *   DERIVE_PUBLIC_KEY request - the key action in opt1 says which, and the
  *   trailing key is simply not read for the first.
+ *
+ *   FRAMED HERE, by peerKeyWire, rather than by the caller. A caller holding a
+ *   65-byte SEC1 point has no reason to suspect it needs reshaping, and the
+ *   consequence of not reshaping it is a wrong secret rather than an error -
+ *   so the conversion belongs at the one place every request passes through.
+ * @param {number} [keytype]  which curve, so the peer key can be framed for it
  */
 function buildMessage({
   transitPublicKey, label, browser = 'C', os = 'L', epochSeconds, publicKey = null,
+  keytype = KEYTYPE.P256R1,
 } = {}) {
   if (!(transitPublicKey instanceof Uint8Array) || transitPublicKey.length !== 32) {
     throw new Error('transitPublicKey must be 32 bytes');
@@ -147,7 +154,7 @@ function buildMessage({
     transitPublicKey,
     Uint8Array.from([browser.charCodeAt(0) & 0xff, os.charCodeAt(0) & 0xff]),
     derivationHash(label),
-    publicKey ? Uint8Array.from(publicKey) : new Uint8Array(0),
+    publicKey ? peerKeyWire(publicKey, keytype) : new Uint8Array(0),
   ]);
 }
 
@@ -240,6 +247,74 @@ function publicKeyWidth(keytype) {
   if (keytype === KEYTYPE.XWING) return 64;
   if (keytype === KEYTYPE.CURVE25519 || keytype === KEYTYPE.NACL) return 32;
   return 65;
+}
+
+/**
+ * A peer public key in the form the FIRMWARE reads it.
+ *
+ * The device hands the key straight to micro-ecc:
+ *
+ *     uECC_shared_secret(pub, ecc_private_key, secret, curve)   okcrypto.cpp:955
+ *
+ * and micro-ecc's convention is a RAW 64-byte point, `x || y`, with no 0x04
+ * prefix. Everything else about this is a consequence of that one fact.
+ *
+ * It matters because the device emits its OWN derived key the other way round.
+ * ok_extension.cpp:330 does
+ *
+ *     memmove(ecc_public_key+1, ecc_public_key, 64);
+ *     ecc_public_key[0] = 4;
+ *
+ * so what comes back is SEC1 uncompressed, `04 || x || y`. Echoing that 65-byte
+ * value back as the peer key hands micro-ecc `04 || x[0..62]` - a point shifted
+ * one byte along, which is still a valid-looking point and still produces a
+ * perfectly stable 32-byte answer. It is simply the wrong answer, and no test
+ * that checks determinism can see it. That is what this project shipped, and
+ * __e2e_tests__/13-deriveParity.e2e.js is what caught it: an ECDH computed
+ * host-side from a scalar we hold disagreed with the device's.
+ *
+ * The trailing byte matches the reference. onlykey-3rd-party.js:102 builds the
+ * peer key as `x || y || 04` - the 0x04 at the END - which reads like a typo
+ * and is not: micro-ecc takes the first 64 bytes and never looks at the 65th.
+ * Emitting the same 65 bytes keeps us byte-identical to the client that is
+ * proven against hardware, rather than merely equivalent.
+ *
+ * Only SEC1 (65 bytes, leading 0x04) and raw (64 bytes) are accepted. A 65-byte
+ * value with 0x04 at the end would be ambiguous against a SEC1 point whose x
+ * happens to start with 0x04, so it is refused rather than guessed at.
+ *
+ * @param {Uint8Array} publicKey
+ * @param {number} keytype
+ * @returns {Uint8Array} the bytes to append to the OKCONNECT message
+ */
+function peerKeyWire(publicKey, keytype) {
+  const key = Uint8Array.from(publicKey);
+
+  // The 32-byte curves are passed through: Curve25519::eval and
+  // crypto_box_beforenm both take a bare 32-byte key, so there is no framing.
+  if (keytype === KEYTYPE.CURVE25519 || keytype === KEYTYPE.NACL) {
+    if (key.length !== 32) {
+      throw new Error(`peer key for keytype ${keytype} must be 32 bytes, got ${key.length}`);
+    }
+    return key;
+  }
+
+  // X-Wing does not take a peer key at all; its second half is a seed.
+  if (keytype === KEYTYPE.XWING) return key;
+
+  let raw;
+  if (key.length === 65 && key[0] === 0x04) {
+    raw = key.subarray(1);
+  } else if (key.length === 64) {
+    raw = key;
+  } else {
+    throw new Error(
+      `peer key must be 65 bytes starting 0x04, or 64 bytes raw - got ${key.length} ` +
+      `bytes starting 0x${key[0]?.toString(16) ?? '??'}`,
+    );
+  }
+
+  return concat([raw, Uint8Array.of(0x04)]);
 }
 
 /**
@@ -338,6 +413,7 @@ module.exports = {
   publicKeyWidth,
   publicKeyFrom,
   sharedSecretFrom,
+  peerKeyWire,
   SECRET_BYTES,
   XWING_PAIR,
 };
