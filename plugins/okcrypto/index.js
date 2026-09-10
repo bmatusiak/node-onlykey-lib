@@ -77,7 +77,19 @@ const { MSG } = require('../../src/protocol/msg');
 const { IFACE } = require('../../src/transport/contract');
 
 function setup(imports, register) {
-  const { app, transport, host } = imports;
+  const { app, transport, host, session } = imports;
+
+  /*
+   * The device's own account of what it is, for the one decision that cannot be
+   * made from the wire alone: whether a touch-free derive is possible at all.
+   *
+   * Read at the point of use rather than captured here - `session.capabilities`
+   * is null until connect() has run, and this plugin is set up first.
+   */
+  const deviceCan = (name) => {
+    const caps = session && session.capabilities;
+    return caps ? caps[name] : null;
+  };
 
   /*
    * Randomness comes from the host plugin, not from a global. Node has crypto
@@ -277,6 +289,14 @@ function setup(imports, register) {
    * single stolen secret, and the IV is a fixed twelve zero bytes, so a
    * reused key would also reuse the keystream.
    */
+  /**
+   * What a device status line looks like, and nothing else does.
+   *
+   * The four states the firmware reports, anchored at the start because that
+   * is where the status sits.
+   */
+  const DEVICE_STATUS = /^(UNINITIALIZED|INITIALIZED|UNLOCKED|LOCKED)/i;
+
   async function derive({
     action,
     keytype = okconnect.KEYTYPE.P256R1,
@@ -287,6 +307,28 @@ function setup(imports, register) {
   }) {
     if (typeof randomBytes !== 'function') {
       throw new Error('okcrypto needs randomBytes from the host plugin to derive');
+    }
+
+    /*
+     * DO NOT ASK A FIRMWARE FOR A KEY TYPE IT DOES NOT HAVE.
+     *
+     * X-Wing arrived after v3.0.2; `KEYTYPE_XWING` appears nowhere in
+     * libraries@5d7ce7a. An older device does not refuse the request - it has
+     * no branch for the type, so `pubsize` is never set and it answers with a
+     * perfectly well-formed status line and whatever happens to be in the key
+     * area. Measured on a v3.0.2 soft key: the derive returned successfully
+     * and the caller got 64 bytes that are not a key.
+     *
+     * The status guard below cannot catch that, because the status is real.
+     * Only knowing what the firmware has can, so this asks before it sends.
+     */
+    if (keytype === okconnect.KEYTYPE.XWING && deviceCan('xwingDerive') === false) {
+      throw new Error(
+        'this firmware has no X-Wing key type, so it cannot derive one. It '
+        + 'answers the request with a valid status and no key rather than '
+        + 'refusing, which is why this is checked here instead of being left '
+        + 'to the device. X-Wing arrived after v3.0.2.',
+      );
     }
 
     const app = okconnect.newTransitKeypair();
@@ -318,6 +360,43 @@ function setup(imports, register) {
     }
 
     const opened = okconnect.openResponse(answer.data, app.secretKey);
+
+    /*
+     * THE STATUS IS THE PROOF THAT THIS IS AN ANSWER.
+     *
+     * Every device response begins with a status line - UNLOCKED, LOCKED,
+     * INITIALIZED, UNINITIALIZED, optionally with a version and a model letter.
+     * If the decrypted bytes do not start with one, they are not a response to
+     * this request.
+     *
+     * That happens for real, and it is the most expensive failure mode in this
+     * file's history. When the firmware REFUSES a derive - a key type it does
+     * not have, a preference bit it reads as clear - it returns an error code
+     * and calls wipedata(), which is a TIMER rather than an immediate clear. A
+     * poll landing in that window gets whatever is left of the previous
+     * response: a plausible number of bytes, stable per label, and completely
+     * wrong.
+     *
+     * Measured on a v3.0.2 soft key, five attempts at a derive the firmware
+     * was refusing outright: payloads of 76, 84 and 86 bytes, each with a
+     * different 65-byte "public key" and a status that was empty or a few
+     * bytes of binary noise. Every one was returned to the caller as a derived
+     * public key. The vault then sealed blobs under it, and the only symptom
+     * anywhere was a confusing complaint about key framing several layers up.
+     *
+     * The LENGTH is not a guard: 76 and 86 both look reasonable, and the value
+     * is stable per label because the stale buffer is. Only the status can tell
+     * an answer from a leftover.
+     */
+    if (!DEVICE_STATUS.test(String(opened.status || ''))) {
+      throw new Error(
+        'the device did not answer this derive - the reply carries no device '
+        + 'status, so it is not a response to this request. The usual cause is '
+        + 'the firmware REFUSING the request (a key type it does not have, or '
+        + 'a preference it reads as clear) and this poll landing on the '
+        + 'previous response before it was wiped.',
+      );
+    }
 
     /*
      * The transit secret is wiped rather than left for the GC. It decrypts
@@ -696,6 +775,43 @@ function setup(imports, register) {
            * EEPROM bit is clear.
            */
           if (/EXTENSION_NOT_SUPPORTED/.test(String(err && err.message))) {
+            /*
+             * The status names the wrong cause, and WHICH right cause depends
+             * on the firmware. Three releases behave three ways here
+             * (src/device/version.js, touchFreeDerive):
+             *
+             *   'always'      v3.0.1 and earlier - no preference exists, so a
+             *                 refusal here means something else entirely and
+             *                 the raw status is the most honest thing to show.
+             *   'preference'  after v3.0.2 - an EEPROM bit is clear, and
+             *                 turning it on fixes this.
+             *   'broken'      v3.0.2 exactly - the check reads a RAM cache the
+             *                 raw-HID pipeline zeroes, so the device refuses a
+             *                 preference it is already holding. Telling
+             *                 somebody to enable a setting that cannot take
+             *                 effect is worse than telling them nothing.
+             *
+             * There is no fallback to the press variant in any of them: the
+             * press flag is an INPUT to the derivation, so retrying with a
+             * touch derives a different key.
+             */
+            const can = deviceCan('touchFreeDerive');
+            if (can === 'broken') {
+              throw new Error(
+                'this firmware cannot do a touch-free derive at all, so the '
+                + 'vault cannot be opened on it. v3.0.2 checks a cached copy '
+                + 'of the preference that its own raw-HID path clears, so it '
+                + 'refuses the derive whatever the setting says. Later '
+                + 'firmware reads the setting properly.',
+              );
+            }
+            if (can === 'always') {
+              throw new Error(
+                'the device refused a touch-free derive, and this firmware has '
+                + 'no preference gating one - so the cause is not a setting. '
+                + `The device said: ${String(err && err.message)}`,
+              );
+            }
             throw new Error(
               'the vault needs the device preference "derived keys per site ' +
               'without touch" enabled (derived_key_challenge_mode bit 3). The ' +

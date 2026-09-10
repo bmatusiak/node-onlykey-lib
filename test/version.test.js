@@ -252,3 +252,56 @@ test('a status nobody recognises degrades instead of throwing', () => {
   assert.equal(capabilities(info).challengeFormula, 'modern');
   assert.equal(capabilities(info).debugConsole, null);
 });
+
+/* ------------------------------------------------- the touch-free derive */
+
+/*
+ * MEASURED against staged firmware, not transcribed. The split is one release
+ * wide, and getting it wrong in either direction is expensive: too permissive
+ * and the vault seals blobs on a device that cannot open them, too strict and
+ * a working v2.1 key is refused a feature it has always had.
+ */
+test('v3.0.1 and earlier need no preference at all', () => {
+  // ok_extension.cpp at a27ffa6 sets additional_data[0] for the REQ_PRESS
+  // variants and carries straight on - there is no preference check anywhere.
+  assert.equal(capabilities('UNLOCKEDv2.1.0-testc').touchFreeDerive, 'always');
+  assert.equal(capabilities('UNLOCKEDv2.1.2-prodc').touchFreeDerive, 'always');
+  assert.equal(capabilities('UNLOCKEDv3.0.0-prodc').touchFreeDerive, 'always');
+  assert.equal(capabilities('UNLOCKEDv3.0.1-prodc').touchFreeDerive, 'always');
+});
+
+test('v3.0.2 added the check and reads a cache that is always stale', () => {
+  // derived_key_challenge_mode is a RAM cache the raw-HID pipeline zeroes on
+  // every done_process_packets(), so the FIDO2 path reads zero whatever is
+  // persisted - the device refuses a preference it is holding. Measured: a
+  // v3.0.2 soft key answers CTAP2_ERR_EXTENSION_NOT_SUPPORTED after being told
+  // "Successfully set derived key challenge mode".
+  assert.equal(capabilities('UNLOCKEDv3.0.2-testc').touchFreeDerive, 'broken');
+});
+
+test('after v3.0.2 the preference works, so it is required', () => {
+  assert.equal(capabilities('UNLOCKEDv3.0.3-prodc').touchFreeDerive, 'preference');
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').touchFreeDerive, 'preference');
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').touchFreeDerive, 'preference');
+  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'preference');
+});
+
+test('an unreadable version does not disable a working device', () => {
+  // Old firmware and unparseable shapes both land here. Every pre-v3.0.2
+  // release we have measured allows the touch-free derive, so refusing on
+  // "unknown" would disable exactly the population this work exists to serve.
+  assert.equal(capabilities('WAT').touchFreeDerive, 'always');
+  assert.equal(capabilities('UNINITIALIZED').touchFreeDerive, 'always');
+});
+
+test('X-Wing arrived after v3.0.2, and absence is the default', () => {
+  // KEYTYPE_XWING does not appear anywhere in libraries@5d7ce7a. The age file
+  // format is built on it, so neither works on an older key.
+  assert.equal(capabilities('UNLOCKEDv3.0.2-testc').xwingDerive, false);
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').xwingDerive, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').xwingDerive, true);
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').xwingDerive, true);
+  // Unknown defaults to absent - the opposite of touchFreeDerive, because this
+  // is a feature old firmware does NOT have rather than one it does.
+  assert.equal(capabilities('WAT').xwingDerive, false);
+});

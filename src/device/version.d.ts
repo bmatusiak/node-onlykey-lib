@@ -95,6 +95,54 @@ export function capabilities(status: object | string): {
      */
     slots: number;
     profiles: number;
+    /**
+     * What the touch-free derive needs from this firmware.
+     *
+     *   'always'      it just works. No preference, nothing to turn on.
+     *   'preference'  needs derived_key_challenge_mode bit 3 set.
+     *   'broken'      the check exists and reads a stale cache, so the device
+     *                 refuses it whatever the preference says.
+     *
+     * MEASURED, and the split is exactly one release wide:
+     *
+     *   v2.1.0 - v3.0.1   NO GATE AT ALL. ok_extension.cpp sets
+     *                     additional_data[0] for the REQ_PRESS variants and
+     *                     carries straight on; there is no preference check
+     *                     anywhere (`git show a27ffa6:fido2/ok_extension.cpp`).
+     *   v3.0.2            the check was ADDED, against `derived_key_challenge_mode`
+     *                     - a RAM cache of an EEPROM byte that the raw-HID
+     *                     pipeline zeroes on every done_process_packets(). By
+     *                     the time the FIDO2 path reads it, it is always zero.
+     *                     So the device answers CTAP2_ERR_EXTENSION_NOT_SUPPORTED
+     *                     to a preference it is holding.
+     *   after v3.0.2      the same check, reloading the byte from EEPROM first,
+     *                     so the preference works as intended.
+     *
+     * Why a host needs to know: the press flag is an INPUT to the derivation,
+     * not a permission check in front of it, so retrying with a touch derives a
+     * DIFFERENT key (FINDING-the-press-flag-changes-the-derived-key.md). There
+     * is no fallback. A caller that cannot do a touch-free derive cannot open
+     * the vault at all, and the honest thing is to say why rather than to offer
+     * a button that seals blobs nothing else can read.
+     *
+     * 'broken' is what the vault should refuse on, naming the firmware rather
+     * than the preference - telling someone to enable a setting that cannot
+     * take effect is worse than telling them nothing.
+     */
+    touchFreeDerive: string;
+    /**
+     * Whether the X-Wing hybrid key type exists at all.
+     *
+     * MEASURED: `KEYTYPE_XWING` does not appear anywhere in libraries@5d7ce7a
+     * (v3.0.2) and does in the working tree, so it arrived after v3.0.2. The
+     * age file format built on it therefore cannot work on an older key either.
+     *
+     * Defaults to FALSE for a version we cannot read, which is the opposite of
+     * touchFreeDerive's default and deliberately so: that one is a feature old
+     * firmware HAS, and this is one it does not. Guessing "present" would offer
+     * a screen that produces an identity the device cannot use.
+     */
+    xwingDerive: boolean;
     /** Three buttons on a DUO, six otherwise - see protocol/challenge.js. */
     buttons: number;
 };
