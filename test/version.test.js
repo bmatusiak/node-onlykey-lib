@@ -459,3 +459,20 @@ test('consolePress and debugConsole treat UNKNOWN in opposite directions', () =>
   assert.equal(unknown.debugConsole, null, 'unknown console is not false');
   assert.equal(unknown.consolePress, false, 'unknown press capability is false');
 });
+
+test('consolePress is about the CONSOLE, not about whether a host can press', () => {
+  // A production soft key presses fine: the host fakes the capacitive reading,
+  // so the press lands at touch_sense_loop()'s touchread comparisons, which sit
+  // outside every #ifdef DEBUG in that function. Reading consolePress===false
+  // as 'this device cannot be pressed' would disable a key that works.
+  //
+  // Pinned as a test because the name invites exactly that misreading, and the
+  // cost of it is a host refusing to drive a device it could have driven.
+  const prodSoftKey = capabilities('UNLOCKEDv3.0.4-prodc');
+  assert.equal(prodSoftKey.consolePress, false, 'no console parser in a prod build');
+
+  // Nothing here claims anything about pressing, because the library does not
+  // press - every call site takes the press from its caller.
+  assert.equal('canPress' in prodSoftKey, false);
+  assert.equal('press' in prodSoftKey, false);
+});

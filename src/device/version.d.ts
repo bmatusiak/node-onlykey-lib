@@ -291,6 +291,21 @@ export function capabilities(status: object | string): {
      * - taps, holds by tier, explicit tick counts, restart and factory reset -
      * which is what makes a developer key drivable by a test suite.
      *
+     * ## THIS IS NOT "CAN THE HOST PRESS A BUTTON"
+     *
+     * Pressing is a property of the HOST, not of the firmware, and this answers
+     * only whether the CONSOLE accepts press commands - which is the question
+     * for a real key reached over a wire.
+     *
+     * An emulated key presses in ANY build, including production, and does not
+     * need the console at all: the host fakes the capacitive reading itself, so
+     * the press arrives at `touch_sense_loop()`'s `touchread1..6` comparisons
+     * (okcore.cpp:2574) exactly as a finger would. Those sit outside every
+     * `#ifdef DEBUG` in that function - the first one is the console parser,
+     * further down - so the gate this capability turns on is simply not in that
+     * path. Reading `consolePress === false` as "this device cannot be pressed"
+     * would disable a soft key that presses perfectly well.
+     *
      * TWO CONDITIONS, and both are needed. The parser sits inside `#ifdef
      * DEBUG` (okcore.cpp:2360), so a production build of newer firmware has it
      * compiled out - which is `debugConsole` being false. And it postdates
