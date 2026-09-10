@@ -10,6 +10,7 @@ module.exports = {
   version: require('./version'),
   slots: require('./slots'),
   pin: require('./pin'),
+  press: require('./press'),
   keys: require('./keys'),
   chunker: require('./chunker'),
   parsers: require('./parsers'),

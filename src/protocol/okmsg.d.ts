@@ -24,6 +24,25 @@ export function build({ msg, slot, field, payload }: {
  * it that way. Passing the number would be silently wrong rather than
  * rejected, which is why this is a named function and not an inline expression.
  *
+ * ## This is not how the session sends the time
+ *
+ * `session.connect()` does not call this. It builds the whole 43-byte OKCONNECT
+ * payload in one go - `transit.connectPayload()`, which writes the same seconds
+ * as a fixed big-endian uint32 at bytes [5..8] and appends the transit public
+ * key. The firmware dispatches `case OKCONNECT: set_time(recv_buffer)`, so the
+ * time IS set on every connect; it just does not come from here.
+ *
+ * What this is for is a caller building the frame ITSELF - which is what
+ * ok-rn's soft-key suite does to prove the firmware answers OKCONNECT at all,
+ * without a session in the way.
+ *
+ * ## The two encoders agree, and only by arithmetic
+ *
+ * For any epoch that fits in four bytes these produce identical bytes, which is
+ * why nothing has ever noticed there are two. They diverge past 0xFFFFFFFF -
+ * February 2106 - where this grows a fifth byte and connectPayload cannot.
+ * test/okmsg.test.js pins that agreement so it cannot drift quietly.
+ *
  * @param {Date|number} [when]
  */
 export function setTimePayload(when?: Date | number): number[];

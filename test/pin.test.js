@@ -204,3 +204,32 @@ test('a firmware block exposes its signature layout', () => {
 test('the bootloader kick is the literal 1234', () => {
   assert.equal(parsers.BOOTLOADER_KICK, '1234');
 });
+
+/* ------------------------------------------------------- the rollover */
+
+test('padding to the rollover, because the buffer cannot be cleared', () => {
+  // pass_keypress starts at 1 and the tenth press resets it. Six digits in
+  // means four more to go.
+  assert.deepEqual(pin.rolloverPresses(6), [6, 6, 6, 6]);
+  assert.deepEqual(pin.rolloverPresses(1), [6, 6, 6, 6, 6, 6, 6, 6, 6]);
+  assert.deepEqual(pin.rolloverPresses(9), [6]);
+});
+
+test('nothing to do for an empty buffer or one already at the rollover', () => {
+  // Padding an empty buffer would ADD nine digits and cost a session attempt
+  // for no reason, which is worse than doing nothing.
+  assert.deepEqual(pin.rolloverPresses(0), []);
+  assert.deepEqual(pin.rolloverPresses(10), []);
+  assert.deepEqual(pin.rolloverPresses(11), []);
+});
+
+test('padding with button 3 is refused, because 3 is the lock gesture', () => {
+  // A press is a press. Padding with 3 would lock the key and restart it - the
+  // opposite of clearing a buffer, and irreversible in the sense that the
+  // session is gone.
+  assert.throws(() => pin.rolloverPresses(6, {button: 3}), /lock gesture/);
+});
+
+test('a different pad button is allowed, for a device with fewer buttons', () => {
+  assert.deepEqual(pin.rolloverPresses(8, {button: 1}), [1, 1]);
+});

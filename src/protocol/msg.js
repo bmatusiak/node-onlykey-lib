@@ -61,6 +61,13 @@ const MSG_ALIASES = {
   OKSETPIN: MSG.OKPIN,
   OKSETSDPIN: MSG.OKPINSD,
   OKSETPIN2: MSG.OKPINSEC,
+  /*
+   * The same message. The firmware has one id for "connect" and "set the
+   * time" because they are one exchange - okcore.cpp dispatches
+   * `case OKCONNECT: set_time(recv_buffer)`. Both spellings are kept because
+   * both references use both, and a reader looking for one should not have to
+   * know it is the other.
+   */
   OKSETTIME: MSG.OKCONNECT,
 };
 

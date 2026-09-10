@@ -85,6 +85,7 @@ export let device: {
     version: typeof import("./device/version");
     slots: typeof import("./device/slots");
     pin: typeof import("./device/pin");
+    press: typeof import("./device/press");
     keys: typeof import("./device/keys");
     chunker: typeof import("./device/chunker");
     parsers: typeof import("./device/parsers");

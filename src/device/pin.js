@@ -217,6 +217,53 @@ const RECOVERY_STEP = {
   [MSG.OKPINSD]: 'enterSelfDestruct',
 };
 
+/**
+ * How to empty the device's PIN buffer, given how many digits are already in it.
+ *
+ * THE BUFFER CANNOT BE CLEARED. There is no message for it: the firmware's
+ * `clearPinEntry` APPENDS before it resets, so asking for a clear leaves a digit
+ * behind. The only clean way back to empty is the firmware's own ROLLOVER -
+ * `pass_keypress` starts at 1 and the tenth press takes the else branch, which
+ * calls `password.reset()` and sets it back to 1 (OnlyKey.ino:964-989).
+ *
+ * So "start over" is not a command, it is PADDING: press the rest of the way to
+ * ten and let the firmware reset itself.
+ *
+ * ## Which button to pad with, and which never to
+ *
+ * NEVER BUTTON 3. A press is a press and 3 is the lock gesture. Button 6 is the
+ * default here, and a single repeated digit also makes an accidental match on
+ * somebody's real PIN vanishingly unlikely - padding with a varied sequence
+ * could spell one.
+ *
+ * A caller on a device with fewer buttons passes its own; a DUO does not need
+ * this at all, because its PIN travels in the message body and never enters a
+ * button buffer.
+ *
+ * ## What it costs
+ *
+ * One session attempt of the three allowed, and it sets `firsttime`, so the
+ * EEPROM failed-login counter ticks up once this boot. Both are reset by the
+ * next successful unlock. That is the price of the only clean reset there is.
+ *
+ * @param {number} entered digits already in the buffer
+ * @param {object} [opts]
+ * @param {number} [opts.button] which button to pad with
+ * @returns {number[]} the buttons to press, in order. Empty when there is
+ *   nothing to do - an empty buffer, or one already at the rollover.
+ */
+function rolloverPresses(entered, { button = 6 } = {}) {
+  if (button === 3) {
+    throw new Error(
+      'button 3 is the lock gesture - padding with it locks the key and '
+      + 'restarts it rather than clearing the buffer',
+    );
+  }
+  if (!Number.isInteger(entered) || entered <= 0) return [];
+  if (entered >= MAX_DIGITS) return [];
+  return new Array(MAX_DIGITS - entered).fill(button);
+}
+
 module.exports = {
   MIN_DIGITS,
   MAX_DIGITS,
@@ -227,6 +274,7 @@ module.exports = {
   DIGIT_ACK,
   PIN_SEQUENCE,
   RECOVERY_STEP,
+  rolloverPresses,
   validatePin,
   validateDuoPins,
   encodeDuoPins,
