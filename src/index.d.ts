@@ -80,7 +80,25 @@ export let protocol: {
     messageId: typeof import("./protocol/msg").messageId;
     fieldId: typeof import("./protocol/msg").fieldId;
 };
-export let transport: typeof import("./transport/contract");
+export let transport: {
+    usb: typeof import("./transport/usbDescriptors");
+    IFACE: {
+        KEYBOARD: 0;
+        FIDO: 1;
+        VENDOR: 2;
+        SEREMU: 3;
+    };
+    DIR: {
+        OUT: 0;
+        IN: 1;
+    };
+    REPORT_SIZE: 64;
+    REQUIRED: string[];
+    assertTransport: typeof import("./transport/contract").assertTransport;
+    stripPadding: typeof import("./transport/contract").stripPadding;
+    toReport: typeof import("./transport/contract").toReport;
+    withReportId: typeof import("./transport/contract").withReportId;
+};
 export let device: {
     version: typeof import("./device/version");
     slots: typeof import("./device/slots");
