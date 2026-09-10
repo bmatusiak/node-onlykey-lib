@@ -612,6 +612,59 @@ const gestures = (() => {
       return rel.major >= 3;
     })(),
 
+    /**
+     * Whether the debug console can PRESS BUTTONS, not just print.
+     *
+     * MEASURED, and it settles a contradiction. `device.unlock()` defaults to
+     * writing PIN digits to SEREMU, and a comment in ok-rn's test helpers said
+     * that was a debug-build feature. Two readings of the firmware failed to
+     * find anything consuming console input, and a probe on the running key
+     * found that it plainly does. Both were right, for different firmware:
+     *
+     *   working tree   okcore.cpp:2689 reads Serial and queues presses
+     *   v3.0.2 and older   NO Serial.read anywhere in okcore.cpp at all
+     *
+     * So on every RELEASED firmware the console is write-only, and unlock()'s
+     * default path cannot work. On newer firmware it is a full control channel
+     * - taps, holds by tier, explicit tick counts, restart and factory reset -
+     * which is what makes a developer key drivable by a test suite.
+     *
+     * TWO CONDITIONS, and both are needed. The parser sits inside `#ifdef
+     * DEBUG` (okcore.cpp:2360), so a production build of newer firmware has it
+     * compiled out - which is `debugConsole` being false. And it postdates
+     * every pinned release.
+     *
+     * The boundary is only known to be SOMEWHERE ABOVE v3.0.2: it is absent
+     * from every pin in ok-versions.json and present in the working tree at
+     * v3.0.4. No pin sits between them, so this is the tightest honest answer
+     * rather than a measured edge.
+     */
+    consolePress: (() => {
+      /*
+       * No console, no parser to reach. Read from the same place debugConsole
+       * is - a sibling in an object literal cannot see it, and copying the
+       * ternary would be two things to keep in step.
+       *
+       * UNKNOWN counts as no here, unlike debugConsole where null means the
+       * console may well be there. The directions differ on purpose: assuming
+       * a console exists keeps old devices provisionable, while assuming it
+       * can PRESS would write a PIN into a void and then blame the PIN.
+       */
+      if (info.build !== BUILD.DEBUG) return false;
+
+      const rel = parseRelease(stripModelSuffix(info.versionField || ''));
+      /*
+       * Unknown is FALSE, the same direction as xwingDerive and for the same
+       * reason: this is a feature old firmware does NOT have. Claiming it
+       * would make a host write a PIN into a void and then blame the PIN.
+       */
+      if (!rel) return false;
+      if (rel.major > 3) return true;
+      if (rel.major < 3) return false;
+      if (rel.minor > 0) return true;
+      return rel.patch !== null && rel.patch > 2;
+    })(),
+
     /** Three buttons on a DUO, six otherwise - see protocol/challenge.js. */
     buttons: info.model === MODEL.DUO ? 3 : 6,
   };

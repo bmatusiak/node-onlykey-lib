@@ -430,3 +430,32 @@ test('duoSupported is about the FIRMWARE, model is about the device', () => {
   assert.equal(duo.buttons, 3);
   assert.equal(duo.slots, 24);
 });
+
+test('consolePress needs BOTH a debug build and firmware newer than v3.0.2', () => {
+  // Measured, and it settles a contradiction rather than restating a doc.
+  // okcore.cpp reads Serial and queues presses in the working tree; NO pinned
+  // release has a Serial.read anywhere in it. So the console is a control
+  // channel on new firmware and write-only on every release, which is why
+  // unlock()'s default path both does and does not work depending who asks.
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').consolePress, true);
+
+  // Production compiles the parser out - it sits inside #ifdef DEBUG.
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').consolePress, false);
+
+  // Every released firmware, debug build or not.
+  assert.equal(capabilities('UNLOCKEDv3.0.2-testc').consolePress, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.0-testc').consolePress, false);
+  assert.equal(capabilities('UNLOCKEDv2.1.1-testc').consolePress, false);
+
+  // Unknown is no. Claiming it would write a PIN into a void and blame the PIN.
+  assert.equal(capabilities('WAT').consolePress, false);
+});
+
+test('consolePress and debugConsole treat UNKNOWN in opposite directions', () => {
+  // Deliberate, and worth pinning because it looks like an inconsistency.
+  // A console that may be there keeps an old device provisionable; a console
+  // that may be able to press is not something to bet a PIN entry on.
+  const unknown = capabilities('WAT');
+  assert.equal(unknown.debugConsole, null, 'unknown console is not false');
+  assert.equal(unknown.consolePress, false, 'unknown press capability is false');
+});

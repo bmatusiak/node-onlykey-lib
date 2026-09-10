@@ -274,6 +274,34 @@ export function capabilities(status: object | string): {
      * model; the model is what decides how many buttons to draw.
      */
     duoSupported: boolean;
+    /**
+     * Whether the debug console can PRESS BUTTONS, not just print.
+     *
+     * MEASURED, and it settles a contradiction. `device.unlock()` defaults to
+     * writing PIN digits to SEREMU, and a comment in ok-rn's test helpers said
+     * that was a debug-build feature. Two readings of the firmware failed to
+     * find anything consuming console input, and a probe on the running key
+     * found that it plainly does. Both were right, for different firmware:
+     *
+     *   working tree   okcore.cpp:2689 reads Serial and queues presses
+     *   v3.0.2 and older   NO Serial.read anywhere in okcore.cpp at all
+     *
+     * So on every RELEASED firmware the console is write-only, and unlock()'s
+     * default path cannot work. On newer firmware it is a full control channel
+     * - taps, holds by tier, explicit tick counts, restart and factory reset -
+     * which is what makes a developer key drivable by a test suite.
+     *
+     * TWO CONDITIONS, and both are needed. The parser sits inside `#ifdef
+     * DEBUG` (okcore.cpp:2360), so a production build of newer firmware has it
+     * compiled out - which is `debugConsole` being false. And it postdates
+     * every pinned release.
+     *
+     * The boundary is only known to be SOMEWHERE ABOVE v3.0.2: it is absent
+     * from every pin in ok-versions.json and present in the working tree at
+     * v3.0.4. No pin sits between them, so this is the tightest honest answer
+     * rather than a measured edge.
+     */
+    consolePress: boolean;
     /** Three buttons on a DUO, six otherwise - see protocol/challenge.js. */
     buttons: number;
 };
