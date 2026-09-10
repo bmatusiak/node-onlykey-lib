@@ -399,3 +399,34 @@ test('configModeGesture is READ OFF the band table, not restated beside it', () 
     assert.equal(caps.configModeGesture.ticks, caps.gestures.configMode.lo, status);
   }
 });
+
+test('duoSupported splits exactly where OK_GO became OK_HW_DUO', () => {
+  // Measured from the pinned sources: the two constants never coexist. The 3.0
+  // line replaced OK_GO outright rather than adding beside it, and the
+  // firmware's own `//#define DEFINED_HWID OK_HW_DUO` override appears on the
+  // same three releases and no earlier one.
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').duoSupported, false);
+  assert.equal(capabilities('UNLOCKEDv2.1.1-prodc').duoSupported, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.0-prodc').duoSupported, true);
+  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').duoSupported, true);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').duoSupported, true);
+
+  // Unknown is FALSE, the opposite of touchFreeDerive's default: this is a
+  // feature old firmware does not have, so guessing "present" would offer 24
+  // slots on a key that has 12.
+  assert.equal(capabilities('WAT').duoSupported, false);
+});
+
+test('duoSupported is about the FIRMWARE, model is about the device', () => {
+  // A 3.0 build on classic hardware knows what a DUO is and is not one. Reading
+  // duoSupported as "this is a DUO" would draw three buttons on a six-button key.
+  const classic = capabilities('UNLOCKEDv3.0.4-testc');
+  assert.equal(classic.duoSupported, true);
+  assert.equal(classic.buttons, 6);
+  assert.equal(classic.slots, 12);
+
+  const duo = capabilities('UNLOCKEDv3.0.4-testp');
+  assert.equal(duo.duoSupported, true);
+  assert.equal(duo.buttons, 3);
+  assert.equal(duo.slots, 24);
+});

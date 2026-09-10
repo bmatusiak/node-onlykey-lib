@@ -25,6 +25,29 @@ export function parseStatus(status: string | Uint8Array): {
     fwUpdateOverUsb: boolean;
 };
 /**
+ * Why three branches below are marked UNVERIFIED, and will stay that way.
+ *
+ * The version matrix (ok-rn/tools/matrix.js) rebuilds each pinned release as an
+ * emulator and runs the whole suite against it, so most of what this file says
+ * is a MEASUREMENT rather than a transcription. Three branches are not, and a
+ * green matrix must not be read as covering them:
+ *
+ *   okconnectLayout 'legacy'    v0.2-beta.8c
+ *   challengeFormula 'legacy'   v0.2-beta.8c
+ *   pollDelayMultiplier 4       Original hardware
+ *
+ * ok-versions.json pins six releases and the oldest is v2.1.0. Beta-8c is years
+ * older than that and has no pin; Original is a discontinued MODEL rather than a
+ * release, so no firmware version selects it and no build option produces one.
+ * The matrix CANNOT reach either, however many versions are added to it - only
+ * an older pin or a physical Original key would.
+ *
+ * Both branches come from the web app, which is the only client that implements
+ * them, and both are transcribed against the exact source line. That is the
+ * evidence they have. It is not the same evidence as everything else here, and
+ * the difference is worth saying out loud rather than discovering later.
+ */
+/**
  * What this device can be asked to do.
  *
  * Every entry cites where it came from, and entries whose old-firmware branch
@@ -65,7 +88,8 @@ export function capabilities(status: object | string): {
      * onlykey-api.js:167-197. The reference switches on an exact string match
      * against the version field, so this does too.
      *
-     * The legacy branch is UNVERIFIED against hardware by this project.
+     * The legacy branch is UNVERIFIED - no pin in ok-versions.json is beta-8c,
+     * so the matrix cannot reach it. See the note above capabilities().
      */
     okconnectLayout: string;
     /**
@@ -79,7 +103,9 @@ export function capabilities(status: object | string): {
      * challenge digits on screen, so getting it wrong puts 4, 5 and 6 in front
      * of someone holding a device with three buttons.
      *
-     * The legacy branch is UNVERIFIED against hardware by this project.
+     * The legacy branch is UNVERIFIED for the same reason as okconnectLayout:
+     * beta-8c has no pin. The DUO branch IS measured - a DUO is a staging
+     * gate, not a fixture.
      */
     challengeFormula: string;
     /**
@@ -89,7 +115,10 @@ export function capabilities(status: object | string): {
      * for it - onlykey-pgp.js:133-135 and 236-239, both keyed on
      * `OKversion == 'Original'`.
      *
-     * UNVERIFIED against hardware by this project.
+     * UNVERIFIED, and unreachable by the matrix in a way the other two are not:
+     * Original is a discontinued MODEL rather than a release, so no version
+     * selects it and no build option produces one. Only a physical Original
+     * key would settle this. See the note above capabilities().
      */
     pollDelayMultiplier: number;
     /** Firmware update from a host over USB - see supportsFwUpdate(). */
@@ -217,6 +246,34 @@ export function capabilities(status: object | string): {
         button: any;
         ticks: any;
     };
+    /**
+     * Whether this firmware knows what a DUO is at all.
+     *
+     * MEASURED, from the pinned sources rather than from a changelog. The
+     * constant that names the model appears on exactly one side of the 3.0
+     * boundary, and its predecessor on the other:
+     *
+     *     v2.1.0  OK_GO       OK_HW_DUO absent
+     *     v2.1.1  OK_GO       OK_HW_DUO absent
+     *     v3.0.0  OK_HW_DUO   OK_GO absent
+     *     v3.0.1  OK_HW_DUO   OK_GO absent
+     *     v3.0.2  OK_HW_DUO   OK_GO absent
+     *
+     * They never coexist: the 3.0 line replaced OK_GO outright rather than
+     * adding beside it. `//#define DEFINED_HWID OK_HW_DUO` - the firmware's own
+     * commented-out override, which is how ok-rn stages a DUO - appears on the
+     * same three releases and no earlier one.
+     *
+     * FALSE FOR UNKNOWN, the opposite of touchFreeDerive's default and for the
+     * same reason xwingDerive is: this is a feature old firmware does NOT have.
+     * Guessing "present" would offer 24 slots on a key that has 12 and put four
+     * profiles in front of someone whose device has two.
+     *
+     * Note this is about the FIRMWARE, not the device in hand. A 3.0 build
+     * running on classic hardware answers true here and 'classic' for its
+     * model; the model is what decides how many buttons to draw.
+     */
+    duoSupported: boolean;
     /** Three buttons on a DUO, six otherwise - see protocol/challenge.js. */
     buttons: number;
 };
