@@ -17,6 +17,7 @@
     "./plugins/session": "./plugins/session/index.js",
     "./plugins/transport/memory": "./plugins/transport/memory.js",
     "./plugins/transport/embedded": "./plugins/transport/embedded.js",
+    "./plugins/transport/usb": "./plugins/transport/usb.js",
     "./plugins/device": "./plugins/device/index.js",
     "./plugins/okcrypto": "./plugins/okcrypto/index.js",
     "./package.json": "./package.json",
