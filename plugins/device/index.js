@@ -20,6 +20,7 @@ const chunker = require('../../src/device/chunker');
 const parsers = require('../../src/device/parsers');
 const deviceKeys = require('../../src/device/keys');
 const keystrokes = require('../../src/device/keystrokes');
+const presses = require('../../src/device/press');
 const encoders = require('../../src/device/encoders');
 const { MSG, FIELD } = require('../../src/protocol/msg');
 const okmsg = require('../../src/protocol/okmsg');
@@ -712,6 +713,129 @@ const PREFERENCES = {
     },
 
     slotNumber(slotId) { return slots.slotNumber(slotId, currentType()); },
+
+    /**
+     * Ask the key to TYPE a slot, and read back what it typed.
+     *
+     * There is no message that reads a credential out; the firmware will not
+     * hand one over. The only way to see what is in a slot is to press its
+     * button and decode the keystrokes, which on hardware means into a text
+     * editor and here means off the keyboard interface.
+     *
+     * `press` is the caller's, for the same reason captureBackup's `trigger`
+     * is: making the device do it is platform-specific - a counted hold on the
+     * emulator, a finger on a real key - and the library has no business
+     * knowing which. Everything else is protocol, so it lives here rather than
+     * in a screen.
+     *
+     * ## THE PRESS IS COUNTED, NOT TIMED
+     *
+     * The band comes from pressForSlot(), which is the inverse of gen_press()
+     * and gen_hold(). A tap types the a profile, a hold types the b profile,
+     * and a hold that runs past the gesture floor stops being a slot read
+     * entirely - button 1 takes a backup, button 3 locks the key or cycles a
+     * DUO's profile. src/device/press.js has the bands and the refusal, and
+     * both are used rather than restated.
+     *
+     * ## IT WAITS FOR THE TYPING TO STOP, NOT FOR A FIXED TIME
+     *
+     * A slot is typed one character at a time, paced by its own TYPESPEED, so
+     * how long it takes is a property of the slot and not something to guess.
+     * The read ends after `quietMs` with no new report, and `timeoutMs` is only
+     * the outer bound for a device that never starts.
+     *
+     * ## NOTHING IN THE REPLY SAYS WHICH SLOT IT WAS
+     *
+     * The device types the profile it is on, and does not announce which one.
+     * `profile` is passed through to pressForSlot, which refuses a slot id the
+     * requested profile cannot reach; the physical slot that will be typed is
+     * returned as `slot` so a caller can check it against a label.
+     *
+     * @param {string|number} slotId
+     * @param {object} opts
+     * @param {function} opts.press      (button, ticks) => Promise
+     * @param {number} [opts.profile]    the profile the DEVICE is on
+     * @param {number} [opts.ticks]      override the band's hold length
+     * @param {number} [opts.quietMs]    idle before the typing is finished
+     * @param {number} [opts.timeoutMs]  outer bound on the whole read
+     * @param {string} [opts.layout]     keyboard layout for the decode
+     */
+    async readSlot(slotId, {
+      press,
+      profile = 0,
+      ticks = null,
+      quietMs = 600,
+      timeoutMs = 8000,
+      layout,
+    } = {}) {
+      if (typeof press !== 'function') {
+        throw new Error(
+          'readSlot needs a press(button, ticks) - the library does not press '
+          + 'buttons, the host does',
+        );
+      }
+
+      const plan = slots.pressForSlot(slotId, {
+        deviceType: currentType(),
+        profile,
+      });
+
+      const held = ticks === null
+        ? (plan.band === 'hold' ? presses.PRESS_TICKS.HOLD : presses.PRESS_TICKS.TAP)
+        : ticks;
+
+      /*
+       * An overridden hold is checked against the gesture band, because the
+       * whole point of allowing the override is that a slow TYPESPEED might
+       * want a longer one - and the next number up from "longer" is the one
+       * that takes a backup.
+       */
+      const refusal = presses.gestureRefusal(plan.button, held);
+      if (refusal) {
+        throw new Error(`readSlot would not be a slot read: ${refusal}`);
+      }
+
+      const decoder = keystrokes.createDecoder(layout ? { layout } : {});
+      let reports = 0;
+      let lastAt = 0;
+
+      const off = transport.on('keyboard', (event) => {
+        decoder.push(event.data);
+        reports += 1;
+        lastAt = Date.now();
+      });
+
+      try {
+        await press(plan.button, held);
+
+        const deadline = Date.now() + timeoutMs;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 100));
+          if (reports && Date.now() - lastAt >= quietMs) break;
+          if (Date.now() >= deadline) break;
+        }
+      } finally {
+        off();
+      }
+
+      const text = decoder.text;
+      const { segments, separators } = keystrokes.splitFields(text);
+
+      progress('readSlot', {
+        slot: plan.slot, button: plan.button, band: plan.band, reports,
+      });
+
+      return {
+        ...plan,
+        slotId,
+        ticks: held,
+        text,
+        segments: reports ? segments : [],
+        separators,
+        reports,
+        unmapped: decoder.events.filter((e) => e.unmapped),
+      };
+    },
 
     /**
      * Write fields to a slot, one at a time, WAITING for each.

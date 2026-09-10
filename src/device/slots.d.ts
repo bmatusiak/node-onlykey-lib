@@ -49,6 +49,76 @@ export const LABEL_TOKENS: {
  * six - which is why it cannot be expressed as one offset.
  */
 export function slotNumber(slotId: any, deviceType?: string): number;
+/**
+ * Which button types a slot, how long to hold it, and what it will type.
+ *
+ * The INVERSE of gen_press() and gen_hold(), which is where every number here
+ * comes from. Both compute the slot the same way:
+ *
+ *     slot = button + profileOffset            gen_press, a tap
+ *     slot = button + profileOffset + span     gen_hold, a hold
+ *
+ * ## THE PROFILE IS DEVICE STATE, AND NO MESSAGE SETS IT
+ *
+ * `profileOffset` is read from the device's own `profilemode` / `Duo_config[1]`
+ * at the moment of the press. A classic reaches its second profile by being
+ * unlocked with the SECOND PIN; a DUO cycles through its four by holding
+ * button 3 for 72..179 iterations (OnlyKey.ino:886-901), which on a classic is
+ * the gesture that locks the key instead. Neither is a command, and the
+ * desktop app's profile switcher sends the device nothing at all - it is a
+ * display filter over labels it already has.
+ *
+ * So a press reads the profile the device is ALREADY on, and nothing in the
+ * reply says which one that was. `profile` is therefore an argument rather than
+ * an assumption: a caller that does not know is about to read someone else's
+ * credential and should find that out here.
+ *
+ * ## THE TWO MODELS PUT THE PROFILE IN DIFFERENT PLACES
+ *
+ * A DUO's slot ids span all 24 - '5a' IS profile 1, and slotNumber() already
+ * folds the offset in. A classic's ids only span 12 and the profile is a
+ * separate axis on top, so classic '3a' is physical slot 3 or 15 depending on
+ * which PIN was used. Both are returned as `slot`, the number process_slot()
+ * actually receives, because that is the one a caller can check a label against.
+ *
+ * @param {string|number} slotId  '3a', '12b'
+ * @param {object} opts
+ * @param {string} [opts.deviceType] 'classic' or 'duo'
+ * @param {number} [opts.profile]    the profile the DEVICE is on, 0-based
+ * @returns {{button: number, band: 'tap'|'hold', slot: number, profile: number}}
+ */
+export function pressForSlot(slotId: string | number, { deviceType, profile }?: {
+    deviceType?: string | undefined;
+    profile?: number | undefined;
+}): {
+    button: number;
+    band: "tap" | "hold";
+    slot: number;
+    profile: number;
+};
+/**
+ * How many profiles the device has, and what each one ADDS to a slot number.
+ *
+ * From the four branches gen_press() and gen_hold() share (OnlyKey.ino:998-1006
+ * and :1013-1021). They are written as a chain of literal comparisons rather
+ * than as arithmetic, so this is a table for the same reason: the firmware's
+ * order is not the obvious one and a formula that happens to agree today would
+ * not say where it came from.
+ *
+ *   if (profilemode || Duo_config[1] == 2)  slot = button + 12
+ *   else if (Duo_config[1] == 1)            slot = button + 6
+ *   else if (Duo_config[1] == 3)            slot = button + 18
+ *   else                                    slot = button
+ *
+ * A CLASSIC reaches +12 through `profilemode`, which is STDPROFILE2 (1) or
+ * NONENCRYPTEDPROFILE (2); STDPROFILE1 is 0 and therefore falsy, which is why
+ * the first profile falls all the way through to the else. So a classic has
+ * exactly two, at +0 and +12, and the travel edition shares the second one.
+ */
+export const PROFILE_OFFSETS: {
+    [DEVICE_TYPE.CLASSIC]: number[];
+    [DEVICE_TYPE.DUO]: number[];
+};
 export function labelSlotNumber(token: any): any;
 /**
  * Accumulates OKGETLABELS responses.

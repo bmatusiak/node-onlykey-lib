@@ -676,3 +676,104 @@ test('an ordinary key slot reports no such thing', async () => {
 
   await app.destroy();
 });
+
+/* ------------------------------------------------------------- reading a slot */
+
+/*
+ * The firmware TYPES a slot; there is no message that reads one out. These
+ * reports are the two-report press/release pair okemu_usb.cpp sends per
+ * character, with 'a', TAB and 'b' - enough to prove the read is decoded and
+ * split, which keystrokes.test.js already covers in depth against every layout.
+ */
+const KEY = { a: 0x04, b: 0x05, TAB: 0x2b };
+const typed = (...usages) => usages.flatMap(
+  (u) => [[0, 0, u, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]]);
+
+test('readSlot presses the right button for the band, and splits the fields', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const device = app.services.device;
+  await device.connect();
+
+  const pressed = [];
+  const press = async (button, ticks) => {
+    pressed.push([button, ticks]);
+    for (const report of typed(KEY.a, KEY.TAB, KEY.b)) {
+      pipe.deliver(report, { iface: IFACE.KEYBOARD });
+    }
+  };
+
+  const read = await device.readSlot('3b', { press, quietMs: 150 });
+
+  // '3b' is the b profile: a HOLD on button 3, and physical slot 9.
+  assert.deepEqual(pressed, [[3, 40]]);
+  assert.equal(read.band, 'hold');
+  assert.equal(read.slot, 9);
+  assert.equal(read.text, 'a\tb');
+  assert.deepEqual(read.segments, ['a', 'b']);
+  assert.deepEqual(read.separators, ['TAB']);
+
+  await app.destroy();
+});
+
+test('a slot that types nothing comes back empty, not as an empty field', async () => {
+  // splitFields('') returns [''] - one empty segment, which reads as a slot
+  // holding a blank password rather than as a slot that did not answer. The
+  // report count is what separates them, so it is what is checked.
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const device = app.services.device;
+  await device.connect();
+
+  const read = await device.readSlot('1a', {
+    press: async () => {},
+    quietMs: 100,
+    timeoutMs: 400,
+  });
+
+  assert.equal(read.reports, 0);
+  assert.deepEqual(read.segments, []);
+  assert.equal(read.text, '');
+
+  await app.destroy();
+});
+
+test('readSlot waits for the typing to STOP, not for a fixed time', async () => {
+  // A slot is typed one character at a time, paced by its own TYPESPEED. A
+  // fixed wait truncates a slow slot into a shorter password that looks valid.
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const device = app.services.device;
+  await device.connect();
+
+  const press = async () => {
+    for (const report of typed(KEY.a)) pipe.deliver(report, { iface: IFACE.KEYBOARD });
+    setTimeout(() => {
+      for (const report of typed(KEY.b)) pipe.deliver(report, { iface: IFACE.KEYBOARD });
+    }, 250);
+  };
+
+  const read = await device.readSlot('1a', { press, quietMs: 400 });
+  assert.equal(read.text, 'ab', 'the late character was waited for');
+
+  await app.destroy();
+});
+
+test('readSlot refuses a hold that would be a gesture instead of a read', async () => {
+  // Past 72 iterations button 1 takes a backup and button 3 locks the key, so
+  // an overridden hold is checked rather than trusted.
+  const app = await start(fakeFirmware());
+  const device = app.services.device;
+  await device.connect();
+
+  await assert.rejects(
+    () => device.readSlot('1a', { press: async () => {}, ticks: 80 }),
+    /gesture band/,
+  );
+  await assert.rejects(
+    () => device.readSlot('1a', {}),
+    /the library does not press buttons/,
+  );
+
+  await app.destroy();
+});

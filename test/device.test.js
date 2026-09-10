@@ -51,6 +51,69 @@ test('an out-of-range slot is an error, not undefined', () => {
   assert.throws(() => slots.slotNumber('nonsense'), /unrecognised/);
 });
 
+/* --------------------------------------------------- which button types what */
+
+test('a tap is the a profile and a hold is the b profile, on both models', () => {
+  // gen_press() types `button + profileOffset`; gen_hold() adds the span,
+  // which is 6 on a classic and 3 on a DUO.
+  assert.deepEqual(slots.pressForSlot('3a'), {
+    button: 3, band: 'tap', slot: 3, profile: 0,
+  });
+  assert.deepEqual(slots.pressForSlot('3b'), {
+    button: 3, band: 'hold', slot: 9, profile: 0,
+  });
+
+  const duo = slots.DEVICE_TYPE.DUO;
+  assert.deepEqual(slots.pressForSlot('2a', { deviceType: duo }), {
+    button: 2, band: 'tap', slot: 2, profile: 0,
+  });
+  assert.deepEqual(slots.pressForSlot('2b', { deviceType: duo }), {
+    button: 2, band: 'hold', slot: 5, profile: 0,
+  });
+});
+
+test('a classic has two profiles, at +0 and +12 - NOT +6', () => {
+  // STDPROFILE1 is 0 and therefore falsy, so the first profile falls through
+  // the whole `if (profilemode || ...)` chain to the else. The second reaches
+  // the FIRST branch, which adds 12. Reading it as "profile times six" gives
+  // slot 9 where the device types slot 15, and both are real credentials.
+  assert.deepEqual(slots.PROFILE_OFFSETS[slots.DEVICE_TYPE.CLASSIC], [0, 12]);
+  assert.equal(slots.pressForSlot('3a', { profile: 1 }).slot, 15);
+  assert.equal(slots.pressForSlot('3b', { profile: 1 }).slot, 21);
+  assert.equal(slots.pressForSlot('6b', { profile: 1 }).slot, 24);
+
+  // The button does not move with the profile: the id does not carry it.
+  assert.equal(slots.pressForSlot('3a', { profile: 1 }).button, 3);
+});
+
+test('a DUO id already carries its profile, so the offset comes back off', () => {
+  const duo = slots.DEVICE_TYPE.DUO;
+  // '5a' IS profile 1: slotNumber folds the +6 in, and three buttons mean the
+  // button underneath is 2.
+  assert.deepEqual(slots.pressForSlot('5a', { deviceType: duo, profile: 1 }), {
+    button: 2, band: 'tap', slot: 8, profile: 1,
+  });
+  assert.deepEqual(slots.pressForSlot('12b', { deviceType: duo, profile: 3 }), {
+    button: 3, band: 'hold', slot: 24, profile: 3,
+  });
+});
+
+test('a slot the device is not on is refused, not pressed anyway', () => {
+  // No message sets the profile - a classic takes the second PIN, a DUO cycles
+  // on a button-3 hold - so a press reads whatever the device is already on and
+  // says nothing about which. Guessing here types someone else's credential.
+  assert.throws(
+    () => slots.pressForSlot('5a', { deviceType: slots.DEVICE_TYPE.DUO, profile: 0 }),
+    /not in profile 0/,
+  );
+  assert.throws(() => slots.pressForSlot('3a', { profile: 2 }), /out of range/);
+});
+
+test('no button types the global pseudo-slot', () => {
+  // It holds preferences. Pressing for it would read slot 0, which is not one.
+  assert.throws(() => slots.pressForSlot('XX'), /no button/);
+});
+
 test('label tokens 1a-1e are a lookup table, NOT hex', () => {
   // Read as hex, 1a would be 26 - out of every valid range, so it presents as
   // "labels stop at 19" rather than as a parse error.
