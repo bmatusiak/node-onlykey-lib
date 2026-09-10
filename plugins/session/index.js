@@ -38,6 +38,8 @@ function setup(imports, register) {
   let keys = null;
   let key = null;
   let device = null;
+  /* Set by device.enterConfigMode(); cleared only by a fresh connect. */
+  let configMode = false;
 
   const session = {
     /** True once a key exchange has completed. */
@@ -57,6 +59,13 @@ function setup(imports, register) {
       keys = transit.keypair();
       key = null;
       device = null;
+      /*
+       * NOT cleared here. Config mode ends only at RESTART, and a connect is
+       * not a restart - the device answers OKCONNECT perfectly well while in
+       * it. Clearing this would turn a known-bad state into a silent one
+       * again, which is the whole thing it exists to prevent. The flag dies
+       * with the process, which is when the firmware restarts too.
+       */
 
       const payload = transit.connectPayload(keys.publicKey, {
         when: opts.when || host.now(),
@@ -121,6 +130,28 @@ function setup(imports, register) {
      * src/device/version.js for why nothing outside it compares versions.
      */
     get identity() { return identity; },
+
+    /**
+     * Whether the device has been put into CONFIG MODE, and cannot leave.
+     *
+     * Config mode is entered by a gesture and ends ONLY AT RESTART - there is
+     * no message to leave it. While in it the device answers the vendor
+     * interface but goes silent on CTAPHID, so every derive, every FIDO
+     * ceremony and everything built on them stops working for the rest of the
+     * firmware's life.
+     *
+     * That silence is this project's most expensive failure mode. It presents
+     * as six unrelated timeouts naming nothing, and it cost a full debugging
+     * session before anyone connected them to a gesture forty seconds earlier
+     * (FINDING-enabling-touch-free-derive-mid-run-kills-ctaphid.md).
+     *
+     * So it is recorded HERE, on the session, rather than in whichever plugin
+     * happened to take the gesture: the device plugin sets it and okcrypto
+     * reads it, and neither imports the other. A caller that lands in config
+     * mode now gets told so by name at the first thing it tries.
+     */
+    get configMode() { return configMode; },
+    set configMode(value) { configMode = Boolean(value); },
 
     /** What this device can be asked to do, derived from `identity`. */
     get capabilities() { return caps; },

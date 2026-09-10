@@ -348,6 +348,31 @@ function setup(imports, register) {
     }
 
     /*
+     * CONFIG MODE KILLS CTAPHID, so say so instead of timing out.
+     *
+     * Entering config mode locks the device and it stays there until restart -
+     * there is no message to leave. While in it the vendor interface still
+     * answers and CTAPHID goes silent, so a derive waits out its timeout
+     * against a device that is working exactly as designed.
+     *
+     * That is this project's most expensive failure shape: six tests failing in
+     * a row with "no CTAPHID reply", none of them naming a cause, all of them
+     * downstream of one gesture forty seconds earlier
+     * (FINDING-enabling-touch-free-derive-mid-run-kills-ctaphid.md).
+     *
+     * Checked before the request rather than after the silence, because the
+     * silence carries no information at all.
+     */
+    if (session && session.configMode) {
+      throw new Error(
+        'this device is in CONFIG MODE, where it answers the vendor interface '
+        + 'and goes silent on CTAPHID - so this derive would time out rather '
+        + 'than fail. Config mode ends only at a restart; restart the firmware '
+        + 'and try again.',
+      );
+    }
+
+    /*
      * DO NOT ASK A FIRMWARE FOR A KEY TYPE IT DOES NOT HAVE.
      *
      * X-Wing arrived after v3.0.2; `KEYTYPE_XWING` appears nowhere in

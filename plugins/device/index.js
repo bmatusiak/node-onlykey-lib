@@ -582,6 +582,126 @@ const PREFERENCES = {
       return reply;
     },
 
+    /**
+     * Take the device into CONFIG MODE, and confirm it actually went.
+     *
+     * The gesture, the proof and the retry - everything except the pressing.
+     * A host supplies `hold(button, ticks)`, because pressing a button is
+     * platform-specific and the library has no business knowing how; the same
+     * split device.captureBackup() already makes about its own trigger.
+     *
+     * ## The gesture comes from the device
+     *
+     * A classic wants button 6 held past 72 main-loop iterations, a DUO button
+     * 1 past 180 (OnlyKey.ino:914). Holding the classic gesture at a DUO
+     * presses a button that does something else and then waits for a lock that
+     * never comes.
+     *
+     * ## The LOCK is the proof, not the press
+     *
+     * `hold` resolving means the press was delivered and counted, not that
+     * payload() acted on it. Two firmware states swallow the gesture and
+     * neither is readable over the wire: `isfade`, while the LED is still
+     * fading from a previous press, and `pending_operation`, for up to twenty
+     * seconds after a FIDO ceremony. A swallowed hold is handled as an ordinary
+     * long press instead - which TYPES A SLOT at the keyboard.
+     *
+     * Entering config mode locks the device (OnlyKey.ino:914-926), so a device
+     * still answering readLabels afterwards did not enter it. That is the only
+     * positive signal available, so it is the one used, and a miss is retried
+     * rather than reported - the window that swallowed it is transient.
+     *
+     * ## It cannot be left
+     *
+     * There is no message to exit. Config mode ends at RESTART and nowhere
+     * else, and while in it the device goes silent on CTAPHID - every derive
+     * and every FIDO ceremony for the rest of the firmware's life. That is
+     * recorded on the session the moment this succeeds, so the next thing to
+     * try one gets told by name instead of timing out.
+     *
+     * @param {object} opts
+     * @param {function} opts.hold        (button, ticks) => Promise
+     * @param {function} [opts.settle]    ms => Promise, for the waits
+     * @param {number} [opts.attempts]    holds before giving up
+     * @param {number} [opts.lockMs]      how long to watch for the lock
+     * @param {number} [opts.quietMs]     wait before a retry, for the fade
+     */
+    async enterConfigMode({
+      hold,
+      settle = (ms) => new Promise((r) => setTimeout(r, ms)),
+      attempts = 3,
+      lockMs = 8000,
+      quietMs = 22000,
+    } = {}) {
+      if (typeof hold !== 'function') {
+        throw new Error(
+          'enterConfigMode needs a hold(button, ticks) - the library does not '
+          + 'press buttons, the host does',
+        );
+      }
+
+      const caps = session.capabilities;
+      const gesture = (caps && caps.configModeGesture) || { button: 6, ticks: 72 };
+      /*
+       * A small margin over the floor, never a generous one. Past the same band
+       * a hold stops being config mode and becomes another gesture, so
+       * overshooting is not the safe direction.
+       */
+      const ticks = gesture.ticks + 8;
+
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        progress('configMode', { step: 'holding', button: gesture.button, ticks, attempt });
+        await hold(gesture.button, ticks);
+
+        const deadline = Date.now() + lockMs;
+        while (Date.now() < deadline) {
+          await settle(1000);
+          try {
+            await device.readLabels({ timeoutMs: 2000 });
+          } catch (_) {
+            /* Refused: it locked, so the gesture landed. */
+            session.configMode = true;
+            progress('configMode', { step: 'entered', attempt });
+            return { entered: true, attempts: attempt, gesture };
+          }
+        }
+
+        progress('configMode', { step: 'swallowed', attempt });
+        if (attempt < attempts) await settle(quietMs);
+      }
+
+      throw new Error(
+        `the device never locked after ${attempts} holds, so the config-mode `
+        + 'gesture was not taken. A hold is ignored while the LED is fading and '
+        + 'while pending_operation is set after a FIDO ceremony, and is then '
+        + 'handled as an ordinary long press that types a slot.',
+      );
+    },
+
+    /**
+     * Whether the device has become readable again after a config-mode unlock.
+     *
+     * UNLOCKING IN CONFIG MODE IS NEVER ANNOUNCED (OnlyKey.ino:707), so there
+     * is no broadcast to wait for and unlock()'s own wait can only time out
+     * saying the PIN may be wrong. It is not; there is nothing to hear.
+     *
+     * OKGETLABELS is on the config-mode allowlist and is refused while locked,
+     * so a successful read is the positive proof the broadcast never gives.
+     * Polled rather than inferred from the status broadcast stopping, because
+     * silence is also what a wedged device produces.
+     */
+    async configModeReady({ timeoutMs = 2500 } = {}) {
+      try {
+        await device.readLabels({ timeoutMs });
+        return true;
+      } catch (_) {
+        return false;
+      }
+    },
+
+    /** True once enterConfigMode has succeeded. Ends only at restart. */
+    get inConfigMode() { return session.configMode; },
+
     /** Send button presses directly - the manual half of the PIN bracket. */
     press(digits) { return pressLine(transport, digits); },
 
