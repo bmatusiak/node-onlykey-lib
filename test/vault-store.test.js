@@ -269,3 +269,53 @@ test('two vaults over the same store see the same records', async () => {
   const second = createVaultStore({ store });
   assert.equal((await second.get('shared')).encrypted, 'c2VhbGVk');
 });
+
+test('a vault written by the WEB APP imports, and exports back the same way', async () => {
+  /*
+   * The envelope is an INTERFACE, not an internal shape: a vault exported by
+   * the reference has to import here and back again
+   * (onlykey.github.io/src/plugins/vault/vault.js:127-152).
+   *
+   * Asserted by importing a document written the way the reference writes one,
+   * rather than by exporting ours and reading it back - which would agree with
+   * itself whatever shape it had. A standing plan claimed these had diverged;
+   * they have not, and this is what says so.
+   */
+  const store = memoryStore();
+  const vault = createVaultStore({ store });
+
+  const fromTheWebApp = JSON.stringify({
+    version: 1,
+    exportedAt: '2026-01-02T03:04:05.000Z',
+    credentials: [
+      { serviceId: 'openai', encrypted: 'AAECAw==', policy: 'session:8h' },
+      { serviceId: 'github', encrypted: 'BAUGBw==', policy: 'always' },
+    ],
+  });
+
+  const result = await vault.importJSON(fromTheWebApp);
+  assert.equal(result.imported, 2, 'a reference export did not import');
+  assert.deepEqual((await vault.serviceIds()).sort(), ['github', 'openai']);
+
+  const back = JSON.parse(await vault.exportJSON());
+  assert.equal(back.version, EXPORT_VERSION);
+  assert.equal(typeof back.exportedAt, 'string');
+  assert.equal(back.credentials.length, 2);
+  for (const entry of back.credentials) {
+    assert.ok(entry.serviceId, 'a record without a serviceId is skipped on import');
+    assert.ok(entry.encrypted, 'a record without ciphertext is skipped on import');
+  }
+
+  /*
+   * The reference skips a record missing either field rather than throwing, so
+   * a partially damaged export still restores what it can.
+   */
+  const damaged = JSON.stringify({
+    version: 1,
+    credentials: [{ serviceId: 'nociphertext' }, { encrypted: 'AAA=' }],
+  });
+  assert.deepEqual(
+    await vault.importJSON(damaged),
+    { imported: 0, skipped: 2, total: 2 },
+  );
+});

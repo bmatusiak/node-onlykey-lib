@@ -411,3 +411,35 @@ test('the derivation phrase carries the vault prefix', () => {
   assert.equal(phrase('github.com'), 'vault:github.com');
   assert.notEqual(phrase('github.com'), 'github.com');
 });
+
+test('EVERY policy the web app offers in its dropdown parses here', () => {
+  /*
+   * A standing plan claimed the two vocabularies diverged - that the reference
+   * offered `session:8h` where this library only documented `session:2h`, and
+   * that an exported vault therefore would not round-trip. That is WRONG on
+   * both counts, and this test is here so it stays settled rather than being
+   * "fixed" later.
+   *
+   * The four values are the reference's own <select>, verbatim
+   * (onlykey.github.io/src/plugins/vault/vault.html). parsePolicy is the same
+   * general `session:(\d+)(m|h)` match on both sides, so the dropdown is a UI
+   * choice and not a vocabulary - 8h was never special.
+   */
+  const OFFERED = ['always', 'session:30m', 'session:8h', 'startup'];
+
+  for (const policy of OFFERED) {
+    const parsed = vault.parsePolicy(policy);
+    if (policy === 'always') continue;   // its noCache is the point of it
+    assert.equal(
+      parsed.noCache, false,
+      `${policy} fell through to the fail-closed branch, so it is not understood`,
+    );
+  }
+
+  // 8h is longer than the sliding threshold, so it is absolute. Worth naming:
+  // it is the only offered value whose window does not restart on each use.
+  assert.deepEqual(
+    vault.parsePolicy('session:8h'),
+    { ttlMs: 28800000, sliding: false, noCache: false },
+  );
+});
