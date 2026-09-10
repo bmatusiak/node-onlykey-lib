@@ -318,18 +318,70 @@ function setup(imports, register) {
   /*
    * A derive is IDEMPOTENT, which is what makes retrying it safe: the same
    * label and the same press flag derive the same key, and the device holds no
-   * state between attempts. A REQ_PRESS variant is the exception worth naming -
-   * it asks for a touch each time - so onKeepAlive is handed a fresh chance to
-   * press on each attempt rather than being expected to answer twice.
+   * state between attempts.
+   *
+   * A REQ_PRESS variant is the exception, and it is the reason every attempt
+   * is ANNOUNCED. The comment here used to claim that `onKeepAlive` was handed
+   * a fresh chance to press on each attempt; it was not - the same closure was
+   * passed straight through, so a host whose press budget is one per call had
+   * already spent it by attempt two.
+   *
+   * That matters most on firmware that BLOCKS for a touch instead of asking
+   * for one (capabilities().presenceTest === 'blocking', the 2.1 line). There
+   * is no keepalive to answer there, so a host presses on a timer, and a
+   * retry it is never told about goes out with no press behind it - which
+   * makes the retry useless on exactly the firmware that needs it.
+   *
+   * The event carries the attempt number rather than the library guessing
+   * what the host should do about it. See
+   * ok-rn/FINDING-blocking-presence-fails-a-second-shared-secret.md, which
+   * this was added to settle.
    */
   async function derive(opts) {
     let last = null;
     for (let attempt = 1; attempt <= DERIVE_ATTEMPTS; attempt++) {
+      events.emit('progress', {
+        step: 'derive',
+        action: opts && opts.action,
+        label: opts && opts.label,
+        attempt,
+        attempts: DERIVE_ATTEMPTS,
+      });
       try {
         return await deriveOnce(opts);
       } catch (err) {
         last = err;
         if (!/did not answer this derive/.test(String(err && err.message))) throw err;
+
+        /*
+         * TELL THE HOST A RETRY IS COMING, so a press-required derive can be
+         * pressed again.
+         *
+         * MEASURED, on v2.1.1: attempts 2 and 3 went out with no press behind
+         * them at all, because the host had armed one press for the ceremony
+         * and the library asked again without saying so.
+         *
+         *     derive attempt 1/3 for "vault.example"
+         *     pressed button 1 for the derive (timer)
+         *     derive attempt 2/3 for "vault.example"      <- no press
+         *     derive attempt 3/3 for "vault.example"      <- no press
+         *
+         * On keepalive firmware this is harmless - the device asks again on
+         * its own and the host is already answering. On BLOCKING firmware it
+         * is the only signal there is, because nothing else ever calls this
+         * hook there, and without it the retry could not succeed however many
+         * times it ran.
+         *
+         * The library does not press. It says a fresh touch is wanted and
+         * leaves the deciding to whoever owns the buttons.
+         */
+        if (attempt < DERIVE_ATTEMPTS && typeof opts.onKeepAlive === 'function') {
+          try {
+            await opts.onKeepAlive({ retry: true, attempt: attempt + 1 });
+          } catch (_) {
+            /* A host that cannot press is not a reason to skip the retry. */
+          }
+        }
       }
     }
     throw last;
