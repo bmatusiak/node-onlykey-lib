@@ -165,6 +165,32 @@ export function capabilities(status: object | string): {
      * failed this way while the touch-free derives beside them passed.
      */
     presenceTest: string;
+    /**
+     * The gesture that reaches config mode: which button, and for how long.
+     *
+     * OnlyKey.ino:914, verbatim:
+     *
+     *     (onlykeyhw==OK_HW_DUO && duration >= 180 && button_selected=='1')
+     *     || (onlykeyhw!=OK_HW_DUO && duration >= 72 && button_selected=='6')
+     *
+     * `duration` is MAIN-LOOP ITERATIONS, not milliseconds - roughly 36ms each,
+     * so the DUO's 180 is about six and a half seconds and the classic's 72 is
+     * under three. The desktop app tells a DUO owner to hold for "10+ seconds"
+     * and a classic owner for "5+", which are safe overshoots of these rather
+     * than the numbers themselves.
+     *
+     * A host that uses the classic gesture on a DUO holds a button that does
+     * something else entirely and then waits for a lock that never comes -
+     * measured, as "the device never locked after three attempts".
+     *
+     * `ticks` is the FLOOR. Going further is not safer: past the same band a
+     * hold stops being config mode and becomes another gesture, which is why
+     * callers ask for this rather than picking a number that felt generous.
+     */
+    configModeGesture: {
+        button: number;
+        ticks: number;
+    };
     /** Three buttons on a DUO, six otherwise - see protocol/challenge.js. */
     buttons: number;
 };

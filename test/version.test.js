@@ -319,3 +319,18 @@ test('the 2.1 line blocks for a touch; the 3.0 line keeps the host informed', ()
   // waiting to be asked works on only one.
   assert.equal(capabilities('WAT').presenceTest, 'blocking');
 });
+
+test('the config-mode gesture is a different button on a DUO', () => {
+  // OnlyKey.ino:914 - a DUO wants button 1 held 180 main-loop iterations, a
+  // classic button 6 held 72. Using the classic gesture on a DUO holds a button
+  // that does something else and then waits for a lock that never comes.
+  assert.deepStrictEqual(
+    capabilities('UNLOCKEDv3.0.4-testp').configModeGesture, {button: 1, ticks: 180});
+  assert.deepStrictEqual(
+    capabilities('UNLOCKEDv3.0.4-testn').configModeGesture, {button: 1, ticks: 180});
+  assert.deepStrictEqual(
+    capabilities('UNLOCKEDv3.0.4-testc').configModeGesture, {button: 6, ticks: 72});
+  // Unknown is a classic, which is what every release ships as.
+  assert.deepStrictEqual(
+    capabilities('WAT').configModeGesture, {button: 6, ticks: 72});
+});

@@ -460,13 +460,35 @@ const PREFERENCES = {
        * message naming the real cause is worth more than fifteen seconds.
        */
       const caps = session.capabilities;
-      if (!enterDigits && caps && caps.debugConsole === false) {
+      if (!enterDigits && caps && caps.debugConsole === false
+        && currentType() !== slots.DEVICE_TYPE.DUO) {
         throw new Error(
           'this is a production firmware build, which has no debug console to ' +
           'accept typed digits - pass enterDigits to press the buttons instead',
         );
       }
-      const enter = enterDigits || ((line) => pressLine(transport, line));
+      /*
+       * A DUO DOES NOT UNLOCK BY PRESSING ANYTHING.
+       *
+       * Its PIN travels in the message body - one OKPIN carrying the digits as
+       * ASCII, at their natural length, which is what distinguishes an unlock
+       * from a provisioning write (src/device/pin.js, encodeDuoPins). The
+       * classic device captures digits from its own buttons and the host only
+       * brackets that; these share a message id and nothing else.
+       *
+       * Handled here rather than left to callers because the caller cannot
+       * reasonably know: every screen and every suite would have to branch on
+       * the model before asking a device to unlock, and the one that forgot
+       * would sit pressing buttons at a device with three of them until the
+       * timeout ran out.
+       *
+       * The wait below is unchanged - the device announces UNLOCKED the same
+       * way whichever mechanism opened it.
+       */
+      const isDuo = currentType() === slots.DEVICE_TYPE.DUO;
+      const enter = isDuo
+        ? (line) => device.duoPin([String(line)], { set: false })
+        : (enterDigits || ((line) => pressLine(transport, line)));
 
       const seen = await new Promise((resolve, reject) => {
         const offs = [];
