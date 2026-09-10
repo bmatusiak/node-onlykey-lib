@@ -262,7 +262,88 @@ function supportsFwUpdate(version) {
 function capabilities(status) {
   const info = typeof status === 'string' ? parseStatus(status) : status;
 
+  /**
+   * The gesture bands: which button, held how long, does what.
+   *
+   * A gesture is a hold past 72 main-loop iterations, and past that floor a
+   * press stops being a slot read. The bands are NOT all open-ended - several
+   * have an upper bound, and a hold past it falls through to a DIFFERENT
+   * branch rather than doing nothing. That is why each one carries `lo`, `hi`
+   * and a recommended `ticks` in the middle: "hold it longer to be sure" is
+   * the reasoning that takes a backup when it meant to read a slot.
+   *
+   * `hi` is EXCLUSIVE and null means open-ended. `ticks` is what a caller
+   * should actually hold.
+   *
+   * ## THE BACKUP BAND CHANGED BETWEEN THE 2.1 AND 3.0 LINES
+   *
+   * v2.1.x, OnlyKey.ino:830 - the upper bound applies to OK_GO only, so on
+   * classic hardware `(duration < 126 || HW_ID!=OK_GO)` is always true:
+   *
+   *     duration >= 72 && (duration < 126 || HW_ID!=OK_GO) && button == '1'
+   *
+   * v3.0.x, OnlyKey.ino:873 - bounded on every model, because 180 became the
+   * DUO's config-mode gesture on the same button:
+   *
+   *     duration < 180 && duration >= 72 && button == '1'
+   *
+   * So a hold of 200 takes a backup on a 2.1 key and types a slot on a 3.0
+   * one. Both lines agree in 72..125, which is where `ticks` sits.
+   *
+   * ## WHAT IS NOT MODELLED
+   *
+   * The OK_GO bands (button 3 past 270 for config mode, button 2 past 270 for
+   * labels). OK_GO is the DUO's predecessor and the 3.0 line replaced it with
+   * OK_HW_DUO outright, so no firmware this library can be pointed at has
+   * both - and no pin in ok-versions.json builds one. Claiming a band nothing
+   * can reach is how the other UNVERIFIED branches got there.
+   */
+const gestures = (() => {
+    const rel = parseRelease(stripModelSuffix(info.versionField || ''));
+    const duo = info.model === MODEL.DUO;
+
+    /*
+     * Unknown parses as the 2.1 shape for the backup bound, which is the
+     * SAFE direction: 100 ticks is a backup on both lines, and claiming an
+     * upper bound that is not there would only make a caller refuse a hold
+     * the device would have accepted.
+     */
+    const bounded = rel ? rel.major >= 3 : false;
+
+    const bands = {
+      /** The device TYPES the whole backup file at the keyboard. */
+      backup: { button: 1, lo: 72, hi: bounded ? 180 : null, ticks: 100 },
+
+      /** The slot labels, typed as text. */
+      slotLabels: { button: 2, lo: 72, hi: null, ticks: 100 },
+
+      /** The key labels too - a strictly longer hold on the same button. */
+      keyLabels: { button: 2, lo: 140, hi: null, ticks: 150 },
+    };
+
+    if (duo) {
+      /*
+       * A DUO puts three gestures on buttons the classic uses for one each,
+       * separated only by how long the hold is. Button 3 at 100 cycles the
+       * profile; at 200 it locks. Button 1 at 100 takes a backup; at 200 it
+       * enters config mode, which ends only at restart.
+       */
+      bands.cycleProfile = { button: 3, lo: 72, hi: 180, ticks: 100 };
+      bands.lock = { button: 3, lo: 180, hi: null, ticks: 200 };
+      bands.configMode = { button: 1, lo: 180, hi: null, ticks: 200 };
+      /* Config mode only, and it is exactly what it sounds like. */
+      bands.factoryDefault = { button: 2, lo: 360, hi: null, ticks: 380 };
+    } else {
+      bands.lock = { button: 3, lo: 72, hi: null, ticks: 100 };
+      bands.configMode = { button: 6, lo: 72, hi: null, ticks: 80 };
+    }
+
+    return bands;
+  })();
+
   return {
+    gestures,
+
     /**
      * The OKCONNECT reply layout.
      *
@@ -463,10 +544,11 @@ function capabilities(status) {
      * `ticks` is the FLOOR. Going further is not safer: past the same band a
      * hold stops being config mode and becomes another gesture, which is why
      * callers ask for this rather than picking a number that felt generous.
+     *
+     * Read off `gestures` rather than restated, so the two cannot disagree.
+     * A caller that wants the whole band, or any other gesture, wants that.
      */
-    configModeGesture: info.model === MODEL.DUO
-      ? { button: 1, ticks: 180 }
-      : { button: 6, ticks: 72 },
+    configModeGesture: { button: gestures.configMode.button, ticks: gestures.configMode.lo },
 
     /** Three buttons on a DUO, six otherwise - see protocol/challenge.js. */
     buttons: info.model === MODEL.DUO ? 3 : 6,

@@ -33,6 +33,29 @@ export function parseStatus(status: string | Uint8Array): {
  * @param {object|string} status a parseStatus result, or a raw status line
  */
 export function capabilities(status: object | string): {
+    gestures: {
+        /** The device TYPES the whole backup file at the keyboard. */
+        backup: {
+            button: number;
+            lo: number;
+            hi: number | null;
+            ticks: number;
+        };
+        /** The slot labels, typed as text. */
+        slotLabels: {
+            button: number;
+            lo: number;
+            hi: null;
+            ticks: number;
+        };
+        /** The key labels too - a strictly longer hold on the same button. */
+        keyLabels: {
+            button: number;
+            lo: number;
+            hi: null;
+            ticks: number;
+        };
+    };
     /**
      * The OKCONNECT reply layout.
      *
@@ -186,10 +209,13 @@ export function capabilities(status: object | string): {
      * `ticks` is the FLOOR. Going further is not safer: past the same band a
      * hold stops being config mode and becomes another gesture, which is why
      * callers ask for this rather than picking a number that felt generous.
+     *
+     * Read off `gestures` rather than restated, so the two cannot disagree.
+     * A caller that wants the whole band, or any other gesture, wants that.
      */
     configModeGesture: {
-        button: number;
-        ticks: number;
+        button: any;
+        ticks: any;
     };
     /** Three buttons on a DUO, six otherwise - see protocol/challenge.js. */
     buttons: number;

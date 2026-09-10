@@ -334,3 +334,68 @@ test('the config-mode gesture is a different button on a DUO', () => {
   assert.deepStrictEqual(
     capabilities('WAT').configModeGesture, {button: 6, ticks: 72});
 });
+
+test('the backup gesture gained an upper bound in the 3.0 line', () => {
+  // v2.1.x bounds it for OK_GO ONLY, so on classic hardware
+  // `(duration < 126 || HW_ID!=OK_GO)` is always true and the band is open:
+  //
+  //     duration >= 72 && (duration < 126 || HW_ID!=OK_GO) && button == '1'
+  //
+  // v3.0.x bounds it on every model, because 180 became the DUO's config-mode
+  // gesture on the same button:
+  //
+  //     duration < 180 && duration >= 72 && button == '1'
+  //
+  // So a hold of 200 takes a backup on a 2.1 key and TYPES A SLOT on a 3.0 one.
+  assert.equal(capabilities('UNLOCKEDv2.1.1-prodc').gestures.backup.hi, null);
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').gestures.backup.hi, null);
+  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').gestures.backup.hi, 180);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').gestures.backup.hi, 180);
+
+  // Unknown reads as the open band, which is the safe direction: the
+  // recommended hold is a backup on both lines, and inventing an upper bound
+  // would only refuse a hold the device would have taken.
+  assert.equal(capabilities('WAT').gestures.backup.hi, null);
+});
+
+test('the recommended hold is inside the band on BOTH lines', () => {
+  // The whole reason `ticks` is published rather than left to a caller: the
+  // number has to satisfy two different firmwares at once.
+  for (const status of ['UNLOCKEDv2.1.1-prodc', 'UNLOCKEDv3.0.4-testc']) {
+    const { backup } = capabilities(status).gestures;
+    assert.ok(backup.ticks >= backup.lo, `${status}: below the floor`);
+    assert.ok(backup.hi === null || backup.ticks < backup.hi, `${status}: past the ceiling`);
+  }
+});
+
+test('a DUO stacks three gestures on two buttons, separated by duration', () => {
+  // Button 3 at 100 cycles the profile and at 200 locks; button 1 at 100 takes
+  // a backup and at 200 enters config mode, which ends only at restart. Every
+  // one of those is a hold a classic reads as something else.
+  const duo = capabilities('UNLOCKEDv3.0.4-testp').gestures;
+
+  assert.deepStrictEqual(duo.cycleProfile, { button: 3, lo: 72, hi: 180, ticks: 100 });
+  assert.deepStrictEqual(duo.lock, { button: 3, lo: 180, hi: null, ticks: 200 });
+  assert.deepStrictEqual(duo.configMode, { button: 1, lo: 180, hi: null, ticks: 200 });
+  assert.deepStrictEqual(duo.factoryDefault, { button: 2, lo: 360, hi: null, ticks: 380 });
+
+  // The bands on button 3 abut rather than overlap - there is no hold that is
+  // both, and no gap between them where nothing happens.
+  assert.equal(duo.cycleProfile.hi, duo.lock.lo);
+
+  // A classic has neither of the DUO-only ones, and locks from 72.
+  const classic = capabilities('UNLOCKEDv3.0.4-testc').gestures;
+  assert.equal('cycleProfile' in classic, false);
+  assert.equal('factoryDefault' in classic, false);
+  assert.deepStrictEqual(classic.lock, { button: 3, lo: 72, hi: null, ticks: 100 });
+});
+
+test('configModeGesture is READ OFF the band table, not restated beside it', () => {
+  // Two copies of the same number is how the DUO's different gesture went
+  // unnoticed in the first place.
+  for (const status of ['UNLOCKEDv3.0.4-testp', 'UNLOCKEDv3.0.4-testc', 'WAT']) {
+    const caps = capabilities(status);
+    assert.equal(caps.configModeGesture.button, caps.gestures.configMode.button, status);
+    assert.equal(caps.configModeGesture.ticks, caps.gestures.configMode.lo, status);
+  }
+});
