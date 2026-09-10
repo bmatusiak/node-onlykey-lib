@@ -143,6 +143,28 @@ export function capabilities(status: object | string): {
      * a screen that produces an identity the device cannot use.
      */
     xwingDerive: boolean;
+    /**
+     * How the device asks for a touch, and therefore how a host must press.
+     *
+     *   'keepalive'  the request returns CTAP2_ERR_PROCESSING while it waits,
+     *                the host keeps polling, and a press answered from inside
+     *                the keepalive completes it. No time limit worth naming.
+     *   'blocking'   ctap_user_presence_test(5000) BLOCKS for five seconds and
+     *                then denies. There is no keepalive to answer, so a host
+     *                that only presses when asked never presses at all.
+     *
+     * MEASURED at each pin by whether ok_extension.cpp mentions
+     * CTAP2_ERR_PROCESSING: present through the whole 3.0 line, absent in the
+     * 2.1 line. The split is the generation boundary.
+     *
+     * Why a host cannot ignore this: on 'blocking' firmware the press has to be
+     * sent on a TIMER shortly after the request, not in response to anything.
+     * Waiting to be asked produces CTAP2_ERR_OPERATION_DENIED five seconds
+     * later, which reads as a refusal rather than as nobody having touched it.
+     * Measured on a v2.1.0 soft key: every press-required shared-secret derive
+     * failed this way while the touch-free derives beside them passed.
+     */
+    presenceTest: string;
     /** Three buttons on a DUO, six otherwise - see protocol/challenge.js. */
     buttons: number;
 };

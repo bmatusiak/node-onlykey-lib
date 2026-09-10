@@ -297,7 +297,45 @@ function setup(imports, register) {
    */
   const DEVICE_STATUS = /^(UNINITIALIZED|INITIALIZED|UNLOCKED|LOCKED)/i;
 
-  async function derive({
+  /**
+   * How many times a derive is re-sent when the reply carries no device status.
+   *
+   * A reply with no status is not an answer to this request - see the guard in
+   * deriveOnce. That happens for two reasons and they need the same handling:
+   * the device REFUSED the request (and this poll landed on the previous
+   * response before it was wiped), or the request itself was lost.
+   *
+   * The second is real and measured. On v2.1.0 a request issued immediately
+   * after another one is dropped: the shared-secret derives failed every time
+   * while the public-key derives before them passed, and the plugin's own
+   * sendField has retried since it was written for exactly this reason.
+   *
+   * Bounded, because a refusal will not start answering however many times it
+   * is asked - retrying only means the honest error takes longer to arrive.
+   */
+  const DERIVE_ATTEMPTS = 3;
+
+  /*
+   * A derive is IDEMPOTENT, which is what makes retrying it safe: the same
+   * label and the same press flag derive the same key, and the device holds no
+   * state between attempts. A REQ_PRESS variant is the exception worth naming -
+   * it asks for a touch each time - so onKeepAlive is handed a fresh chance to
+   * press on each attempt rather than being expected to answer twice.
+   */
+  async function derive(opts) {
+    let last = null;
+    for (let attempt = 1; attempt <= DERIVE_ATTEMPTS; attempt++) {
+      try {
+        return await deriveOnce(opts);
+      } catch (err) {
+        last = err;
+        if (!/did not answer this derive/.test(String(err && err.message))) throw err;
+      }
+    }
+    throw last;
+  }
+
+  async function deriveOnce({
     action,
     keytype = okconnect.KEYTYPE.P256R1,
     label = null,

@@ -305,3 +305,17 @@ test('X-Wing arrived after v3.0.2, and absence is the default', () => {
   // is a feature old firmware does NOT have rather than one it does.
   assert.equal(capabilities('WAT').xwingDerive, false);
 });
+
+test('the 2.1 line blocks for a touch; the 3.0 line keeps the host informed', () => {
+  // ok_extension.cpp mentions CTAP2_ERR_PROCESSING through the 3.0 line and
+  // never in the 2.1 line. On the older firmware ctap_user_presence_test(5000)
+  // blocks and then denies, so a host that presses only when asked never
+  // presses at all.
+  assert.equal(capabilities('UNLOCKEDv2.1.0-testc').presenceTest, 'blocking');
+  assert.equal(capabilities('UNLOCKEDv2.1.1-prodc').presenceTest, 'blocking');
+  assert.equal(capabilities('UNLOCKEDv3.0.0-prodc').presenceTest, 'keepalive');
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').presenceTest, 'keepalive');
+  // Unknown is 'blocking' because pressing on a timer works on both, and
+  // waiting to be asked works on only one.
+  assert.equal(capabilities('WAT').presenceTest, 'blocking');
+});

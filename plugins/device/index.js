@@ -660,7 +660,8 @@ const PREFERENCES = {
      * one frame - the split is the key SIZE, not the algorithm, which is why
      * both live behind one method.
      */
-    async loadKey(slotId, { type, key }, { onProgress = null } = {}) {
+    async loadKey(slotId, { type, key },
+      { onProgress = null, ackTimeoutMs = 8000, ackRetries = 2 } = {}) {
       const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
       const bytes = Uint8Array.from(key);
       const send = (frame) => transport.write(IFACE.VENDOR, frame);
@@ -671,12 +672,70 @@ const PREFERENCES = {
        * separate RSA from ECC: an ECC scalar is 32 bytes and a single frame,
        * an RSA p||q is at least 128 and is not.
        */
+      /*
+       * AWAIT THE ACKNOWLEDGEMENT, and retry if it does not come.
+       *
+       * This used to write one frame and return. The device DOES answer -
+       * ecc_priv_flash hidprints "Successfully set ECC Key" on every release in
+       * the matrix - so a write that went nowhere was indistinguishable from one
+       * that landed, and the caller found out one operation later when the slot
+       * turned out to be empty.
+       *
+       * Measured on v2.1.0: a key write issued immediately after another
+       * command produced no answer and no console output at all, and the SAME
+       * write repeated 1.5 seconds later succeeded. The preference write before
+       * it had already been landing on its own retry, which is why nothing else
+       * in this plugin showed the problem - `sendField` has retried since it was
+       * written, and this was the one command that did not.
+       *
+       * Rewriting the same key to the same slot is idempotent, so a retry
+       * cannot do half a thing.
+       *
+       * Slots 131 and 132 answer differently - "Successfully set Backup
+       * Passphrase" for the designated backup slot - so the match is the
+       * plugin's general acknowledgement shape rather than one string.
+       */
+      const acknowledged = async (frame) => {
+        const reply = await transport.request({
+          iface: IFACE.VENDOR,
+          data: frame,
+          timeoutMs: ackTimeoutMs,
+          match: isSlotAcknowledgement,
+        });
+        return okmsg.text(reply);
+      };
+
       if (bytes.length > chunker.CHUNK_BYTES) {
+        /*
+         * RSA keys are many frames and the device answers once, at the end, so
+         * the chunker owns the write and only the final acknowledgement is
+         * waited for here.
+         */
         await chunker.sendRsaKey({ slot, type, key: bytes, send, onProgress });
       } else {
-        await send(okmsg.build({
+        const frame = okmsg.build({
           msg: MSG.OKSETPRIV, slot, field: type, payload: bytes,
-        }));
+        });
+        let text = null;
+        let last = null;
+        for (let attempt = 1; attempt <= ackRetries + 1 && text === null; attempt++) {
+          try {
+            text = await acknowledged(frame);
+            if (attempt > 1) progress('retry', { field: `key:${slot}`, attempt });
+          } catch (err) {
+            last = err;
+            if (attempt > ackRetries) {
+              throw new Error(
+                `key write to slot ${slot} was never acknowledged after `
+                + `${attempt} attempts - ${err.message}`,
+              );
+            }
+          }
+        }
+        if (text && /^Error/i.test(text)) {
+          throw new Error(`key write to slot ${slot} refused: ${text}`);
+        }
+        if (text) progress('keyAck', { slot, response: text });
       }
       /*
        * WRITING AN HMAC KEY REMOVES THAT SLOT'S PRESS REQUIREMENT, and the
