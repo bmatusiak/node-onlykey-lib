@@ -153,6 +153,37 @@ test('a preference is OKSETSLOT on the global slot with one byte', async () => {
   await app.destroy();
 });
 
+test('touch sensitivity is a real field, with the only floor in the table', async () => {
+  /*
+   * FIELD 28. The table copied from the desktop's client said 28 was
+   * unassigned; okcore.cpp:2106 writes the touch offset there and accepts
+   * only 2..100 ("Error touchsense value out of range"). Both halves are
+   * pinned here: the frame that goes out, and the two values every other
+   * preference would have let through.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const { device } = app.services;
+
+  const spec = device.preferences().find((p) => p.name === 'touchSense');
+  assert.equal(spec.field, 28);
+  assert.equal(spec.min, 2);
+  assert.equal(spec.max, 100);
+  assert.equal(spec.requires, 'configMode');
+
+  await device.setPreference('touchSense', 50);
+  const f = vendor(pipe)[0].data;
+  assert.equal(f[6], 28);
+  assert.equal(f[7], 50);
+
+  await assert.rejects(() => device.setPreference('touchSense', 1), /must be an integer 2\.\.100/);
+  await assert.rejects(() => device.setPreference('touchSense', 101), /must be an integer 2\.\.100/);
+  /* 0 is the default floor everywhere else, and is refused here. */
+  await assert.rejects(() => device.setPreference('touchSense', 0), /must be an integer 2\.\.100/);
+
+  await app.destroy();
+});
+
 test('a preference is validated before anything is sent', async () => {
   const pipe = fakeFirmware();
   const app = await start(pipe);

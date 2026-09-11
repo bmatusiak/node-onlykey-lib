@@ -79,6 +79,7 @@ export namespace FIELD {
     let LOCKBUTTON: number;
     let hmacchallengeMode: number;
     let modkeyMode: number;
+    let TOUCHSENSE: number;
     let YUBIANDHMAC: number;
 }
 export namespace FIELD_ALIASES {

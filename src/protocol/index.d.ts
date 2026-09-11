@@ -55,6 +55,7 @@ export declare let FIELD: {
     LOCKBUTTON: number;
     hmacchallengeMode: number;
     modkeyMode: number;
+    TOUCHSENSE: number;
     YUBIANDHMAC: number;
 };
 export declare let IFACE: {

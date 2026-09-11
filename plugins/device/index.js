@@ -345,6 +345,26 @@ const PREFERENCES = {
   hmacChallengeMode:    { field: FIELD.hmacchallengeMode, max: 1, label: 'HMAC challenge', requires: 'configMode' },
   modKeyMode:           { field: FIELD.modkeyMode, max: 1, label: 'Sysadmin mode', requires: 'configMode' },
 
+  /*
+   * How hard a finger has to press, and the ONE preference with a floor.
+   *
+   * okcore.cpp:2106-2119 accepts `buffer[7] > 1 && buffer[7] <= 100` and
+   * answers "Error touchsense value out of range" otherwise - so 0 and 1
+   * are refused, which every other preference here would have accepted.
+   * That is why `min` exists at all; the alternative was letting a caller
+   * send a byte the firmware throws away and calling it a success.
+   *
+   * Lower is MORE sensitive (it is an offset from the measured baseline);
+   * the firmware's own default lives in EEPROM and is not readable, so
+   * this sets without being able to show what it is now - the same
+   * limitation every preference here has.
+   */
+  touchSense: {
+    field: FIELD.TOUCHSENSE, min: 2, max: 100, label: 'Touch sensitivity',
+    requires: 'configMode',
+    note: 'Lower is more sensitive. The firmware refuses anything outside 2-100.',
+  },
+
   wipeMode: {
     field: FIELD.WIPEMODE, max: 2, label: 'Wipe mode', requires: 'configMode',
     note: 'Full wipe (2) needs config mode; the other values can only be set '
@@ -998,9 +1018,11 @@ const PREFERENCES = {
         );
       }
       const byte = Number(value);
-      if (!Number.isInteger(byte) || byte < 0 || byte > spec.max) {
+      /* `min` is 0 for all but touchSense; see its entry for why it exists. */
+      const min = spec.min ?? 0;
+      if (!Number.isInteger(byte) || byte < min || byte > spec.max) {
         throw new RangeError(
-          `${name} must be an integer 0..${spec.max}, got ${value}`,
+          `${name} must be an integer ${min}..${spec.max}, got ${value}`,
         );
       }
 

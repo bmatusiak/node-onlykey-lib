@@ -83,7 +83,14 @@ const PIN_KIND = {
 };
 
 /**
- * Slot field ids, from OnlyKeyComm.js. 28 is unassigned - not an omission.
+ * Slot field ids, from OnlyKeyComm.js.
+ *
+ * 28 IS TOUCH SENSITIVITY, and this said it was unassigned. The desktop
+ * app has no control for it, so a table copied from OnlyKeyComm.js has a
+ * hole there; the firmware does not (okcore.cpp:2106, `case 28`, which
+ * writes the touch offset and answers "Successfully set Touch
+ * Sensitivity"). python-onlykey has had it all along - `touchsense`,
+ * client.py:208. Read the firmware, not only the reference client.
  *
  * Casing is verbatim: `derivedchallengeMode`, `storedchallengeMode` and
  * `hmacchallengeMode` really are mixed-case in the firmware's client, and
@@ -117,6 +124,7 @@ const FIELD = {
   LOCKBUTTON: 25,
   hmacchallengeMode: 26,
   modkeyMode: 27,
+  TOUCHSENSE: 28,
   YUBIANDHMAC: 29,
 };
 

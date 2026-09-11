@@ -57,6 +57,7 @@ export let protocol: {
         LOCKBUTTON: number;
         hmacchallengeMode: number;
         modkeyMode: number;
+        TOUCHSENSE: number;
         YUBIANDHMAC: number;
     };
     IFACE: {
