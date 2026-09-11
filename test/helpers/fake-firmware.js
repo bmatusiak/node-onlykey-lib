@@ -55,6 +55,8 @@ function fakeFirmware(opts = {}) {
      * "unknown" from a fixture would hide a real failure to detect.
      */
     version = 'v3.0.4-prodc',
+    /* slot -> public key bytes, for OKGETPUBKEY. Absent means an empty slot. */
+    pubKeys = {},
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
@@ -122,6 +124,30 @@ function fakeFirmware(opts = {}) {
           ? 'Successfully set Backup Passphrase'
           : 'Successfully set ECC Key',
       ));
+    }
+
+    if (msg === MSG.OKGETPUBKEY) {
+      /*
+       * okcrypto_getpubkey: the key as RAW 64-byte reports with no length
+       * and no terminator, an empty slot as an error sentence
+       * (okcore.cpp:5245). `pubKeys` maps slot -> bytes; a slot not in it is
+       * empty, which is how a caller asks whether a slot is free.
+       */
+      const slot = frame[5];
+      const key = pubKeys[slot];
+      if (!key) {
+        return pipe.deliver(reportText(
+          slot >= 1 && slot <= 4
+            ? 'Error no RSA Private Key set in this slot'
+            : 'Error no ECC Private Key set in this slot',
+        ));
+      }
+      for (let at = 0; at < key.length; at += 64) {
+        const report = new Uint8Array(64);
+        report.set(key.subarray(at, Math.min(at + 64, key.length)));
+        pipe.deliver(report);
+      }
+      return undefined;
     }
 
     if (msg === MSG.OKGETLABELS && !unlocked) {

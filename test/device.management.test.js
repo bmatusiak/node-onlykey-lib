@@ -91,6 +91,73 @@ function typeText(text) {
   return reports;
 }
 
+/* ------------------------------------------------------------ public keys */
+
+test('getPublicKey reads a slot, and the length has to be asked for', async () => {
+  /*
+   * The firmware sends raw 64-byte reports with no length in them
+   * (okcore.cpp:2833-2850) and memcpy's only the key, leaving the rest of
+   * the buffer as it was. A 32-byte Ed25519 key therefore arrives with 32
+   * bytes of something else behind it - so the fixture puts a recognisable
+   * pattern there and the test proves `bytes` is what cuts it off.
+   */
+  const key = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+  const app = await start(fakeFirmware({ pubKeys: { 101: key } }));
+  const { device } = app.services;
+
+  assert.deepEqual([...await device.getPublicKey(101, { bytes: 32 })], [...key]);
+
+  /* Without it, the whole report comes back and the caller has to know. */
+  const raw = await device.getPublicKey(101);
+  assert.equal(raw.length, 64);
+  assert.deepEqual([...raw.slice(0, 32)], [...key]);
+
+  await app.destroy();
+});
+
+test('an RSA public key is collected across reports', async () => {
+  const modulus = Uint8Array.from({ length: 256 }, (_, i) => i & 0xff);
+  const app = await start(fakeFirmware({ pubKeys: { 1: modulus } }));
+
+  const got = await app.services.device.getPublicKey(1, { bytes: 256 });
+  assert.equal(got.length, 256);
+  assert.deepEqual([...got], [...modulus]);
+
+  await app.destroy();
+});
+
+test('an empty slot is an error with the firmware own words, not an empty answer', async () => {
+  /*
+   * This is how a caller asks whether a slot is free, so the sentence is
+   * the answer and must not be flattened into a null.
+   */
+  const app = await start(fakeFirmware({ pubKeys: {} }));
+  await assert.rejects(
+    () => app.services.device.getPublicKey(101, { bytes: 32 }),
+    /no ECC Private Key set in this slot/,
+  );
+  await app.destroy();
+});
+
+test('OKGETPUBKEY goes out as one frame naming the slot', async () => {
+  const pipe = fakeFirmware({ pubKeys: { 102: new Uint8Array(64) } });
+  const app = await start(pipe);
+
+  await app.services.device.getPublicKey(102, { bytes: 64 });
+  const frames = vendor(pipe);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].data[4], MSG.OKGETPUBKEY);
+  assert.equal(frames[0].data[5], 102);
+  /*
+   * buffer[6] must be 0 for an RSA slot - okcrypto.cpp:274 dispatches on
+   * `buffer[5] < 5 && !buffer[6]` - so the default keyType is 0 and not
+   * something helpful-looking.
+   */
+  assert.equal(frames[0].data[6], 0);
+
+  await app.destroy();
+});
+
 /* ----------------------------------------------------------- preferences */
 
 test('preferences() describes the whole settings surface', async () => {

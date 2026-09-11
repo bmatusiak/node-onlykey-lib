@@ -1319,6 +1319,111 @@ const PREFERENCES = {
       return { slot: prepared.slot, type: prepared.type, keyType: parsed.type, comment: parsed.comment };
     },
 
+    /**
+     * Read a slot's PUBLIC key.
+     *
+     * OKGETPUBKEY was in the message table and called by nothing: the app
+     * could write a key and never see what it had written, and the e2e
+     * suite built the frame by hand to ask whether a slot was empty.
+     * python-onlykey has used it since the beginning (onlykey_hid.py:156,
+     * tests/ssh_auth_ed25519.py:48).
+     *
+     * `bytes` IS NOT OPTIONAL FOR A USABLE ANSWER, and that is the
+     * firmware's doing rather than a design choice here.
+     * send_transport_response() writes raw 64-byte reports with no length
+     * anywhere in them (okcore.cpp:2833-2850), and when the key is shorter
+     * than a report it memcpy's only the key and leaves the rest of the
+     * buffer as it was. So a 32-byte Ed25519 public key arrives as 32 bytes
+     * of key followed by 32 bytes of whatever the device sent last. Omit
+     * `bytes` and you get that whole report and have to know where to cut;
+     * pass it and you get the key.
+     *
+     * The lengths, from okcrypto.cpp:
+     *   Ed25519, Curve25519    32   (okcrypto.cpp:583)
+     *   NIST P-256, secp256k1  64   (okcrypto.cpp:573)
+     *   RSA                    128 * type, so 128/256/384/512
+     *   ML-KEM-768, X-Wing     their own, and read by their own callers
+     *
+     * An empty slot is an ERROR, not an empty answer: "Error no ECC Private
+     * Key set in this slot" (okcore.cpp:5245), which is how a caller asks
+     * whether a slot is free. A slot outside 101-132 answers "Error invalid
+     * ECC slot" (okcore.cpp:5229), and a locked device "Error device
+     * locked" (okcore.cpp:590) - all of them thrown as they are.
+     *
+     * @param {number|string} slotId
+     * @param {object} [opts] {bytes, keyType, timeoutMs}
+     * @returns {Promise<Uint8Array>}
+     */
+    async getPublicKey(slotId, { bytes = 0, keyType = 0, timeoutMs = 8000 } = {}) {
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
+      const frame = okmsg.build({ msg: MSG.OKGETPUBKEY, slot, field: keyType });
+
+      /*
+       * Subscribed before the write, and leading status broadcasts skipped
+       * only BEFORE the first data byte - the same rule okcrypto's collector
+       * and python-onlykey's read_exact follow, for the same reason: once
+       * the key has started arriving a report may legitimately read as text
+       * or be all zeros, and dropping one corrupts the answer silently.
+       */
+      let started = false;
+      let off = null;
+      const collected = [];
+      let got = 0;
+
+      const answer = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (off) off();
+          reject(new Error(
+            `slot ${slot} did not answer OKGETPUBKEY within ${timeoutMs}ms`,
+          ));
+        }, timeoutMs);
+
+        off = transport.on('report', (event) => {
+          if (event.iface !== IFACE.VENDOR) return;
+          if (!started) {
+            const state = okmsg.parseState(event.data);
+            if (state.state === 'unlocked' || state.state === 'locked'
+                || state.state === 'uninitialized' || state.state === 'bootloader') return;
+            if (state.state === 'error') {
+              clearTimeout(timer);
+              if (off) off();
+              reject(new Error(state.raw.trim()));
+              return;
+            }
+            /*
+             * The one refusal that does not begin with "Error": an
+             * uninitialized device answers "No PIN set, You must set a PIN
+             * first" (okcore.cpp:576). Matched by its exact words rather
+             * than by "looks like text", because a public key may look like
+             * text too.
+             */
+            const text = okmsg.text(event.data);
+            if (/^No PIN set/i.test(text)) {
+              clearTimeout(timer);
+              if (off) off();
+              reject(new Error(text.trim()));
+              return;
+            }
+            started = true;
+          }
+          collected.push(Uint8Array.from(event.data));
+          got += event.data.length;
+          if (bytes && got < bytes) return;
+          clearTimeout(timer);
+          if (off) off();
+          const out = new Uint8Array(got);
+          let at = 0;
+          for (const c of collected) { out.set(c, at); at += c.length; }
+          resolve(bytes ? out.slice(0, bytes) : out);
+        });
+      });
+
+      await transport.write(IFACE.VENDOR, frame);
+      const key = await answer;
+      progress('publicKey', { slot, bytes: key.length });
+      return key;
+    },
+
     /** Erase a key slot. Irreversible; the caller has already confirmed. */
     async wipeKey(slotId) {
       const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
