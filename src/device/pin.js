@@ -73,6 +73,15 @@ function validatePin(pin, { confirm = null } = {}) {
 /**
  * Validate the DUO PIN set.
  *
+ * WHICH DIGITS: any numeral 0-9, 7 to 16 of them. Settled from the firmware
+ * rather than from the two clients, which disagree: a DUO's PIN is TYPED into
+ * the message body, and okcore.cpp:978 copies it out as bytes
+ * (`memcpy(password.guess, (ID+18), 16)`) and hashes it by strlen with no
+ * digit check at all. The 1-6 rule belongs to the button-press path
+ * (okcore.cpp:2415, "is not a button 1-6") that a DUO never takes for its
+ * PIN. The desktop wizard's "numerals only" is the right constraint; its
+ * button-numbered variant elsewhere is the Classic's.
+ *
  * Policy from OnlyKeyWizard.js:1435-1449, with two corrections.
  *
  * The original enforces no MAXIMUM in JavaScript - the 16-character cap is
