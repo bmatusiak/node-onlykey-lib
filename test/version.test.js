@@ -25,6 +25,7 @@ const assert = require('node:assert');
 
 const {
   parseStatus, capabilities, parseRelease, stripModelSuffix, supportsFwUpdate,
+  atLeast,
   MODEL, BUILD, BREAKING_BETA_8C, PRE_VERSION_FIRMWARE,
 } = require('../src/device/version');
 
@@ -475,4 +476,67 @@ test('consolePress is about the CONSOLE, not about whether a host can press', ()
   // press - every call site takes the press from its caller.
   assert.equal('canPress' in prodSoftKey, false);
   assert.equal('press' in prodSoftKey, false);
+});
+
+/* ------------------------------------------- version-gated capabilities */
+
+test('no RELEASED firmware has any post-quantum support', () => {
+  /*
+   * Measured, not assumed. Every pin in ok-versions.json was read at its
+   * commit: okpqc.cpp does not exist at v2.1.0, v2.1.1, v3.0.0, v3.0.1 or
+   * v3.0.2; KEYTYPE_MLKEM768 and KEYTYPE_XWING are absent from okcore.h at
+   * all five; and XWING and MLKEM appear nowhere in okcrypto.cpp at any of
+   * them. All of it lives in the firmware working tree only.
+   *
+   * So this is the test that stops the app offering a post-quantum screen to
+   * somebody holding a shipped key, where it can only fail at the device.
+   */
+  for (const version of ['v2.1.0', 'v2.1.1', 'v3.0.0', 'v3.0.1', 'v3.0.2']) {
+    assert.equal(
+      capabilities(`UNLOCKED${version}c`).postQuantum, false,
+      `${version} is a release and no release has post-quantum support`,
+    );
+  }
+
+  /* The working-tree line, which is what the bench key runs. */
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').postQuantum, true);
+});
+
+test('a device that has not said what it is gets no optional features', () => {
+  /*
+   * The safe direction. A locked key announces INITIALIZED with no version at
+   * all, and "unknown" must not read as "modern" - offering a feature that is
+   * not there fails at the device as a silence the user has to interpret.
+   */
+  for (const status of ['INITIALIZED', 'INITIALIZED-D', 'UNINITIALIZED', 'nonsense']) {
+    const caps = capabilities(status);
+    assert.equal(caps.postQuantum, false, status);
+    assert.equal(caps.hmacSha1, false, status);
+  }
+});
+
+test('HMAC-SHA1 arrived in the 3.0 line', () => {
+  /* KEYTYPE_HMACSHA1 9 is in okcore.h at v3.0.0+ and not at v2.1.0 or v2.1.1. */
+  assert.equal(capabilities('UNLOCKEDv2.1.0c').hmacSha1, false);
+  assert.equal(capabilities('UNLOCKEDv2.1.1c').hmacSha1, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.0c').hmacSha1, true);
+  assert.equal(capabilities('UNLOCKEDv3.0.2c').hmacSha1, true);
+});
+
+test('atLeast orders the two version shapes the firmware ships', () => {
+  const rel = (v) => parseStatus(`UNLOCKED${v}`).release;
+
+  assert.equal(atLeast(rel('v3.0.3'), [3, 0, 3]), true);
+  assert.equal(atLeast(rel('v3.0.2'), [3, 0, 3]), false);
+  assert.equal(atLeast(rel('v3.1.0'), [3, 0, 3]), true);
+  assert.equal(atLeast(rel('v4.0.0'), [3, 0, 3]), true);
+  assert.equal(atLeast(rel('v2.9.9'), [3, 0, 3]), false);
+
+  /* A build keyword is not "not there yet" - v3.0.4-test IS past v3.0.3. */
+  assert.equal(atLeast(rel('v3.0.4-test'), [3, 0, 3]), true);
+  assert.equal(atLeast(rel('v3.0.3-prod'), [3, 0, 3]), true);
+
+  /* A version with no patch counts its patch as zero, not as missing. */
+  assert.equal(atLeast(rel('v0.2-beta.8'), [3, 0, 3]), false);
+  assert.equal(atLeast(null, [3, 0, 3]), false);
 });

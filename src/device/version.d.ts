@@ -124,6 +124,50 @@ export function capabilities(status: object | string): {
     /** Firmware update from a host over USB - see supportsFwUpdate(). */
     firmwareUpdateOverUsb: any;
     /**
+     * EVERY post-quantum path, and no released firmware has any of it.
+     *
+     * Measured across every pin in ok-versions.json, reading the sources at
+     * those commits with `git show` rather than trusting a changelog:
+     *
+     *   okpqc.cpp            composite ML-DSA signing - ABSENT at v2.1.0,
+     *                        v2.1.1, v3.0.0, v3.0.1, v3.0.2. The file does
+     *                        not exist at any of them.
+     *   KEYTYPE_MLKEM768 5   absent from okcore.h at all five
+     *   KEYTYPE_XWING    6   absent from okcore.h at all five
+     *   XWING / MLKEM        zero occurrences in okcrypto.cpp at all five
+     *
+     * So the three features that look separate in a UI - composite PGP keys,
+     * X-Wing age identities derived over CTAP, and ML-KEM or X-Wing keys held
+     * in a slot - are ONE capability as far as any shipped key is concerned:
+     * a person holding a production OnlyKey has none of them, whatever their
+     * firmware version, up to and including the newest release.
+     *
+     * They exist only in the firmware working tree, the line that builds
+     * v3.0.4-testc, which is what the bench key runs. That is the same
+     * position the web app's two post-quantum pages are in: present in its
+     * working tree, registered in plugins-devel.js, absent from a production
+     * build. The app and the firmware are ahead of the same release together.
+     *
+     * THE THRESHOLD IS A GUESS ABOUT THE FUTURE, and deliberately the
+     * pessimistic one. v3.0.2 is the newest release measured to lack all of
+     * it, so anything at or past v3.0.3 is treated as having it. If 3.0.3
+     * ships without post-quantum support this flag is wrong in the direction
+     * of offering too much, and the fix is to raise the number here once
+     * there is a release to measure. Nothing else in the library reads the
+     * version for this.
+     */
+    postQuantum: boolean;
+    /**
+     * HMAC-SHA1 slot keys, which the Keys tab offers as a key type.
+     *
+     * `KEYTYPE_HMACSHA1 9` is in okcore.h at v3.0.0, v3.0.1 and v3.0.2 and
+     * NOT at v2.1.0 or v2.1.1. v2.1.2 is unmeasured - its libraries commit
+     * (12eb5b0) is not in the local checkout, so the probe skips it - which
+     * only matters for a key running exactly that release, and the flag errs
+     * towards not offering.
+     */
+    hmacSha1: boolean;
+    /**
      * Whether a serial console is there to talk to.
      *
      *   true   a DEBUG build ('-test'), so SEREMU exists and prints prompts
@@ -365,6 +409,21 @@ export function stripModelSuffix(version: any): any;
  * would be improving a protocol we have no way to test against.
  */
 export function supportsFwUpdate(version: any): boolean;
+/**
+ * Is this release at or past `[major, minor, patch]`?
+ *
+ * Only for the version-gated capability flags below, which is why it is
+ * deliberately strict rather than clever: a version that does not parse, or a
+ * device that has not said what it is, returns false. Every caller is asking
+ * "may I offer this feature", and the safe answer when nothing is known is no
+ * - a feature offered to firmware that lacks it fails at the device with a
+ * silence or a refusal the user has to interpret.
+ *
+ * A prerelease of the SAME numbers counts as at least that version. The only
+ * prereleases this firmware produces are build keywords - `-test`, `-prod` -
+ * on an otherwise complete number, not the semver sense of "not there yet".
+ */
+export function atLeast(release: any, [major, minor, patch]: [any, any, any]): boolean;
 export namespace MODEL {
     let CLASSIC: string;
     let DUO: string;
