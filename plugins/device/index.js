@@ -475,6 +475,33 @@ const PREFERENCES = {
    * is what the firmware actually tests, which is why this is written as the
    * bytes and not as a named constant somewhere claiming to be a command.
    */
+  /**
+   * Resolve once no vendor report has arrived for `quietMs`.
+   *
+   * Capped, because a device that chatters forever - the once-a-second
+   * INITIALIZED broadcast of a locked key, say - would otherwise hang a
+   * caller rather than fail it. Reaching the cap is not an error: the
+   * operation goes ahead and its own timeout covers it.
+   */
+  function busQuiet(quietMs, capMs) {
+    return new Promise((resolve) => {
+      let timer = null;
+      const giveUp = setTimeout(() => { finish(); }, capMs);
+      const off = transport.on('report', (event) => {
+        if (event.iface !== IFACE.VENDOR) return;
+        clearTimeout(timer);
+        timer = setTimeout(finish, quietMs);
+      });
+      function finish() {
+        clearTimeout(timer);
+        clearTimeout(giveUp);
+        off();
+        resolve();
+      }
+      timer = setTimeout(finish, quietMs);
+    });
+  }
+
   const GENERATE_TRIGGER = Uint8Array.from([
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   ]);
@@ -540,6 +567,30 @@ const PREFERENCES = {
     duo = false,
     timeoutMs = 60000,
     settleMs = 60,
+    /*
+     * WAIT FOR THE BUS TO GO QUIET FIRST, and this is not politeness.
+     *
+     * This collector takes consecutive 64-byte reports and cannot tell one
+     * from another - there is no length, no tag and no terminator anywhere in
+     * a public key. So ANY reply still arriving from an earlier request is
+     * read as the beginning of this one.
+     *
+     * Measured on the soft key, and it is not a rare race. A host GUI that
+     * refreshes its slot list when the device unlocks sends OKGETSLOTLABELS,
+     * which answers with twelve reports shaped `[index, 0x7c, label...]`.
+     * Generating a key straight after unlocking put those twelve into this
+     * collector: the first one (`01 7c "band-a"`) started the key, `answered`
+     * went true, and the caller - which uses that to stop pressing early when
+     * the device only wants one press - pressed ONE button of a three-button
+     * challenge. The generation then never happened, and sixty seconds later
+     * the timeout blamed the user for not pressing buttons they had been told
+     * to stop pressing.
+     *
+     * Waiting for a gap costs a few hundred milliseconds before an operation
+     * that takes a human several seconds to confirm.
+     */
+    quietMs = 250,
+    quietTimeoutMs = 5000,
   } = {}) {
     const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
 
@@ -580,6 +631,25 @@ const PREFERENCES = {
     const collected = [];
     let got = 0;
 
+    /*
+     * NOTHING SENT BEFORE OUR REQUEST CAN BE OUR ANSWER.
+     *
+     * Subscribing before the write is not optional - the device can answer
+     * inside it - but it also picks up whatever was still arriving from the
+     * PREVIOUS operation, and this collector cannot tell one 64-byte report
+     * from another. Measured on the soft key: a label listing was still
+     * streaming when a generation was triggered, its first report
+     * (`01 7c "band-a"`) was taken as the first 64 bytes of the key, and the
+     * caller was told the device had already answered - so it pressed ONE
+     * button of a three-button challenge, and the generation that never
+     * happened timed out sixty seconds later blaming the user for not
+     * pressing. See ok-rn/FINDING-a-collector-ate-the-previous-replys-reports.md.
+     *
+     * A timestamp rather than a drain: draining guesses how long the bus
+     * needs to go quiet, and this needs no guess at all.
+     */
+    let sent = false;
+
     const answer = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (off) off();
@@ -591,6 +661,7 @@ const PREFERENCES = {
 
       off = transport.on('report', (event) => {
         if (event.iface !== IFACE.VENDOR) return;
+        if (!sent) return;
         if (!started) {
           const state = okmsg.parseState(event.data);
           if (state.state === 'unlocked' || state.state === 'locked'
@@ -617,7 +688,10 @@ const PREFERENCES = {
       });
     });
 
+    if (quietMs > 0) await busQuiet(quietMs, quietTimeoutMs);
+
     await transport.write(IFACE.VENDOR, frame);
+    sent = true;
     events.emit('challenge', { slot, digits });
     progress('generateKey', { slot, keyType, digits });
 
