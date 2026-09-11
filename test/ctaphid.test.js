@@ -196,13 +196,13 @@ test('a keepalive handler is told the status, so a UI can prompt', async () => {
 test('a non-zero CTAP status becomes a named error', async () => {
   // The name matters: "CTAP2_ERR_NO_CREDENTIALS" says the keyhandle was not
   // recognised, which is a completely different problem from a refusal.
-  const transport = fakeCtapHid({ onCbor: () => ({ status: 0x2b }) });
+  const transport = fakeCtapHid({ onCbor: () => ({ status: 0x2e }) });
   const ctap = new CtapHid(transport);
   await ctap.init();
 
   const err = await ctap.send(CTAP2_CMD.GET_ASSERTION).catch(e => e);
   assert.equal(err instanceof Ctap2Error, true);
-  assert.equal(err.code, 0x2b);
+  assert.equal(err.code, 0x2e);
   assert.equal(err.ctapName, 'CTAP2_ERR_NO_CREDENTIALS');
 });
 
@@ -327,17 +327,67 @@ test('a slow press still completes, where the ordinary timeout would not', async
   assert.equal(out.get(1), 'pressed');
 });
 
-test('every status we can send is one the spec defines', () => {
+test('every status we can send is the byte the firmware calls by that name', () => {
   /*
-   * CTAP2_ERROR answers "what did the device send me". CTAP2_STATUS answers
-   * "what may I send back", and until it existed, callers that needed the
-   * second direction wrote their own - ok-rn's copy had NOT_ALLOWED as 0x30,
-   * which is not a CTAP2 status at all, and UNSUPPORTED_OPTION as 0x2b, which
-   * is NO_CREDENTIALS. Every rejected BLE request carried an undefined byte.
+   * THIS TEST USED TO PIN THE BUG IN PLACE.
    *
-   * Asserting one table against the other is what stops the pair drifting
-   * apart again: a name here without a code there is a code nobody defined.
+   * It asserted NOT_ALLOWED === 0x2d, NO_CREDENTIALS === 0x2b and
+   * UNSUPPORTED_OPTION === 0x6a, and its comment said it was correcting
+   * ok-rn, which had `NOT_ALLOWED: 0x30`. The app was right: ctap_errors.h:42
+   * defines NOT_ALLOWED as 0x30. The table here had slid by a few entries and
+   * the test froze the slide - three of the eleven bytes this library can
+   * send to a browser named something else entirely, and 0x6a named nothing
+   * at all.
+   *
+   * So the oracle is no longer this file. The numbers below are copied from
+   * libraries/fido2/ctap_errors.h, which is the header the firmware itself
+   * compiles against, and the whole table is checked rather than the three
+   * that happened to be noticed.
    */
+  const FIRMWARE = {
+    CTAP1_ERR_SUCCESS: 0x00,
+    CTAP1_ERR_INVALID_COMMAND: 0x01,
+    CTAP1_ERR_INVALID_PARAMETER: 0x02,
+    CTAP1_ERR_INVALID_LENGTH: 0x03,
+    CTAP2_ERR_CBOR_UNEXPECTED_TYPE: 0x11,
+    CTAP2_ERR_INVALID_CBOR: 0x12,
+    CTAP2_ERR_MISSING_PARAMETER: 0x14,
+    CTAP2_ERR_LIMIT_EXCEEDED: 0x15,
+    CTAP2_ERR_CREDENTIAL_EXCLUDED: 0x19,
+    CTAP2_ERR_PROCESSING: 0x21,
+    CTAP2_ERR_INVALID_CREDENTIAL: 0x22,
+    CTAP2_ERR_USER_ACTION_PENDING: 0x23,
+    CTAP2_ERR_OPERATION_PENDING: 0x24,
+    CTAP2_ERR_NO_OPERATIONS: 0x25,
+    CTAP2_ERR_UNSUPPORTED_ALGORITHM: 0x26,
+    CTAP2_ERR_OPERATION_DENIED: 0x27,
+    CTAP2_ERR_KEY_STORE_FULL: 0x28,
+    CTAP2_ERR_UNSUPPORTED_OPTION: 0x2b,
+    CTAP2_ERR_INVALID_OPTION: 0x2c,
+    CTAP2_ERR_KEEPALIVE_CANCEL: 0x2d,
+    CTAP2_ERR_NO_CREDENTIALS: 0x2e,
+    CTAP2_ERR_USER_ACTION_TIMEOUT: 0x2f,
+    CTAP2_ERR_NOT_ALLOWED: 0x30,
+    CTAP2_ERR_PIN_INVALID: 0x31,
+    CTAP2_ERR_PIN_BLOCKED: 0x32,
+    CTAP2_ERR_PIN_AUTH_INVALID: 0x33,
+    CTAP2_ERR_PIN_AUTH_BLOCKED: 0x34,
+    CTAP2_ERR_PIN_NOT_SET: 0x35,
+    CTAP2_ERR_PIN_REQUIRED: 0x36,
+    CTAP2_ERR_PIN_POLICY_VIOLATION: 0x37,
+    CTAP2_ERR_PIN_TOKEN_EXPIRED: 0x38,
+    CTAP2_ERR_REQUEST_TOO_LARGE: 0x39,
+  };
+
+  for (const [name, code] of Object.entries(FIRMWARE)) {
+    if (code === 0x00) continue;   // CTAP1_ERR_SUCCESS here, CTAP2_OK there
+    assert.equal(
+      CTAP2_ERROR[code], name,
+      `0x${code.toString(16)} is ${name} in ctap_errors.h`,
+    );
+  }
+
+  /* And the responder table names bytes out of that same set. */
   for (const [name, code] of Object.entries(CTAP2_STATUS)) {
     assert.ok(
       Object.prototype.hasOwnProperty.call(CTAP2_ERROR, code),
@@ -345,11 +395,11 @@ test('every status we can send is one the spec defines', () => {
     );
   }
 
-  /* And the two that were wrong, pinned by value so a typo cannot pass. */
-  assert.equal(CTAP2_STATUS.NOT_ALLOWED, 0x2d);
-  assert.equal(CTAP2_STATUS.NO_CREDENTIALS, 0x2b);
-  assert.equal(CTAP2_STATUS.UNSUPPORTED_OPTION, 0x6a);
-  assert.equal(CTAP2_ERROR[0x2d], 'CTAP2_ERR_NOT_ALLOWED');
+  /* The three that were wrong, now pinned to the firmware's numbers. */
+  assert.equal(CTAP2_STATUS.NOT_ALLOWED, 0x30);
+  assert.equal(CTAP2_STATUS.NO_CREDENTIALS, 0x2e);
+  assert.equal(CTAP2_STATUS.UNSUPPORTED_OPTION, 0x2b);
+  assert.equal(CTAP2_ERROR[0x30], 'CTAP2_ERR_NOT_ALLOWED');
 });
 
 /*

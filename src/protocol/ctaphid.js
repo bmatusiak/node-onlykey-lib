@@ -48,6 +48,7 @@
 'use strict';
 
 const cbor = require('./cbor');
+const { STATUS } = require('./ctap');
 const { IFACE } = require('./msg');
 const { concat } = require('../bytes');
 
@@ -84,13 +85,30 @@ const CTAP2_CMD = {
  *
  * CTAP2_ERROR below maps a byte to its spec name, which is what a client needs
  * when it RECEIVES one. Answering a request needs the other direction, and
- * having only the first is how ok-rn came to keep its own table with
- * `NOT_ALLOWED: 0x30` in it - a byte the spec does not define at all - and
- * `UNSUPPORTED_OPTION: 0x2b`, which is really NO_CREDENTIALS. Every rejected
- * BLE request went out as an undefined status.
+ * having only the first is how ok-rn came to keep its own table.
  *
- * Kept honest by a test asserting every value here is a key of CTAP2_ERROR, so
- * a code that is not in the spec cannot be added to this one either.
+ * ## Both tables here were WRONG, and the comment that said so was too
+ *
+ * This pair used to be transcribed by hand, and the transcription had slid:
+ * NO_CREDENTIALS was 0x2b (really UNSUPPORTED_OPTION), NOT_ALLOWED was 0x2d
+ * (really KEEPALIVE_CANCEL), and UNSUPPORTED_OPTION was 0x6a, which the spec
+ * does not define at all. An earlier comment right here claimed to have
+ * corrected ok-rn's table, which had `NOT_ALLOWED: 0x30` - and 0x30 is the
+ * RIGHT value (ctap_errors.h:42). The app's table was replaced with a wrong
+ * one and a test pinned the wrong values in place.
+ *
+ * It surfaced on a real device: a wrong FIDO2 PIN answered
+ * CTAP2_ERR_PIN_NOT_SET on a key that plainly had a PIN set, because 0x31 was
+ * labelled PIN_NOT_SET when it is PIN_INVALID. See
+ * FINDING-ctap2-status-table-was-shifted.md.
+ *
+ * ## So there is now ONE table
+ *
+ * CTAP2_ERROR is built from ctap.js's STATUS, which was transcribed
+ * separately, from the shipped web client, and is correct. Two hand-written
+ * copies of one table is the bug; deriving one from the other is the fix.
+ * CTAP2_STATUS names a subset of it for the responder direction, and a test
+ * checks every value against ctap_errors.h's numbers.
  */
 const CTAP2_STATUS = {
   OK: 0x00,
@@ -101,35 +119,20 @@ const CTAP2_STATUS = {
   INVALID_CREDENTIAL: 0x22,
   USER_ACTION_PENDING: 0x23,
   OPERATION_DENIED: 0x27,
-  NO_CREDENTIALS: 0x2b,
-  NOT_ALLOWED: 0x2d,
-  UNSUPPORTED_OPTION: 0x6a,
+  NO_CREDENTIALS: 0x2e,
+  NOT_ALLOWED: 0x30,
+  UNSUPPORTED_OPTION: 0x2b,
 };
 
-const CTAP2_ERROR = {
-  0x00: 'CTAP2_OK',
-  0x01: 'CTAP1_ERR_INVALID_COMMAND',
-  0x02: 'CTAP1_ERR_INVALID_PARAMETER',
-  0x03: 'CTAP1_ERR_INVALID_LENGTH',
-  0x11: 'CTAP2_ERR_CBOR_UNEXPECTED_TYPE',
-  0x12: 'CTAP2_ERR_INVALID_CBOR',
-  0x14: 'CTAP2_ERR_MISSING_PARAMETER',
-  0x15: 'CTAP2_ERR_LIMIT_EXCEEDED',
-  0x19: 'CTAP2_ERR_CREDENTIAL_EXCLUDED',
-  0x21: 'CTAP2_ERR_PROCESSING',
-  0x22: 'CTAP2_ERR_INVALID_CREDENTIAL',
-  0x23: 'CTAP2_ERR_USER_ACTION_PENDING',
-  0x24: 'CTAP2_ERR_OPERATION_PENDING',
-  0x25: 'CTAP2_ERR_NO_OPERATIONS',
-  0x26: 'CTAP2_ERR_UNSUPPORTED_ALGORITHM',
-  0x27: 'CTAP2_ERR_OPERATION_DENIED',
-  0x2b: 'CTAP2_ERR_NO_CREDENTIALS',
-  0x2d: 'CTAP2_ERR_NOT_ALLOWED',
-  0x2e: 'CTAP2_ERR_PIN_INVALID',
-  0x31: 'CTAP2_ERR_PIN_NOT_SET',
-  0x36: 'CTAP2_ERR_PIN_AUTH_INVALID',
-  0x6a: 'CTAP2_ERR_UNSUPPORTED_OPTION',
-};
+/**
+ * Byte to spec name, for a status a device SENT us.
+ *
+ * Derived, not retyped: see the note above CTAP2_STATUS. 0x00 keeps the
+ * CTAP2 spelling here because this table describes CTAP2 command replies,
+ * while ctap.js reads byte 0 of a tunnelled U2F signature, where the same
+ * zero means CTAP1_SUCCESS.
+ */
+const CTAP2_ERROR = { ...STATUS, 0x00: 'CTAP2_OK' };
 
 const KEEPALIVE = { PROCESSING: 0x01, UP_NEEDED: 0x02 };
 

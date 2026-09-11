@@ -215,16 +215,35 @@ export namespace CTAP2_STATUS {
     let NOT_ALLOWED: number;
     let UNSUPPORTED_OPTION: number;
 }
+/**
+ * Byte to spec name, for a status a device SENT us.
+ *
+ * Derived, not retyped: see the note above CTAP2_STATUS. 0x00 keeps the
+ * CTAP2 spelling here because this table describes CTAP2 command replies,
+ * while ctap.js reads byte 0 of a tunnelled U2F signature, where the same
+ * zero means CTAP1_SUCCESS.
+ */
 export const CTAP2_ERROR: {
     0: string;
     1: string;
     2: string;
     3: string;
+    4: string;
+    5: string;
+    6: string;
+    10: string;
+    11: string;
+    16: string;
     17: string;
     18: string;
+    19: string;
     20: string;
     21: string;
+    22: string;
+    23: string;
+    24: string;
     25: string;
+    32: string;
     33: string;
     34: string;
     35: string;
@@ -232,12 +251,24 @@ export const CTAP2_ERROR: {
     37: string;
     38: string;
     39: string;
+    40: string;
+    41: string;
+    42: string;
     43: string;
+    44: string;
     45: string;
     46: string;
+    47: string;
+    48: string;
     49: string;
+    50: string;
+    51: string;
+    52: string;
+    53: string;
     54: string;
-    106: string;
+    55: string;
+    56: string;
+    57: string;
 };
 export namespace KEEPALIVE {
     let PROCESSING: number;
