@@ -7,3 +7,4 @@ export let chunker: typeof import("./chunker");
 export let parsers: typeof import("./parsers");
 export let encoders: typeof import("./encoders");
 export let keystrokes: typeof import("./keystrokes");
+export let slotConfig: typeof import("./slotConfig");
