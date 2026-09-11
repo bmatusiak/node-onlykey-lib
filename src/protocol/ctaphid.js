@@ -78,6 +78,17 @@ const CTAP2_CMD = {
   CLIENT_PIN: 0x06,
   RESET: 0x07,
   GET_NEXT_ASSERTION: 0x08,
+  /*
+   * Credential management, and the firmware answers on BOTH bytes.
+   *
+   * 0x0A is the standard opcode; 0x41 is the CTAP2.1-PRE preview one that
+   * platforms shipped before the spec settled. ctap.cpp:2443 routes them to
+   * the same handler, so either reaches it - the preview byte is kept because
+   * a bridge forwarding a browser's request will see whichever that browser
+   * chose, and a table missing one would reject a perfectly good request.
+   */
+  CREDENTIAL_MANAGEMENT: 0x0a,
+  CREDENTIAL_MANAGEMENT_PREVIEW: 0x41,
 };
 
 /**

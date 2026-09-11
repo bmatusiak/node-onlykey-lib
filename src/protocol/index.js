@@ -21,6 +21,7 @@ const cbor = require('./cbor');
 const ctaphid = require('./ctaphid');
 const cose = require('./cose');
 const clientpin = require('./clientpin');
+const credmgmt = require('./credmgmt');
 const tunnel = require('./tunnel');
 const challenge = require('./challenge');
 const bridge = require('./bridge');
@@ -34,6 +35,7 @@ module.exports = {
   ctaphid,
   cose,
   clientpin,
+  credmgmt,
   tunnel,
   challenge,
   bridge,

@@ -90,6 +90,59 @@ export class FidoAdmin {
      * will face.
      */
     _describe(error: any, before: any, opts: any): Promise<any>;
+    /** One credential-management subcommand. */
+    _credMgmt(params: any, opts: any): Promise<any>;
+    /**
+     * How many resident credentials the key holds, and how many more fit.
+     *
+     * Ask this FIRST. Every other credential-management subcommand answers
+     * success with an EMPTY BODY when there are none stored (ctap.cpp:1754),
+     * which a caller cannot tell from a malformed reply; metadata is the one
+     * that still answers properly, so it is what turns "nothing came back" into
+     * "there is nothing there".
+     */
+    credentialCount(pinToken: any, opts?: {}): Promise<{
+        stored: number;
+        remaining: number;
+    }>;
+    /**
+     * Every resident credential on the key, grouped by the site that owns it.
+     *
+     * ONE PASS, and it has to be. The enumeration cursors are function statics
+     * shared by every channel (ctap.cpp:1736-1741), so this walks the relying
+     * parties to completion, collecting their hashes, and only then walks each
+     * one's credentials - interleaving the two walks moves two cursors that do
+     * not know about each other.
+     *
+     * A `*Next` without its `*Begin` answers CTAP2_ERR_NO_CREDENTIALS rather
+     * than starting again, and any failure clears the flag, so a walk that
+     * breaks cannot be resumed - only restarted.
+     *
+     * @returns {Promise<Array<{id, name, rpIdHash, credentials: Array}>>}
+     */
+    listCredentials(pinToken: any, opts?: {}): Promise<Array<{
+        id: any;
+        name: any;
+        rpIdHash: any;
+        credentials: any[];
+    }>>;
+    /**
+     * Delete one resident credential.
+     *
+     * @param {Map} credentialId  the descriptor from listCredentials, unchanged
+     *
+     * IRREVERSIBLE, and the device asks for nothing: no button, no second
+     * thought. The account that credential belongs to stops recognising this
+     * key, and if it was the only second factor that account may be
+     * unreachable. A caller is expected to have shown the user which site and
+     * which user name it belongs to before getting here.
+     *
+     * The descriptor is passed through rather than rebuilt, and should come
+     * from a listing taken immediately before - the cursors are shared, so an
+     * index or a stale copy can name a different credential than the one a
+     * person was looking at.
+     */
+    deleteCredential(pinToken: any, credentialId: Map<any, any>, opts?: {}): Promise<boolean>;
     /**
      * Erase the FIDO2 key space and every resident credential.
      *

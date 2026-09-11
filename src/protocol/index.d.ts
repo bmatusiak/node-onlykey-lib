@@ -6,6 +6,7 @@ import cbor = require("./cbor");
 import ctaphid = require("./ctaphid");
 import cose = require("./cose");
 import clientpin = require("./clientpin");
+import credmgmt = require("./credmgmt");
 import tunnel = require("./tunnel");
 import challenge = require("./challenge");
 import bridge = require("./bridge");
@@ -80,4 +81,4 @@ export declare let KEYACTION: {
 };
 export declare let messageId: typeof import("./msg").messageId;
 export declare let fieldId: typeof import("./msg").fieldId;
-export { msg, okmsg, ctap, chunk, cbor, ctaphid, cose, clientpin, tunnel, challenge, bridge };
+export { msg, okmsg, ctap, chunk, cbor, ctaphid, cose, clientpin, credmgmt, tunnel, challenge, bridge };

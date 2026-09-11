@@ -33,6 +33,7 @@
 'use strict';
 
 const clientpin = require('../protocol/clientpin');
+const credmgmt = require('../protocol/credmgmt');
 const { CTAP2_CMD, Ctap2Error } = require('../protocol/ctaphid');
 const cbor = require('../protocol/cbor');
 
@@ -236,6 +237,110 @@ class FidoAdmin {
     wrapped.code = error.code;
     wrapped.retries = after;
     return wrapped;
+  }
+
+  /** One credential-management subcommand. */
+  async _credMgmt(params, opts) {
+    return this.ctap.send(
+      CTAP2_CMD.CREDENTIAL_MANAGEMENT, cbor.encode(params), opts,
+    );
+  }
+
+  /**
+   * How many resident credentials the key holds, and how many more fit.
+   *
+   * Ask this FIRST. Every other credential-management subcommand answers
+   * success with an EMPTY BODY when there are none stored (ctap.cpp:1754),
+   * which a caller cannot tell from a malformed reply; metadata is the one
+   * that still answers properly, so it is what turns "nothing came back" into
+   * "there is nothing there".
+   */
+  async credentialCount(pinToken, opts = {}) {
+    return credmgmt.readMetadata(
+      await this._credMgmt(credmgmt.metadataParams(pinToken), opts),
+    );
+  }
+
+  /**
+   * Every resident credential on the key, grouped by the site that owns it.
+   *
+   * ONE PASS, and it has to be. The enumeration cursors are function statics
+   * shared by every channel (ctap.cpp:1736-1741), so this walks the relying
+   * parties to completion, collecting their hashes, and only then walks each
+   * one's credentials - interleaving the two walks moves two cursors that do
+   * not know about each other.
+   *
+   * A `*Next` without its `*Begin` answers CTAP2_ERR_NO_CREDENTIALS rather
+   * than starting again, and any failure clears the flag, so a walk that
+   * breaks cannot be resumed - only restarted.
+   *
+   * @returns {Promise<Array<{id, name, rpIdHash, credentials: Array}>>}
+   */
+  async listCredentials(pinToken, opts = {}) {
+    const { stored } = await this.credentialCount(pinToken, opts);
+    if (!stored) return [];
+
+    /* ---- the relying parties, first and completely ---- */
+    const rps = [];
+    let first = credmgmt.readRp(
+      await this._credMgmt(credmgmt.rpBeginParams(pinToken), opts),
+    );
+    if (!first) return [];
+    rps.push(first);
+
+    /*
+     * The count comes only with the FIRST answer (ctap.cpp:1526-1530), so it
+     * is read once and counted down - not expected on every reply.
+     */
+    const total = first.total === null ? 1 : first.total;
+    for (let i = 1; i < total; i += 1) {
+      const next = credmgmt.readRp(await this._credMgmt(credmgmt.rpNextParams(), opts));
+      if (!next) break;
+      rps.push(next);
+    }
+
+    /* ---- then each site's credentials ---- */
+    const out = [];
+    for (const rp of rps) {
+      const credentials = [];
+      const begun = credmgmt.readCredential(
+        await this._credMgmt(credmgmt.rkBeginParams(pinToken, rp.rpIdHash), opts),
+      );
+      if (begun) {
+        credentials.push(begun);
+        const count = begun.total === null ? 1 : begun.total;
+        for (let i = 1; i < count; i += 1) {
+          const next = credmgmt.readCredential(
+            await this._credMgmt(credmgmt.rkNextParams(), opts),
+          );
+          if (!next) break;
+          credentials.push(next);
+        }
+      }
+      out.push({ id: rp.id, name: rp.name, rpIdHash: rp.rpIdHash, credentials });
+    }
+    return out;
+  }
+
+  /**
+   * Delete one resident credential.
+   *
+   * @param {Map} credentialId  the descriptor from listCredentials, unchanged
+   *
+   * IRREVERSIBLE, and the device asks for nothing: no button, no second
+   * thought. The account that credential belongs to stops recognising this
+   * key, and if it was the only second factor that account may be
+   * unreachable. A caller is expected to have shown the user which site and
+   * which user name it belongs to before getting here.
+   *
+   * The descriptor is passed through rather than rebuilt, and should come
+   * from a listing taken immediately before - the cursors are shared, so an
+   * index or a stale copy can name a different credential than the one a
+   * person was looking at.
+   */
+  async deleteCredential(pinToken, credentialId, opts = {}) {
+    await this._credMgmt(credmgmt.rkDeleteParams(pinToken, credentialId), opts);
+    return true;
   }
 
   /**

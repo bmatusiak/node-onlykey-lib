@@ -8,6 +8,7 @@ export let protocol: {
     ctaphid: typeof import("./protocol/ctaphid");
     cose: typeof import("./protocol/cose");
     clientpin: typeof import("./protocol/clientpin");
+    credmgmt: typeof import("./protocol/credmgmt");
     tunnel: typeof import("./protocol/tunnel");
     challenge: typeof import("./protocol/challenge");
     bridge: typeof import("./protocol/bridge");

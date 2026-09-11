@@ -201,6 +201,8 @@ export namespace CTAP2_CMD {
     let CLIENT_PIN: number;
     let RESET: number;
     let GET_NEXT_ASSERTION: number;
+    let CREDENTIAL_MANAGEMENT: number;
+    let CREDENTIAL_MANAGEMENT_PREVIEW: number;
 }
 export namespace CTAP2_STATUS {
     let OK: number;
