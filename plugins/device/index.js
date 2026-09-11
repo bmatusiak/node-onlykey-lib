@@ -420,7 +420,7 @@ const PREFERENCES = {
           if (state.state === 'error') {
             clearTimeout(timer);
             if (off) off();
-            reject(new Error(state.raw.trim()));
+            reject(okmsg.deviceError(state.raw));
             return;
           }
           /*
@@ -434,7 +434,7 @@ const PREFERENCES = {
           if (/^No PIN set/i.test(text)) {
             clearTimeout(timer);
             if (off) off();
-            reject(new Error(text.trim()));
+            reject(okmsg.deviceError(text));
             return;
           }
           started = true;
@@ -1092,7 +1092,7 @@ const PREFERENCES = {
       for (const write of writes) {
         const { text, attempts } = await sendField(write, { timeoutMs, retries });
         if (/^Error/i.test(text)) {
-          throw new Error(`${write.name}: ${text}`);
+          throw okmsg.deviceError(text, write.name);
         }
         applied.push({ name: write.name, response: text, attempts });
         progress('field', { slot, field: write.name, response: text, attempts });
@@ -1139,7 +1139,7 @@ const PREFERENCES = {
       const { text, attempts } = await sendField(
         { name, frame }, { timeoutMs, retries },
       );
-      if (/^Error/i.test(text)) throw new Error(`${name}: ${text}`);
+      if (/^Error/i.test(text)) throw okmsg.deviceError(text, name);
       progress('preference', { name, value: byte, response: text, attempts });
       return { name, value: byte, response: text, attempts };
     },
@@ -1324,7 +1324,9 @@ const PREFERENCES = {
         });
         labelResponse = okmsg.text(reply).trim();
         if (/^Error/i.test(labelResponse)) {
-          throw new Error(`the key went into slot ${slot} but its name did not: ${labelResponse}`);
+          throw okmsg.deviceError(
+            labelResponse, `the key went into slot ${slot} but its name did not`,
+          );
         }
       }
 
@@ -1600,7 +1602,7 @@ const PREFERENCES = {
         match: isSlotAcknowledgement,
       });
       const said = okmsg.text(reply).trim();
-      if (/^Error/i.test(said)) throw new Error(`wipeKey slot ${slot}: ${said}`);
+      if (/^Error/i.test(said)) throw okmsg.deviceError(said, `wipeKey slot ${slot}`);
 
       let label = null;
       const labelIndex = slots.labelIndexForKeySlot(slot);
@@ -1614,7 +1616,7 @@ const PREFERENCES = {
           match: isSlotAcknowledgement,
         });
         label = okmsg.text(cleared).trim();
-        if (/^Error/i.test(label)) throw new Error(`wipeKey slot ${slot} label: ${label}`);
+        if (/^Error/i.test(label)) throw okmsg.deviceError(label, `wipeKey slot ${slot} label`);
       }
 
       progress('wipeKey', { slot, response: said, label });

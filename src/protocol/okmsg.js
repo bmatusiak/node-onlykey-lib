@@ -154,6 +154,82 @@ function parseState(response) {
   return { state: 'unknown', raw };
 }
 
+/**
+ * What KIND of refusal the device just gave.
+ *
+ * The firmware has 113 distinct `hidprint()` sentences and a host that wants
+ * to behave differently for "the slot is empty" than for "you are not in
+ * config mode" has been matching them with regexes at each call site -
+ * `/no ECC Private Key/` in one place, `/not set as decryption key/` in
+ * another, `/out of range/` in a third. python-onlykey does the same thing
+ * with a thirteen-branch if-chain (client.py:404-433) and re-raises each
+ * sentence as itself, which classifies nothing.
+ *
+ * This groups them instead. The kind is for BRANCHING; the device's own
+ * words stay the message, because they say which slot and which field and
+ * no summary of mine will. Transcribing all 113 as constants would be a
+ * second copy of the firmware's strings to keep in step with it - the
+ * groups are the part that is stable.
+ *
+ * Returns null for anything that is not a refusal, including the success
+ * sentences and the status broadcasts.
+ *
+ * @param {string} message  the device's text
+ * @returns {string|null}
+ */
+function errorKind(message) {
+  const said = String(message || '').trim();
+  if (!said) return null;
+
+  /*
+   * TWO refusals do not begin with "Error", and both were missed by a
+   * leading-Error test: "No PIN set, You must set a PIN first"
+   * (okcore.cpp:576) and "Timeout occured while waiting for confirmation on
+   * OnlyKey", which is the answer to an unanswered button challenge and the
+   * most ordinary failure a signing caller will ever see. The firmware's
+   * spelling of "occured" is its own; matched as written.
+   */
+  if (/^No PIN set/i.test(said) || /must be initialized first/i.test(said)) {
+    return 'uninitialized';
+  }
+  if (/^Timeout occured/i.test(said)) return 'challenge';
+  if (!/^Error/i.test(said)) return null;
+
+  if (/device locked/i.test(said)) return 'locked';
+  if (/not in config mode/i.test(said)) return 'configMode';
+  if (/may not be changed|may only be changed/i.test(said)) return 'refused';
+  if (/no (ECC |RSA )?(Private )?[Kk]ey set in this slot/i.test(said)) return 'emptySlot';
+  if (/not set as (signature|decryption) key/i.test(said)) return 'wrongRole';
+  if (/invalid (ECC|RSA) slot|reserved slot/i.test(said)) return 'badSlot';
+  if (/no backup key set|backup key mode|incorrect backup key|backup file|backup does not match/i.test(said)) {
+    return 'backup';
+  }
+  if (/incorrect challenge|Timeout occured/i.test(said)) return 'challenge';
+  if (/already enabled on this slot/i.test(said)) return 'needsPin';
+  if (/invalid size|wrong size|bad input size|exceeded size limit|not between|out of range|invalid RSA type|ECC type incorrect|key check failed|does not match key|use (ML-KEM|X-Wing) decaps/i.test(said)) {
+    return 'badInput';
+  }
+  if (/ML-KEM|ML-DSA|X-Wing|X25519|RSA (signing|decryption|Encryption)|generating RSA|ECC Shared Secret|keygen|decaps|expansion/i.test(said)) {
+    return 'cryptoFailed';
+  }
+  return 'error';
+}
+
+/**
+ * An Error carrying the device's words and the kind they fall into.
+ *
+ * `context` prefixes the message the way a caller would anyway ("wipeKey
+ * slot 101"), and is left off the `deviceText` so a caller that wants to
+ * compare or re-display the raw sentence still can.
+ */
+function deviceError(message, context = '') {
+  const said = String(message || '').trim();
+  const err = new Error(context ? `${context}: ${said}` : said);
+  err.deviceText = said;
+  err.kind = errorKind(said);
+  return err;
+}
+
 module.exports = {
   REPORT_SIZE,
   HEADER,
@@ -161,4 +237,6 @@ module.exports = {
   setTimePayload,
   text,
   parseState,
+  errorKind,
+  deviceError,
 };

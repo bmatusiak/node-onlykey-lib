@@ -213,7 +213,7 @@ function setup(imports, register) {
             clearTimeout(timer);
             answered = true;
             if (off) off();
-            reject(new Error(state.raw));
+            reject(okmsg.deviceError(state.raw));
             return;
           }
           started = true;

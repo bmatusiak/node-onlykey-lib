@@ -70,3 +70,35 @@ export function parseState(response: Uint8Array | string): {
     state: string;
     raw: string;
 };
+/**
+ * What KIND of refusal the device just gave.
+ *
+ * The firmware has 113 distinct `hidprint()` sentences and a host that wants
+ * to behave differently for "the slot is empty" than for "you are not in
+ * config mode" has been matching them with regexes at each call site -
+ * `/no ECC Private Key/` in one place, `/not set as decryption key/` in
+ * another, `/out of range/` in a third. python-onlykey does the same thing
+ * with a thirteen-branch if-chain (client.py:404-433) and re-raises each
+ * sentence as itself, which classifies nothing.
+ *
+ * This groups them instead. The kind is for BRANCHING; the device's own
+ * words stay the message, because they say which slot and which field and
+ * no summary of mine will. Transcribing all 113 as constants would be a
+ * second copy of the firmware's strings to keep in step with it - the
+ * groups are the part that is stable.
+ *
+ * Returns null for anything that is not a refusal, including the success
+ * sentences and the status broadcasts.
+ *
+ * @param {string} message  the device's text
+ * @returns {string|null}
+ */
+export function errorKind(message: string): string | null;
+/**
+ * An Error carrying the device's words and the kind they fall into.
+ *
+ * `context` prefixes the message the way a caller would anyway ("wipeKey
+ * slot 101"), and is left off the `deviceText` so a caller that wants to
+ * compare or re-display the raw sentence still can.
+ */
+export function deviceError(message: any, context?: string): Error;
