@@ -21,6 +21,7 @@ const embedded = require('../plugins/transport/embedded');
 const sessionPlugin = require('../plugins/session');
 const devicePlugin = require('../plugins/device');
 const { fakeFirmware } = require('./helpers/fake-firmware');
+const { fakePipe } = require('./helpers/fake-pipe');
 const { IFACE } = require('../src/transport/contract');
 const { MSG, FIELD } = require('../src/protocol/msg');
 const parsers = require('../src/device/parsers');
@@ -90,6 +91,157 @@ function typeText(text) {
   }
   return reports;
 }
+
+/* ------------------------------------------------------------ key labels */
+
+test('readKeyLabels reads the OTHER label list, the one nothing could read', async () => {
+  /*
+   * OKGETLABELS with slot byte 'k' runs get_key_labels() instead of
+   * get_slot_labels() (okcore.cpp:387). The rows arrive at their own label
+   * indices - 25..28 for RSA 1..4, 29..44 for ECC 101..116 - and this test
+   * pins that mapping, because getting it wrong names the wrong slot rather
+   * than failing.
+   */
+  const pipe = fakeFirmware({
+    keyLabels: { 25: 'signing rsa', 29: 'ssh', 44: 'the last one' },
+  });
+  const app = await start(pipe);
+
+  const { keys, complete } = await app.services.device.readKeyLabels();
+  assert.equal(complete, true);
+  assert.equal(keys.length, 20);
+
+  const bySlot = Object.fromEntries(keys.map((k) => [k.slot, k]));
+  assert.equal(bySlot[1].label, 'signing rsa');
+  assert.equal(bySlot[1].kind, 'rsa');
+  assert.equal(bySlot[101].label, 'ssh');
+  assert.equal(bySlot[101].kind, 'ecc');
+  assert.equal(bySlot[116].label, 'the last one');
+  /* A slot with no label is '' - it answered, it just has no name. */
+  assert.equal(bySlot[102].label, '');
+
+  const frames = vendor(pipe);
+  assert.equal(frames[0].data[4], MSG.OKGETLABELS);
+  assert.equal(frames[0].data[5], 0x6b, "the slot byte is 'k'");
+
+  await app.destroy();
+});
+
+test('a locked device is silent here, and the timeout says so', async () => {
+  /*
+   * The same measurement readLabels records: the firmware source has an
+   * `else { hidprint("Error device locked"); }` that does not reach the
+   * wire, so from a host "locked" and "not listening" look identical unless
+   * the status broadcast is noticed.
+   */
+  const pipe = fakePipe({ autoStart: true });
+  const app = await start(pipe);
+  const status = new Uint8Array(64);
+  'INITIALIZED'.split('').forEach((c, i) => { status[i] = c.charCodeAt(0); });
+  const ticker = setInterval(() => pipe.deliver(status), 20);
+
+  await assert.rejects(
+    () => app.services.device.readKeyLabels({ timeoutMs: 200 }),
+    /LOCKED device does with this message/,
+  );
+
+  clearInterval(ticker);
+  await app.destroy();
+});
+
+test('a key can be named as it is written, and an over-long name is refused', async () => {
+  /*
+   * Nothing has ever written a key label: python-onlykey can read them and
+   * never sets one, and the desktop app has no control for either - so
+   * every key slot on every device is blank, and a list of names is
+   * correct and useless. The name is a separate OKSETSLOT to the slot's own
+   * label index, sent AFTER the key, because a name on a slot whose key
+   * write failed is the same lie wipeKey used to leave behind.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const { device } = app.services;
+
+  const result = await device.loadKey(101, { type: 1, key: new Uint8Array(32) }, { label: 'ssh key' });
+  assert.match(result.label, /^Success/i);
+
+  const frames = vendor(pipe);
+  assert.equal(frames.length, 2, 'the key and then its name');
+  assert.equal(frames[0].data[4], MSG.OKSETPRIV);
+  assert.equal(frames[1].data[4], MSG.OKSETSLOT);
+  assert.equal(frames[1].data[5], 29, 'ECC slot 101 keeps its label at index 29');
+  assert.equal(frames[1].data[6], FIELD.LABEL);
+  assert.equal(String.fromCharCode(...frames[1].data.slice(7, 14)), 'ssh key');
+
+  /* No name given is no second frame at all. */
+  pipe.writes.length = 0;
+  const plain = await device.loadKey(101, { type: 1, key: new Uint8Array(32) });
+  assert.equal(plain.label, null);
+  assert.equal(vendor(pipe).length, 1);
+
+  /* The device stores sixteen characters; a longer one is refused, not cut. */
+  await assert.rejects(
+    () => device.loadKey(101, { type: 1, key: new Uint8Array(32) }, { label: 'x'.repeat(17) }),
+    /the device stores 16/,
+  );
+
+  await app.destroy();
+});
+
+/* ------------------------------------------------------------- wipe a key */
+
+test('wipeKey waits for the device, and blanks the label the key left behind', async () => {
+  /*
+   * The firmware keeps a key and its label apart: wipe_private() clears the
+   * key material and answers, and never touches the label - so a wiped slot
+   * went on naming a key that was gone. python-onlykey blanks it right
+   * afterwards (client.py:584-594); the two frames are asserted here in
+   * order, with the label index the second one has to carry.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  const result = await app.services.device.wipeKey(101);
+  assert.match(result.response, /^Success/i);
+
+  const frames = vendor(pipe);
+  assert.equal(frames.length, 2, 'a wipe is the key AND its label');
+  assert.equal(frames[0].data[4], MSG.OKWIPEPRIV);
+  assert.equal(frames[0].data[5], 101);
+  assert.equal(frames[1].data[4], MSG.OKSETSLOT);
+  assert.equal(frames[1].data[5], 29, 'ECC slot 101 keeps its label at index 29');
+  assert.equal(frames[1].data[6], FIELD.LABEL);
+
+  await app.destroy();
+});
+
+test('wipeKey on an RSA slot uses that ranges label index, and keepLabel sends one frame', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  await app.services.device.wipeKey(1);
+  assert.equal(vendor(pipe)[1].data[5], 25, 'RSA slot 1 keeps its label at index 25');
+
+  pipe.writes.length = 0;
+  await app.services.device.wipeKey(102, { keepLabel: true });
+  assert.equal(vendor(pipe).length, 1, 'keepLabel leaves the name alone');
+
+  await app.destroy();
+});
+
+test('a refused wipe throws instead of reporting success', async () => {
+  /*
+   * The whole point of waiting. This used to write one frame and return, so
+   * a wipe the device refused was indistinguishable from one it did.
+   */
+  const pipe = fakeFirmware({ slotError: 'Error device locked' });
+  const app = await start(pipe);
+  await assert.rejects(
+    () => app.services.device.wipeKey(101),
+    /wipeKey slot 101: Error device locked/,
+  );
+  await app.destroy();
+});
 
 /* ------------------------------------------------------------ public keys */
 
@@ -293,18 +445,6 @@ test('an ECC key is one frame and an RSA key is chunked', async () => {
     vendor(pipe).every((w) => w.data[4] === MSG.OKSETPRIV),
     'every chunk is an OKSETPRIV',
   );
-
-  await app.destroy();
-});
-
-test('wipeKey sends OKWIPEPRIV for the slot', async () => {
-  const pipe = fakeFirmware();
-  const app = await start(pipe);
-
-  await app.services.device.wipeKey(102);
-  const f = vendor(pipe)[0].data;
-  assert.equal(f[4], MSG.OKWIPEPRIV);
-  assert.equal(f[5], 102);
 
   await app.destroy();
 });

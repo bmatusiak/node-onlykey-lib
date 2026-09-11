@@ -167,3 +167,52 @@ export class LabelReader {
  * @param {object} [opts] {deviceType, timeoutMs}
  */
 export function readLabels(transport: object, opts?: object): Promise<any>;
+export const KEY_LABEL_FIRST: 25;
+export const KEY_LABEL_LAST: 44;
+/** The slot byte that asks for KEY labels rather than slot labels: 'k'. */
+export const KEY_LABELS_SLOT_BYTE: 107;
+/** Label index (25..44) -> key slot (1..4, 101..116), or null. */
+export function keySlotForLabelIndex(index: any): any;
+/** Key slot (1..4, 101..116) -> label index (25..44), or null. */
+export function labelIndexForKeySlot(slot: any): any;
+/**
+ * Accumulates the KEY label list.
+ *
+ * Simpler than LabelReader because this list has no string form to support:
+ * no client ever reconstructed it as hex the way OnlyKey-App does for slot
+ * labels, so only the wire layout exists.
+ *
+ *     [0]    the LABEL INDEX as a raw byte, 25..44
+ *     [1]    0x7C, a pipe
+ *     [2..]  up to EElen_label (16) bytes of text, NUL-terminated
+ *
+ * The RSA rows are sent as 21 bytes and the ECC rows as 22
+ * (okcore.cpp:1445 vs :1491). Nothing turns on the difference - both carry
+ * the same two header bytes and the same 16 bytes of label - but it is the
+ * sort of thing that looks like a bug when you meet it, so: it is not.
+ */
+export class KeyLabelReader {
+    labels: Map<any, any>;
+    done: boolean;
+    error: string | null;
+    statusReports: number;
+    /** Feed one vendor report. @returns {'stored'|'ignored'|'done'|'error'} */
+    push(report: any): "stored" | "ignored" | "done" | "error";
+    /** One row per key slot, in firmware order, with '' for an unlabelled slot. */
+    result(): {
+        keys: {
+            slot: any;
+            kind: string;
+            label: any;
+        }[];
+        complete: boolean;
+        error: string | null;
+    };
+}
+/**
+ * Read every KEY label.
+ *
+ * @param {object} transport  must provide on() and write()
+ * @param {object} [opts] {timeoutMs, settleMs}
+ */
+export function readKeyLabels(transport: object, opts?: object): Promise<any>;

@@ -381,6 +381,90 @@ const PREFERENCES = {
   },
 };
 
+  /**
+   * One OKGETPUBKEY read. `getPublicKey` wraps this with the retry.
+   *
+   * @param {number|string} slotId
+   * @param {object} [opts] {bytes, keyType, timeoutMs, settleMs}
+   */
+  async function readPublicKey(slotId, { bytes = 0, keyType = 0, timeoutMs = 8000, settleMs = 60 } = {}) {
+    const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
+    const frame = okmsg.build({ msg: MSG.OKGETPUBKEY, slot, field: keyType });
+
+    /*
+     * Subscribed before the write, and leading status broadcasts skipped
+     * only BEFORE the first data byte - the same rule okcrypto's collector
+     * and python-onlykey's read_exact follow, for the same reason: once
+     * the key has started arriving a report may legitimately read as text
+     * or be all zeros, and dropping one corrupts the answer silently.
+     */
+    let started = false;
+    let off = null;
+    const collected = [];
+    let got = 0;
+
+    const answer = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (off) off();
+        reject(new Error(
+          `slot ${slot} did not answer OKGETPUBKEY within ${timeoutMs}ms`,
+        ));
+      }, timeoutMs);
+
+      off = transport.on('report', (event) => {
+        if (event.iface !== IFACE.VENDOR) return;
+        if (!started) {
+          const state = okmsg.parseState(event.data);
+          if (state.state === 'unlocked' || state.state === 'locked'
+              || state.state === 'uninitialized' || state.state === 'bootloader') return;
+          if (state.state === 'error') {
+            clearTimeout(timer);
+            if (off) off();
+            reject(new Error(state.raw.trim()));
+            return;
+          }
+          /*
+           * The one refusal that does not begin with "Error": an
+           * uninitialized device answers "No PIN set, You must set a PIN
+           * first" (okcore.cpp:576). Matched by its exact words rather
+           * than by "looks like text", because a public key may look like
+           * text too.
+           */
+          const text = okmsg.text(event.data);
+          if (/^No PIN set/i.test(text)) {
+            clearTimeout(timer);
+            if (off) off();
+            reject(new Error(text.trim()));
+            return;
+          }
+          started = true;
+        }
+        collected.push(Uint8Array.from(event.data));
+        got += event.data.length;
+        if (bytes && got < bytes) return;
+        clearTimeout(timer);
+        if (off) off();
+        const out = new Uint8Array(got);
+        let at = 0;
+        for (const c of collected) { out.set(c, at); at += c.length; }
+        resolve(bytes ? out.slice(0, bytes) : out);
+      });
+    });
+
+    await transport.write(IFACE.VENDOR, frame);
+    let key;
+    try {
+      key = await answer;
+    } catch (err) {
+      /* A refusal owes the same settle: it is a hidprint like any other. */
+      if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
+      throw err;
+    }
+    if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
+    progress('publicKey', { slot, bytes: key.length });
+    return key;
+  }
+
   const device = {
     /* ---- identity ------------------------------------------------------ */
 
@@ -834,6 +918,26 @@ const PREFERENCES = {
       return slots.readLabels(transport, { deviceType: currentType(), ...opts });
     },
 
+    /**
+     * The KEY labels: what is loaded in each RSA and ECC slot.
+     *
+     * A SECOND list, read with the same message and a different slot byte -
+     * 'k' rather than nothing (okcore.cpp:387) - and nothing in this library
+     * could read it, so a host could load a key and never see that it had.
+     * python-onlykey has had it as `getkeylabels` from the beginning
+     * (client.py:484-498); the desktop app has no control for it.
+     *
+     * Twenty rows, one per host key slot: RSA 1-4 then ECC 101-116. A row
+     * whose label is '' is a slot with a key and no name; a row whose label
+     * is null never answered. Which slots actually HOLD a key is a separate
+     * question - `getPublicKey` answers that - because the firmware keeps
+     * the label and the key in different places and wiping one used to leave
+     * the other (see wipeKey).
+     */
+    readKeyLabels(opts = {}) {
+      return slots.readKeyLabels(transport, opts);
+    },
+
     slotNumber(slotId) { return slots.slotNumber(slotId, currentType()); },
 
     /**
@@ -1051,7 +1155,7 @@ const PREFERENCES = {
      * both live behind one method.
      */
     async loadKey(slotId, { type, key },
-      { onProgress = null, ackTimeoutMs = 8000, ackRetries = 2 } = {}) {
+      { onProgress = null, ackTimeoutMs = 8000, ackRetries = 2, label = null } = {}) {
       const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
       const bytes = Uint8Array.from(key);
       const send = (frame) => transport.write(IFACE.VENDOR, frame);
@@ -1188,13 +1292,51 @@ const PREFERENCES = {
         });
       }
 
-      progress('key', { slot, type, bytes: bytes.length, pressFree });
+      /*
+       * NAME IT, optionally, because otherwise nothing ever does.
+       *
+       * The key label list exists on the device and no client writes to it:
+       * python-onlykey can read the names (`getkeylabels`) and never sets
+       * one, and the desktop app has no control for either. So every key
+       * slot on every OnlyKey is unnamed, and `readKeyLabels` shows twenty
+       * blanks - which is correct and useless. The label is a separate
+       * OKSETSLOT to the slot's own label index (25..44), gated on config
+       * mode like any other, and this is already inside that window.
+       *
+       * It is written AFTER the key: a name on a slot whose key write
+       * failed would be the same lie wipeKey used to leave behind.
+       */
+      let labelResponse = null;
+      const labelIndex = slots.labelIndexForKeySlot(slot);
+      if (label !== null && labelIndex !== null) {
+        /*
+         * Through planSlotWrites, not by hand: a key label is an ordinary
+         * slot label at a different index, so it gets the same TEXT
+         * encoding and the same sixteen-character cap (EElen_label,
+         * okeeprom.h:95) rather than a second implementation of both.
+         */
+        const [write] = slotConfig.planSlotWrites({ label: String(label) }, labelIndex);
+        const reply = await transport.request({
+          iface: IFACE.VENDOR,
+          data: write.frame,
+          timeoutMs: ackTimeoutMs,
+          match: isSlotAcknowledgement,
+        });
+        labelResponse = okmsg.text(reply).trim();
+        if (/^Error/i.test(labelResponse)) {
+          throw new Error(`the key went into slot ${slot} but its name did not: ${labelResponse}`);
+        }
+      }
+
+      progress('key', { slot, type, bytes: bytes.length, pressFree, label });
       return {
         slot,
         type,
         bytes: bytes.length,
         /** True when this write also made the slot answer without a press. */
         clearedPressRequirement: pressFree,
+        /** What the device said about the name, or null when none was given. */
+        label: labelResponse,
       };
     },
 
@@ -1309,14 +1451,37 @@ const PREFERENCES = {
      */
     async loadSshKey(text, {
       slot, backup = false, signature = true, decryption = false, onProgress = null,
+      label = null,
     } = {}) {
       if (slot === undefined || slot === null) throw new Error('loadSshKey needs a slot');
       const parsed = openssh.parsePrivateKey(text);
       const material = deviceKeys.fromSshpk(parsed);
       const prepared = deviceKeys.prepareKey(material, { slot, backup, signature, decryption });
-      await device.loadKey(prepared.slot, { type: prepared.type, key: prepared.key }, { onProgress });
-      progress('sshKey', { slot: prepared.slot, keyType: parsed.type });
-      return { slot: prepared.slot, type: prepared.type, keyType: parsed.type, comment: parsed.comment };
+      /*
+       * The key file already carries a name - ssh-keygen puts the comment
+       * there, usually user@host - so an SSH key names itself unless the
+       * caller says otherwise. `label: ''` is how a caller asks for no name
+       * at all, which is why the check is for null rather than falsiness.
+       *
+       * A DERIVED name is TRUNCATED; a chosen one is refused. The device
+       * stores sixteen characters and "bmatusiak@desktop-3f2" is a perfectly
+       * ordinary comment - failing the key load over the name nobody typed
+       * would be the tail wagging the dog. A caller who typed a long name
+       * gets told (planSlotWrites throws), because that one they can fix.
+       */
+      const name = label === null ? String(parsed.comment || '').slice(0, 16) : label;
+      const written = await device.loadKey(
+        prepared.slot, { type: prepared.type, key: prepared.key },
+        { onProgress, label: name || null },
+      );
+      progress('sshKey', { slot: prepared.slot, keyType: parsed.type, label: name || null });
+      return {
+        slot: prepared.slot,
+        type: prepared.type,
+        keyType: parsed.type,
+        comment: parsed.comment,
+        label: written.label,
+      };
     },
 
     /**
@@ -1350,88 +1515,110 @@ const PREFERENCES = {
      * ECC slot" (okcore.cpp:5229), and a locked device "Error device
      * locked" (okcore.cpp:590) - all of them thrown as they are.
      *
+     * IT SETTLES AND IT RESENDS, because a read straight after a read is
+     * SOMETIMES never answered.
+     *
+     * Measured on the bench, 2026-09-11: two probes back to back, and when
+     * the first hit an EMPTY slot - which answers with hidprint's error
+     * sentence rather than with key bytes - the second timed out in three
+     * runs out of four. A 60 ms settle alone did not prevent it. It never
+     * happened when the first slot held a key, which is what kept it
+     * hidden.
+     *
+     * Whether this is the dead window
+     * ok-rn/FINDING-slot-write-after-a-label-read-is-lost.md describes is
+     * NOT established - the shape matches and nothing here traced the
+     * firmware far enough to say so. The settle is there because that
+     * finding says a read owes one; the resend is there because the settle
+     * was not enough. A read is idempotent, so a resend cannot do half a
+     * thing, and an unanswered read is unknown rather than failed - the
+     * rule sendField and loadKey already follow for writes. Only SILENCE is
+     * retried: a refusal, an error and a key all count as answers.
+     *
+     * AND IT RETRIES A SILENCE, because a read is idempotent and an
+     * unanswered one is unknown rather than failed - the same rule
+     * `sendField` and `loadKey` follow for writes. The settle alone was not
+     * enough: measured on the bench, a read of an EMPTY slot straight after
+     * another read of an empty slot went unanswered through a 60 ms pause
+     * every time, and answered on the resend. A refusal, an error or a key
+     * all count as an answer; only silence is retried.
+     *
      * @param {number|string} slotId
-     * @param {object} [opts] {bytes, keyType, timeoutMs}
+     * @param {object} [opts] {bytes, keyType, timeoutMs, settleMs, retries}
      * @returns {Promise<Uint8Array>}
      */
-    async getPublicKey(slotId, { bytes = 0, keyType = 0, timeoutMs = 8000 } = {}) {
-      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
-      const frame = okmsg.build({ msg: MSG.OKGETPUBKEY, slot, field: keyType });
-
-      /*
-       * Subscribed before the write, and leading status broadcasts skipped
-       * only BEFORE the first data byte - the same rule okcrypto's collector
-       * and python-onlykey's read_exact follow, for the same reason: once
-       * the key has started arriving a report may legitimately read as text
-       * or be all zeros, and dropping one corrupts the answer silently.
-       */
-      let started = false;
-      let off = null;
-      const collected = [];
-      let got = 0;
-
-      const answer = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          if (off) off();
-          reject(new Error(
-            `slot ${slot} did not answer OKGETPUBKEY within ${timeoutMs}ms`,
-          ));
-        }, timeoutMs);
-
-        off = transport.on('report', (event) => {
-          if (event.iface !== IFACE.VENDOR) return;
-          if (!started) {
-            const state = okmsg.parseState(event.data);
-            if (state.state === 'unlocked' || state.state === 'locked'
-                || state.state === 'uninitialized' || state.state === 'bootloader') return;
-            if (state.state === 'error') {
-              clearTimeout(timer);
-              if (off) off();
-              reject(new Error(state.raw.trim()));
-              return;
-            }
-            /*
-             * The one refusal that does not begin with "Error": an
-             * uninitialized device answers "No PIN set, You must set a PIN
-             * first" (okcore.cpp:576). Matched by its exact words rather
-             * than by "looks like text", because a public key may look like
-             * text too.
-             */
-            const text = okmsg.text(event.data);
-            if (/^No PIN set/i.test(text)) {
-              clearTimeout(timer);
-              if (off) off();
-              reject(new Error(text.trim()));
-              return;
-            }
-            started = true;
-          }
-          collected.push(Uint8Array.from(event.data));
-          got += event.data.length;
-          if (bytes && got < bytes) return;
-          clearTimeout(timer);
-          if (off) off();
-          const out = new Uint8Array(got);
-          let at = 0;
-          for (const c of collected) { out.set(c, at); at += c.length; }
-          resolve(bytes ? out.slice(0, bytes) : out);
-        });
-      });
-
-      await transport.write(IFACE.VENDOR, frame);
-      const key = await answer;
-      progress('publicKey', { slot, bytes: key.length });
-      return key;
+    async getPublicKey(slotId, opts = {}) {
+      const { retries = 1, ...rest } = opts;
+      let attempt = 0;
+      for (;;) {
+        attempt += 1;
+        try {
+          return await readPublicKey(slotId, rest);
+        } catch (err) {
+          const silent = /did not answer OKGETPUBKEY/.test(String(err.message));
+          if (!silent || attempt > retries) throw err;
+          progress('publicKeyRetry', { slot: slotId, attempt });
+        }
+      }
     },
 
-    /** Erase a key slot. Irreversible; the caller has already confirmed. */
-    async wipeKey(slotId) {
+
+    /**
+     * Erase a key slot. Irreversible; the caller has already confirmed.
+     *
+     * TWO THINGS, because the firmware keeps a key and its label apart.
+     * wipe_private() clears the key material (okcore.cpp:5191-5208) and
+     * answers "Successfully wiped ECC Key" or "Successfully wiped RSA
+     * Private Key" (:5405, :5516); it does not touch the label, so a wiped
+     * slot went on naming a key that was no longer there. python-onlykey
+     * blanks the label itself right afterwards (client.py:584-594) and so
+     * does this now, through the same OKSETSLOT the label was written with.
+     *
+     * AND IT WAITS. This wrote one frame and returned, which is the
+     * fire-and-forget that cost loadKey a whole debugging session: a wipe
+     * that went nowhere was indistinguishable from one that landed, and the
+     * caller found out when the slot turned out to be full. The device
+     * answers; waiting for it is the difference between "wiped" and "sent".
+     *
+     * `keepLabel` is for a caller that is wiping in order to rewrite, where
+     * blanking the name in between would just flicker.
+     *
+     * python-onlykey sends this with a payload of '00'. That is not a
+     * difference: its send_message APPENDS only what it is given
+     * (client.py:305-351), so the byte lands at buffer[6] where a field id
+     * would be, and the frame is padded with zeros from there - which is
+     * byte for byte the frame okmsg.build produces with neither. Checked
+     * rather than assumed, because "Python sends a payload and we do not"
+     * reads like a bug.
+     */
+    async wipeKey(slotId, { timeoutMs = 8000, keepLabel = false } = {}) {
       const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
-      await transport.write(IFACE.VENDOR, okmsg.build({
-        msg: MSG.OKWIPEPRIV, slot,
-      }));
-      progress('wipeKey', { slot });
-      return { slot };
+      const reply = await transport.request({
+        iface: IFACE.VENDOR,
+        data: okmsg.build({ msg: MSG.OKWIPEPRIV, slot }),
+        timeoutMs,
+        match: isSlotAcknowledgement,
+      });
+      const said = okmsg.text(reply).trim();
+      if (/^Error/i.test(said)) throw new Error(`wipeKey slot ${slot}: ${said}`);
+
+      let label = null;
+      const labelIndex = slots.labelIndexForKeySlot(slot);
+      if (!keepLabel && labelIndex !== null) {
+        const cleared = await transport.request({
+          iface: IFACE.VENDOR,
+          data: okmsg.build({
+            msg: MSG.OKSETSLOT, slot: labelIndex, field: FIELD.LABEL, payload: [],
+          }),
+          timeoutMs,
+          match: isSlotAcknowledgement,
+        });
+        label = okmsg.text(cleared).trim();
+        if (/^Error/i.test(label)) throw new Error(`wipeKey slot ${slot} label: ${label}`);
+      }
+
+      progress('wipeKey', { slot, response: said, label });
+      return { slot, response: said, label };
     },
 
     /**

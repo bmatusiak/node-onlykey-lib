@@ -425,6 +425,166 @@ async function readLabels(transport, opts = {}) {
   });
 }
 
+/* ------------------------------------------------------------ key labels */
+
+/*
+ * KEY labels are a SECOND list, read with the same message and a different
+ * slot byte, and nothing here could read it.
+ *
+ * OKGETLABELS with slot byte 'k' (0x6B, 107) runs get_key_labels() instead
+ * of get_slot_labels() (okcore.cpp:387). python-onlykey has had it as
+ * `getkeylabels` since the beginning (client.py:484-498); the desktop app
+ * has no control for it, which is why a table copied from that app does not
+ * mention it.
+ *
+ * The labels live at their own indices, contiguous across two key ranges:
+ *
+ *     25..28   RSA slots 1..4        (okcore.cpp:1427, `label[0] = i`)
+ *     29..44   ECC slots 101..116    (okcore.cpp:1455)
+ *
+ * The firmware comment beside the second loop says "101-132" and the loop
+ * runs 29..44, which is 101..116 - the reserved ECC slots above 116 have no
+ * label of their own. Trust the loop.
+ */
+const KEY_LABEL_FIRST = 25;
+const KEY_LABEL_LAST = 44;
+const KEY_LABEL_COUNT = KEY_LABEL_LAST - KEY_LABEL_FIRST + 1;
+const RSA_LABEL_LAST = 28;
+
+/** Label index (25..44) -> key slot (1..4, 101..116), or null. */
+function keySlotForLabelIndex(index) {
+  if (index >= KEY_LABEL_FIRST && index <= RSA_LABEL_LAST) return index - 24;
+  if (index > RSA_LABEL_LAST && index <= KEY_LABEL_LAST) return index + 72;
+  return null;
+}
+
+/** Key slot (1..4, 101..116) -> label index (25..44), or null. */
+function labelIndexForKeySlot(slot) {
+  if (slot >= 1 && slot <= 4) return slot + 24;
+  if (slot >= 101 && slot <= 116) return slot - 72;
+  return null;
+}
+
+/**
+ * Accumulates the KEY label list.
+ *
+ * Simpler than LabelReader because this list has no string form to support:
+ * no client ever reconstructed it as hex the way OnlyKey-App does for slot
+ * labels, so only the wire layout exists.
+ *
+ *     [0]    the LABEL INDEX as a raw byte, 25..44
+ *     [1]    0x7C, a pipe
+ *     [2..]  up to EElen_label (16) bytes of text, NUL-terminated
+ *
+ * The RSA rows are sent as 21 bytes and the ECC rows as 22
+ * (okcore.cpp:1445 vs :1491). Nothing turns on the difference - both carry
+ * the same two header bytes and the same 16 bytes of label - but it is the
+ * sort of thing that looks like a bug when you meet it, so: it is not.
+ */
+class KeyLabelReader {
+  constructor() {
+    this.labels = new Map();
+    this.done = false;
+    this.error = null;
+    this.statusReports = 0;
+  }
+
+  /** Feed one vendor report. @returns {'stored'|'ignored'|'done'|'error'} */
+  push(report) {
+    if (this.done) return 'done';
+    const bytes = report instanceof Uint8Array ? report : Uint8Array.from(report || []);
+    if (!bytes.length) return 'ignored';
+
+    /* A refusal arrives INSTEAD of the list, so it is checked first. */
+    const text = okmsg.text(bytes);
+    if (/^Error/i.test(text)) {
+      this.error = text.trim();
+      this.done = true;
+      return 'error';
+    }
+    if (/^(UNLOCKED|INITIALIZED|UNINITIALIZED)/.test(text)) {
+      this.statusReports += 1;
+      return 'ignored';
+    }
+
+    if (bytes.length < 3 || bytes[1] !== PIPE) return 'ignored';
+    const slot = keySlotForLabelIndex(bytes[0]);
+    if (slot === null) return 'ignored';
+
+    let label = '';
+    for (let i = 2; i < bytes.length && i < 2 + 16; i += 1) {
+      const b = bytes[i];
+      if (b === 0x00) break;
+      if (b >= 0x20 && b <= 0x7e) label += String.fromCharCode(b);
+    }
+    this.labels.set(slot, label);
+    if (bytes[0] >= KEY_LABEL_LAST) this.done = true;
+    return this.done ? 'done' : 'stored';
+  }
+
+  /** One row per key slot, in firmware order, with '' for an unlabelled slot. */
+  result() {
+    const rows = [];
+    for (let index = KEY_LABEL_FIRST; index <= KEY_LABEL_LAST; index += 1) {
+      const slot = keySlotForLabelIndex(index);
+      rows.push({
+        slot,
+        kind: slot <= 4 ? 'rsa' : 'ecc',
+        label: this.labels.has(slot) ? this.labels.get(slot) : null,
+      });
+    }
+    return { keys: rows, complete: this.done, error: this.error };
+  }
+}
+
+/**
+ * Read every KEY label.
+ *
+ * @param {object} transport  must provide on() and write()
+ * @param {object} [opts] {timeoutMs, settleMs}
+ */
+async function readKeyLabels(transport, opts = {}) {
+  const { timeoutMs = 15000, settleMs = 60 } = opts;
+  const reader = new KeyLabelReader();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      off();
+      const partial = reader.result();
+      /*
+       * A locked device answers this with silence, not with the refusal its
+       * source suggests - the same measurement readLabels records. If the
+       * only thing that arrived was the status broadcast, say so.
+       */
+      const looksLocked = reader.statusReports > 0 && !partial.keys.some((k) => k.label !== null);
+      reject(new Error(
+        looksLocked
+          ? `no key labels within ${timeoutMs}ms; the device sent only its status broadcast, `
+            + 'which is what a LOCKED device does with this message'
+          : `no key labels within ${timeoutMs}ms (${partial.keys.filter((k) => k.label !== null).length} of ${KEY_LABEL_COUNT} arrived)`,
+      ));
+    }, timeoutMs);
+
+    const off = transport.on('report', (event) => {
+      if (event.iface !== IFACE.VENDOR) return;
+      const state = reader.push(event.data);
+      if (state !== 'done' && state !== 'error') return;
+      clearTimeout(timer);
+      off();
+      const out = reader.result();
+      if (out.error) { reject(new Error(out.error)); return; }
+      /* The same settle readLabels takes, and for the same reason. */
+      if (settleMs > 0) setTimeout(() => resolve(out), settleMs);
+      else resolve(out);
+    });
+
+    transport.write(IFACE.VENDOR, okmsg.build({ msg: MSG.OKGETLABELS, slot: KEY_LABELS_SLOT_BYTE }))
+      .catch((err) => { clearTimeout(timer); off(); reject(err); });
+  });
+}
+
+/** The slot byte that asks for KEY labels rather than slot labels: 'k'. */
+const KEY_LABELS_SLOT_BYTE = 0x6b;
+
 module.exports = {
   DEVICE_TYPE,
   SLOT_COUNT,
@@ -439,4 +599,11 @@ module.exports = {
   labelSlotNumber,
   LabelReader,
   readLabels,
+  KEY_LABEL_FIRST,
+  KEY_LABEL_LAST,
+  KEY_LABELS_SLOT_BYTE,
+  keySlotForLabelIndex,
+  labelIndexForKeySlot,
+  KeyLabelReader,
+  readKeyLabels,
 };

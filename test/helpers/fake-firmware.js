@@ -57,6 +57,8 @@ function fakeFirmware(opts = {}) {
     version = 'v3.0.4-prodc',
     /* slot -> public key bytes, for OKGETPUBKEY. Absent means an empty slot. */
     pubKeys = {},
+    /* label index (25..44) -> text, for the KEY label list. */
+    keyLabels = {},
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
@@ -109,6 +111,23 @@ function fakeFirmware(opts = {}) {
       return pipe.deliver(reportText(text));
     }
 
+    if (msg === MSG.OKWIPEPRIV) {
+      /*
+       * wipe_private() answers, and which sentence depends on the slot
+       * (okcore.cpp:5405 for ECC, :5516 for RSA). Modelled because wipeKey
+       * WAITS for it now - it used to write one frame and return, so a wipe
+       * the device refused looked exactly like one it did.
+       */
+      if (slotSilent) return undefined;
+      if (slotError) return pipe.deliver(reportText(slotError));
+      const slot = frame[5];
+      return pipe.deliver(reportText(
+        slot >= 1 && slot <= 4
+          ? 'Successfully wiped RSA Private Key'
+          : 'Successfully wiped ECC Key',
+      ));
+    }
+
     if (msg === MSG.OKSETPRIV) {
       /*
        * ecc_priv_flash acknowledges, and which sentence depends on the slot
@@ -152,6 +171,29 @@ function fakeFirmware(opts = {}) {
 
     if (msg === MSG.OKGETLABELS && !unlocked) {
       return pipe.deliver(reportText('Error device locked'));
+    }
+
+    if (msg === MSG.OKGETLABELS && frame[5] === 0x6b) {
+      /*
+       * KEY labels, which the slot byte 'k' selects (okcore.cpp:387).
+       *
+       * get_key_labels() sends one row per host key slot at its own label
+       * index - 25..28 for RSA 1..4, then 29..44 for ECC 101..116 - as the
+       * raw index, a pipe, and the text. The RSA rows go out as 21 bytes and
+       * the ECC rows as 22 (okcore.cpp:1445 vs :1491), which is modelled
+       * here only so a reader that assumed one width would fail.
+       */
+      for (let index = 25; index <= 44; index++) {
+        const text = keyLabels[index] || '';
+        const bytes = new Uint8Array(index <= 28 ? 21 : 22);
+        bytes[0] = index;
+        bytes[1] = 0x7c;
+        for (let i = 0; i < text.length && 2 + i < 18; i++) {
+          bytes[2 + i] = text.charCodeAt(i) & 0xff;
+        }
+        pipe.deliver(bytes);
+      }
+      return undefined;
     }
 
     if (msg === MSG.OKGETLABELS) {
