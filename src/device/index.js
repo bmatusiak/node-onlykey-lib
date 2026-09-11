@@ -12,6 +12,8 @@ module.exports = {
   pin: require('./pin'),
   press: require('./press'),
   keys: require('./keys'),
+  /* OpenSSH private keys, parsed here so keys.fromSshpk is reachable without sshpk. */
+  openssh: require('./openssh'),
   chunker: require('./chunker'),
   parsers: require('./parsers'),
   encoders: require('./encoders'),

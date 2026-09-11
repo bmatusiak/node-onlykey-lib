@@ -105,6 +105,7 @@ export let device: {
     pin: typeof import("./device/pin");
     press: typeof import("./device/press");
     keys: typeof import("./device/keys");
+    openssh: typeof import("./device/openssh");
     chunker: typeof import("./device/chunker");
     parsers: typeof import("./device/parsers");
     encoders: typeof import("./device/encoders");

@@ -19,6 +19,7 @@ const slotConfig = require('../../src/device/slotConfig');
 const chunker = require('../../src/device/chunker');
 const parsers = require('../../src/device/parsers');
 const deviceKeys = require('../../src/device/keys');
+const openssh = require('../../src/device/openssh');
 const keystrokes = require('../../src/device/keystrokes');
 const presses = require('../../src/device/press');
 const encoders = require('../../src/device/encoders');
@@ -1264,6 +1265,35 @@ const PREFERENCES = {
       }
       progress('pgpKey', { slots: loaded.map((l) => l.slot) });
       return loaded;
+    },
+
+    /**
+     * Load an OpenSSH private key into ONE slot, with the roles given.
+     *
+     * The desktop's Keys panel takes an SSH key through sshpk and then the
+     * same slot picker and role checkboxes a raw key gets (OnlyKeyComm.js
+     * confirmRsaKeySelect); this is that path with the library's own parser
+     * (device/openssh.js) in sshpk's place. Unlike a PGP key there is no
+     * convention to assign slots by - an SSH key is one key - so `slot` is
+     * required, and the roles default to signature only, which is what an
+     * SSH key is for (ssh-agent signs; nothing decrypts with it). An ECC key
+     * given a 1-based slot is moved to 101+ by prepareKey, as the raw loader
+     * does.
+     *
+     * @param {string} text  the armoured "BEGIN OPENSSH PRIVATE KEY" block
+     * @param {object} opts  {slot, backup, signature, decryption, onProgress}
+     * @returns {{slot, type, keyType, comment}}
+     */
+    async loadSshKey(text, {
+      slot, backup = false, signature = true, decryption = false, onProgress = null,
+    } = {}) {
+      if (slot === undefined || slot === null) throw new Error('loadSshKey needs a slot');
+      const parsed = openssh.parsePrivateKey(text);
+      const material = deviceKeys.fromSshpk(parsed);
+      const prepared = deviceKeys.prepareKey(material, { slot, backup, signature, decryption });
+      await device.loadKey(prepared.slot, { type: prepared.type, key: prepared.key }, { onProgress });
+      progress('sshKey', { slot: prepared.slot, keyType: parsed.type });
+      return { slot: prepared.slot, type: prepared.type, keyType: parsed.type, comment: parsed.comment };
     },
 
     /** Erase a key slot. Irreversible; the caller has already confirmed. */
