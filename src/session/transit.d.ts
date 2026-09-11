@@ -73,6 +73,13 @@ export function connectPayload(publicKey: any, opts?: {}): Uint8Array<ArrayBuffe
  */
 export function parseConnectReply(reply: any, key: any): {
     kind: string;
+    devicePublic: null;
+    status: string;
+    sealed: boolean;
+    layout?: undefined;
+} | {
+    kind: string;
+    layout: string;
     devicePublic: any;
     status: string;
     sealed: boolean;

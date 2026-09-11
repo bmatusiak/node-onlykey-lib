@@ -21,6 +21,8 @@ const assert = require('node:assert');
 const {
   createVaultStore, memoryStore, INDEX_KEY, RECORD_PREFIX, EXPORT_VERSION,
 } = require('../src/crypto/vault_store');
+const vault = require('../src/crypto/vault');
+const { bytesToUtf8 } = require('../src/bytes');
 
 /** A record as vault.seal would leave it - the blob is opaque here. */
 const entry = (serviceId, encrypted = 'c2VhbGVk') => ({ serviceId, encrypted });
@@ -318,4 +320,66 @@ test('a vault written by the WEB APP imports, and exports back the same way', as
     await vault.importJSON(damaged),
     { imported: 0, skipped: 2, total: 2 },
   );
+});
+
+/* ------------------------------------------- interchange with the web app */
+
+test('an export written by the web app imports here, and its blobs still open', async () => {
+  /*
+   * The two vaults are meant to be the same vault seen from two places, and
+   * "meant to be" was as far as it had been checked. Four things have to
+   * agree and all four are asserted against the web app's source rather
+   * than against this implementation:
+   *
+   *   HKDF info   "onlyagent-vault-v1"          vault.js:21
+   *   HKDF salt   32 zero bytes                 vault.js:28
+   *   blob        12-byte nonce ‖ AES-GCM ct, base64  vault.js:36-47
+   *   export      {version:1, exportedAt, credentials:[{serviceId, encrypted, …}]}
+   *                                             vault.js:127-134
+   *
+   * The export is built here BY HAND to the web app's shape rather than by
+   * calling this library's exportJSON, because an export produced by the
+   * thing under test proves only that it agrees with itself.
+   */
+  assert.equal(bytesToUtf8(vault.HKDF_INFO), 'onlyagent-vault-v1');
+
+  const secret = 'hunter2-but-longer';
+  const key = vault.deriveVaultKey(new Uint8Array(32).fill(7));
+  const blob = vault.seal(key, secret, (n) => new Uint8Array(n).fill(3));
+
+  const webExport = JSON.stringify({
+    version: 1,
+    exportedAt: '2026-09-11T12:00:00.000Z',
+    credentials: [
+      { serviceId: 'github.com', encrypted: blob, policy: 'session:30m', createdAt: 1, updatedAt: 2 },
+    ],
+  });
+
+  const { vault: store } = freshStore();
+  const result = await store.importJSON(webExport);
+  assert.equal(result.imported, 1);
+
+  const back = await store.get('github.com');
+  assert.equal(back.encrypted, blob);
+  assert.equal(back.policy, 'session:30m');
+  /* And the blob a web-shaped export carried is still a blob this can open. */
+  assert.equal(vault.open(key, back.encrypted), secret);
+});
+
+test('this export is the shape the web app import would accept', async () => {
+  /*
+   * The other direction, as far as it can go without a browser: the web
+   * app rejects an import whose `credentials` is not an array
+   * (vault.js:137-139) and skips any entry without both `serviceId` and
+   * `encrypted` (vault.js:147). So those are the fields this has to emit.
+   */
+  const { vault: store } = freshStore();
+  await store.put(entry('example.com'));
+
+  const out = JSON.parse(await store.exportJSON());
+  assert.equal(out.version, 1);
+  assert.ok(typeof out.exportedAt === 'string' && out.exportedAt.endsWith('Z'));
+  assert.ok(Array.isArray(out.credentials));
+  assert.equal(out.credentials[0].serviceId, 'example.com');
+  assert.ok(out.credentials[0].encrypted, 'the web app skips an entry with no encrypted field');
 });

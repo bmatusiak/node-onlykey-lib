@@ -233,3 +233,55 @@ test('the exact bytes the device sent are parsed as status', () => {
   assert.equal(out.status, 'INITIALIZED');
   assert.equal(out.sealed, false, 'and no session key was invented from it');
 });
+
+/* ------------------------------------------------ the beta-8c exchange */
+
+test('a v0.2-beta.8c reply puts its key at 21, and is told apart by the reply itself', () => {
+  /*
+   * The web app has branched on this since the beginning
+   * (onlykey-api.js:168-198): in this one firmware the public key is at
+   * bytes 21..53 and the version string is in the CLEAR at 8..20, where a
+   * modern reply has the first 32 bytes of the key. Detecting it from the
+   * reply is what makes it work at all - the version this branch depends on
+   * is inside the very message being parsed.
+   *
+   * Reading a legacy reply with the modern offsets does not fail: it derives
+   * a transit key from the wrong 32 bytes and the session reports itself
+   * established, which is the silent failure parseConnectReply exists to
+   * prevent. Pinned here with a synthetic reply because no release in the
+   * matrix is beta-8c; the offsets are the web app's, the crypto after them
+   * is shared with the modern path.
+   */
+  const key = new Uint8Array(32).map((_, i) => (i * 7 + 1) & 0xff);
+  const reply = new Uint8Array(64);
+  reply.set(Uint8Array.from('v0.2-beta.8c', (c) => c.charCodeAt(0)), 8);
+  reply.set(key, 21);
+
+  const out = transit.parseConnectReply(reply, null);
+  assert.equal(out.kind, 'exchange');
+  assert.equal(out.layout, 'legacy');
+  assert.equal(out.status, 'v0.2-beta.8c');
+  assert.deepEqual([...out.devicePublic], [...key]);
+});
+
+test('a modern exchange reply is unaffected, and says which layout it was', () => {
+  const key = new Uint8Array(32).map((_, i) => (i * 3 + 9) & 0xff);
+  const reply = new Uint8Array(64);
+  reply.set(key, 0);
+  reply.set(Uint8Array.from('UNLOCKEDv3.0.4', (c) => c.charCodeAt(0)), 32);
+
+  const out = transit.parseConnectReply(reply, null);
+  assert.equal(out.layout, 'modern');
+  assert.deepEqual([...out.devicePublic], [...key]);
+});
+
+test('the legacy marker has to be the whole version field, not a fragment of a key', () => {
+  /*
+   * The check reads bytes 8..20 as printable text and compares the WHOLE
+   * string. A modern key whose bytes 8..20 happen to be printable must not
+   * be mistaken for beta-8c, so a near-miss is checked rather than assumed.
+   */
+  const reply = new Uint8Array(64);
+  reply.set(Uint8Array.from('v0.2-beta.8d', (c) => c.charCodeAt(0)), 8);
+  assert.equal(transit.parseConnectReply(reply, null).layout, 'modern');
+});

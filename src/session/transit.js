@@ -248,6 +248,41 @@ function parseConnectReply(reply, key) {
     );
   }
 
+  /*
+   * A THIRD FORM: v0.2-beta.8c, whose exchange reply is laid out differently.
+   *
+   * The public key is at bytes 21..53 rather than 0..32, and the version
+   * string sits in the CLEAR at 8..20 instead of inside the boxed tail. The
+   * web app has carried this branch from the beginning
+   * (onlykey-api.js:168-198) and detects it exactly this way - by reading
+   * that version field before deciding where the key is - so no caller has
+   * to know the firmware version in order to parse the reply that tells it
+   * the firmware version.
+   *
+   * Reading a legacy reply with the modern offsets is the silent failure
+   * this whole function exists to prevent: 32 bytes that are not the key
+   * derive a transit key that is not the transit key, the session reports
+   * itself established, and the first real command fails somewhere
+   * unrelated.
+   *
+   * UNVERIFIED ON HARDWARE, and it cannot be here: no release in
+   * ok-versions.json is beta-8c, so there is no emulator to point at it.
+   * version.js says the same of its own `okconnectLayout` flag, which
+   * nothing consumed until now - this is what it was for. What IS pinned is
+   * the offset arithmetic, against a synthetic reply built to the web app's
+   * description.
+   */
+  const LEGACY_VERSION = 'v0.2-beta.8c';
+  if (reply.length >= 53 && printable(reply.subarray(8, 20)) === LEGACY_VERSION) {
+    return {
+      kind: 'exchange',
+      layout: 'legacy',
+      devicePublic: reply.subarray(21, 53),
+      status: LEGACY_VERSION,
+      sealed: false,
+    };
+  }
+
   const devicePublic = reply.subarray(0, 32);
   const tail = reply.subarray(32);
   const opened = key ? printable(box(key, tail)) : null;
@@ -255,6 +290,7 @@ function parseConnectReply(reply, key) {
 
   return {
     kind: 'exchange',
+    layout: 'modern',
     devicePublic,
     status: opened || asIs || '',
     sealed: Boolean(opened),
