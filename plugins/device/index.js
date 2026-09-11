@@ -20,6 +20,7 @@ const chunker = require('../../src/device/chunker');
 const parsers = require('../../src/device/parsers');
 const deviceKeys = require('../../src/device/keys');
 const openssh = require('../../src/device/openssh');
+const firmware = require('../../src/device/firmware');
 const keystrokes = require('../../src/device/keystrokes');
 const presses = require('../../src/device/press');
 const encoders = require('../../src/device/encoders');
@@ -1385,6 +1386,124 @@ const PREFERENCES = {
 
       progress('backupKey', { slot: derived.slot, response: text, attempts });
       return { slot: derived.slot, type: derived.type, response: text, attempts };
+    },
+
+    /* ---- firmware update ----------------------------------------------- */
+
+    /**
+     * Ask a config-mode key to reboot into its bootloader.
+     *
+     * The desktop's "kick" (OnlyKeyComm.js submitFirmware): one OKFWUPDATE
+     * carrying "1234". The firmware answers "SUCCESSFULL FW LOAD REQUEST,
+     * REBOOTING..." and restarts (okcore.cpp:619-626); outside config mode
+     * it answers "Error not in config mode", locked "Error device locked",
+     * and both are thrown as they are. After the reboot the key
+     * re-enumerates as BOOTLOADER; sendFirmware is the next step, and the
+     * caller sees the re-enumeration, not this.
+     *
+     * NOT RUN ON HARDWARE - see src/device/firmware.js. The bench key is a
+     * developer build nobody can re-image.
+     */
+    async requestFirmwareUpdate({ timeoutMs = 8000 } = {}) {
+      const reply = await transport.request({
+        iface: IFACE.VENDOR,
+        data: firmware.kickFrame(),
+        timeoutMs,
+        match: (r) => {
+          const t = okmsg.text(r);
+          return firmware.SAYS.REQUESTED.test(t) || firmware.SAYS.ERROR.test(t);
+        },
+      });
+      const text = okmsg.text(reply).trim();
+      if (firmware.SAYS.ERROR.test(text)) throw new Error(text);
+      progress('firmwareRequest', { said: text });
+      return text;
+    },
+
+    /**
+     * Send a signed firmware file to a key that is in its BOOTLOADER.
+     *
+     * The desktop's loadFirmware + submitFirmwareData, awaited the way the
+     * bootloader talks: "RECEIVED OKFWUPDATE" per 57-byte packet, then
+     * "NEXT BLOCK" once a block checks out against the signature chain, and
+     * "SUCCESSFULLY LOADED FW" after the last, after which the key boots the
+     * new firmware on its own. The block verdict is subscribed BEFORE the
+     * block's last packet goes out, for the reason request() exists: the
+     * bootloader answers faster than a listener attached afterwards.
+     *
+     * A refusal or a silence stops the update where it is and says which
+     * block and packet; the bootloader keeps waiting, and the desktop's
+     * remedy (send the file again from the start) applies.
+     *
+     * Does NOT check the status itself: the caller has watched the key say
+     * BOOTLOADER, and a status request here would be one more frame to a
+     * bootloader that expects firmware.
+     */
+    async sendFirmware(text, {
+      onProgress = null, packetTimeoutMs = 8000, blockTimeoutMs = 30000,
+    } = {}) {
+      const blocks = firmware.parseSignedFirmware(text);
+      const isVendorText = (re) => (r) => re.test(okmsg.text(r));
+
+      for (let b = 0; b < blocks.length; b++) {
+        const frames = firmware.blockFrames(blocks[b]);
+        const lastBlock = b === blocks.length - 1;
+        for (let i = 0; i < frames.length; i++) {
+          const { frame, final } = frames[i];
+          let verdict = null;
+          const off = final
+            ? transport.on('report', (event) => {
+              if (event.iface !== IFACE.VENDOR || verdict !== null) return;
+              const t = okmsg.text(event.data).trim();
+              if (firmware.SAYS.NEXT_BLOCK.test(t) || firmware.SAYS.LOADED.test(t)
+                  || firmware.SAYS.ERROR.test(t)) verdict = t;
+            })
+            : null;
+          try {
+            let reply;
+            try {
+              reply = await transport.request({
+                iface: IFACE.VENDOR,
+                data: frame,
+                timeoutMs: packetTimeoutMs,
+                match: (r) => {
+                  const t = okmsg.text(r);
+                  return firmware.SAYS.RECEIVED.test(t) || firmware.SAYS.ERROR.test(t);
+                },
+              });
+            } catch (e) {
+              throw new Error(
+                `block ${b + 1} packet ${i + 1} was not acknowledged within ${packetTimeoutMs}ms (${e.message})`,
+              );
+            }
+            const said = okmsg.text(reply).trim();
+            if (firmware.SAYS.ERROR.test(said)) {
+              throw new Error(`block ${b + 1} packet ${i + 1}: ${said}`);
+            }
+            if (onProgress) {
+              onProgress({ block: b + 1, of: blocks.length, packet: i + 1, packets: frames.length });
+            }
+            if (final) {
+              const deadline = Date.now() + blockTimeoutMs;
+              while (verdict === null && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 20));
+              }
+              if (verdict === null) {
+                throw new Error(`block ${b + 1} was received but never judged within ${blockTimeoutMs}ms`);
+              }
+              if (firmware.SAYS.ERROR.test(verdict)) throw new Error(`block ${b + 1}: ${verdict}`);
+              const expected = lastBlock ? firmware.SAYS.LOADED : firmware.SAYS.NEXT_BLOCK;
+              if (!expected.test(verdict)) {
+                throw new Error(`block ${b + 1}: expected ${lastBlock ? 'SUCCESSFULLY LOADED FW' : 'NEXT BLOCK'}, the bootloader said "${verdict}"`);
+              }
+            }
+          } finally {
+            if (off) off();
+          }
+        }
+      }
+      progress('firmware', { blocks: blocks.length });
+      return { blocks: blocks.length };
     },
 
     /* ---- backup and restore -------------------------------------------- */

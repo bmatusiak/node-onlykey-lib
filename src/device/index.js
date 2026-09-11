@@ -14,6 +14,8 @@ module.exports = {
   keys: require('./keys'),
   /* OpenSSH private keys, parsed here so keys.fromSshpk is reachable without sshpk. */
   openssh: require('./openssh'),
+  /* Signed firmware files and the OKFWUPDATE frames; not yet run on hardware. */
+  firmware: require('./firmware'),
   chunker: require('./chunker'),
   parsers: require('./parsers'),
   encoders: require('./encoders'),
