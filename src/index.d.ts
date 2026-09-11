@@ -109,4 +109,5 @@ export let device: {
     parsers: typeof import("./device/parsers");
     encoders: typeof import("./device/encoders");
     keystrokes: typeof import("./device/keystrokes");
+    slotConfig: typeof import("./device/slotConfig");
 };
