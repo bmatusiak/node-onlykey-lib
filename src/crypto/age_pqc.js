@@ -244,12 +244,107 @@ function encodeIdentity(label) {
     return bech32Encode(IDENTITY_HRP, payload).toUpperCase();
 }
 
+// ---- slot age identity encoding -----------------------------------------
+// The OTHER kind of identity: a key the device GENERATED and keeps in a slot,
+// rather than one derived from a label on demand. Same HRP, because age picks
+// which plugin binary to exec from that literal prefix and a distinct one
+// breaks dispatch entirely - so the two forms are told apart by their first
+// payload byte.
+//
+// THE TWO CANNOT COLLIDE. A derived identity starts with 0xFF; a slot
+// identity starts with either a slot number (101..116) or a version number
+// (1). Neither is 0xFF and neither ever will be - 0xFF is not a legal slot and
+// a version of 255 would mean this scheme had been redesigned 254 times.
+//
+// python-onlykey's cli.py is the other end of this, and it is the reason for
+// both shapes below:
+//
+//   1 byte              just the slot. cli.py's encode_identity still emits
+//                       this and calls it `legacy` when reading it back.
+//   [1, slot, fp x8]    version 1, the slot, and SHA-256(pubkey)[0..8].
+//                       cli.py DECODES this and nothing there writes it yet.
+//
+// We WRITE the second one. The fingerprint answers a question the one-byte
+// form cannot: an identity names a slot, and a slot can be regenerated. With
+// only a slot number, a file encrypted to the old key fails to decrypt with a
+// "no identity matched" that points at nothing; with a fingerprint, the client
+// can say the slot now holds a different key from the one this identity was
+// made for. Both forms are READ, because files written by the Python plugin
+// today carry the one-byte form.
+const IDENTITY_VERSION = 1;
+const IDENTITY_FINGERPRINT_LEN = 8;
+
+/** SHA-256(pubkey)[0..8] - cli.py's recipient_fingerprint. */
+function recipientFingerprint(pubkey) {
+    return sha256(Uint8Array.from(pubkey)).subarray(0, IDENTITY_FINGERPRINT_LEN);
+}
+
+/**
+ * @param {number} slot        101..116
+ * @param {Uint8Array} [pubkey] the slot's X-Wing public key. Without it the
+ *                              one-byte form is written, which is what the
+ *                              Python plugin emits - offered so a caller that
+ *                              genuinely has no public key to hand can still
+ *                              produce something both clients read.
+ */
+function encodeSlotIdentity(slot, pubkey = null) {
+    if (!Number.isInteger(slot) || slot < 101 || slot > 116) {
+        throw new Error(`an age identity slot is 101..116; ${slot} is not one`);
+    }
+    const payload = pubkey
+        ? concatBytes(
+            Uint8Array.of(IDENTITY_VERSION, slot),
+            recipientFingerprint(pubkey),
+        )
+        : Uint8Array.of(slot);
+    return bech32Encode(IDENTITY_HRP, payload).toUpperCase();
+}
+
+/**
+ * Read either kind of identity.
+ *
+ * @returns {{derived: true, label: string}
+ *          |{derived: false, slot: number, fingerprint: Uint8Array|null,
+ *            legacy: boolean}
+ *          |null}
+ */
 function decodeIdentity(s) {
     const { hrp, data } = bech32Decode(String(s).trim().toLowerCase());
-    if (hrp !== IDENTITY_HRP || !data || data.length < 1 || data[0] !== DERIVED_MARKER) {
-        return null;
+    if (hrp !== IDENTITY_HRP || !data || data.length < 1) return null;
+
+    if (data[0] === DERIVED_MARKER) {
+        return { derived: true, label: bytesToUtf8(data.subarray(1)) };
     }
-    return { derived: true, label: bytesToUtf8(data.subarray(1)) };
+
+    /* The one-byte form python-onlykey writes today. */
+    if (data.length === 1) {
+        return { derived: false, slot: data[0], fingerprint: null, legacy: true };
+    }
+
+    if (data.length !== 2 + IDENTITY_FINGERPRINT_LEN) return null;
+    if (data[0] !== IDENTITY_VERSION) return null;
+    return {
+        derived: false,
+        slot: data[1],
+        fingerprint: data.subarray(2),
+        legacy: false,
+    };
+}
+
+/**
+ * Does this identity still name the key it was made for?
+ *
+ * @returns true when it cannot tell - a one-byte identity carries no
+ *          fingerprint, and refusing what the Python plugin writes would make
+ *          the two clients unable to share a file.
+ */
+function identityMatchesKey(identity, pubkey) {
+    if (!identity || identity.derived || !identity.fingerprint) return true;
+    const expected = recipientFingerprint(pubkey);
+    if (expected.length !== identity.fingerprint.length) return false;
+    let same = 0;
+    for (let i = 0; i < expected.length; i++) same |= expected[i] ^ identity.fingerprint[i];
+    return same === 0;
 }
 
 module.exports = {
@@ -263,7 +358,12 @@ module.exports = {
     encodeRecipient,
     decodeRecipient,
     encodeIdentity,
+    encodeSlotIdentity,
     decodeIdentity,
+    identityMatchesKey,
+    recipientFingerprint,
+    IDENTITY_VERSION,
+    IDENTITY_FINGERPRINT_LEN,
     XWING_LABEL,
     MLKEM_PK,
     MLKEM_CT,

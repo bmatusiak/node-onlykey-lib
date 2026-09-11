@@ -218,3 +218,100 @@ test('composite_pgp is device-free', () => {
   assert.equal(/require\(['"]\.\.\/(session|transport|device)/.test(source), false);
   assert.equal(typeof composite.registerCompositeHooks, 'function');
 });
+
+/* ------------------------------------------- slot age identities */
+
+/*
+ * THE FIXTURES BELOW WERE PRODUCED BY PYTHON-ONLYKEY, not by this library.
+ *
+ * They are the output of `bech32_encode` from
+ * python-onlykey/onlykey/age_plugin/bech32.py, run directly, for a slot of
+ * 110 and a public key of 1216 bytes of 0x07:
+ *
+ *   legacy     bech32_encode(HRP, bytes([110])).upper()
+ *   versioned  bech32_encode(HRP, bytes([1,110]) + sha256(pk)[:8]).upper()
+ *
+ * That matters more than it looks. An identity written by one client has to
+ * be readable by the other or a file encrypted on a phone cannot be opened on
+ * a laptop, and asserting our encoder against our decoder would prove nothing
+ * about that at all. These strings are the other implementation's answer.
+ */
+const PY_LEGACY_SLOT_110 = 'AGE-PLUGIN-ONLYKEY-1DCNPXSY2';
+const PY_V1_SLOT_110_HEAD = 'AGE-PLUGIN-ONLYKEY-1Q9HTMTMK4ECTPN3LYYCV';
+
+function testKey() {
+  return new Uint8Array(1216).fill(7);
+}
+
+test('a slot identity is byte-for-byte what python-onlykey writes', () => {
+  assert.equal(pqc.encodeSlotIdentity(110), PY_LEGACY_SLOT_110);
+
+  const versioned = pqc.encodeSlotIdentity(110, testKey());
+  assert.equal(versioned.slice(0, PY_V1_SLOT_110_HEAD.length), PY_V1_SLOT_110_HEAD);
+});
+
+test('both identity shapes the python plugin can read, read back here', () => {
+  /*
+   * One byte is what cli.py's encode_identity emits today and calls `legacy`
+   * when it reads one. The versioned form is what its decoder also accepts
+   * and nothing there writes yet - so files from either client open here.
+   */
+  const legacy = pqc.decodeIdentity(PY_LEGACY_SLOT_110);
+  assert.equal(legacy.derived, false);
+  assert.equal(legacy.slot, 110);
+  assert.equal(legacy.legacy, true);
+  assert.equal(legacy.fingerprint, null);
+
+  const versioned = pqc.decodeIdentity(pqc.encodeSlotIdentity(110, testKey()));
+  assert.equal(versioned.slot, 110);
+  assert.equal(versioned.legacy, false);
+  assert.equal(versioned.fingerprint.length, 8);
+});
+
+test('a derived identity and a slot identity cannot be confused', () => {
+  /*
+   * They share an HRP deliberately - age picks which plugin binary to exec
+   * from that literal prefix, so a distinct one would break dispatch. The
+   * first payload byte is what separates them, and the ranges cannot meet:
+   * derived is 0xFF, a slot is 101..116, a version is 1.
+   */
+  const derived = pqc.decodeIdentity(pqc.encodeIdentity('me@example.com'));
+  assert.equal(derived.derived, true);
+  assert.equal(derived.label, 'me@example.com');
+
+  const slot = pqc.decodeIdentity(pqc.encodeSlotIdentity(116, testKey()));
+  assert.equal(slot.derived, false);
+  assert.equal(slot.slot, 116);
+});
+
+test('a slot outside the user range is refused, not encoded', () => {
+  /* 117..132 are reserved and 133 is not a slot at all. */
+  assert.throws(() => pqc.encodeSlotIdentity(117), /101\.\.116/);
+  assert.throws(() => pqc.encodeSlotIdentity(100), /101\.\.116/);
+  assert.throws(() => pqc.encodeSlotIdentity(1), /101\.\.116/);
+});
+
+test('the fingerprint catches a slot that has been regenerated', () => {
+  /*
+   * The whole reason for writing the versioned form. An identity names a
+   * slot, and a slot can be generated again - at which point a file
+   * encrypted to the old key fails with "no identity matched", which points
+   * at nothing. With the fingerprint a client can say what actually happened.
+   */
+  const identity = pqc.decodeIdentity(pqc.encodeSlotIdentity(110, testKey()));
+  assert.equal(pqc.identityMatchesKey(identity, testKey()), true);
+
+  const regenerated = new Uint8Array(1216).fill(9);
+  assert.equal(pqc.identityMatchesKey(identity, regenerated), false);
+});
+
+test('a one-byte identity matches anything, because it cannot tell', () => {
+  /*
+   * Refusing what python-onlykey writes today would make the two clients
+   * unable to share a file, which is a worse failure than not detecting a
+   * regenerated slot.
+   */
+  const legacy = pqc.decodeIdentity(PY_LEGACY_SLOT_110);
+  assert.equal(pqc.identityMatchesKey(legacy, testKey()), true);
+  assert.equal(pqc.identityMatchesKey(legacy, new Uint8Array(1216).fill(9)), true);
+});
