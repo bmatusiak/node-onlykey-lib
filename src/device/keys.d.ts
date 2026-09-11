@@ -29,6 +29,40 @@ export const RAW_KEY_TYPES: ({
     bytes: number;
     hmacOnly: boolean;
 })[];
+/**
+ * How many bytes of PUBLIC key a post-quantum slot answers with.
+ *
+ * okcore.h:233 and :240. X-Wing is the ML-KEM key with an X25519 key glued to
+ * the end - `pk_M(1184) || pk_X(32)` - which is also why its ciphertext is 32
+ * bytes longer than ML-KEM's.
+ *
+ * These matter to a READER, not to a writer: the reply is raw reports with no
+ * length anywhere in them, so a caller that does not know how many bytes to
+ * expect cannot tell a finished key from a truncated one.
+ */
+export const PUBLIC_KEY_BYTES: {
+    [KEY_TYPE.MLKEM768]: number;
+    [KEY_TYPE.XWING]: number;
+};
+/**
+ * Key types the DEVICE makes, rather than ones a host writes into a slot.
+ *
+ * Deliberately not part of RAW_KEY_TYPES, which is "the types a person picks
+ * when writing a raw key". A post-quantum slot is written by asking the
+ * device to generate into it; the private half is a 32-byte seed that never
+ * leaves. Writing a host-chosen seed into one of these slots would probably
+ * work - the ordinary write path does not special-case the type - but nothing
+ * here has tested it, and offering it in the same list as Ed25519 would be
+ * presenting an untested path as an equal option.
+ *
+ * NO RELEASED FIRMWARE HAS EITHER OF THESE. See version.js's `postQuantum`
+ * capability, which was measured across every pinned release.
+ */
+export const GENERATED_KEY_TYPES: {
+    name: string;
+    type: number;
+    publicKeyBytes: number;
+}[];
 export namespace CURVE {
     export let NONE: number;
     let ED25519_1: number;

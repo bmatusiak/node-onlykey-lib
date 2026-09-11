@@ -27,6 +27,7 @@ const encoders = require('../../src/device/encoders');
 const { MSG, FIELD } = require('../../src/protocol/msg');
 const okmsg = require('../../src/protocol/okmsg');
 const { DeviceConsole, pressLine } = require('../../src/device/console');
+const { challengeDigits } = require('../../src/protocol/challenge');
 
 /**
  * A byte the console parser recognises as neither a press nor a command.
@@ -458,6 +459,174 @@ const PREFERENCES = {
     } catch (err) {
       /* A refusal owes the same settle: it is a hidprint like any other. */
       if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
+      throw err;
+    }
+    if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
+    progress('publicKey', { slot, bytes: key.length });
+    return key;
+  }
+
+  /**
+   * The eight bytes that mean "make one yourself".
+   *
+   * set_private() sums buffer[7..14] and compares against 2040
+   * (okcore.cpp:5311). Eight 0xFFs is the only way to hit it with a key body
+   * that is otherwise a legal length, and the sum - rather than a flag byte -
+   * is what the firmware actually tests, which is why this is written as the
+   * bytes and not as a named constant somewhere claiming to be a command.
+   */
+  const GENERATE_TRIGGER = Uint8Array.from([
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  ]);
+
+  /**
+   * Ask the DEVICE to make a post-quantum key in a slot, and read the public
+   * half back.
+   *
+   * The private half is a 32-byte seed that is generated inside the key,
+   * encrypted with the profile key and written to flash without ever crossing
+   * the wire. That is the whole point of this over generating on the phone:
+   * there is no moment at which a private key exists in the host's memory.
+   *
+   * ## Why this cannot go through loadKey
+   *
+   * loadKey waits for a `Successfully set ...` acknowledgement. This
+   * operation deliberately does NOT send one - `ecc_priv_flash` is called
+   * with `quiet` set, and the firmware comment at okcore.cpp:5401 explains
+   * why at length: the acknowledgement would go out as an ordinary transport
+   * response and the public key follows immediately after, so a host
+   * collecting 1216 bytes would take the sentence as the key's first report,
+   * end up with "Successfully set ECC Key" followed by zeros and the real key
+   * shifted along, and print a recipient the device does not have. Anything
+   * encrypted to it would be lost.
+   *
+   * So the answer here is raw key bytes from the first report, and the only
+   * thing that says how many to read is the key type.
+   *
+   * ## The button challenge, and why the frame is sent ONCE
+   *
+   * Generation needs a three-button confirmation. The first request primes it
+   * - ecc_priv_flash builds a nine-byte payload `[keytype, FF x8]`, hands it
+   * to process_packets(), sets a pending operation and RETURNS without
+   * generating (okcore.cpp:5326-5339).
+   *
+   * The host does not re-send. The third press replays it: the button handler
+   * decrypts the stored payload, rebuilds the buffer and calls set_private()
+   * itself (OnlyKey.ino:846-859). A client that sent the trigger again while
+   * the challenge was up would hit `CRYPTO_AUTH != 4` and be ignored, and on
+   * an unlocked device the stray presses that follow type slot contents at
+   * the keyboard.
+   *
+   * The digits are computed over those nine bytes, NOT over the eight-byte
+   * payload - done_process_packets hashes what process_packets was given.
+   *
+   * ## One press may be enough
+   *
+   * For slots 101..116 the firmware reads the stored-key challenge
+   * preference, and when it is on it sets CRYPTO_AUTH straight to 3 and never
+   * computes the digits at all (okcore.cpp:7567-7573): ANY single press
+   * confirms. `confirm` is therefore handed `isAnswered()` so a caller
+   * pressing on the user\'s behalf can stop after the device has answered,
+   * instead of leaving two stray presses behind.
+   *
+   * @param {number|string} slotId  101..116
+   * @param {number} keyType        keys.KEY_TYPE.MLKEM768 or .XWING - the
+   *                                SLOT table, not okconnect\'s; see the note
+   *                                above KEY_TYPE, where 5 means two things
+   * @returns {Promise<Uint8Array>} the public key, 1184 or 1216 bytes
+   */
+  async function generateKey(slotId, keyType, {
+    confirm = null,
+    duo = false,
+    timeoutMs = 60000,
+    settleMs = 60,
+  } = {}) {
+    const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
+
+    /*
+     * Bounded here rather than at the device, because the device does not
+     * bound it: okcrypto.cpp has no else for a slot past 116, so the request
+     * produces no answer and no error at all - just a timeout the caller has
+     * to guess the meaning of.
+     */
+    if (!(slot >= 101 && slot <= 116)) {
+      throw new Error(
+        `a post-quantum key lives in slot 101..116; ${slot} is not one of them`,
+      );
+    }
+
+    const bytes = deviceKeys.PUBLIC_KEY_BYTES[keyType];
+    if (!bytes) {
+      const names = deviceKeys.GENERATED_KEY_TYPES
+        .map((t) => `${t.name} (${t.type})`).join(', ');
+      throw new Error(
+        `the device can only generate ${names}; key type ${keyType} is not one of them`,
+      );
+    }
+
+    const frame = okmsg.build({
+      msg: MSG.OKSETPRIV, slot, field: keyType, payload: GENERATE_TRIGGER,
+    });
+
+    /* The nine bytes the firmware hashes - see the note above. */
+    const challenged = new Uint8Array(1 + GENERATE_TRIGGER.length);
+    challenged[0] = keyType;
+    challenged.set(GENERATE_TRIGGER, 1);
+    const digits = challengeDigits(challenged, { duo });
+
+    let answered = false;
+    let started = false;
+    let off = null;
+    const collected = [];
+    let got = 0;
+
+    const answer = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (off) off();
+        reject(new Error(
+          `slot ${slot} produced no key within ${timeoutMs}ms; the challenge `
+          + `was ${digits.join('-')} - were those buttons pressed?`,
+        ));
+      }, timeoutMs);
+
+      off = transport.on('report', (event) => {
+        if (event.iface !== IFACE.VENDOR) return;
+        if (!started) {
+          const state = okmsg.parseState(event.data);
+          if (state.state === 'unlocked' || state.state === 'locked'
+              || state.state === 'uninitialized' || state.state === 'bootloader') return;
+          if (state.state === 'error') {
+            clearTimeout(timer);
+            answered = true;
+            if (off) off();
+            reject(okmsg.deviceError(state.raw));
+            return;
+          }
+          started = true;
+        }
+        answered = true;
+        collected.push(Uint8Array.from(event.data));
+        got += event.data.length;
+        if (got < bytes) return;
+        clearTimeout(timer);
+        if (off) off();
+        const out = new Uint8Array(got);
+        let at = 0;
+        for (const c of collected) { out.set(c, at); at += c.length; }
+        resolve(out.slice(0, bytes));
+      });
+    });
+
+    await transport.write(IFACE.VENDOR, frame);
+    events.emit('challenge', { slot, digits });
+    progress('generateKey', { slot, keyType, digits });
+
+    let key;
+    try {
+      if (confirm) await confirm({ digits, slot, isAnswered: () => answered });
+      key = await answer;
+    } catch (err) {
+      if (off) off();
       throw err;
     }
     if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
@@ -1549,6 +1718,17 @@ const PREFERENCES = {
      * @param {object} [opts] {bytes, keyType, timeoutMs, settleMs, retries}
      * @returns {Promise<Uint8Array>}
      */
+    /**
+     * Generate a post-quantum key INSIDE the key - see generateKey() above,
+     * where the whole of the reasoning lives.
+     *
+     * Needs config mode, like any other slot write, and config mode ends only
+     * at a restart. It also silences CTAPHID while it lasts, so a session
+     * cannot generate a key and then derive anything without restarting in
+     * between.
+     */
+    generateKey,
+
     async getPublicKey(slotId, opts = {}) {
       const { retries = 1, ...rest } = opts;
       let attempt = 0;

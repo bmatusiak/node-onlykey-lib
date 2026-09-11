@@ -59,10 +59,19 @@ function fakeFirmware(opts = {}) {
     pubKeys = {},
     /* label index (25..44) -> text, for the KEY label list. */
     keyLabels = {},
+    /*
+     * slot -> the public key an on-device generation will produce.
+     *
+     * Absent means the slot refuses to generate, which is how a test asks
+     * what happens when the firmware says no.
+     */
+    generates = {},
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
   let pinStep = 0;
+  /* A generation that has been triggered and is waiting for three buttons. */
+  let pending = null;
 
   /*
    * The lock state, modelled because it gates almost everything. A locked
@@ -129,6 +138,28 @@ function fakeFirmware(opts = {}) {
     }
 
     if (msg === MSG.OKSETPRIV) {
+      /*
+       * THE GENERATE TRIGGER, which is not a flag but a SUM: set_private()
+       * adds buffer[7..14] and compares against 2040 (okcore.cpp:5311).
+       *
+       * Modelled faithfully in the two ways that matter to a client:
+       *
+       *   it does not answer, at all, until the button challenge is
+       *   confirmed - the first request only primes it and returns
+       *   (okcore.cpp:5326-5339); and
+       *
+       *   when it does answer there is NO acknowledgement sentence, only the
+       *   raw key. ecc_priv_flash runs `quiet` for exactly this reason, and a
+       *   fake that acknowledged would let a client pass here and then read
+       *   "Successfully set ECC Key" as the first 64 bytes of a real key.
+       */
+      let sum = 0;
+      for (let i = 7; i <= 14; i++) sum += frame[i];
+      if (sum === 2040) {
+        pending = { slot: frame[5], keyType: frame[6] };
+        return undefined;
+      }
+
       /*
        * ecc_priv_flash acknowledges, and which sentence depends on the slot
        * (okcore.cpp:5399,5413). Modelled because setBackupPassphrase now WAITS
@@ -304,6 +335,34 @@ function fakeFirmware(opts = {}) {
 `);
       }
     },
+
+    /**
+     * The third button press, which is what actually runs a generation.
+     *
+     * The HOST does not re-send the trigger: the firmware's button handler
+     * decrypts the payload it stored, rebuilds the buffer and calls
+     * set_private() itself (OnlyKey.ino:846-859). So a fake that generated on
+     * a second write would be modelling a client bug as if it were the
+     * protocol.
+     */
+    confirmChallenge() {
+      if (!pending) throw new Error('no generation is waiting for a challenge');
+      const { slot } = pending;
+      pending = null;
+      const key = generates[slot];
+      if (!key) {
+        return pipe.deliver(reportText('Error not in config mode'));
+      }
+      for (let at = 0; at < key.length; at += 64) {
+        const report = new Uint8Array(64);
+        report.set(key.subarray(at, Math.min(at + 64, key.length)));
+        pipe.deliver(report);
+      }
+      return undefined;
+    },
+
+    /** Is a generation waiting for its button challenge? */
+    get awaitingChallenge() { return pending !== null; },
 
     /** How many OKPIN messages have been received. */
     get pinStep() { return pinStep; },

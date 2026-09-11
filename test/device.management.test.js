@@ -873,3 +873,167 @@ test('a backup key needs actual bytes', () => {
   assert.throws(() => deviceKeys.backupKeyFromPgp(null, { curve: 1 }), /private scalar/);
   assert.throws(() => deviceKeys.backupKeyFromPgp(new Uint8Array(0), { curve: 1 }), /private scalar/);
 });
+
+/* ------------------------------------ generating a key inside the device */
+
+/** A stand-in public key of the right length, distinguishable from padding. */
+function fakePublicKey(bytes) {
+  const key = new Uint8Array(bytes);
+  for (let i = 0; i < bytes; i += 1) key[i] = (i * 7 + 3) & 0xff;
+  return key;
+}
+
+test('generating an X-Wing key sends the trigger ONCE and waits for buttons', async () => {
+  /*
+   * The two things a client can get wrong here, both of which cost real
+   * damage on a real key:
+   *
+   *   RE-SENDING the trigger after the challenge appears. The firmware
+   *   replays the stored payload itself on the third press
+   *   (OnlyKey.ino:846-859); a second write lands while CRYPTO_AUTH is 3 and
+   *   is ignored, and the presses that follow it type slot contents at the
+   *   keyboard of an unlocked device.
+   *
+   *   Reading an acknowledgement. There is none - ecc_priv_flash runs quiet -
+   *   so a client expecting one waits out its timeout on a key that was
+   *   generated perfectly well.
+   */
+  const expected = fakePublicKey(1216);
+  const fw = fakeFirmware({ generates: { 105: expected } });
+  const app = await start(fw);
+
+  let sawDigits = null;
+  const key = await app.services.device.generateKey(105, keys.KEY_TYPE.XWING, {
+    confirm: async ({ digits }) => {
+      sawDigits = digits;
+      assert.equal(fw.awaitingChallenge, true, 'the device should be waiting');
+      fw.confirmChallenge();
+    },
+  });
+
+  assert.equal(key.length, 1216);
+  assert.equal(toBase64(key), toBase64(expected));
+
+  assert.equal(sawDigits.length, 3, 'three digits, one per button');
+  for (const d of sawDigits) assert.ok(d >= 1 && d <= 6, `digit out of range: ${d}`);
+
+  const writes = vendor(fw);
+  const triggers = writes.filter((w) => w.data[4] === MSG.OKSETPRIV);
+  assert.equal(triggers.length, 1, 'the trigger must be sent exactly once');
+  assert.equal(triggers[0].data[5], 105, 'slot');
+  assert.equal(triggers[0].data[6], keys.KEY_TYPE.XWING, 'key type');
+  for (let i = 7; i <= 14; i += 1) {
+    assert.equal(triggers[0].data[i], 0xff, `trigger byte ${i}`);
+  }
+});
+
+test('ML-KEM-768 is 1184 bytes, and the length is what ends the read', async () => {
+  /*
+   * Nothing in the reply says how long it is - no length, no terminator, just
+   * consecutive 64-byte reports. 1184 is not a multiple of 64, so the last
+   * report is padded and the trailing bytes have to be cut by the expected
+   * length rather than by where the reports stop.
+   */
+  const expected = fakePublicKey(1184);
+  const fw = fakeFirmware({ generates: { 101: expected } });
+  const app = await start(fw);
+
+  const key = await app.services.device.generateKey(101, keys.KEY_TYPE.MLKEM768, {
+    confirm: async () => fw.confirmChallenge(),
+  });
+
+  assert.equal(key.length, 1184);
+  assert.equal(toBase64(key), toBase64(expected));
+});
+
+test('the challenge is hashed over the nine bytes the firmware hashes', async () => {
+  /*
+   * done_process_packets hashes what process_packets was GIVEN, and
+   * ecc_priv_flash gives it `[keytype, FF x8]` with a length of 9
+   * (okcore.cpp:5327-5334) - not the eight-byte payload on the wire.
+   *
+   * So the digits differ between the two key types, and a client that hashed
+   * the payload alone would show the same three numbers for both and be
+   * wrong for both.
+   */
+  const digitsFor = async (keyType, bytes) => {
+    const fw = fakeFirmware({ generates: { 110: fakePublicKey(bytes) } });
+    const app = await start(fw);
+    let digits = null;
+    await app.services.device.generateKey(110, keyType, {
+      confirm: async (c) => { digits = c.digits; fw.confirmChallenge(); },
+    });
+    return digits.join('-');
+  };
+
+  const mlkem = await digitsFor(keys.KEY_TYPE.MLKEM768, 1184);
+  const xwing = await digitsFor(keys.KEY_TYPE.XWING, 1216);
+  assert.notEqual(mlkem, xwing, 'the key type is part of what is hashed');
+
+  /* And the same request always shows the same numbers - it is a hash. */
+  assert.equal(await digitsFor(keys.KEY_TYPE.XWING, 1216), xwing);
+});
+
+test('a slot the firmware would silently drop is refused here instead', async () => {
+  /*
+   * okcrypto.cpp has no else for a slot past 116, so the device answers
+   * NOTHING - not an error, not a refusal. A caller would see a timeout and
+   * have to guess whether the key was busy, absent, or asked something
+   * impossible. Bounded here so the message names the real problem.
+   */
+  const fw = fakeFirmware({});
+  const app = await start(fw);
+
+  await assert.rejects(
+    () => app.services.device.generateKey(133, keys.KEY_TYPE.XWING, {}),
+    /slot 101\.\.116/,
+  );
+  await assert.rejects(
+    () => app.services.device.generateKey(1, keys.KEY_TYPE.XWING, {}),
+    /slot 101\.\.116/,
+  );
+  assert.equal(vendor(fw).length, 0, 'nothing should have been sent');
+});
+
+test('a key type the device cannot generate is named, not attempted', async () => {
+  const fw = fakeFirmware({});
+  const app = await start(fw);
+
+  await assert.rejects(
+    () => app.services.device.generateKey(105, keys.KEY_TYPE.ED25519, {}),
+    /ML-KEM-768 \(5\), X-Wing \(6\)/,
+  );
+  assert.equal(vendor(fw).length, 0, 'nothing should have been sent');
+});
+
+test('a refusal after the press is reported as the device worded it', async () => {
+  /*
+   * Generation needs config mode, and outside it the firmware answers with a
+   * sentence rather than a key. Read as an error rather than as the first 64
+   * bytes of something.
+   */
+  const fw = fakeFirmware({});   // no `generates` entry: it refuses
+  const app = await start(fw);
+
+  await assert.rejects(
+    () => app.services.device.generateKey(105, keys.KEY_TYPE.XWING, {
+      confirm: async () => fw.confirmChallenge(),
+      timeoutMs: 500,
+    }),
+    /not in config mode/i,
+  );
+});
+
+test('a challenge nobody answers times out saying which buttons to press', async () => {
+  const fw = fakeFirmware({ generates: { 105: fakePublicKey(1216) } });
+  const app = await start(fw);
+
+  await assert.rejects(
+    () => app.services.device.generateKey(105, keys.KEY_TYPE.XWING, {timeoutMs: 300}),
+    (e) => {
+      assert.match(e.message, /produced no key within 300ms/);
+      assert.match(e.message, /the challenge was \d-\d-\d/);
+      return true;
+    },
+  );
+});

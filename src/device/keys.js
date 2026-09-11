@@ -37,6 +37,23 @@ const CURVE = { NONE: 0, ED25519: 1, NIST256P1: 2 };
  * clears that slot's button-press requirement without saying so; the device
  * plugin reports that, since the firmware will not.
  */
+/**
+ * THE TWO TABLES COLLIDE, AND THE COLLIDING VALUE IS 5.
+ *
+ * `KEY_TYPE` below is the byte a SLOT is written with, over the vendor
+ * interface. `okconnect.KEYTYPE` is the byte a DERIVE request carries, over
+ * CTAPHID. They are different protocols with independently grown numbering,
+ * and they overlap:
+ *
+ *   keys.KEY_TYPE.MLKEM768      = 5     a slot holds an ML-KEM-768 key
+ *   okconnect.KEYTYPE.XWING     = 5     derive an X-Wing key for a label
+ *
+ * Same number, different algorithm, different wire, and nothing in either
+ * table stops a caller passing one where the other belongs. The failure is
+ * silent in the worst way: the device does something, and what it does is
+ * cryptographically unrelated to what was asked. Always name the table when
+ * one of these travels through a variable called `type`.
+ */
 const KEY_TYPE = {
   ED25519: 1,
   P256R1: 2,
@@ -68,6 +85,41 @@ const RAW_KEY_TYPES = [
    * `slots` names those; repeating the numbers here would be a second copy.
    */
   { name: 'HMAC-SHA1', type: KEY_TYPE.HMACSHA1, bytes: 20, hmacOnly: true },
+];
+
+/**
+ * How many bytes of PUBLIC key a post-quantum slot answers with.
+ *
+ * okcore.h:233 and :240. X-Wing is the ML-KEM key with an X25519 key glued to
+ * the end - `pk_M(1184) || pk_X(32)` - which is also why its ciphertext is 32
+ * bytes longer than ML-KEM's.
+ *
+ * These matter to a READER, not to a writer: the reply is raw reports with no
+ * length anywhere in them, so a caller that does not know how many bytes to
+ * expect cannot tell a finished key from a truncated one.
+ */
+const PUBLIC_KEY_BYTES = {
+  [KEY_TYPE.MLKEM768]: 1184,
+  [KEY_TYPE.XWING]: 1216,
+};
+
+/**
+ * Key types the DEVICE makes, rather than ones a host writes into a slot.
+ *
+ * Deliberately not part of RAW_KEY_TYPES, which is "the types a person picks
+ * when writing a raw key". A post-quantum slot is written by asking the
+ * device to generate into it; the private half is a 32-byte seed that never
+ * leaves. Writing a host-chosen seed into one of these slots would probably
+ * work - the ordinary write path does not special-case the type - but nothing
+ * here has tested it, and offering it in the same list as Ed25519 would be
+ * presenting an untested path as an equal option.
+ *
+ * NO RELEASED FIRMWARE HAS EITHER OF THESE. See version.js's `postQuantum`
+ * capability, which was measured across every pinned release.
+ */
+const GENERATED_KEY_TYPES = [
+  { name: 'ML-KEM-768', type: KEY_TYPE.MLKEM768, publicKeyBytes: PUBLIC_KEY_BYTES[KEY_TYPE.MLKEM768] },
+  { name: 'X-Wing', type: KEY_TYPE.XWING, publicKeyBytes: PUBLIC_KEY_BYTES[KEY_TYPE.XWING] },
 ];
 
 /**
@@ -509,6 +561,8 @@ function backupKeyFromPgp(scalar, { curve, alsoSignature = false } = {}) {
 module.exports = {
   KEY_TYPE,
   RAW_KEY_TYPES,
+  PUBLIC_KEY_BYTES,
+  GENERATED_KEY_TYPES,
   CURVE,
   OID,
   MODIFIER,
