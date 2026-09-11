@@ -624,6 +624,24 @@ function setup(imports, register) {
      * harmless, they type slots.
      */
     /**
+     * Sign with an ORDINARY key the device holds - an Ed25519 or ECDSA slot
+     * (101-132) or an RSA slot: OKSIGN, the bytes as given, the first report
+     * back. The three phases described above.
+     *
+     * Split from composite_sign, which used to be this: the composite hooks
+     * call that with a half selector, and this suite of ordinary signing
+     * (9-cryptoSign) called the same function with a raw payload. One name
+     * cannot mean both, and the full run said so the moment the composite
+     * shape was fixed.
+     */
+    async sign(slot, data, opts = {}) {
+      return deviceOperation(MSG.OKSIGN, slot, data, opts);
+    },
+    /** Decrypt with an ordinary key the device holds. OKDECRYPT, same three phases. */
+    async decrypt(slot, data, opts = {}) {
+      return deviceOperation(MSG.OKDECRYPT, slot, data, opts);
+    },
+    /**
      * Sign one HALF of a composite key: `(slot, half, digest)`.
      *
      * The shape composite_pgp's hooks call - `ok.composite_sign(slot,

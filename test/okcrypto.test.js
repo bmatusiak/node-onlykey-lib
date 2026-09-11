@@ -486,3 +486,21 @@ test('locking the device forgets every cached vault key', async () => {
   assert.equal(await okcrypto.deviceVault.open('gitlab.com', two), 'hunter3');
   await app.destroy();
 });
+
+test('sign() sends the bytes as given - no half selector, one report back', async () => {
+  // The ordinary-key path. composite_sign prepends a selector because the
+  // firmware's composite handler wants one; an Ed25519 slot wants the digest
+  // alone, and the two were one function until the full run said otherwise.
+  const pipe = fakeFirmware();
+  const app = await start(FULL(), pipe);
+  const payload = Uint8Array.from([1, 2, 3, 4, 5]);
+  const pending = app.services.okcrypto.sign(101, payload, { timeoutMs: 200 }).catch(() => null);
+  await new Promise((r) => setTimeout(r, 30));
+  const frames = cryptoFrames(pipe).map((w) => w.data);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0][4], MSG.OKSIGN);
+  assert.equal(frames[0][5], 101);
+  assert.equal(frames[0][7], 1, 'the digest starts at buffer[7], no selector');
+  await pending;
+  await app.destroy();
+});
