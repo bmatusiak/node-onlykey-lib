@@ -110,6 +110,7 @@ export let device: {
     keys: typeof import("./device/keys");
     openssh: typeof import("./device/openssh");
     firmware: typeof import("./device/firmware");
+    fido: typeof import("./device/fido");
     chunker: typeof import("./device/chunker");
     parsers: typeof import("./device/parsers");
     encoders: typeof import("./device/encoders");

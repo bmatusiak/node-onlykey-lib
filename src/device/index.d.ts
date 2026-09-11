@@ -5,6 +5,7 @@ export let press: typeof import("./press");
 export let keys: typeof import("./keys");
 export let openssh: typeof import("./openssh");
 export let firmware: typeof import("./firmware");
+export let fido: typeof import("./fido");
 export let chunker: typeof import("./chunker");
 export let parsers: typeof import("./parsers");
 export let encoders: typeof import("./encoders");

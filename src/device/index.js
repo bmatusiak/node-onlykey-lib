@@ -16,6 +16,8 @@ module.exports = {
   openssh: require('./openssh'),
   /* Signed firmware files and the OKFWUPDATE frames; not yet run on hardware. */
   firmware: require('./firmware'),
+  /* FIDO2 administration over CTAPHID: PIN, retries, reset. */
+  fido: require('./fido'),
   chunker: require('./chunker'),
   parsers: require('./parsers'),
   encoders: require('./encoders'),
