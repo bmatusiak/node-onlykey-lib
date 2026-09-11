@@ -19,6 +19,8 @@ const ctap = require('./ctap');
 const chunk = require('./chunk');
 const cbor = require('./cbor');
 const ctaphid = require('./ctaphid');
+const cose = require('./cose');
+const clientpin = require('./clientpin');
 const tunnel = require('./tunnel');
 const challenge = require('./challenge');
 const bridge = require('./bridge');
@@ -30,6 +32,8 @@ module.exports = {
   chunk,
   cbor,
   ctaphid,
+  cose,
+  clientpin,
   tunnel,
   challenge,
   bridge,

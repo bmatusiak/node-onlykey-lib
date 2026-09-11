@@ -6,6 +6,8 @@ export let protocol: {
     chunk: typeof import("./protocol/chunk");
     cbor: typeof import("./protocol/cbor");
     ctaphid: typeof import("./protocol/ctaphid");
+    cose: typeof import("./protocol/cose");
+    clientpin: typeof import("./protocol/clientpin");
     tunnel: typeof import("./protocol/tunnel");
     challenge: typeof import("./protocol/challenge");
     bridge: typeof import("./protocol/bridge");
