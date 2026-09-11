@@ -777,3 +777,59 @@ test('readSlot refuses a hold that would be a gesture instead of a read', async 
 
   await app.destroy();
 });
+
+/* ------------------------------------------------- asking the console */
+
+test('consoleAnswers is TRUE when the device echoes the line', async () => {
+  // The firmware prints `I received from DEBUG: <first byte>` before acting on
+  // a line, and says in its own comment that clients use it as a readiness
+  // probe. Z is neither a button nor a command, so the echo is the only thing
+  // it causes.
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  const realWrite = pipe.write;
+  pipe.write = async (iface, bytes) => {
+    const n = await realWrite(iface, bytes);
+    if (iface === IFACE.SEREMU) {
+      pipe.deliverText("I received from DEBUG: 90\n");
+    }
+    return n;
+  };
+
+  assert.equal(await app.services.device.consoleAnswers(), true);
+  await app.destroy();
+});
+
+test('consoleAnswers is FALSE on a console that only prints', async () => {
+  // Every RELEASED firmware reaches this branch: no okcore.cpp before the
+  // working tree contains a Serial.read at all. A timeout is the answer, not a
+  // failure, so it must not throw.
+  const app = await start(fakeFirmware());
+
+  assert.equal(
+    await app.services.device.consoleAnswers({ timeoutMs: 150 }), false);
+  await app.destroy();
+});
+
+test('the probe PRESSES NOTHING, which is the point of the byte it picks', async () => {
+  // The obvious probe is to press a button and watch for the digit. On a LOCKED
+  // device that appends to the PIN buffer and counts as a failed attempt, and
+  // enough of those WIPE the key - which is how a bench key was lost. So the
+  // byte written must not be one the press parser accepts.
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  await app.services.device.consoleAnswers({ timeoutMs: 100 });
+
+  const toConsole = pipe.writes.filter((w) => w.iface === IFACE.SEREMU);
+  assert.equal(toConsole.length, 1, 'exactly one line');
+
+  const line = toLatin1(toConsole[0].data);
+  for (const digit of line) {
+    assert.equal(
+      /[1-6]/.test(digit), false,
+      `the probe wrote ${JSON.stringify(digit)}, which the firmware would ` +
+        'read as a button press - on a locked key that spends a PIN attempt');
+  }
+});

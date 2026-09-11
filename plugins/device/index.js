@@ -25,6 +25,19 @@ const encoders = require('../../src/device/encoders');
 const { MSG, FIELD } = require('../../src/protocol/msg');
 const okmsg = require('../../src/protocol/okmsg');
 const { DeviceConsole, pressLine } = require('../../src/device/console');
+
+/**
+ * A byte the console parser recognises as neither a press nor a command.
+ *
+ * `dbg_commit_line` sends 1-6 to the press parser and everything else to the
+ * command parser, which knows 0, 8 and 9. Z reaches the command parser, is not
+ * one of those, and so produces the line echo and no other effect at all.
+ */
+const CONSOLE_PROBE_BYTE = 'Z';
+
+/** The echo carries the byte as a NUMBER, so Z arrives as 90. */
+const CONSOLE_PROBE_ECHO = new RegExp(
+  `I received from DEBUG: *${CONSOLE_PROBE_BYTE.charCodeAt(0)}`);
 const { IFACE } = require('../../src/transport/contract');
 const version = require('../../src/device/version');
 
@@ -705,6 +718,57 @@ const PREFERENCES = {
 
     /** Send button presses directly - the manual half of the PIN bracket. */
     press(digits) { return pressLine(transport, digits); },
+
+    /**
+     * DOES THE CONSOLE ANSWER? Asked, not inferred from a version.
+     *
+     * `press()` writes to the debug console, and whether anything READS it
+     * depends on the firmware: the working tree has a parser, and no released
+     * firmware has a `Serial.read` in okcore.cpp at all. `capabilities()`
+     * models that as `consolePress`, from the version string.
+     *
+     * WHICH IS NO USE WHEN IT MATTERS. A locked device answers with no version
+     * - `INITIALIZED` and nothing else - so `consolePress` is unknowable until
+     * the PIN is in, and entering the PIN is exactly what needs the answer. A
+     * host that consults the capability before unlocking is always told no.
+     *
+     * The firmware settles it itself. `dbg_commit_line()` prints
+     * `I received from DEBUG: <first byte>` BEFORE acting on a line, and says
+     * in its own comment that clients use it as an acknowledgement and as a
+     * "the firmware is running loop()" readiness probe.
+     *
+     * ## Nothing is pressed
+     *
+     * The byte sent is neither a button (1-6) nor a command (0, 8, 9), so it
+     * reaches the command parser, matches nothing, and produces the echo and
+     * nothing else. That matters more than it sounds: the obvious probe is to
+     * press a button and watch for the digit, and on a LOCKED device that
+     * appends to the PIN buffer and counts as a failed attempt. Enough of them
+     * wipe the key - see
+     * ok-rn/FINDING-probing-on-a-locked-key-burns-pin-attempts.md, which was
+     * written after doing exactly that to a bench key.
+     *
+     * @returns {Promise<boolean>} whether the console read what was written
+     */
+    async consoleAnswers({ timeoutMs = 3000 } = {}) {
+      /*
+       * Cleared first. The echo has to be one this call caused - the buffer
+       * holds whatever the device has been saying, and a device says a lot.
+       */
+      console_.clear();
+      await device.press(CONSOLE_PROBE_BYTE);
+
+      try {
+        await console_.waitFor(CONSOLE_PROBE_ECHO, { timeoutMs });
+        return true;
+      } catch (_) {
+        /*
+         * A timeout is the ANSWER here, not a failure. Every released firmware
+         * reaches this branch and is working exactly as built.
+         */
+        return false;
+      }
+    },
 
     /* ---- slots --------------------------------------------------------- */
 
