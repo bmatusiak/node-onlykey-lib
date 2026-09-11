@@ -144,6 +144,13 @@ function parseState(response) {
   if (/^UNINITIALIZED/.test(raw)) return { state: 'uninitialized', raw };
   if (/^INITIALIZED/.test(raw)) return { state: 'locked', raw };
   if (/^Error/i.test(raw)) return { state: 'error', raw };
+  /*
+   * A key that has taken the OKFWUPDATE kick re-enumerates saying
+   * BOOTLOADER (the desktop keys isBootloader off the same word,
+   * OnlyKeyComm.js:1447). It was 'unknown' here, which a host cannot tell
+   * from a garbled reply; the firmware update path needs to know.
+   */
+  if (/BOOTLOADER/.test(raw)) return { state: 'bootloader', raw };
   return { state: 'unknown', raw };
 }
 
