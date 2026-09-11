@@ -253,6 +253,21 @@ function timingSafeEqual(a, b) {
 // ciphertext: 1120-byte X-Wing ciphertext (from xwingEncapsHost). sharedSecret:
 // its matching 32-byte X-Wing shared secret. Returns a Uint8Array.
 function encryptAgeFile(plaintext, { ciphertext, sharedSecret }) {
+    /*
+     * A STRING IS ACCEPTED, and it has to be.
+     *
+     * This took bytes only, and a string did not fail cleanly - it failed
+     * DEEP: `plaintext.length === 0` is true for an empty string, so that
+     * case worked, and anything longer reached `plaintext.subarray()` inside
+     * streamEncrypt and threw "undefined is not a function" with a stack
+     * pointing at the chunker. Nothing in it said "you passed a string".
+     *
+     * "Encrypt this message" with a string is the obvious call, and the
+     * alternative is every caller writing the same TextEncoder line and one
+     * of them forgetting. Bytes pass through untouched, so a caller holding a
+     * file does not get an accidental re-encode.
+     */
+    const input = typeof plaintext === 'string' ? utf8(plaintext) : plaintext;
     const fileKey = randomBytes(FILE_KEY_LEN);
     const sealedFileKey = sealFileKey(sharedSecret, ciphertext, fileKey);
 
@@ -266,7 +281,7 @@ function encryptAgeFile(plaintext, { ciphertext, sharedSecret }) {
 
     const streamNonce = randomBytes(16);
     const payloadKey = hkdfExpand(sha256, hkdfExtract(sha256, fileKey, streamNonce), utf8('payload'), 32);
-    const body = streamEncrypt(payloadKey, plaintext);
+    const body = streamEncrypt(payloadKey, input);
 
     return concatBytes(header, streamNonce, body);
 }

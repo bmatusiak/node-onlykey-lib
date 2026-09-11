@@ -504,3 +504,73 @@ test('sign() sends the bytes as given - no half selector, one report back', asyn
   await pending;
   await app.destroy();
 });
+
+/* ------------------------------- age files addressed to a SLOT */
+
+const pqcLib = require('../src/crypto/age_pqc');
+
+test('a slot identity is the public key, a recipient and an identity', async () => {
+  const publicKey = new Uint8Array(1216);
+  for (let i = 0; i < publicKey.length; i++) publicKey[i] = (i * 11 + 5) & 0xff;
+
+  const pipe = fakeFirmware({ pubKeys: { 110: publicKey } });
+  const app = await start(FULL(), pipe);
+
+  const id = await app.services.okcrypto.deviceAge.slotIdentity(110);
+
+  assert.equal(id.slot, 110);
+  assert.equal(id.publicKey.length, 1216);
+  assert.ok(id.recipientString.startsWith('age1onlykey1'));
+  assert.ok(id.identityString.startsWith('AGE-PLUGIN-ONLYKEY-1'));
+
+  /* And the identity names this key, not merely this slot. */
+  const decoded = pqcLib.decodeIdentity(id.identityString);
+  assert.equal(decoded.slot, 110);
+  assert.equal(pqcLib.identityMatchesKey(decoded, publicKey), true);
+  assert.equal(pqcLib.identityMatchesKey(decoded, new Uint8Array(1216)), false);
+});
+
+test('an identity for a slot that has been regenerated is REFUSED, not tried', async () => {
+  /*
+   * The reason the versioned identity carries a fingerprint at all. Without
+   * this the decrypt would go ahead, spend a three-button confirmation, and
+   * fail as an age "no identity matched" - which is true and points at the
+   * file rather than at the key that changed underneath it.
+   */
+  const original = new Uint8Array(1216).fill(3);
+  const regenerated = new Uint8Array(1216).fill(4);
+
+  const identity = pqcLib.encodeSlotIdentity(110, original);
+
+  /* The device now holds the OTHER key. */
+  const pipe = fakeFirmware({ pubKeys: { 110: regenerated } });
+  const app = await start(FULL(), pipe);
+
+  await assert.rejects(
+    () => app.services.okcrypto.deviceAge.decryptWithIdentity(new Uint8Array(8), identity),
+    /generated again/,
+  );
+});
+
+test('decryptWithIdentity sends a DERIVED identity down the label path', async () => {
+  /*
+   * The two identity kinds share an HRP because age picks a plugin binary
+   * from that prefix. The happy consequence is that a caller holds a string
+   * and does not have to know which kind it is - so this checks the branch
+   * lands on the label side, by the error it produces when no device answers
+   * a derive.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(FULL(), pipe);
+
+  const derived = pqcLib.encodeIdentity('me@example.com');
+  const decoded = pqcLib.decodeIdentity(derived);
+  assert.equal(decoded.derived, true);
+  assert.equal(decoded.label, 'me@example.com');
+
+  /* Not an OnlyKey identity at all is refused before anything is sent. */
+  await assert.rejects(
+    () => app.services.okcrypto.deviceAge.decryptWithIdentity(new Uint8Array(8), 'nonsense'),
+    /not an OnlyKey age identity/,
+  );
+});

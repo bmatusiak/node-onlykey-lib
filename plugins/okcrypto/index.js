@@ -67,6 +67,7 @@ const composite = require('../../src/crypto/composite_pgp');
 const vault = require('../../src/crypto/vault');
 const vaultStore = require('../../src/crypto/vault_store');
 const okconnect = require('../../src/crypto/okconnect');
+const keys = require('../../src/device/keys');
 const tunnelling = require('../../src/protocol/tunnel');
 const { CtapHid } = require('../../src/protocol/ctaphid');
 const chunker = require('../../src/device/chunker');
@@ -77,7 +78,7 @@ const { MSG } = require('../../src/protocol/msg');
 const { IFACE } = require('../../src/transport/contract');
 
 function setup(imports, register) {
-  const { app, transport, host, session } = imports;
+  const { app, transport, host, session, device } = imports;
 
   /*
    * The device's own account of what it is, for the one decision that cannot be
@@ -855,6 +856,115 @@ function setup(imports, register) {
           return pqc.splitDecapsulate(answer.secret, ciphertext, id.pkX, id.mlkemSeed);
         });
       },
+
+      /**
+       * The identity of a key the device GENERATED and keeps in a slot.
+       *
+       * The other kind entirely. `identity()` above derives a key from a
+       * label on demand and it exists nowhere; this one reads the public half
+       * of a key whose private half is a seed sitting in flash.
+       *
+       * Nothing is derived, so nothing here needs a button.
+       */
+      async slotIdentity(slot, opts = {}) {
+        const publicKey = await device.getPublicKey(slot, {
+          ...opts,
+          bytes: keys.PUBLIC_KEY_BYTES[keys.KEY_TYPE.XWING],
+          keyType: keys.KEY_TYPE.XWING,
+        });
+        return {
+          slot,
+          publicKey,
+          recipientString: pqc.encodeRecipient(publicKey),
+          identityString: pqc.encodeSlotIdentity(slot, publicKey),
+        };
+      },
+
+      /**
+       * Decrypt with a key held in a SLOT.
+       *
+       * ## This is NOT the label path with a number instead of a string
+       *
+       * The two send different things and get different things back, and
+       * confusing them produces a shared secret that is wrong in a way
+       * nothing reports:
+       *
+       *   label   ct_X only, 32 bytes  ->  64 bytes back, and the HOST does
+       *           the ML-KEM half from the seed (splitDecapsulate)
+       *   slot    the WHOLE ciphertext, 1120 bytes  ->  32 bytes back, which
+       *           ARE the shared secret - the DEVICE ran the combiner
+       *
+       * So there is no splitDecapsulate here and there must not be. The
+       * firmware checks the length (`large_buffer_offset == XWING_CT_SIZE`,
+       * okcrypto.cpp:2069) and refuses 32 bytes where it wants 1120, which is
+       * the merciful case; running the ML-KEM half twice would not be
+       * refused by anything.
+       *
+       * A three-button challenge is raised over the ciphertext, the same as
+       * signing. It does NOT need config mode, and cannot have it: config
+       * mode answers eleven message types and silently drops the rest, and
+       * OKDECRYPT is not among them (okcore.cpp:347).
+       */
+      async decryptWithSlot(fileBytes, slot, opts = {}) {
+        return age.decryptAgeFile(fileBytes, async (ciphertext) => {
+          /*
+           * 32, written out rather than reached for: age_pqc exports
+           * XWING_CT and XWING_PK but no shared-secret constant, and
+           * `pqc.XWING_SS || 32` reads as if one might exist. The number is
+           * XWING_SS_SIZE at okcore.h:242 and it is the SHA3-256 combiner's
+           * output width, so it is not going to move without the algorithm
+           * moving with it.
+           */
+          const secret = await okcrypto.decrypt(slot, ciphertext, {
+            ...opts,
+            expectBytes: 32,
+          });
+          if (secret.length !== 32) {
+            throw new Error(
+              `slot ${slot} returned ${secret.length} bytes for an X-Wing `
+              + 'decapsulation; the shared secret is 32',
+            );
+          }
+          return secret;
+        });
+      },
+
+      /**
+       * Decrypt with whichever kind of identity the string names.
+       *
+       * The reason the two identity forms share an HRP is that age picks a
+       * plugin binary from that prefix - but the happy consequence is this:
+       * a caller holds an identity string and does not have to know which
+       * kind it is.
+       */
+      async decryptWithIdentity(fileBytes, identityString, opts = {}) {
+        const id = pqc.decodeIdentity(identityString);
+        if (!id) throw new Error('not an OnlyKey age identity');
+
+        if (id.derived) return okcrypto.deviceAge.decrypt(fileBytes, id.label, opts);
+
+        /*
+         * CHECK THE FINGERPRINT FIRST, when there is one.
+         *
+         * An identity names a slot and a slot can be generated again. Without
+         * this the attempt fails as an age "no identity matched", which is
+         * true and useless - it points at the file rather than at the key. A
+         * versioned identity carries SHA-256(pubkey)[0..8] precisely so the
+         * client can say what actually happened.
+         *
+         * It costs one public-key read, no button and no attempt counter.
+         */
+        if (id.fingerprint) {
+          const { publicKey } = await okcrypto.deviceAge.slotIdentity(id.slot, opts);
+          if (!pqc.identityMatchesKey(id, publicKey)) {
+            throw new Error(
+              `slot ${id.slot} holds a different key from the one this identity `
+              + 'was made for - it has been generated again since',
+            );
+          }
+        }
+        return okcrypto.deviceAge.decryptWithSlot(fileBytes, id.slot, opts);
+      },
     },
     /**
      * Credentials sealed under a key only the device can derive.
@@ -1128,7 +1238,20 @@ function setup(imports, register) {
   });
 }
 
-setup.consumes = ['app', 'transport', 'session', 'host'];
+/*
+ * `device` joined this list for the SLOT age identities.
+ *
+ * Decrypting a file addressed to a slot has to read that slot's public key -
+ * to build the recipient, and to check the fingerprint an identity carries
+ * before spending a button press on a key that has since been generated
+ * again. That read is device.getPublicKey, and duplicating its collector here
+ * would be a second copy of the one piece of code that has already produced
+ * two findings.
+ *
+ * No cycle: plugins/device consumes app, transport and session, and knows
+ * nothing about okcrypto.
+ */
+setup.consumes = ['app', 'transport', 'session', 'host', 'device'];
 setup.provides = ['okcrypto'];
 
 module.exports = setup;
