@@ -1077,7 +1077,41 @@ const PREFERENCES = {
          * the chunker owns the write and only the final acknowledgement is
          * waited for here.
          */
-        await chunker.sendRsaKey({ slot, type, key: bytes, send, onProgress });
+        /*
+         * ACKNOWLEDGED, like the single-frame path below. The chunked send
+         * used to return as soon as the last chunk was written, and the
+         * device's answer - "Successfully set RSA Key", or "Error not in
+         * config mode" to EVERY chunk - went unread. A composite PQC key
+         * cannot be read back (okcrypto_getpubkey has no branch for it), so
+         * that answer is the only evidence a load happened; python-onlykey's
+         * load_composite_key waits for the same line for the same reason.
+         *
+         * Subscribed before the first chunk: a refusal arrives after the
+         * first one, long before the last is sent.
+         */
+        let answer = null;
+        const off = transport.on('report', (event) => {
+          if (event.iface !== IFACE.VENDOR || answer !== null) return;
+          if (isSlotAcknowledgement(event.data)) answer = okmsg.text(event.data);
+        });
+        try {
+          await chunker.sendRsaKey({ slot, type, key: bytes, send, onProgress });
+          const deadline = Date.now() + ackTimeoutMs;
+          while (answer === null && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        } finally {
+          off();
+        }
+        if (answer === null) {
+          throw new Error(
+            `key write to slot ${slot} was never acknowledged within ${ackTimeoutMs}ms`,
+          );
+        }
+        if (/^Error/i.test(answer)) {
+          throw new Error(`key write to slot ${slot} refused: ${answer}`);
+        }
+        progress('keyAck', { slot, response: answer });
       } else {
         const frame = okmsg.build({
           msg: MSG.OKSETPRIV, slot, field: type, payload: bytes,

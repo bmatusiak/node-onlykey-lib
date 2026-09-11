@@ -877,3 +877,54 @@ test('wipeUserspace() writes 0C - the path AND its confirmation in one line', as
   assert.doesNotMatch(written[0], /9C/);
   await app.destroy();
 });
+
+/* ----------------------------------------- a chunked key load is acknowledged */
+
+function vendorText(text) {
+  const report = new Uint8Array(64);
+  for (let i = 0; i < text.length; i++) report[i] = text.charCodeAt(i);
+  return report;
+}
+
+test('a chunked key load REFUSED by the device throws by name', async () => {
+  // OKSETPRIV is permitted only in config mode; outside it the device answers
+  // "Error not in config mode" to every chunk. The chunked path used to return
+  // after the last chunk was written without reading any of them, so a
+  // composite PQC key - which cannot be read back - looked loaded when it was
+  // not. python-onlykey's load_composite_key waits for the same line.
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const original = pipe.write.bind(pipe);
+  pipe.write = async (iface, bytes) => {
+    if (iface === IFACE.VENDOR && bytes[4] === MSG.OKSETPRIV) {
+      pipe.deliver(vendorText('Error not in config mode'));
+    }
+    return original(iface, bytes);
+  };
+
+  const blob = new Uint8Array(160).fill(7);
+  await assert.rejects(
+    app.services.device.loadKey(1, { type: 0x67, key: blob }, { ackTimeoutMs: 500 }),
+    /refused: Error not in config mode/,
+  );
+  await app.destroy();
+});
+
+test('a chunked key load the device ACKNOWLEDGES resolves', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const original = pipe.write.bind(pipe);
+  let chunks = 0;
+  pipe.write = async (iface, bytes) => {
+    if (iface === IFACE.VENDOR && bytes[4] === MSG.OKSETPRIV) {
+      chunks += 1;
+      if (chunks === 3) pipe.deliver(vendorText('Successfully set RSA Key'));
+    }
+    return original(iface, bytes);
+  };
+
+  const blob = new Uint8Array(160).fill(7);
+  await app.services.device.loadKey(1, { type: 0x67, key: blob }, { ackTimeoutMs: 1000 });
+  assert.equal(chunks, 3, '160 bytes is three 57-byte chunks');
+  await app.destroy();
+});
