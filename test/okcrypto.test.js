@@ -23,6 +23,7 @@ const embedded = require('../plugins/transport/embedded');
 const sessionPlugin = require('../plugins/session');
 const devicePlugin = require('../plugins/device');
 const okcryptoPlugin = require('../plugins/okcrypto');
+const composite = require('../src/crypto/composite_pgp');
 const { fakeFirmware } = require('./helpers/fake-firmware');
 const { IFACE } = require('../src/transport/contract');
 const { MSG } = require('../src/protocol/msg');
@@ -175,7 +176,7 @@ test('a sign request is framed the way process_packets reads it', async () => {
 
   /* 60 bytes: one full chunk then a 3-byte remainder, so both headers show. */
   const payload = new Uint8Array(60).map((_, i) => i);
-  const pending = app.services.okcrypto.composite_sign(101, payload, { timeoutMs: 200 })
+  const pending = app.services.okcrypto.composite_sign(101, composite.HALF_ECC, payload, { timeoutMs: 200 })
     .catch(() => null);
 
   await new Promise((r) => setTimeout(r, 30));
@@ -185,11 +186,12 @@ test('a sign request is framed the way process_packets reads it', async () => {
   assert.equal(frames[0][4], MSG.OKSIGN);
   assert.equal(frames[0][5], 101, 'the slot must be at buffer[5]');
   assert.equal(frames[0][6], 0xff, 'a non-final chunk is 0xFF');
-  assert.equal(frames[0][7], 0, 'data starts at buffer[7]');
+  assert.equal(frames[0][7], composite.HALF_ECC, 'the half selector leads the payload at buffer[7]');
+  assert.equal(frames[0][8], 0, 'then the digest');
 
   assert.equal(frames[1][5], 101);
-  assert.equal(frames[1][6], 3, 'the final chunk carries its length');
-  assert.equal(frames[1][7], 57, 'the remainder continues the payload');
+  assert.equal(frames[1][6], 4, 'the final chunk carries its length (61 bytes: selector + 60)');
+  assert.equal(frames[1][7], 56, 'the remainder continues the digest');
   assert.ok(frames.every((f) => f.length === 64));
 
   await pending;
@@ -212,13 +214,14 @@ test('the challenge digits are the ones the firmware will ask for', async () => 
   app.services.okcrypto.on('challenge', (e) => { announced = e; });
 
   let handed = null;
-  const pending = app.services.okcrypto.composite_sign(101, payload, {
+  const pending = app.services.okcrypto.composite_sign(101, composite.HALF_ECC, payload, {
     timeoutMs: 200,
     confirm: ({ digits }) => { handed = digits; },
   }).catch(() => null);
   await pending;
 
-  const expected = challengeDigits(payload);
+  /* Over the bytes the firmware receives: the selector and then the digest. */
+  const expected = challengeDigits(Uint8Array.from([composite.HALF_ECC, ...payload]));
   assert.deepEqual(handed, expected);
   assert.deepEqual(announced && announced.digits, expected);
   assert.ok(expected.every((d) => d >= 1 && d <= 6), `out of range: ${expected}`);
@@ -237,7 +240,7 @@ test('a wrong challenge comes back as the sentence the device said', async () =>
   const app = await start(FULL(), pipe);
 
   const pending = assert.rejects(
-    () => app.services.okcrypto.composite_sign(101, Uint8Array.from([9, 9]), {
+    () => app.services.okcrypto.composite_sign(101, composite.HALF_ECC, Uint8Array.from([9, 9]), {
       timeoutMs: 2000,
       confirm: () => {
         const bytes = new Uint8Array(64);
@@ -265,7 +268,7 @@ test('the signature is returned as raw bytes, not decrypted', async () => {
   const app = await start(FULL(), pipe);
 
   const signature = new Uint8Array(64).map((_, i) => (i * 7 + 3) & 0xff);
-  const got = await app.services.okcrypto.composite_sign(101, Uint8Array.from([1, 2, 3]), {
+  const got = await app.services.okcrypto.composite_sign(101, composite.HALF_ECC, Uint8Array.from([1, 2, 3]), {
     timeoutMs: 2000,
     confirm: () => pipe.deliver(signature),
   });
@@ -284,7 +287,7 @@ test('the state broadcast is not mistaken for an answer', async () => {
   const app = await start(FULL(), pipe);
 
   const signature = new Uint8Array(64).fill(0xa5);
-  const got = await app.services.okcrypto.composite_sign(101, Uint8Array.from([4, 5, 6]), {
+  const got = await app.services.okcrypto.composite_sign(101, composite.HALF_ECC, Uint8Array.from([4, 5, 6]), {
     timeoutMs: 2000,
     confirm: () => {
       const state = new Uint8Array(64);
@@ -324,7 +327,7 @@ test('a timeout says what the challenge was', async () => {
    */
   const app = await start(FULL());
   await assert.rejects(
-    () => app.services.okcrypto.composite_sign(101, Uint8Array.from([7]), { timeoutMs: 120 }),
+    () => app.services.okcrypto.composite_sign(101, composite.HALF_ECC, Uint8Array.from([7]), { timeoutMs: 120 }),
     /were those buttons pressed/,
   );
   await app.destroy();

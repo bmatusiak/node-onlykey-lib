@@ -152,6 +152,15 @@ function setup(imports, register) {
       duo = false,
       timeoutMs = 30000,
       onProgress = null,
+      /*
+       * How many bytes the answer is, when it is more than one report. The
+       * device sends a large response as consecutive 64-byte reports in one
+       * tight loop (send_transport_response, okcore.cpp) and nothing
+       * interleaves with them, so a 3309-byte ML-DSA signature is 52 reports
+       * to collect. Zero means "the first report is the answer", which is
+       * what every operation here was before composite signing arrived.
+       */
+      expectBytes = 0,
     } = opts;
 
     const payload = Uint8Array.from(data);
@@ -175,6 +184,16 @@ function setup(imports, register) {
      */
     let answered = false;
     let off = null;
+    /*
+     * Leading status broadcasts and error sentences are recognised only
+     * BEFORE the first data byte, exactly as python-onlykey's read_exact
+     * does. Once the answer has started, a report may legitimately be all
+     * zeros or read as text, and dropping one would corrupt the result
+     * silently.
+     */
+    let started = false;
+    const collected = [];
+    let got = 0;
     const answer = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (off) off();
@@ -186,32 +205,36 @@ function setup(imports, register) {
 
       off = transport.on('report', (event) => {
         if (event.iface !== IFACE.VENDOR) return;
-
-        /*
-         * The state broadcast arrives about once a second and is not an
-         * answer to anything. Ignoring it by shape rather than by timing is
-         * what stops a signature request from resolving with "UNLOCKED".
-         */
-        const state = okmsg.parseState(event.data);
-        if (state.state === 'unlocked' || state.state === 'locked'
-            || state.state === 'uninitialized') return;
-
-        clearTimeout(timer);
+        if (!started) {
+          const state = okmsg.parseState(event.data);
+          if (state.state === 'unlocked' || state.state === 'locked'
+              || state.state === 'uninitialized') return;
+          if (state.state === 'error') {
+            clearTimeout(timer);
+            answered = true;
+            if (off) off();
+            reject(new Error(state.raw));
+            return;
+          }
+          started = true;
+        }
         answered = true;
-        if (off) off();
-
-        /*
-         * An error is TEXT and a signature is 64 random-looking bytes, so the
-         * two are told apart by the firmware's own wording rather than by
-         * length. "Error incorrect challenge was entered" is the one a caller
-         * will actually hit, and it deserves to arrive as that sentence
-         * rather than as 64 bytes of something.
-         */
-        if (state.state === 'error') {
-          reject(new Error(state.raw));
+        const chunk = Uint8Array.from(event.data);
+        if (!expectBytes) {
+          clearTimeout(timer);
+          if (off) off();
+          resolve(chunk);
           return;
         }
-        resolve(Uint8Array.from(event.data));
+        collected.push(chunk);
+        got += chunk.length;
+        if (got < expectBytes) return;
+        clearTimeout(timer);
+        if (off) off();
+        const out = new Uint8Array(got);
+        let at = 0;
+        for (const c of collected) { out.set(c, at); at += c.length; }
+        resolve(out.slice(0, expectBytes));
       });
     });
 
@@ -600,13 +623,37 @@ function setup(imports, register) {
      * time and stop when isAnswered() goes true - the extra presses are not
      * harmless, they type slots.
      */
-    async composite_sign(slot, data, opts = {}) {
-      return deviceOperation(MSG.OKSIGN, slot, data, opts);
+    /**
+     * Sign one HALF of a composite key: `(slot, half, digest)`.
+     *
+     * The shape composite_pgp's hooks call - `ok.composite_sign(slot,
+     * HALF_ECC, hashed)` - and the reference's (python-onlykey pqc.py):
+     * the payload is the selector byte and then the digest, OKSIGN to the
+     * RSA slot the key was loaded into, and the answer is 64 bytes (Ed25519)
+     * or 3309 (ML-DSA-65) collected across reports. This took `(slot, data)`
+     * before, so the hooks handed it the selector AS the data and the
+     * firmware was asked to sign nothing - measured on the bench key from
+     * the hardKeyConfig suite: "nothing to sign or decrypt".
+     */
+    async composite_sign(slot, half, digest, opts = {}) {
+      if (half !== composite.HALF_ECC && half !== composite.HALF_PQC) {
+        throw new Error(`composite_sign: half must be HALF_ECC (0) or HALF_PQC (1), got ${half}`);
+      }
+      const bytes = Uint8Array.from(digest);
+      const payload = new Uint8Array(1 + bytes.length);
+      payload[0] = half;
+      payload.set(bytes, 1);
+      const expectBytes = half === composite.HALF_ECC
+        ? composite.ED25519_SIG_LEN : composite.MLDSA_SIG_LEN;
+      return deviceOperation(MSG.OKSIGN, slot, payload, { expectBytes, ...opts });
     },
-
-    /** Decrypt with a key the device holds. OKDECRYPT, same three phases. */
+    /**
+     * Decrypt one half of a composite exchange: no selector - the firmware
+     * infers X25519 from a 32-byte point and ML-KEM from a 1088-byte
+     * ciphertext - and a 32-byte shared secret back either way.
+     */
     async composite_decrypt(slot, data, opts = {}) {
-      return deviceOperation(MSG.OKDECRYPT, slot, data, opts);
+      return deviceOperation(MSG.OKDECRYPT, slot, data, { expectBytes: composite.SS_LEN, ...opts });
     },
 
     /**
