@@ -770,6 +770,42 @@ const PREFERENCES = {
       }
     },
 
+    /**
+     * Restart the device, through the console. No data is touched.
+     *
+     * `dbg_run_command()` in okcore.cpp: a line of "8" is CPU_RESTART. It
+     * does not return, so there is no acknowledgement to wait for; the key
+     * drops off the bus and comes back, and whoever owns the pipe sees that
+     * as a disconnect. Only a console that answers (consoleAnswers) will act
+     * on it - on any other build this writes into silence, which is what the
+     * caller should check first rather than what this should guess.
+     *
+     * The emulator cannot do this: its firmware thread only exits through the
+     * reset trap. On a real key it is the one restart there is short of
+     * unplugging.
+     */
+    restart() {
+      return device.press('8');
+    },
+
+    /**
+     * Wipe the USER data - PIN, profiles, slots - and restart. NOT the firmware.
+     *
+     * The firmware's "0C" path: the C on the same line is the confirmation,
+     * so no arm/confirm state has to be carried between lines and no stray
+     * single byte can reach a wipe. This deliberately never sends "9C", the
+     * full wipe, which also erases the firmware hash and leaves a key that
+     * needs reflashing; nothing above the wire has a reason to want that.
+     *
+     * Same console requirement as restart(). Written for the bench: a key
+     * with a forgotten PIN is a key whose whole path is read-only, and ten
+     * wrong attempts is the firmware's own route to the same wipe, one that
+     * cannot be told apart from an attack.
+     */
+    wipeUserspace() {
+      return device.press('0C');
+    },
+
     /* ---- slots --------------------------------------------------------- */
 
     readLabels(opts = {}) {

@@ -833,3 +833,47 @@ test('the probe PRESSES NOTHING, which is the point of the byte it picks', async
         'read as a button press - on a locked key that spends a PIN attempt');
   }
 });
+
+/* ------------------------------------------- console commands, by name */
+
+function seremuText(pipe) {
+  // Everything written to the debug console, decoded, in order.
+  const lines = [];
+  const realWrite = pipe.write;
+  pipe.write = async (iface, bytes) => {
+    if (iface === IFACE.SEREMU) {
+      lines.push(Buffer.from(bytes).toString('latin1').replace(/\0+$/, ''));
+    }
+    return realWrite(iface, bytes);
+  };
+  return lines;
+}
+
+test('restart() writes the firmware\'s restart command, 8, and nothing else', async () => {
+  // dbg_run_command() in okcore.cpp: "8" is CPU_RESTART, no data touched.
+  // The digit is not a button press because the press parser takes 1-6 only.
+  const pipe = fakeFirmware();
+  const written = seremuText(pipe);
+  const app = await start(pipe);
+
+  await app.services.device.restart();
+  assert.equal(written.length, 1);
+  assert.match(written[0], /^8/);
+  await app.destroy();
+});
+
+test('wipeUserspace() writes 0C - the path AND its confirmation in one line', async () => {
+  // The firmware takes the trailing C as the confirmation on the same line,
+  // so no separate arm/confirm state exists and no stray single byte can
+  // reach a wipe. Sending "0" alone must therefore do nothing, and this never
+  // sends the full-wipe path (9C), which also erases the firmware hash.
+  const pipe = fakeFirmware();
+  const written = seremuText(pipe);
+  const app = await start(pipe);
+
+  await app.services.device.wipeUserspace();
+  assert.equal(written.length, 1);
+  assert.match(written[0], /^0C/);
+  assert.doesNotMatch(written[0], /9C/);
+  await app.destroy();
+});
