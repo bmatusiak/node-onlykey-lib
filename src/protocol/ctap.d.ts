@@ -20,7 +20,35 @@ export const MAX_PAYLOAD: 245;
  * drives CTAP2 directly and so must state it. Overriding it is deliberate and
  * loud for that reason.
  */
-export const RP_ID: "onlyagent.app";
+export const RP_ID: "apps.crp.to";
+/**
+ * Every origin worth trying, most compatible FIRST.
+ *
+ * THE ORIGIN IS PART OF THE KEY, not just an access check. `okcrypto_hkdf()`
+ * reads the rpId out of the CTAP buffer, hashes it, and mixes that hash into
+ * the HKDF expand step - so two origins derive two different keys for the same
+ * label, with no error anywhere and no way to tell them apart until a file
+ * will not open.
+ *
+ * `apps.crp.to` is first because it is the one every firmware accepts.
+ * Measured byte for byte at every pin in ok-versions.json from the 2019 beta
+ * to the current working tree: `stored_apprpid` has never changed, and one
+ * commit ever touched it. `onlyagent.app` is an ADDITION the working tree made
+ * in 2026 (libraries@a5b731f, "accept onlyagent.app origin alongside
+ * apps.crp.to") and no release carries it.
+ *
+ * So the order is not a preference, it is the difference between working on
+ * every OnlyKey in existence and working on none of them. Putting
+ * `onlyagent.app` first is what made the whole vendor path - every derive, the
+ * vault, age identities - go unanswered on released firmware, which nobody saw
+ * because a debug build trusts all origins before comparing.
+ * ok-rn/FINDING-the-vendor-path-is-origin-gated-and-no-release-accepts-ours.md
+ *
+ * The list exists so a firmware that stops accepting the first is not a code
+ * change. A host overrides it with
+ * `plugins.config = { okcrypto: { rpIds: [...] } }`.
+ */
+export const RP_IDS: string[];
 /**
  * CTAP status codes, transcribed from onlykey.extra.js:245-292.
  *

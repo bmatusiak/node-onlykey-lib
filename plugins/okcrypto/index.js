@@ -69,6 +69,7 @@ const vaultStore = require('../../src/crypto/vault_store');
 const okconnect = require('../../src/crypto/okconnect');
 const keys = require('../../src/device/keys');
 const tunnelling = require('../../src/protocol/tunnel');
+const { RP_IDS } = require('../../src/protocol/ctap');
 const { CtapHid } = require('../../src/protocol/ctaphid');
 const chunker = require('../../src/device/chunker');
 const okmsg = require('../../src/protocol/okmsg');
@@ -77,8 +78,9 @@ const { toBase64Url, utf8ToBytes } = require('../../src/bytes');
 const { MSG } = require('../../src/protocol/msg');
 const { IFACE } = require('../../src/transport/contract');
 
-function setup(imports, register) {
+function setup(imports, register, config) {
   const { app, transport, host, session, device } = imports;
+  const settings = (config && config.okcrypto) || {};
 
   /*
    * The device's own account of what it is, for the one decision that cannot be
@@ -285,12 +287,34 @@ function setup(imports, register) {
    */
   let tunnelReady = null;
 
+  /**
+   * Which origin this device accepts, decided once and remembered.
+   *
+   * The rpId is an INPUT TO THE DERIVED KEY - okcrypto_hkdf() hashes it into
+   * the expand step - so this is not a connection detail. Two origins are two
+   * different keys for the same label, and the failure appears much later as a
+   * file that will not open.
+   *
+   * `RP_IDS` (src/protocol/ctap.js) is ordered most-compatible first, and the first
+   * entry is accepted by every firmware ever pinned. So under normal
+   * circumstances the first candidate wins on every device and there is one
+   * key per label everywhere - the list is a fallback for a firmware that
+   * stops accepting it, not a per-device lookup.
+   *
+   * A host that needs a different order passes one:
+   *
+   *     plugins.config = { okcrypto: { rpIds: ['apps.crp.to'] } };
+   */
+  const rpIds = (settings.rpIds && settings.rpIds.length)
+    ? settings.rpIds.slice()
+    : RP_IDS.slice();
+
   function openTunnel() {
     if (tunnelReady) return tunnelReady;
     tunnelReady = (async () => {
       const ctap = new CtapHid(transport);
       await ctap.init();
-      return tunnelling.createTunnel(ctap, { randomBytes });
+      return tunnelling.createTunnel(ctap, { randomBytes, rpId: rpIds[0] });
     })().catch((error) => {
       /* Not cached, so the next call tries again rather than replaying it. */
       tunnelReady = null;
