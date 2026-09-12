@@ -146,41 +146,51 @@ export function capabilities(status: any): {
      */
     postQuantum: boolean;
     /**
-     * Whether the firmware accepts the ORIGIN this library speaks.
+     * Whether this firmware answers the FIRST-PARTY origin this library sends.
      *
-     * This gates the WHOLE FIDO2 vendor path, not one feature.
-     * `ok_extension.cpp:137` wraps every branch of it in
-     * `if (webcryptcheck(_appid, client_handle))` - OKCONNECT, the derives,
-     * the tunnel, all of it - and `webcryptcheck` (fido2/device.cpp:83 at
-     * every pin) compares the request's rpId against `stored_apprpid`. When it
-     * does not match, the branch is skipped and the device answers nothing at
-     * all.
+     * `ok_extension.cpp:137` wraps the whole OnlyKey extension - OKCONNECT,
+     * every derive, the tunnel - in `if (webcryptcheck(_appid, client_handle))`,
+     * and `webcryptcheck` (fido2/device.cpp:83) answers with THREE values, not
+     * two:
+     *
+     *   2  the request's rpId matches `stored_apprpid`, or its appid hash
+     *      matches a stored one. Full extension.
+     *   1  any other origin, but only for the `0xFFFFFFFF` OKCONNECT bootstrap
+     *      and only when bit 2 of `derived_key_challenge_mode` is set. This is
+     *      THIRD-PARTY MODE, and it is a feature: the site sends its own
+     *      hostname, okcrypto_hkdf() folds that into the derivation, and the
+     *      site gets keys nobody else can ask for. Present in every release
+     *      from v2.1.0 on.
+     *   0  refused, and the device answers nothing at all.
+     *
+     * This flag is about the 2, because that is what the app needs. Third-
+     * party mode depends on an EEPROM byte written by setting 21 in config
+     * mode, which is a device setting rather than anything a version can
+     * answer for.
      *
      * MEASURED ACROSS NINE PINS: `stored_apprpid` is byte-identical
      * "apps.crp.to" from v0.2-beta.8 (2019) through HEAD. `onlyagent.app` is
-     * an ADDITION at HEAD - libraries@a5b731f (2026-07-08), "fido2: accept
-     * onlyagent.app origin alongside apps.crp.to" - working-tree work that has
-     * never shipped in a release. `localhost` exists only as the comment
-     * "//Todo add localhost support".
+     * an ADDITION at HEAD - libraries@a5b731f (2026-07-08) - matched by appid
+     * hash, and has never shipped in a release. `localhost` exists only as the
+     * comment "//Todo add localhost support".
      *
-     * So this is not a version boundary any more. The library used to send
-     * `onlyagent.app`, which made every released firmware answer nothing; it
-     * now sends the origin they all know, and the capability is a comparison
-     * rather than a threshold. Left as a capability rather than deleted
-     * because it is the thing that broke: if RP_ID moves again, this goes
-     * false and the suites that depend on the vendor path skip by name instead
-     * of failing with CTAP2_ERR_EXTENSION_NOT_SUPPORTED thirty tests later.
+     * So this is not a version boundary. The library used to send
+     * `onlyagent.app`, which dropped every release to 0; it now sends the
+     * origin they all know, and this is a comparison rather than a threshold.
+     * Left as a capability rather than deleted because it is the thing that
+     * broke: if RP_ID moves again, this goes false and the suites that need
+     * the vendor path skip by name instead of failing thirty tests later with
+     * CTAP2_ERR_EXTENSION_NOT_SUPPORTED.
      *
      * A DEBUG build would accept anything - webcryptcheck returns 2, "trust
      * all origins for debug firmware", before comparing - and that is deliber-
      * ately NOT used here. Reading true because the console build waves every
      * origin through is how thirteen green sweeps hid this for a month.
-     * See ok-rn/FINDING-the-vendor-path-is-origin-gated-and-no-release-accepts-ours.md.
+     * See ok-rn/FINDING-the-vendor-path-is-origin-gated.md.
      *
      * A HOST THAT OVERRIDES THE ORIGIN is not visible from here - the app can
      * pass `plugins.config = { okcrypto: { rpIds: [...] } }`, which ok-rn does
-     * from ok-versions.json. This answers for the library's own default, which
-     * is what every caller that does not override gets.
+     * from ok-versions.json. This answers for the library's own default.
      */
     vendorOrigin: boolean;
     /**

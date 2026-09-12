@@ -44,29 +44,39 @@ const RP_ID = 'apps.crp.to';
 /**
  * Every origin worth trying, most compatible FIRST.
  *
- * THE ORIGIN IS PART OF THE KEY, not just an access check. `okcrypto_hkdf()`
+ * THE ORIGIN IS PART OF THE KEY, AND THAT IS THE DESIGN. `okcrypto_hkdf()`
  * reads the rpId out of the CTAP buffer, hashes it, and mixes that hash into
- * the HKDF expand step - so two origins derive two different keys for the same
- * label, with no error anywhere and no way to tell them apart until a file
- * will not open.
+ * the HKDF expand step, so the same slot and the same input data derive a
+ * DIFFERENT key at every origin. That is what makes per-site derived keys work
+ * at all: a third-party site asks with its own hostname and gets keys only it
+ * can ask for again. `webcryptcheck()` has a branch for exactly that - it
+ * answers 2 for the first-party origin and 1 for any other, given the
+ * `0xFFFFFFFF` OKCONNECT bootstrap and bit 2 of `derived_key_challenge_mode`
+ * (setting 21, writable in config mode or on first use).
  *
- * `apps.crp.to` is first because it is the one every firmware accepts.
- * Measured byte for byte at every pin in ok-versions.json from the 2019 beta
- * to the current working tree: `stored_apprpid` has never changed, and one
- * commit ever touched it. `onlyagent.app` is an ADDITION the working tree made
- * in 2026 (libraries@a5b731f, "accept onlyagent.app origin alongside
- * apps.crp.to") and no release carries it.
+ * WHICH MEANS THE CHOICE HERE IS WHICH KEYSPACE TO LAND IN, not whether the
+ * device will answer. Send one origin, derive one set of keys; send another,
+ * derive another set, with no error anywhere - it surfaces much later as a
+ * file that will not open. So the order is pinned by a test rather than left
+ * to whichever constant was added most recently.
  *
- * So the order is not a preference, it is the difference between working on
- * every OnlyKey in existence and working on none of them. Putting
- * `onlyagent.app` first is what made the whole vendor path - every derive, the
- * vault, age identities - go unanswered on released firmware, which nobody saw
- * because a debug build trusts all origins before comparing.
- * ok-rn/FINDING-the-vendor-path-is-origin-gated-and-no-release-accepts-ours.md
+ * `apps.crp.to` leads because it is the FIRST-PARTY origin: it is the one that
+ * answers 2, the full vendor extension, without depending on an EEPROM bit
+ * somebody has to have set. Measured byte for byte at every pin in
+ * ok-versions.json from the 2019 beta to the working tree - `stored_apprpid`
+ * has never changed. `onlyagent.app` is an ADDITION the working tree made in
+ * 2026 (libraries@a5b731f) and is matched by its appid HASH rather than as an
+ * rpId string; no release carries it.
  *
- * The list exists so a firmware that stops accepting the first is not a code
- * change. A host overrides it with
- * `plugins.config = { okcrypto: { rpIds: [...] } }`.
+ * Leading with `onlyagent.app` is what made the whole vendor path - every
+ * derive, the vault, age identities - go unanswered on released firmware,
+ * which nobody saw because a debug build returns 2 before comparing anything.
+ * ok-rn/FINDING-the-vendor-path-is-origin-gated.md
+ *
+ * A host overrides the list with
+ * `plugins.config = { okcrypto: { rpIds: [...] } }`, which is also the door to
+ * third-party mode: pass a site's own hostname and the derives land in that
+ * site's keyspace instead of this one.
  */
 const RP_IDS = [RP_ID, 'onlyagent.app'];
 

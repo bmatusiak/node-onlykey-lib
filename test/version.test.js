@@ -319,7 +319,7 @@ test('the vendor ORIGIN gates the whole FIDO2 path, and now we speak it', () => 
    * `stored_apprpid` - byte-identical "apps.crp.to" at all nine pins, 2019 to
    * HEAD - and the library used to speak "onlyagent.app", which no release
    * knows. It now speaks the one they all know, so the whole line reads true.
-   * ok-rn/FINDING-the-vendor-path-is-origin-gated-and-no-release-accepts-ours.md
+   * ok-rn/FINDING-the-vendor-path-is-origin-gated.md
    */
   assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').vendorOrigin, true);
   assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').vendorOrigin, true);
