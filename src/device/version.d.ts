@@ -24,38 +24,7 @@ export function parseStatus(status: string | Uint8Array): {
     /** Whether firmware can be updated from a host over USB. */
     fwUpdateOverUsb: boolean;
 };
-/**
- * Why three branches below are marked UNVERIFIED, and will stay that way.
- *
- * The version matrix (ok-rn/tools/matrix.js) rebuilds each pinned release as an
- * emulator and runs the whole suite against it, so most of what this file says
- * is a MEASUREMENT rather than a transcription. Three branches are not, and a
- * green matrix must not be read as covering them:
- *
- *   okconnectLayout 'legacy'    v0.2-beta.8c
- *   challengeFormula 'legacy'   v0.2-beta.8c
- *   pollDelayMultiplier 4       Original hardware
- *
- * ok-versions.json pins six releases and the oldest is v2.1.0. Beta-8c is years
- * older than that and has no pin; Original is a discontinued MODEL rather than a
- * release, so no firmware version selects it and no build option produces one.
- * The matrix CANNOT reach either, however many versions are added to it - only
- * an older pin or a physical Original key would.
- *
- * Both branches come from the web app, which is the only client that implements
- * them, and both are transcribed against the exact source line. That is the
- * evidence they have. It is not the same evidence as everything else here, and
- * the difference is worth saying out loud rather than discovering later.
- */
-/**
- * What this device can be asked to do.
- *
- * Every entry cites where it came from, and entries whose old-firmware branch
- * has never been run against old hardware say so.
- *
- * @param {object|string} status a parseStatus result, or a raw status line
- */
-export function capabilities(status: object | string): {
+export function capabilities(status: any): {
     gestures: {
         /** The device TYPES the whole backup file at the keyboard. */
         backup: {
@@ -183,27 +152,35 @@ export function capabilities(status: object | string): {
      * `ok_extension.cpp:137` wraps every branch of it in
      * `if (webcryptcheck(_appid, client_handle))` - OKCONNECT, the derives,
      * the tunnel, all of it - and `webcryptcheck` (fido2/device.cpp:83 at
-     * every pin) compares the request's rpId against `stored_apprpid`, which
-     * is "apps.crp.to". When it does not match, the branch is skipped
-     * entirely and the device answers nothing at all.
+     * every pin) compares the request's rpId against `stored_apprpid`. When it
+     * does not match, the branch is skipped and the device answers nothing at
+     * all.
      *
-     * This library speaks `onlyagent.app` (RP_ID in protocol/ctap.js, and see
-     * the note in protocol/tunnel.js about why that is not a free choice).
-     * The firmware that accepts it arrived in libraries@a5b731f (2026-07-08),
-     * "fido2: accept onlyagent.app origin alongside apps.crp.to" - working
-     * tree work that has never shipped. So on a RELEASED OnlyKey, every
-     * derive and every tunnelled request through this library goes
-     * unanswered.
+     * MEASURED ACROSS NINE PINS: `stored_apprpid` is byte-identical
+     * "apps.crp.to" from v0.2-beta.8 (2019) through HEAD. `onlyagent.app` is
+     * an ADDITION at HEAD - libraries@a5b731f (2026-07-08), "fido2: accept
+     * onlyagent.app origin alongside apps.crp.to" - working-tree work that has
+     * never shipped in a release. `localhost` exists only as the comment
+     * "//Todo add localhost support".
      *
-     * The official web app is unaffected: it runs at apps.crp.to and matches.
+     * So this is not a version boundary any more. The library used to send
+     * `onlyagent.app`, which made every released firmware answer nothing; it
+     * now sends the origin they all know, and the capability is a comparison
+     * rather than a threshold. Left as a capability rather than deleted
+     * because it is the thing that broke: if RP_ID moves again, this goes
+     * false and the suites that depend on the vendor path skip by name instead
+     * of failing with CTAP2_ERR_EXTENSION_NOT_SUPPORTED thirty tests later.
      *
-     * A DEBUG build hides all of it. webcryptcheck returns 2 - "trust all
-     * origins for debug firmware" - before comparing anything, which is why
-     * this was invisible for as long as the matrix forced the debug gate on.
+     * A DEBUG build would accept anything - webcryptcheck returns 2, "trust
+     * all origins for debug firmware", before comparing - and that is deliber-
+     * ately NOT used here. Reading true because the console build waves every
+     * origin through is how thirteen green sweeps hid this for a month.
      * See ok-rn/FINDING-the-vendor-path-is-origin-gated-and-no-release-accepts-ours.md.
      *
-     * Nothing assumed forward: a release that ships a5b731f will need this
-     * raised once there is one to measure.
+     * A HOST THAT OVERRIDES THE ORIGIN is not visible from here - the app can
+     * pass `plugins.config = { okcrypto: { rpIds: [...] } }`, which ok-rn does
+     * from ok-versions.json. This answers for the library's own default, which
+     * is what every caller that does not override gets.
      */
     vendorOrigin: boolean;
     /**

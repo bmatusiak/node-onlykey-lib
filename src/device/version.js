@@ -73,6 +73,15 @@ const MODEL = {
 };
 
 /** Which firmware build, from the version keyword. */
+/*
+ * The one origin question this file cannot answer from a version string: WHICH
+ * ORIGIN THIS LIBRARY SENDS. `vendorOrigin` below compares it against the set
+ * each firmware accepts, so changing RP_ID changes that capability rather than
+ * quietly breaking every derive - which is exactly what happened the last time
+ * the two drifted apart.
+ */
+const { RP_ID } = require('../protocol/ctap');
+
 const BUILD = {
   DEBUG: 'debug',           // '-test': the serial console exists
   PRODUCTION: 'production', // '-prod': it does not
@@ -303,6 +312,25 @@ function supportsFwUpdate(version) {
  *
  * @param {object|string} status a parseStatus result, or a raw status line
  */
+/**
+ * Every origin THIS firmware's `stored_apprpid` will match.
+ *
+ * A list rather than a flag because it is a list in the firmware: HEAD carries
+ * two entries, every release carries one, and a future release may carry more.
+ * Kept beside the capability that reads it so the two cannot drift.
+ *
+ * The development line is the only build that knows `onlyagent.app`, and
+ * nothing is assumed forward - a released 3.0.5 reads like a release until
+ * somebody measures its sources.
+ */
+function vendorOrigins(info) {
+  const origins = ['apps.crp.to'];
+  const development =
+    info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]);
+  if (development) origins.push('onlyagent.app');
+  return origins;
+}
+
 function capabilities(status) {
   const info = typeof status === 'string' ? parseStatus(status) : status;
 
@@ -502,29 +530,37 @@ const gestures = (() => {
      * `ok_extension.cpp:137` wraps every branch of it in
      * `if (webcryptcheck(_appid, client_handle))` - OKCONNECT, the derives,
      * the tunnel, all of it - and `webcryptcheck` (fido2/device.cpp:83 at
-     * every pin) compares the request's rpId against `stored_apprpid`, which
-     * is "apps.crp.to". When it does not match, the branch is skipped
-     * entirely and the device answers nothing at all.
+     * every pin) compares the request's rpId against `stored_apprpid`. When it
+     * does not match, the branch is skipped and the device answers nothing at
+     * all.
      *
-     * This library speaks `onlyagent.app` (RP_ID in protocol/ctap.js, and see
-     * the note in protocol/tunnel.js about why that is not a free choice).
-     * The firmware that accepts it arrived in libraries@a5b731f (2026-07-08),
-     * "fido2: accept onlyagent.app origin alongside apps.crp.to" - working
-     * tree work that has never shipped. So on a RELEASED OnlyKey, every
-     * derive and every tunnelled request through this library goes
-     * unanswered.
+     * MEASURED ACROSS NINE PINS: `stored_apprpid` is byte-identical
+     * "apps.crp.to" from v0.2-beta.8 (2019) through HEAD. `onlyagent.app` is
+     * an ADDITION at HEAD - libraries@a5b731f (2026-07-08), "fido2: accept
+     * onlyagent.app origin alongside apps.crp.to" - working-tree work that has
+     * never shipped in a release. `localhost` exists only as the comment
+     * "//Todo add localhost support".
      *
-     * The official web app is unaffected: it runs at apps.crp.to and matches.
+     * So this is not a version boundary any more. The library used to send
+     * `onlyagent.app`, which made every released firmware answer nothing; it
+     * now sends the origin they all know, and the capability is a comparison
+     * rather than a threshold. Left as a capability rather than deleted
+     * because it is the thing that broke: if RP_ID moves again, this goes
+     * false and the suites that depend on the vendor path skip by name instead
+     * of failing with CTAP2_ERR_EXTENSION_NOT_SUPPORTED thirty tests later.
      *
-     * A DEBUG build hides all of it. webcryptcheck returns 2 - "trust all
-     * origins for debug firmware" - before comparing anything, which is why
-     * this was invisible for as long as the matrix forced the debug gate on.
+     * A DEBUG build would accept anything - webcryptcheck returns 2, "trust
+     * all origins for debug firmware", before comparing - and that is deliber-
+     * ately NOT used here. Reading true because the console build waves every
+     * origin through is how thirteen green sweeps hid this for a month.
      * See ok-rn/FINDING-the-vendor-path-is-origin-gated-and-no-release-accepts-ours.md.
      *
-     * Nothing assumed forward: a release that ships a5b731f will need this
-     * raised once there is one to measure.
+     * A HOST THAT OVERRIDES THE ORIGIN is not visible from here - the app can
+     * pass `plugins.config = { okcrypto: { rpIds: [...] } }`, which ok-rn does
+     * from ok-versions.json. This answers for the library's own default, which
+     * is what every caller that does not override gets.
      */
-    vendorOrigin: info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]),
+    vendorOrigin: vendorOrigins(info).indexOf(RP_ID) !== -1,
 
     /**
      * HMAC-SHA1 slot keys, which the Keys tab offers as a key type.

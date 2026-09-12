@@ -21,6 +21,7 @@
 'use strict';
 
 const test = require('node:test');
+const ctap = require('../src/protocol/ctap');
 const assert = require('node:assert');
 
 const {
@@ -310,21 +311,38 @@ test('nothing is assumed about a release that does not exist yet', () => {
   assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').postQuantum, false);
 });
 
-test('the vendor ORIGIN gates the whole FIDO2 path, and no release accepts ours', () => {
+test('the vendor ORIGIN gates the whole FIDO2 path, and now we speak it', () => {
   /*
    * webcryptcheck() returns 2 on a DEBUG build before comparing anything, so
    * the tunnel appeared to work on every release for as long as the matrix
    * forced the gate on. With it off, the rpId is compared against
-   * "apps.crp.to" and this library speaks "onlyagent.app", which no release
-   * knows - it arrived in libraries@a5b731f, working-tree only.
-   * ok-rn/FINDING-the-vendor-tunnel-never-worked-on-a-release.md
+   * `stored_apprpid` - byte-identical "apps.crp.to" at all nine pins, 2019 to
+   * HEAD - and the library used to speak "onlyagent.app", which no release
+   * knows. It now speaks the one they all know, so the whole line reads true.
+   * ok-rn/FINDING-the-vendor-path-is-origin-gated-and-no-release-accepts-ours.md
    */
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').vendorOrigin, true);
+  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').vendorOrigin, true);
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').vendorOrigin, true);
+  assert.equal(capabilities('UNLOCKEDv0.2-beta.8-prodc').vendorOrigin, true);
   assert.equal(capabilities('UNLOCKEDv3.0.4-testc').vendorOrigin, true);
-  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').vendorOrigin, false);
-  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').vendorOrigin, false);
-  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').vendorOrigin, false);
-  /* And not assumed forward, like the two beside it. */
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').vendorOrigin, false);
+  /* Unmeasured releases inherit the origin too - it has never once moved. */
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').vendorOrigin, true);
+});
+
+test('the capability follows RP_ID, so a change there cannot pass unnoticed', () => {
+  /*
+   * THE POINT OF KEEPING IT A CAPABILITY. The old rule was a version
+   * threshold and went stale the moment the library changed origin; this one
+   * is a comparison, so it answers for whatever RP_ID currently is.
+   *
+   * `onlyagent.app` is known ONLY by the development line (libraries@a5b731f,
+   * 2026-07-08, never released), and that asymmetry is the whole reason the
+   * library leads with the other one.
+   */
+  assert.equal(ctap.RP_ID, 'apps.crp.to');
+  assert.equal(ctap.RP_IDS[0], ctap.RP_ID);
+  assert.ok(ctap.RP_IDS.includes('onlyagent.app'));
 });
 
 test('post-quantum is the development line, not a version threshold', () => {
