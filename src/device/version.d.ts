@@ -188,9 +188,11 @@ export function capabilities(status: any): {
      * origin through is how thirteen green sweeps hid this for a month.
      * See ok-rn/FINDING-the-vendor-path-is-origin-gated.md.
      *
-     * A HOST THAT OVERRIDES THE ORIGIN is not visible from here - the app can
-     * pass `plugins.config = { okcrypto: { rpIds: [...] } }`, which ok-rn does
-     * from ok-versions.json. This answers for the library's own default.
+     * A HOST THAT OVERRIDES THE ORIGIN is not visible from here - a caller can
+     * pass `plugins.config = { okcrypto: { rpIds: [...] } }`, which is how a
+     * third-party site would ask under its own hostname. This answers for the
+     * library's own default, which is what every caller that does not override
+     * gets.
      */
     vendorOrigin: boolean;
     /**
