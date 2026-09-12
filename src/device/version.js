@@ -466,15 +466,58 @@ const gestures = (() => {
      * working tree, registered in plugins-devel.js, absent from a production
      * build. The app and the firmware are ahead of the same release together.
      *
-     * THE THRESHOLD IS A GUESS ABOUT THE FUTURE, and deliberately the
-     * pessimistic one. v3.0.2 is the newest release measured to lack all of
-     * it, so anything at or past v3.0.3 is treated as having it. If 3.0.3
-     * ships without post-quantum support this flag is wrong in the direction
-     * of offering too much, and the fix is to raise the number here once
-     * there is a release to measure. Nothing else in the library reads the
-     * version for this.
+     * NO RELEASE HAS IT, AND THAT IS NOW MEASURED RATHER THAN ASSUMED.
+     *
+     * This used to be `atLeast(release, [3, 0, 3])`, with a comment calling
+     * the threshold a guess about the future and saying to raise it once
+     * there was a release to measure. There are two now, v3.0.3 and v3.0.4,
+     * and neither has any of it - they ran the X-Wing and age tests instead of
+     * skipping them and failed on a key type that does not exist.
+     *
+     * So the question is not "which version" but "release or development
+     * line", and the BUILD KEYWORD answers it: a release is -prod, the
+     * development tree is -test. The version number cannot, because the
+     * development tree still declares 3.0.4 - the macro has not been bumped
+     * since 2022 - so released v3.0.4 and the bench key share a number.
+     *
+     * The keyword only became usable when the matrix started building
+     * releases as they ship. While every pinned release was forced to DEBUG
+     * so it could be provisioned, a released v3.0.4 reported v3.0.4-testc,
+     * character for character what the bench key reports.
+     *
+     * `atLeast(3.0.4)` as well as the keyword, so that a developer building
+     * v3.0.2 with DEBUG on is not told it has post-quantum support. And
+     * nothing is assumed forward: a future 3.0.5-prod reads false until
+     * somebody measures it, because guessing one release ahead is precisely
+     * what went wrong here.
+     *
+     * ok-rn/FINDING-two-capability-guesses-about-the-next-release-were-both-wrong.md
      */
-    postQuantum: atLeast(info.release, [3, 0, 3]),
+    postQuantum: info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]),
+
+    /**
+     * Whether a vendor request can reach the device through the FIDO2 tunnel.
+     *
+     * NO RELEASE ACCEPTS THE ORIGIN THIS LIBRARY SPEAKS. `webcryptcheck()`
+     * (fido2/device.cpp:83 at every pin) compares the request's rpId against
+     * `stored_apprpid`, which is "apps.crp.to". The tunnel sends
+     * `onlyagent.app` - see RP_ID in protocol/ctap.js, and the note in
+     * protocol/tunnel.js about why that is not a free choice - and the
+     * firmware that accepts it arrived in libraries@a5b731f (2026-07-08),
+     * working-tree work that has never shipped.
+     *
+     * A DEBUG build hides this completely: webcryptcheck returns 2 - "trust
+     * all origins for debug firmware" - BEFORE any comparison runs. So the
+     * tunnel test passed on every release for as long as the matrix forced
+     * the debug gate on, and turned red the moment releases were built as
+     * they ship. See
+     * ok-rn/FINDING-the-vendor-tunnel-never-worked-on-a-release.md.
+     *
+     * Same shape as postQuantum above, and the same rule: nothing is assumed
+     * forward. A release that ships a5b731f will need this raised once there
+     * is one to measure.
+     */
+    vendorTunnel: info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]),
 
     /**
      * HMAC-SHA1 slot keys, which the Keys tab offers as a key type.
@@ -558,11 +601,38 @@ const gestures = (() => {
        */
       if (!rel) return 'always';
       if (rel.major < 3) return 'always';
-      if (rel.major > 3 || rel.minor > 0) return 'preference';
-      /* 3.0.x */
-      if (rel.patch === null || rel.patch < 2) return 'always';
-      if (rel.patch === 2) return 'broken';
-      return 'preference';
+      if (rel.major === 3 && rel.minor === 0 && (rel.patch === null || rel.patch < 2)) {
+        return 'always';
+      }
+
+      /*
+       * FROM v3.0.2 ON IT IS BROKEN ON EVERY RELEASE, and working only in the
+       * development line.
+       *
+       * This used to read "v3.0.2 is broken, anything after it is fixed", on
+       * the reasoning that the check was corrected to reload the byte from
+       * EEPROM. That was a guess about a release that did not exist yet, and
+       * both releases that have arrived since disprove it: v3.0.3 and v3.0.4
+       * still demand a press with the preference written, and answer a
+       * touch-free derive with nothing at all.
+       *
+       * The development tree DOES work, and it declares 3.0.4 as well - the
+       * macro has not been bumped since 2022 - so the number alone cannot
+       * separate them. The BUILD KEYWORD can: a release is -prod, the
+       * development line is -test. That only became usable when the matrix
+       * started building releases as they ship rather than forcing DEBUG on,
+       * which had every release reporting -test too.
+       *
+       * Nothing is assumed about a release that does not exist. A future
+       * 3.0.5-prod reads 'broken' like the newest release actually measured,
+       * and stays that way until somebody measures it. Guessing forward is the
+       * exact mistake this replaces, and it cost two releases of false
+       * failures before anyone noticed.
+       *
+       * ok-rn/FINDING-two-capability-guesses-about-the-next-release-were-both-wrong.md
+       */
+      const development = info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]);
+      return development ? 'preference' : 'broken';
     })(),
 
     /**

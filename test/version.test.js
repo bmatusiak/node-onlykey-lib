@@ -280,11 +280,60 @@ test('v3.0.2 added the check and reads a cache that is always stale', () => {
   assert.equal(capabilities('UNLOCKEDv3.0.2-testc').touchFreeDerive, 'broken');
 });
 
-test('after v3.0.2 the preference works, so it is required', () => {
-  assert.equal(capabilities('UNLOCKEDv3.0.3-prodc').touchFreeDerive, 'preference');
+test('it is BROKEN on every release from v3.0.2 on, and works only in development', () => {
+  /*
+   * This test used to assert the opposite - that anything after v3.0.2 had the
+   * preference working - on the reasoning that the check was fixed to reload
+   * the byte from EEPROM. Both releases that arrived since disprove it: with
+   * the preference written, v3.0.3 and v3.0.4 still demand a press and answer
+   * a touch-free derive with nothing.
+   *
+   * The development tree does work, and declares 3.0.4 like the release does,
+   * so the build keyword is what separates them.
+   * ok-rn/FINDING-two-capability-guesses-about-the-next-release-were-both-wrong.md
+   */
+  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').touchFreeDerive, 'broken');
+  assert.equal(capabilities('UNLOCKEDv3.0.3-prodc').touchFreeDerive, 'broken');
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').touchFreeDerive, 'broken');
   assert.equal(capabilities('UNLOCKEDv3.0.4-testc').touchFreeDerive, 'preference');
-  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').touchFreeDerive, 'preference');
-  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'preference');
+});
+
+test('nothing is assumed about a release that does not exist yet', () => {
+  /*
+   * The previous rule guessed one release forward and was wrong twice. An
+   * unmeasured release now reads like the newest one that WAS measured, and
+   * stays there until somebody measures it.
+   */
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').touchFreeDerive, 'broken');
+  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'broken');
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').postQuantum, false);
+  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').postQuantum, false);
+});
+
+test('the vendor tunnel is the development line too, and for a measured reason', () => {
+  /*
+   * webcryptcheck() returns 2 on a DEBUG build before comparing anything, so
+   * the tunnel appeared to work on every release for as long as the matrix
+   * forced the gate on. With it off, the rpId is compared against
+   * "apps.crp.to" and this library speaks "onlyagent.app", which no release
+   * knows - it arrived in libraries@a5b731f, working-tree only.
+   * ok-rn/FINDING-the-vendor-tunnel-never-worked-on-a-release.md
+   */
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').vendorTunnel, true);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').vendorTunnel, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').vendorTunnel, false);
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').vendorTunnel, false);
+  /* And not assumed forward, like the two beside it. */
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').vendorTunnel, false);
+});
+
+test('post-quantum is the development line, not a version threshold', () => {
+  /* No release has it - measured across v3.0.3 and v3.0.4, not inferred. */
+  assert.equal(capabilities('UNLOCKEDv3.0.3-prodc').postQuantum, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').postQuantum, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').postQuantum, true);
+  /* And a DEBUG build of an older release is still an older release. */
+  assert.equal(capabilities('UNLOCKEDv3.0.2-testc').postQuantum, false);
 });
 
 test('an unreadable version does not disable a working device', () => {
