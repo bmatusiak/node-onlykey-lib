@@ -115,18 +115,32 @@ function parseFirmware(text) {
 }
 
 /**
- * A firmware block's structure, per the loader's own comments.
+ * A firmware block's structure, in HEX CHARACTERS.
  *
- *   [0..63]    this block's signature   (32 bytes)
- *   [64]       block info               (one nibble)
- *   [65..128]  the next block's signature
+ *   [0..63]    this block's signature      (32 bytes)
+ *   [64..65]   block info                  (1 byte)
+ *   [66..129]  the next block's signature  (32 bytes)
+ *   [130..]    the block itself
+ *
+ * THE INFO FIELD IS A BYTE, AND THIS READ IT AS A NIBBLE. The loader's own
+ * comment calls it a nibble, which is true of what it CONTAINS and not of the
+ * space it occupies, and every field after the signature was shifted one hex
+ * character left as a result. firmware.js:describeBlock had it right all along,
+ * so the app's screen was never affected; the only caller here was a test built
+ * to the same wrong shape.
+ *
+ * The release images settle it. Their block lines are 33026 and 32898 hex
+ * characters: a 130-character header leaves 16448 and 16384 bytes, the second
+ * being exactly a 16 KB flash page, while a 129-character one leaves an odd
+ * number of hex characters, which is not a whole number of bytes at all.
+ * See ok-rn/FINDING-two-block-describers-disagree-by-a-nibble.md.
  */
 function describeFirmwareBlock(block) {
-  if (block.length < 65) return null;
+  if (block.length < 66) return null;
   return {
     signature: block.slice(0, 64),
-    info: block.slice(64, 65),
-    nextSignature: block.length >= 129 ? block.slice(65, 129) : null,
+    info: block.slice(64, 66),
+    nextSignature: block.length >= 130 ? block.slice(66, 130) : null,
   };
 }
 

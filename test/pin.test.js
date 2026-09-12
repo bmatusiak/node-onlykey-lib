@@ -5,6 +5,7 @@ const assert = require('node:assert');
 
 const pin = require('../src/device/pin');
 const parsers = require('../src/device/parsers');
+const firmware = require('../src/device/firmware');
 const { MSG } = require('../src/protocol/msg');
 const { toHex } = require('../src/bytes');
 
@@ -194,11 +195,34 @@ test('an odd-length firmware block is refused', () => {
 });
 
 test('a firmware block exposes its signature layout', () => {
-  const block = 'a'.repeat(64) + '1' + 'b'.repeat(64);
+  /*
+   * A 65-BYTE HEADER, and the data length is what pins it. This used to build
+   * a 129-character block - a one-nibble info field - which agreed with the
+   * function and with nothing else: it leaves an odd number of hex characters
+   * for the block, and that is not a whole number of bytes.
+   *
+   * The real releases in ok-rn/signed_firmware/ carry 33026 and 32898
+   * characters per line, so their data is 16448 and 16384 bytes.
+   * ok-rn/FINDING-two-block-describers-disagree-by-a-nibble.md
+   */
+  const data = 'c'.repeat(32768);
+  const block = 'a'.repeat(64) + '1f' + 'b'.repeat(64) + data;
   const out = parsers.describeFirmwareBlock(block);
-  assert.equal(out.signature.length, 64);
-  assert.equal(out.info, '1');
-  assert.equal(out.nextSignature.length, 64);
+  assert.equal(out.signature, 'a'.repeat(64));
+  assert.equal(out.info, '1f');
+  assert.equal(out.nextSignature, 'b'.repeat(64));
+  assert.equal((block.length - 130) % 2, 0, 'the block data must be whole bytes');
+  assert.equal(block.length - 130, data.length);
+});
+
+test('the two block describers agree, because they used not to', () => {
+  /* firmware.js had the right offsets and parsers.js was a nibble short. */
+  const block = 'a'.repeat(64) + '1f' + 'b'.repeat(64) + 'c'.repeat(256);
+  const a = parsers.describeFirmwareBlock(block);
+  const b = firmware.describeBlock(block);
+  assert.equal(a.signature, b.signature);
+  assert.equal(a.info, b.info);
+  assert.equal(a.nextSignature, b.nextSignature);
 });
 
 test('the bootloader kick is the literal 1234', () => {
