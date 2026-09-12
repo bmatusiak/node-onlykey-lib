@@ -887,6 +887,58 @@ const PREFERENCES = {
         }));
 
         /*
+         * IN CONFIG MODE NOTHING ANNOUNCES THE UNLOCK, so ask instead.
+         *
+         * `if (!configmode) hidprint(HW_MODEL(UNLOCKED))` - OnlyKey.ino:707.
+         * The device unlocks, stops its INITIALIZED broadcast, turns the LED
+         * red and says nothing. Both listeners above go quiet: there is no
+         * vendor status to parse and no console line to match.
+         *
+         * On a DEBUG build the console line existed anyway, so this waited
+         * successfully for years without anyone noticing it was waiting on the
+         * wrong thing. Built as it ships there is no console at all, and
+         * unlocking inside config mode became impossible - which takes loading
+         * a key, setting a preference and requesting a firmware update with it,
+         * since all three need config mode.
+         *
+         * So: a positive probe. OKGETLABELS is on the config-mode allowlist
+         * (okcore.cpp:347) and answers "Error device locked" until the device
+         * is unlocked, so a label read that SUCCEEDS is proof. Silence is not
+         * used as evidence either way - it is also what a wedged device
+         * produces.
+         *
+         * Only while this session put the key into config mode. Outside it the
+         * announcement arrives and probing would be traffic during PIN entry
+         * for no reason.
+         *
+         * The app's Keys screen already did exactly this, in its own copy
+         * (FINDING-config-mode-unlock-is-silent.md). It belongs here, where
+         * every GUI gets it rather than each one rediscovering it.
+         */
+        if (session.configMode) {
+          let probing = false;
+          const probe = setInterval(async () => {
+            if (probing) return;
+            probing = true;
+            try {
+              await device.readLabels({ timeoutMs: 2000 });
+              /*
+               * Resolved with a marker rather than a status line, because
+               * there is no status line to report - the device never sent one.
+               * parseStatus reads it as unlocked with no version, which is the
+               * truth: in config mode the version is not on offer either.
+               */
+              done(() => resolve('UNLOCKED'));
+            } catch (_) {
+              /* Still locked, or busy. Ask again. */
+            } finally {
+              probing = false;
+            }
+          }, 1500);
+          offs.push(() => clearInterval(probe));
+        }
+
+        /*
          * Pressed AFTER both subscriptions are up. The firmware answers within
          * a loop iteration of the last digit, which on an in-process bus is
          * faster than a caller that writes first can start listening.

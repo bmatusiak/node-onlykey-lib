@@ -310,7 +310,7 @@ test('nothing is assumed about a release that does not exist yet', () => {
   assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').postQuantum, false);
 });
 
-test('the vendor tunnel is the development line too, and for a measured reason', () => {
+test('the vendor ORIGIN gates the whole FIDO2 path, and no release accepts ours', () => {
   /*
    * webcryptcheck() returns 2 on a DEBUG build before comparing anything, so
    * the tunnel appeared to work on every release for as long as the matrix
@@ -319,12 +319,12 @@ test('the vendor tunnel is the development line too, and for a measured reason',
    * knows - it arrived in libraries@a5b731f, working-tree only.
    * ok-rn/FINDING-the-vendor-tunnel-never-worked-on-a-release.md
    */
-  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').vendorTunnel, true);
-  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').vendorTunnel, false);
-  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').vendorTunnel, false);
-  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').vendorTunnel, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-testc').vendorOrigin, true);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').vendorOrigin, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').vendorOrigin, false);
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').vendorOrigin, false);
   /* And not assumed forward, like the two beside it. */
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').vendorTunnel, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').vendorOrigin, false);
 });
 
 test('post-quantum is the development line, not a version threshold', () => {

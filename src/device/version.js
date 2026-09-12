@@ -496,28 +496,35 @@ const gestures = (() => {
     postQuantum: info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]),
 
     /**
-     * Whether a vendor request can reach the device through the FIDO2 tunnel.
+     * Whether the firmware accepts the ORIGIN this library speaks.
      *
-     * NO RELEASE ACCEPTS THE ORIGIN THIS LIBRARY SPEAKS. `webcryptcheck()`
-     * (fido2/device.cpp:83 at every pin) compares the request's rpId against
-     * `stored_apprpid`, which is "apps.crp.to". The tunnel sends
-     * `onlyagent.app` - see RP_ID in protocol/ctap.js, and the note in
-     * protocol/tunnel.js about why that is not a free choice - and the
-     * firmware that accepts it arrived in libraries@a5b731f (2026-07-08),
-     * working-tree work that has never shipped.
+     * This gates the WHOLE FIDO2 vendor path, not one feature.
+     * `ok_extension.cpp:137` wraps every branch of it in
+     * `if (webcryptcheck(_appid, client_handle))` - OKCONNECT, the derives,
+     * the tunnel, all of it - and `webcryptcheck` (fido2/device.cpp:83 at
+     * every pin) compares the request's rpId against `stored_apprpid`, which
+     * is "apps.crp.to". When it does not match, the branch is skipped
+     * entirely and the device answers nothing at all.
      *
-     * A DEBUG build hides this completely: webcryptcheck returns 2 - "trust
-     * all origins for debug firmware" - BEFORE any comparison runs. So the
-     * tunnel test passed on every release for as long as the matrix forced
-     * the debug gate on, and turned red the moment releases were built as
-     * they ship. See
-     * ok-rn/FINDING-the-vendor-tunnel-never-worked-on-a-release.md.
+     * This library speaks `onlyagent.app` (RP_ID in protocol/ctap.js, and see
+     * the note in protocol/tunnel.js about why that is not a free choice).
+     * The firmware that accepts it arrived in libraries@a5b731f (2026-07-08),
+     * "fido2: accept onlyagent.app origin alongside apps.crp.to" - working
+     * tree work that has never shipped. So on a RELEASED OnlyKey, every
+     * derive and every tunnelled request through this library goes
+     * unanswered.
      *
-     * Same shape as postQuantum above, and the same rule: nothing is assumed
-     * forward. A release that ships a5b731f will need this raised once there
-     * is one to measure.
+     * The official web app is unaffected: it runs at apps.crp.to and matches.
+     *
+     * A DEBUG build hides all of it. webcryptcheck returns 2 - "trust all
+     * origins for debug firmware" - before comparing anything, which is why
+     * this was invisible for as long as the matrix forced the debug gate on.
+     * See ok-rn/FINDING-the-vendor-path-is-origin-gated-and-no-release-accepts-ours.md.
+     *
+     * Nothing assumed forward: a release that ships a5b731f will need this
+     * raised once there is one to measure.
      */
-    vendorTunnel: info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]),
+    vendorOrigin: info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]),
 
     /**
      * HMAC-SHA1 slot keys, which the Keys tab offers as a key type.
