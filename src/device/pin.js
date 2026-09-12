@@ -34,6 +34,37 @@ const PROMPTS = {
   storing: /Storing PIN/,
   confirm: /Confirm PIN/,
   matched: /Both PINs Match/,
+  /*
+   * THE BRACKET IS NOT OVER WHEN THE PINS MATCH.
+   *
+   * "Both PINs Match" is printed at the TOP of the firmware's commit block,
+   * before it has stored anything (okcore.cpp, set_primary_pin case 3). What
+   * follows is the expensive part: a new nonce2 into EEPROM, a nonce into
+   * flash on first use, TWO Curve25519 evaluations, and a 254-byte flash
+   * sector rewrite - and the hash it commits is taken from `password.guess`
+   * at that moment.
+   *
+   * Returning at "matched" hands control back while that is still running, so
+   * anything the caller does next - pressing buttons, in particular - appends
+   * to the very buffer being hashed. The device then stores the hash of a
+   * LONGER string than the PIN, reports itself initialized, and refuses that
+   * PIN for ever after, with nothing anywhere saying why.
+   *
+   * MEASURED on v2.1.2 staged as a soft key, with the console tapped across
+   * one provisioning and the unlock that followed:
+   *
+   *   ===== SETTING THE PIN =====
+   *   Both PINs Match                 <- setPin returned here
+   *   ===== ENTERING THE PIN =====
+   *   Generating NONCE                <- still committing, while we pressed
+   *   Storing public key of PIN hash =
+   *   Pin hash address =7F47157000
+   *   Successfully set PIN
+   *
+   * Every release from v2.1.1 through HEAD prints "Successfully set PIN" at
+   * the end of that block, so waiting for it is the same wait everywhere.
+   */
+  committed: /Successfully set PIN/,
 };
 
 const ERRORS = {
@@ -201,7 +232,13 @@ const PIN_SEQUENCE = [
   { send: true, expect: 'storing', reject: ['tooShort'], label: 'stored' },
   { send: true, expect: 'confirm', label: 'confirming' },
   { digits: true, label: 're-entered' },
-  { send: true, expect: 'matched', reject: ['mismatch', 'tooShort'], label: 'committed' },
+  { send: true, expect: 'matched', reject: ['mismatch', 'tooShort'], label: 'matched' },
+  /*
+   * NOTHING IS SENT HERE. The firmware is already committing; this waits for
+   * it to say so. See the note on PROMPTS.committed for what goes wrong when
+   * the caller is let go at "Both PINs Match" instead.
+   */
+  { expect: 'committed', label: 'committed' },
 ];
 
 /** The message for one step of a PIN kind. */

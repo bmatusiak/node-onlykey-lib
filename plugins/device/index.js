@@ -177,7 +177,14 @@ function setup(imports, register) {
        * and again for the confirmation - so stale text would satisfy the next
        * wait immediately and the host would run ahead of the device.
        */
-      console_.clear();
+      /*
+       * ...but a step that only WAITS must not clear, or it throws away the
+       * very line it is waiting for. The commit line can arrive in the same
+       * read as "Both PINs Match" on a device that writes flash quickly, and
+       * clearing here would then wait out the full timeout for a line that
+       * had already been said.
+       */
+      if (step.send || step.digits) console_.clear();
 
       if (step.send) {
         await transport.write(IFACE.VENDOR, message);
@@ -196,6 +203,16 @@ function setup(imports, register) {
          * PINs that were typed identically.
          */
         await console_.waitForCount(pin.DIGIT_ACK, digits.length, { timeoutMs });
+      } else if (step.expect) {
+        /*
+         * A WAIT WITH NOTHING SENT. The firmware is already working and the
+         * host has nothing to add - it only has to stay out of the way until
+         * the write is done. See pin.js:PROMPTS.committed: letting the caller
+         * go at "Both PINs Match" means its next button press lands in the
+         * buffer the firmware is still hashing, and the device stores the
+         * hash of a longer string than the PIN it was given.
+         */
+        await console_.waitFor(pin.PROMPTS[step.expect], { timeoutMs });
       }
 
       progress(step.label, { kind });

@@ -29,16 +29,26 @@ test('a confirmation mismatch is reported', () => {
   assert.match(pin.validatePin('1234561', { confirm: '1234562' }).join(' '), /do not match/);
 });
 
-test('the PIN sequence is six transitions, four of them sends', () => {
+test('the PIN sequence is seven transitions, four of them sends', () => {
   // The same message id drives every one; meaning depends on position, which
   // is why each step waits for its prompt rather than assuming it.
-  assert.equal(pin.PIN_SEQUENCE.length, 6);
+  //
+  // THE SEVENTH SENDS NOTHING. "Both PINs Match" is printed at the top of the
+  // firmware's commit block, before the nonce, the two Curve25519 evaluations
+  // and the flash write - and the hash it commits is read from the guess
+  // buffer at that moment. Returning at 'matched' let the caller press
+  // buttons into the buffer being hashed, which stored the hash of a longer
+  // string and left a device that refuses its own PIN. So the last step waits
+  // for the firmware to say it finished.
+  assert.equal(pin.PIN_SEQUENCE.length, 7);
   assert.equal(pin.PIN_SEQUENCE.filter((s) => s.send).length, 4);
   assert.equal(pin.PIN_SEQUENCE.filter((s) => s.digits).length, 2);
   assert.deepEqual(
     pin.PIN_SEQUENCE.filter((s) => s.expect).map((s) => s.expect),
-    ['enter', 'storing', 'confirm', 'matched'],
+    ['enter', 'storing', 'confirm', 'matched', 'committed'],
   );
+  /* The commit wait must not send: the firmware is already working. */
+  assert.equal(pin.PIN_SEQUENCE[6].send, undefined);
 });
 
 test('each PIN kind maps to its own message', () => {

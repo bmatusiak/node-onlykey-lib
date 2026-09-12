@@ -53,7 +53,7 @@ test('device is a service, and session still is not', async () => {
 
 /* -------------------------------------------------------------------- PIN */
 
-test('setPin walks the full six-step bracket', async () => {
+test('setPin walks the full seven-step bracket', async () => {
   const pipe = fakeFirmware();
   const app = await start(pipe);
 
@@ -62,8 +62,15 @@ test('setPin walks the full six-step bracket', async () => {
 
   await app.services.device.setPin(PIN);
 
+  /*
+   * SEVEN, and the last one is the point. 'matched' is the firmware saying
+   * the two entries agree; 'committed' is it saying the flash write is done.
+   * Returning at 'matched' let the caller press buttons into the buffer the
+   * firmware was still hashing - see src/device/pin.js.
+   */
   assert.deepEqual(steps, [
-    'armed', 'entered', 'stored', 'confirming', 're-entered', 'committed',
+    'armed', 'entered', 'stored', 'confirming', 're-entered', 'matched',
+    'committed',
   ]);
   await app.destroy();
 });

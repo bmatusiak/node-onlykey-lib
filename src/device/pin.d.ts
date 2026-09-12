@@ -39,6 +39,7 @@ export namespace PROMPTS {
     let storing: RegExp;
     let confirm: RegExp;
     let matched: RegExp;
+    let committed: RegExp;
 }
 export namespace ERRORS {
     let tooShort: RegExp;
@@ -89,6 +90,12 @@ export const PIN_SEQUENCE: ({
     reject: string[];
     label: string;
     digits?: undefined;
+} | {
+    expect: string;
+    label: string;
+    send?: undefined;
+    digits?: undefined;
+    reject?: undefined;
 })[];
 /**
  * Where to return to when a PIN step fails.

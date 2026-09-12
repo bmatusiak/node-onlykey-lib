@@ -24,8 +24,15 @@ const { IFACE } = require('../../src/transport/contract');
 const { MSG } = require('../../src/protocol/msg');
 const { toLatin1 } = require('../../src/bytes');
 
-/** The classic bracket, in order. One entry per OKPIN the host sends. */
-const PIN_REPLIES = ['Enter PIN\n', 'Storing PIN\n', 'Confirm PIN\n', 'Both PINs Match\n'];
+/**
+ * The classic bracket, in order. One entry per OKPIN the host sends.
+ *
+ * THE LAST SEND ANSWERS TWICE. A real device prints "Both PINs Match" at the
+ * top of its commit block and "Successfully set PIN" once the flash write is
+ * done, and the host waits for the second - see PROMPTS.committed in
+ * src/device/pin.js for what went wrong when it did not.
+ */
+const PIN_REPLIES = ['Enter PIN\n', 'Storing PIN\n', 'Confirm PIN\n', 'Both PINs Match\nSuccessfully set PIN\n'];
 
 /**
  * @param {object} [opts]
