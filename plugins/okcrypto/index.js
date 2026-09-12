@@ -978,9 +978,42 @@ function setup(imports, register) {
      * ability to open them anywhere, which is the point.
      */
     deviceVault: {
-      /** Policy vocabulary: always | startup | session:30m | session:2h. */
+      /**
+       * Policy vocabulary: always | startup | session:30m | session:2h.
+       *
+       * TWO COPIES, AND THE STORED ONE IS THE AUTHORITY.
+       *
+       * `vaultKeys` holds the policy that governs caching RIGHT NOW, in a Map
+       * built when this plugin was constructed. The stored record's `policy`
+       * field is the only copy that survives the process.
+       *
+       * setPolicy used to write the live one and stop, so the two drifted the
+       * moment anybody changed a policy: a screen redrawing from list() read
+       * the stale record and the control snapped back, and a restart brought
+       * back an empty live map that cached a key for a service stored under
+       * `always`. See ok-rn/FINDING-a-vault-policy-change-was-never-stored.md.
+       */
       getPolicy: (label) => vaultKeys.getPolicy(label),
-      setPolicy: (label, policy) => vaultKeys.setPolicy(label, policy),
+
+      async setPolicy(label, policy) {
+        /*
+         * Live first. Tightening to a no-cache policy EVICTS, and that has to
+         * happen even if the write below fails - a key left cached under a
+         * policy that forbids caching is the failure that matters.
+         */
+        vaultKeys.setPolicy(label, policy);
+        if (!okcrypto.deviceVault.canPersist) return policy;
+
+        /*
+         * Read-modify-write: put() demands the sealed blob, and a policy
+         * change must not be able to lose it. No record yet is not an error -
+         * save() records getPolicy() at seal time, so a policy chosen before
+         * the credential exists is written the moment it does.
+         */
+        const record = await persistence().get(label);
+        if (record) await persistence().put({ ...record, policy });
+        return policy;
+      },
 
       /** Drop a cached key now, wiping its bytes. */
       lock: (label) => vaultKeys.evict(label),
@@ -1180,7 +1213,27 @@ function setup(imports, register) {
        * credentials would otherwise ask for twelve button presses to draw
        * itself.
        */
-      list: () => persistence().list(),
+      /**
+       * What is stored, and the moment a stored policy comes back into force.
+       *
+       * A fresh process starts with an empty policy map, so getPolicy would
+       * answer with the DEFAULT for a service stored under `always` - and
+       * vaultKeys.put would cache its key, having been told nothing to the
+       * contrary. Every host has to list the vault before it can use anything
+       * from it, which makes this the one place the restored policy is
+       * guaranteed to be applied before a key is derived.
+       *
+       * Unconditional rather than only-if-unset: setPolicy writes through, so
+       * the record is never the stale copy, and re-applying it costs an evict
+       * for exactly the services that must not be cached anyway.
+       */
+      async list() {
+        const records = await persistence().list();
+        for (const record of records) {
+          if (record.policy) vaultKeys.setPolicy(record.serviceId, record.policy);
+        }
+        return records;
+      },
       serviceIds: () => persistence().serviceIds(),
       forget: (serviceId) => persistence().remove(serviceId),
 

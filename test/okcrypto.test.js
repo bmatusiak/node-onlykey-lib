@@ -574,3 +574,97 @@ test('decryptWithIdentity sends a DERIVED identity down the label path', async (
     /not an OnlyKey age identity/,
   );
 });
+
+/* --------------------------------------------------- the stored policy */
+
+/**
+ * A store, the three methods the host plugin wants, kept in a Map.
+ *
+ * Shared between two plugin instances on purpose: the restart case below is
+ * not a metaphor, it is a second app built over the same bytes.
+ */
+function memoryStore(backing = new Map()) {
+  return {
+    backing,
+    getItem: async (k) => (backing.has(k) ? backing.get(k) : null),
+    setItem: async (k, v) => { backing.set(k, v); },
+    removeItem: async (k) => { backing.delete(k); },
+  };
+}
+
+function startStored(store, pipe = fakeFirmware()) {
+  const plugins = FULL();
+  plugins.config = { transport: { pipe }, host: { store } };
+  return new Promise((resolve, reject) => {
+    const app = Rectify.build(plugins, (err, started) => {
+      if (err) reject(err);
+      else resolve(started);
+    });
+    app.start();
+  });
+}
+
+test('changing a policy writes it to the stored record', async () => {
+  /*
+   * The live map used to be the only copy that received a change, so a screen
+   * redrawing from list() read the policy the credential was SAVED with and
+   * the control snapped back to it. See
+   * ok-rn/FINDING-a-vault-policy-change-was-never-stored.md.
+   */
+  const store = memoryStore();
+  const app = await startStored(store);
+  const okcrypto = app.services.okcrypto;
+  stubDerives(okcrypto);
+
+  await okcrypto.deviceVault.save('github.com', 'hunter2');
+  await okcrypto.deviceVault.setPolicy('github.com', 'always');
+
+  const [record] = await okcrypto.deviceVault.list();
+  assert.equal(record.policy, 'always', 'the record kept the policy from save time');
+  assert.ok(record.encrypted, 'the read-modify-write lost the sealed blob');
+  await app.destroy();
+});
+
+test('a stored policy governs caching again after a restart', async () => {
+  /*
+   * The half that is not cosmetic. A fresh process builds an empty policy map,
+   * so getPolicy fell through to the default and vaultKeys.put cached a key
+   * for a service stored under 'always' - the one policy whose entire meaning
+   * is that the key is never held.
+   */
+  const store = memoryStore();
+
+  const first = await startStored(store);
+  stubDerives(first.services.okcrypto);
+  await first.services.okcrypto.deviceVault.save('github.com', 'hunter2');
+  await first.services.okcrypto.deviceVault.setPolicy('github.com', 'always');
+  await first.destroy();
+
+  const second = await startStored(store);
+  const okcrypto = second.services.okcrypto;
+  const derives = stubDerives(okcrypto);
+
+  const [record] = await okcrypto.deviceVault.list();
+  assert.equal(okcrypto.deviceVault.getPolicy('github.com'), 'always');
+
+  await okcrypto.deviceVault.open('github.com', record.encrypted);
+  await okcrypto.deviceVault.open('github.com', record.encrypted);
+  assert.equal(derives(), 2, 'the key was cached despite the stored policy');
+  assert.equal(okcrypto.deviceVault.isUnlocked('github.com'), false);
+  await second.destroy();
+});
+
+test('a policy set before the credential exists is written when it is saved', async () => {
+  /* setPolicy has no record to update yet; save() records getPolicy(). */
+  const store = memoryStore();
+  const app = await startStored(store);
+  const okcrypto = app.services.okcrypto;
+  stubDerives(okcrypto);
+
+  await okcrypto.deviceVault.setPolicy('gitlab.com', 'startup');
+  await okcrypto.deviceVault.save('gitlab.com', 'hunter2');
+
+  const [record] = await okcrypto.deviceVault.list();
+  assert.equal(record.policy, 'startup');
+  await app.destroy();
+});
