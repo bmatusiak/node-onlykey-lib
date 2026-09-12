@@ -928,3 +928,78 @@ test('a chunked key load the device ACKNOWLEDGES resolves', async () => {
   assert.equal(chunks, 3, '160 bytes is three 57-byte chunks');
   await app.destroy();
 });
+
+/* ------------------------------------------- config mode, as SESSION state */
+
+/**
+ * A device already in config mode, as far as enterConfigMode can tell.
+ *
+ * The gesture is detected by its CONSEQUENCE: config mode locks the key, so
+ * the helper holds the button and then polls readLabels until it is refused
+ * (plugins/device/index.js, enterConfigMode). A fake that starts locked
+ * refuses on the first poll, which is the same evidence a real key gives.
+ */
+async function inConfigMode() {
+  const pipe = fakeFirmware({ pin: '1234561' });
+  const app = await start(pipe);
+  const { device } = app.services;
+
+  const result = await device.enterConfigMode({
+    hold: async () => {},
+    settle: async () => {},
+    attempts: 1,
+  });
+  assert.equal(result.entered, true, 'the fake should read as locked');
+  assert.equal(device.inConfigMode, true);
+  return { app, device };
+}
+
+test('a fresh session has not entered config mode', async () => {
+  const app = await start(fakeFirmware());
+  assert.equal(app.services.device.inConfigMode, false);
+  await app.destroy();
+});
+
+test('a RESTART ends config mode, because a reboot is what ends it', async () => {
+  /*
+   * The flag is not a reading of the device and cannot be: the wire carries
+   * no config-mode signal at all. The firmware logs CONFIG_MODE to a DEBUG
+   * console production builds do not have, and OKCONNECT answers UNLOCKED
+   * from inside config mode exactly as it does outside
+   * (okcore.cpp:1362-1367). So the flag records what the HOST did, and the
+   * only thing that ends config mode on a real key is a reboot.
+   */
+  const { app, device } = await inConfigMode();
+
+  device.restart();
+  assert.equal(device.inConfigMode, false);
+
+  await app.destroy();
+});
+
+test('a WIPE ends it too - it reboots the key as part of wiping', async () => {
+  const { app, device } = await inConfigMode();
+
+  device.wipeUserspace();
+  assert.equal(device.inConfigMode, false);
+
+  await app.destroy();
+});
+
+test('CONNECTING does not clear it, because connecting does not end it', async () => {
+  /*
+   * The comment on this flag used to claim a fresh connect cleared it. It
+   * never did, and it should not: OKCONNECT is one of the eleven messages
+   * config mode still answers, so a connect from inside config mode succeeds,
+   * reports UNLOCKED, and changes nothing about the mode. Clearing it there
+   * would show the key as ordinary while every message outside the allow-list
+   * was still being dropped in silence - which is exactly the confusion this
+   * flag exists to prevent.
+   */
+  const { app, device } = await inConfigMode();
+
+  await device.connect();
+  assert.equal(device.inConfigMode, true, 'a connect must not clear it');
+
+  await app.destroy();
+});

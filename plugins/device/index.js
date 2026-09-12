@@ -1133,7 +1133,16 @@ const PREFERENCES = {
      * reset trap. On a real key it is the one restart there is short of
      * unplugging.
      */
+    /**
+     * Reboot the key, which is the ONLY thing that ends config mode.
+     *
+     * So the flag is cleared here. It is not cleared by connect(): OKCONNECT
+     * is one of the eleven messages config mode still answers, and it replies
+     * UNLOCKED from inside it exactly as it does outside (okcore.cpp:1362-1367),
+     * so a connect proves nothing about the mode either way.
+     */
     restart() {
+      session.configMode = false;
       return device.press('8');
     },
 
@@ -1152,6 +1161,8 @@ const PREFERENCES = {
      * cannot be told apart from an attack.
      */
     wipeUserspace() {
+      /* Wipes and reboots, and a reboot is what ends config mode. */
+      session.configMode = false;
       return device.press('0C');
     },
 

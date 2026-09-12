@@ -38,7 +38,26 @@ function setup(imports, register) {
   let keys = null;
   let key = null;
   let device = null;
-  /* Set by device.enterConfigMode(); cleared only by a fresh connect. */
+  /*
+   * Whether THIS SESSION put the key into config mode.
+   *
+   * Set by device.enterConfigMode(), cleared by device.restart() and
+   * device.wipeUserspace(). This comment used to say "cleared only by a fresh
+   * connect", which was wrong twice over: nothing cleared it, and a connect
+   * would have been the wrong place to. OKCONNECT is one of the eleven
+   * messages config mode still answers and it replies UNLOCKED from inside it
+   * (okcore.cpp:1362-1367), so connecting neither ends config mode nor reveals
+   * it. Only a reboot ends it.
+   *
+   * WHAT THIS IS NOT: a reading of the device. The wire carries no
+   * config-mode signal at all - the firmware logs CONFIG_MODE to a DEBUG
+   * console that production builds do not have, and sends the same UNLOCKED
+   * either way. This is a record of what the HOST did, which is why it dies
+   * with the session: a key that was unplugged, or an app that restarted,
+   * gets a fresh one, and a key rebooted by anything other than this library
+   * is out of config mode without this knowing. Callers should say "this
+   * session entered config mode", not "the key is in config mode".
+   */
   let configMode = false;
 
   const session = {
