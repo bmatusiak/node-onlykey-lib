@@ -416,6 +416,22 @@ test('the 2.1 line blocks for a touch; the 3.0 line keeps the host informed', ()
   assert.equal(capabilities('WAT').presenceTest, 'blocking');
 });
 
+test('the 0.x line holds a gesture longer than every line after it', () => {
+  /*
+   * MEASURED, and measured twice because the source misled once here.
+   * v0.2-beta.8's payload() reads `duration >= 90` on every gesture branch;
+   * the 2.1 and 3.0 lines read 72. A hold of 80 - the 72 floor plus the
+   * plugin's margin - was swallowed on the beta and handled as an ordinary
+   * long press that typed slot 6, and a sweep found it locking at 120.
+   */
+  assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').configModeGesture.ticks, 90);
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').configModeGesture.ticks, 72);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').configModeGesture.ticks, 72);
+  /* The floor moves the whole band table, not just config mode. */
+  assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').gestures.backup.lo, 90);
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').gestures.backup.lo, 72);
+});
+
 test('the config-mode gesture is a different button on a DUO', () => {
   // OnlyKey.ino:914 - a DUO wants button 1 held 180 main-loop iterations, a
   // classic button 6 held 72. Using the classic gesture on a DUO holds a button

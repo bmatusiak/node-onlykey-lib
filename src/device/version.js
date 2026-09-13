@@ -387,12 +387,36 @@ const gestures = (() => {
      */
     const bounded = rel ? rel.major >= 3 : false;
 
+    /*
+     * THE 0.x LINE HOLDS A GESTURE LONGER. Every gesture branch in
+     * v0.2-beta.8's payload() reads `duration >= 90`; the 2.1 and 3.0 lines
+     * read `duration >= 72`. Its ordinary long press is the band below that,
+     * 21..89, where later firmware uses 21..71.
+     *
+     * MEASURED BOTH WAYS, because the source alone had already misled once
+     * here. A hold of 80 ticks - the 72 floor plus the plugin's margin - was
+     * swallowed and handled as an ordinary long press that typed slot 6
+     * ("Button selected6 / Slot Number 6 / Displaying Full Keybuffer" on the
+     * console), and a sweep found the device locking at 120:
+     *
+     *     hold  80 ticks -> still answering
+     *     hold 120 ticks -> LOCKED (gesture taken)
+     *
+     * then the branch itself confirmed 90.
+     *
+     * NOT MEASURED on this line, and so not claimed: button 3 has no gesture
+     * at all in the 0.x payload(), and there is no second button-2 band for
+     * key labels. `lock` and `keyLabels` below are the 2.1-line shape and are
+     * unverified before v2.1.0.
+     */
+    const floor = rel && rel.major < 2 ? 90 : 72;
+
     const bands = {
       /** The device TYPES the whole backup file at the keyboard. */
-      backup: { button: 1, lo: 72, hi: bounded ? 180 : null, ticks: 100 },
+      backup: { button: 1, lo: floor, hi: bounded ? 180 : null, ticks: Math.max(100, floor + 12) },
 
       /** The slot labels, typed as text. */
-      slotLabels: { button: 2, lo: 72, hi: null, ticks: 100 },
+      slotLabels: { button: 2, lo: floor, hi: null, ticks: Math.max(100, floor + 12) },
 
       /** The key labels too - a strictly longer hold on the same button. */
       keyLabels: { button: 2, lo: 140, hi: null, ticks: 150 },
@@ -411,8 +435,8 @@ const gestures = (() => {
       /* Config mode only, and it is exactly what it sounds like. */
       bands.factoryDefault = { button: 2, lo: 360, hi: null, ticks: 380 };
     } else {
-      bands.lock = { button: 3, lo: 72, hi: null, ticks: 100 };
-      bands.configMode = { button: 6, lo: 72, hi: null, ticks: 80 };
+      bands.lock = { button: 3, lo: floor, hi: null, ticks: Math.max(100, floor + 12) };
+      bands.configMode = { button: 6, lo: floor, hi: null, ticks: floor + 8 };
     }
 
     return bands;
