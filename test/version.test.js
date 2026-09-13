@@ -291,7 +291,7 @@ test('it is BROKEN on every release from v3.0.2 on, and works only in developmen
    *
    * The development tree does work, and declares 3.0.4 like the release does,
    * so the build keyword is what separates them.
-   * ok-rn/FINDING-two-capability-guesses-about-the-next-release-were-both-wrong.md
+   * ok-rn/FINDING-capability-guesses-about-the-next-release-were-wrong.md
    */
   assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').touchFreeDerive, 'broken');
   assert.equal(capabilities('UNLOCKEDv3.0.3-prodc').touchFreeDerive, 'broken');
@@ -362,16 +362,44 @@ test('an unreadable version does not disable a working device', () => {
   assert.equal(capabilities('UNINITIALIZED').touchFreeDerive, 'always');
 });
 
-test('X-Wing arrived after v3.0.2, and absence is the default', () => {
-  // KEYTYPE_XWING does not appear anywhere in libraries@5d7ce7a. The age file
-  // format is built on it, so neither works on an older key.
-  assert.equal(capabilities('UNLOCKEDv3.0.2-testc').xwingDerive, false);
+test('X-Wing is the development line, and absence is the default', () => {
+  /*
+   * MEASURED BY DIFF across the pins, not by a version guess. KEYTYPE_XWING,
+   * mlkem, okpqc and the whole ML-KEM/ML-DSA tree appear at HEAD and at NO
+   * release - not v3.0.2 (5d7ce7a), not v3.0.3 (a133bea), not v3.0.4
+   * (c8804e3). The rule used to read "v3.0.3 and later", which was a guess one
+   * release ahead of anything anyone had run, and it cost two failures each on
+   * v3.0.4 and v3.0.3 in a production sweep while v3.0.2 passed by skipping
+   * the same two tests.
+   *
+   * The releases that rule tried to separate are sixteen lines apart.
+   */
+  assert.equal(capabilities('UNLOCKEDv3.0.2-prodc').xwingDerive, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.3-prodc').xwingDerive, false);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').xwingDerive, false);
   assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').xwingDerive, false);
+  /* The development line, which is the only build that carries okpqc. */
   assert.equal(capabilities('UNLOCKEDv3.0.4-testc').xwingDerive, true);
-  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').xwingDerive, true);
+  /* Nothing assumed forward, like the two capabilities beside it. */
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').xwingDerive, false);
   // Unknown defaults to absent - the opposite of touchFreeDerive, because this
   // is a feature old firmware does NOT have rather than one it does.
   assert.equal(capabilities('WAT').xwingDerive, false);
+});
+
+test('the three post-quantum capabilities agree, because they are one feature', () => {
+  /*
+   * postQuantum and xwingDerive are the same body of work - okpqc.cpp and the
+   * ML-KEM sources arrived together - so a build that has one has the other.
+   * They were written months apart and disagreed for exactly that reason.
+   */
+  for (const v of ['UNLOCKEDv3.0.4-prodc', 'UNLOCKEDv3.0.3-prodc', 'UNLOCKEDv2.1.0-prodc']) {
+    const caps = capabilities(v);
+    assert.equal(caps.xwingDerive, caps.postQuantum, v);
+  }
+  const dev = capabilities('UNLOCKEDv3.0.4-testc');
+  assert.equal(dev.xwingDerive, true);
+  assert.equal(dev.postQuantum, true);
 });
 
 test('the 2.1 line blocks for a touch; the 3.0 line keeps the host informed', () => {

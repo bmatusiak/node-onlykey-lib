@@ -142,7 +142,7 @@ export function capabilities(status: any): {
      * somebody measures it, because guessing one release ahead is precisely
      * what went wrong here.
      *
-     * ok-rn/FINDING-two-capability-guesses-about-the-next-release-were-both-wrong.md
+     * ok-rn/FINDING-capability-guesses-about-the-next-release-were-wrong.md
      */
     postQuantum: boolean;
     /**
@@ -267,9 +267,31 @@ export function capabilities(status: any): {
     /**
      * Whether the X-Wing hybrid key type exists at all.
      *
-     * MEASURED: `KEYTYPE_XWING` does not appear anywhere in libraries@5d7ce7a
-     * (v3.0.2) and does in the working tree, so it arrived after v3.0.2. The
-     * age file format built on it therefore cannot work on an older key either.
+     * THE DEVELOPMENT LINE, NOT A VERSION THRESHOLD - the third capability to
+     * make this mistake, and the last one written before the rule was
+     * understood. It read `patch > 2`, meaning v3.0.3 and later, which was a
+     * guess one release ahead of anything anyone had run.
+     *
+     * MEASURED BY DIFF, not by grep. `KEYTYPE_XWING`, `mlkem`, `okpqc` and
+     * every ML-KEM/ML-DSA source appear at HEAD and at NO pinned release:
+     *
+     *   v3.0.2  5d7ce7a   nothing
+     *   v3.0.3  a133bea   nothing
+     *   v3.0.4  c8804e3   nothing
+     *   HEAD              okpqc.cpp/.h, utility/src/ (ML-KEM),
+     *                     utility/mldsa_src/ (ML-DSA) - 50+ files
+     *
+     * And the releases it claimed to separate are barely distinguishable:
+     * v3.0.2 -> v3.0.3 is 29 lines of libraries and 27 of firmware,
+     * v3.0.3 -> v3.0.4 is sixteen lines - a Yubico OTP public-id length fix
+     * and the patch number. There is no release boundary here to sit on.
+     *
+     * The cost of the old rule, measured in one production sweep: v3.0.4 and
+     * v3.0.3 each reported two failures - "payload is 16 bytes; a keytype-5
+     * public key is 64" - on firmware doing exactly what it should, while
+     * v3.0.2 passed by skipping the same two tests. Identical builds, opposite
+     * verdicts, from a boundary that does not exist.
+     * ok-rn/FINDING-capability-guesses-about-the-next-release-were-wrong.md
      *
      * Defaults to FALSE for a version we cannot read, which is the opposite of
      * touchFreeDerive's default and deliberately so: that one is a feature old
