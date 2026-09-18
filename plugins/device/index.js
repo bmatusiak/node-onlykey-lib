@@ -164,6 +164,101 @@ function setup(imports, register) {
    *   is: the firmware appends whatever is pressed while entry is open, and
    *   pressLine only ever stood in for a finger.
    */
+  /**
+   * Wait for one of the firmware's HID replies.
+   *
+   * The PIN bracket's prompts exist on two channels and only one of them
+   * survives a release build - see pin.js HID_PROMPTS. This reads the wire,
+   * which every device has, rather than the debug console, which most do not.
+   */
+  function waitForHid(match, { reject = [], timeoutMs = 10000 } = {}) {
+    return new Promise((resolve, rejectP) => {
+      let off = null;
+      const done = (fn, arg) => {
+        clearTimeout(timer);
+        if (off) off();
+        fn(arg);
+      };
+      const timer = setTimeout(
+        () => done(rejectP, new Error(`the device did not answer ${match} within ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+      off = transport.on('report', (event) => {
+        if (event.iface !== IFACE.VENDOR) return;
+        const text = okmsg.parseState(event.data).raw || '';
+        if (!text) return;
+        for (const bad of reject) {
+          if (bad && bad.test(text)) return done(rejectP, new Error(text.trim()));
+        }
+        if (match.test(text)) done(resolve, text);
+      });
+    });
+  }
+
+  /**
+   * Wait for one step of the PIN bracket, on WHICHEVER channel answers.
+   *
+   * The wire is the design. Every prompt is hidprinted by every pinned
+   * firmware version, ungated, which is why a production build can be
+   * provisioned at all - the console twins are all `Serial.println` inside
+   * `#ifdef DEBUG` and a release compiles them out.
+   *
+   * The console is raced alongside it and is NEVER REQUIRED. It cannot make a
+   * step pass that the wire would have failed; it can only answer sooner, or
+   * answer for a firmware whose wording we have not seen. Nothing production
+   * does depends on it being there.
+   *
+   * A step whose HID prompt is null - `committed` - has nothing left to wait
+   * for on the wire, so it waits on the console alone when there is one and
+   * returns immediately when there is not.
+   */
+  function waitForStep(step, { timeoutMs = 10000 } = {}) {
+    const names = step.reject || [];
+    const onWire = pin.HID_PROMPTS[step.expect];
+    const waits = [];
+
+    if (onWire) {
+      waits.push(waitForHid(onWire, {
+        reject: names.map((name) => pin.HID_ERRORS[name]),
+        timeoutMs,
+      }));
+    }
+    waits.push(console_.waitFor(pin.PROMPTS[step.expect], {
+      reject: names.map((name) => pin.ERRORS[name]),
+      timeoutMs,
+    }));
+
+    /*
+     * A STEP WITH NO WIRE PROMPT IS ADVISORY, and `committed` is the only one.
+     * The wire announces the commit once, in `matched`, after the flash write -
+     * so by the time that resolved there was nothing left to wait for. The
+     * console still has its second line and waiting for it costs nothing on a
+     * debug build, but a release has no console and must not be held up for
+     * ten seconds by a line that cannot arrive. So it is tried and its timeout
+     * is tolerated.
+     */
+    if (!onWire) {
+      const advisory = pin.PROMPTS[step.expect];
+      if (!advisory) return Promise.resolve();
+      return console_.waitFor(advisory, {timeoutMs}).catch(() => {});
+    }
+
+    /*
+     * Rejections are not swallowed by the race: a refusal on either channel -
+     * "Error PINs Don't Match" - is a real answer and has to stop the bracket,
+     * and Promise.race propagates the FIRST settlement whichever way it goes.
+     *
+     * The LOSER still settles though, and on a production build it always
+     * loses by timing out - there is no console to answer. That rejection
+     * arrives after the race is decided and would be an unhandled rejection,
+     * which Node treats as fatal. Attaching a catch to each entry handles it
+     * without changing what the race itself does.
+     */
+    const decided = Promise.race(waits);
+    for (const wait of waits) wait.catch(() => {});
+    return decided;
+  }
+
   async function runPinSequence(kind, digits, { timeoutMs = 10000, enterDigits = null } = {}) {
     const problems = pin.validatePin(digits);
     if (problems.length) throw new Error(problems.join(' '));
@@ -188,31 +283,42 @@ function setup(imports, register) {
 
       if (step.send) {
         await transport.write(IFACE.VENDOR, message);
-        await console_.waitFor(pin.PROMPTS[step.expect], {
-          reject: (step.reject || []).map((name) => pin.ERRORS[name]),
-          timeoutMs,
-        });
+        await waitForStep(step, { timeoutMs });
       } else if (step.digits) {
         if (enterDigits) await enterDigits(digits);
-        else await pressLine(transport, digits);
-        /*
-         * Counted, not first-match. The firmware acknowledges each digit
-         * separately, so returning on the first ack leaves the rest of the
-         * burst in flight - the next message lands mid-burst and the device
-         * sees a short PIN, which surfaces later as a mismatch between two
-         * PINs that were typed identically.
-         */
-        await console_.waitForCount(pin.DIGIT_ACK, digits.length, { timeoutMs });
+        else {
+          await pressLine(transport, digits);
+          /*
+           * THE CONSOLE PATH STILL NEEDS THIS, and only the console path.
+           *
+           * pressLine writes the digits to SEREMU and returns; nothing in that
+           * write says the device consumed them. The firmware acknowledges
+           * each one with "password appended with", so counting the acks is
+           * how a burst is known to have landed before the next OKPIN is sent
+           * - and a message arriving mid-burst leaves the device holding a
+           * SHORT PIN, which surfaces later as a mismatch between two PINs
+           * that were typed identically.
+           *
+           * It is skipped for enterDigits because that hook is awaited and its
+           * presses resolve on the observed release (holdTicks waits out the
+           * idle sense rounds), so the burst is already known to be in. Which
+           * is just as well: the ack is a Serial.println under DEBUG and does
+           * not exist on a release build, so a caller that needs this count
+           * needs the console anyway - and pressLine needs the console to work
+           * at all.
+           */
+          await console_.waitForCount(pin.DIGIT_ACK, digits.length, { timeoutMs });
+        }
       } else if (step.expect) {
         /*
          * A WAIT WITH NOTHING SENT. The firmware is already working and the
          * host has nothing to add - it only has to stay out of the way until
-         * the write is done. See pin.js:PROMPTS.committed: letting the caller
+         * the write is done. See pin.js PROMPTS.committed: letting the caller
          * go at "Both PINs Match" means its next button press lands in the
          * buffer the firmware is still hashing, and the device stores the
          * hash of a longer string than the PIN it was given.
          */
-        await console_.waitFor(pin.PROMPTS[step.expect], { timeoutMs });
+        await waitForStep(step, { timeoutMs });
       }
 
       progress(step.label, { kind });
@@ -781,6 +887,57 @@ const PREFERENCES = {
     get status() { return session.status; },
 
     /* ---- PIN ----------------------------------------------------------- */
+
+    /**
+     * Run ONE step of the PIN bracket, for a caller driving it by hand.
+     *
+     * setPin below owns the whole sequence and presses the digits itself,
+     * which suits a script. It does not suit a KEYPAD: the device only
+     * captures digits while entry is open, and entry is opened and closed by
+     * the very messages setPin is sending, so a screen where someone types one
+     * digit at a time has to be the thing deciding when each message goes.
+     * That is exactly how OnlyKey-App's wizard works - the messages are its
+     * steps' enterFn/exitFn, and the person presses the key in between
+     * (OnlyKeyWizard.js Step2/Step3).
+     *
+     * So this exposes a step rather than a second copy of the sequence. It
+     * sends what that step sends and waits the way every other step waits.
+     *
+     * The labels are PIN_SEQUENCE's, in order:
+     *
+     *   armed       entry is open; press the digits now
+     *   entered     (the caller's own presses - nothing to send)
+     *   stored      the device takes what was pressed
+     *   confirming  entry is open again; press them again
+     *   re-entered  (the caller's own presses)
+     *   matched     the device compares and commits
+     *   committed   nothing left to wait for on the wire
+     *
+     * @param {string} label one of the labels above
+     * @param {object} [opts]
+     * @param {string} [opts.kind] 'primary' | 'secondary' | 'selfDestruct'
+     * @param {number} [opts.timeoutMs]
+     */
+    async pinStep(label, { kind = 'primary', timeoutMs = 10000 } = {}) {
+      const step = pin.PIN_SEQUENCE.find((entry) => entry.label === label);
+      if (!step) {
+        throw new Error(
+          `unknown PIN step "${label}"; expected ${
+            pin.PIN_SEQUENCE.map((entry) => entry.label).join(', ')}`,
+        );
+      }
+      /*
+       * A digits step is the CALLER'S to perform - it is the one place the
+       * device is waiting for a human - so this does nothing but say so.
+       */
+      if (step.digits) return {label, waiting: 'digits'};
+
+      if (step.send || step.digits) console_.clear();
+      if (step.send) await transport.write(IFACE.VENDOR, pin.pinMessage(kind));
+      await waitForStep(step, {timeoutMs});
+      progress(step.label, {kind});
+      return {label, waiting: null};
+    },
 
     /**
      * Set a PIN on a classic device.

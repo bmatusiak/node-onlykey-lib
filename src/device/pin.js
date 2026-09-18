@@ -73,6 +73,64 @@ const ERRORS = {
 };
 
 /**
+ * The same bracket, read off the WIRE instead of the debug console.
+ *
+ * Every prompt in PROMPTS above is a `Serial.println` inside `#ifdef DEBUG`,
+ * and so is every DIGIT_ACK. None of them exist on a firmware built the way it
+ * ships, so a host driving setPin against a release device waits out each step
+ * in turn and reports a timeout - against a device doing the work perfectly.
+ * That is FINDING-provisioning-needs-a-debug-build.md, and it made first-time
+ * setup impossible on any production build.
+ *
+ * The firmware ALSO hidprints at every one of those points, and those calls
+ * are not gated: set_primary_pin case 0 answers "OnlyKey is ready, enter your
+ * PIN", case 1 "Successful PIN entry", case 2 "...re-enter your PIN to
+ * confirm", case 3 "Successfully set PIN". So the whole sequence is drivable
+ * and verifiable on a shipping device; it was only ever listening on the wrong
+ * channel. This is the channel the OnlyKey-App wizard has always used.
+ *
+ * `committed` is null ON PURPOSE, and "Both PINs Match" is NEVER MATCHED. On
+ * the console the commit is announced twice - "Both PINs Match" at the TOP of
+ * the block and "Successfully set PIN" at the bottom - and the second wait
+ * exists so a caller cannot press buttons into the buffer still being hashed.
+ * On the wire there is only the second one: the `hidprint("Both PINs Match")`
+ * is COMMENTED OUT in all nine pinned versions, leaving only its DEBUG twin.
+ * So `matched` waits for the line the firmware emits AFTER the flash write,
+ * which has already outlasted the commit, and nothing is left to wait for.
+ *
+ * ## Checked against every pinned version
+ *
+ * The literals below are byte-identical from v0.2-beta.8 through v3.0.4
+ * (.stage-src/<version>/libraries/onlykey/okcore.cpp) and sit outside every
+ * `#ifdef DEBUG`. The command bytes are stable too - 0x61/0x62/0x63 - through
+ * the rename of OKSETPIN to OKPIN. Only the line numbers move.
+ */
+const HID_PROMPTS = {
+  /*
+   * ANCHORED ON THE COMMA, and it has to be. "enter your PIN" is a SUBSTRING
+   * of the confirm prompt, "OnlyKey is ready, re-enter your PIN to confirm",
+   * so the looser pattern let the arm step be satisfied by the confirmation
+   * and the bracket run a step ahead of the device.
+   *
+   * It also has to be loose enough for the self-destruct PIN, whose case 0
+   * says "OnlyKey is ready, enter your self-destruct PIN" - the one hidprint
+   * literal that differs between the three kinds. "ready, enter your" is true
+   * of both and false of "ready, re-enter your".
+   */
+  enter: /ready, enter your/i,
+  storing: /Successful PIN entry/i,
+  confirm: /re-enter your/i,
+  matched: /Successfully set PIN/i,
+  committed: null,
+};
+
+/** The refusals, as they arrive on the wire. Same words, no "Error" prefix guaranteed. */
+const HID_ERRORS = {
+  tooShort: /PIN is not between 7 - 10 digits/i,
+  mismatch: /PINs Don'?t Match/i,
+};
+
+/**
  * One print per DIGIT, so a first-match wait returns after the first one.
  * Counting them is the only way to know a whole burst was consumed.
  */
@@ -311,6 +369,8 @@ function rolloverPresses(entered, { button = 6 } = {}) {
 }
 
 module.exports = {
+  HID_PROMPTS,
+  HID_ERRORS,
   MIN_DIGITS,
   MAX_DIGITS,
   BUTTONS,
