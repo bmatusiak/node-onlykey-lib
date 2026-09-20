@@ -24,7 +24,7 @@ export function parseStatus(status: string | Uint8Array): {
     /** Whether firmware can be updated from a host over USB. */
     fwUpdateOverUsb: boolean;
 };
-export function capabilities(status: any): {
+export function capabilities(status: any, { unreleased }?: {}): {
     gestures: {
         /** The device TYPES the whole backup file at the keyboard. */
         backup: {
