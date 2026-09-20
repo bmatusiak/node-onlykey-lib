@@ -36,7 +36,7 @@ const LAYOUTS = {
     id: 2,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61487},"ACUTE_ACCENT":{"bits":512,"key":61624},"GRAVE_ACCENT":{"bits":768,"key":61492},"DIAERESIS":{"bits":1024,"key":61552},"CEDILLA":{"bits":1280,"key":61488}},
     ascii: [
       44, 94, 95, 117, 97, 98, 100, 118, 102, 103, 101, 110,
@@ -53,7 +53,7 @@ const LAYOUTS = {
     id: 3,
     shiftMask: 64, altgrMask: 128, rctrlMask: 2048,
     keycodeMask: 4095, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61487},"ACUTE_ACCENT":{"bits":768,"key":63539},"GRAVE_ACCENT":{"bits":1280,"key":61615},"TILDE":{"bits":1536,"key":61616},"DIAERESIS":{"bits":512,"key":61551},"CEDILLA":{"bits":1024,"key":63534},"RING_ABOVE":{"bits":1792,"key":63599}},
     ascii: [
       44, 94, 119, 96, 97, 98, 100, 118, 102, 103, 101, 110,
@@ -70,7 +70,7 @@ const LAYOUTS = {
     id: 4,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61552},"ACUTE_ACCENT":{"bits":512,"key":61486},"GRAVE_ACCENT":{"bits":768,"key":61550},"TILDE":{"bits":1024,"key":61616},"DIAERESIS":{"bits":1280,"key":61488}},
     ascii: [
       44, 94, 95, 96, 161, 98, 99, 49, 101, 102, 113, 45,
@@ -87,7 +87,7 @@ const LAYOUTS = {
     id: 5,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61552},"ACUTE_ACCENT":{"bits":512,"key":61486},"GRAVE_ACCENT":{"bits":768,"key":61550},"TILDE":{"bits":1024,"key":61616},"DIAERESIS":{"bits":1280,"key":61488}},
     ascii: [
       44, 94, 95, 96, 161, 98, 99, 49, 101, 102, 113, 45,
@@ -104,7 +104,7 @@ const LAYOUTS = {
     id: 6,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61487},"GRAVE_ACCENT":{"bits":512,"key":61604},"TILDE":{"bits":1024,"key":61599},"DIAERESIS":{"bits":768,"key":61551}},
     ascii: [
       44, 56, 32, 160, 48, 116, 30, 33, 34, 45, 49, 110,
@@ -121,7 +121,7 @@ const LAYOUTS = {
     id: 7,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61487},"ACUTE_ACCENT":{"bits":1280,"key":61620},"GRAVE_ACCENT":{"bits":512,"key":61617},"TILDE":{"bits":1024,"key":61624},"DIAERESIS":{"bits":768,"key":61551}},
     ascii: [
       44, 37, 32, 160, 48, 116, 30, 33, 34, 45, 112, 120,
@@ -138,7 +138,7 @@ const LAYOUTS = {
     id: 8,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61486},"ACUTE_ACCENT":{"bits":1280,"key":61613},"GRAVE_ACCENT":{"bits":512,"key":61550},"TILDE":{"bits":1024,"key":61614},"DIAERESIS":{"bits":768,"key":61488}},
     ascii: [
       44, 112, 95, 160, 49, 98, 99, 45, 101, 102, 96, 94,
@@ -155,7 +155,7 @@ const LAYOUTS = {
     id: 9,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":768,"key":61493},"ACUTE_ACCENT":{"bits":1024,"key":61486},"GRAVE_ACCENT":{"bits":1280,"key":61550}},
     ascii: [
       44, 94, 95, 49, 97, 98, 99, 113, 101, 102, 112, 48,
@@ -172,7 +172,7 @@ const LAYOUTS = {
     id: 10,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":768,"key":61667},"ACUTE_ACCENT":{"bits":256,"key":61486},"GRAVE_ACCENT":{"bits":512,"key":61550},"TILDE":{"bits":1280,"key":61585},"DIAERESIS":{"bits":1024,"key":61592}},
     ascii: [
       44, 94, 95, 49, 97, 98, 99, 113, 101, 102, 112, 48,
@@ -189,7 +189,7 @@ const LAYOUTS = {
     id: 11,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61486},"ACUTE_ACCENT":{"bits":1280,"key":61613},"GRAVE_ACCENT":{"bits":512,"key":61550},"TILDE":{"bits":1024,"key":61614},"DIAERESIS":{"bits":768,"key":61488}},
     ascii: [
       44, 112, 95, 160, 49, 98, 99, 45, 101, 102, 96, 94,
@@ -206,7 +206,7 @@ const LAYOUTS = {
     id: 12,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61620},"ACUTE_ACCENT":{"bits":512,"key":61492},"GRAVE_ACCENT":{"bits":768,"key":61617},"DIAERESIS":{"bits":1024,"key":61557},"RING_ABOVE":{"bits":1280,"key":61493}},
     ascii: [
       44, 94, 95, 96, 97, 98, 99, 116, 101, 102, 113, 49,
@@ -223,7 +223,7 @@ const LAYOUTS = {
     id: 13,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 1023, deadkeysMask: 768, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"ACUTE_ACCENT":{"bits":512,"key":61620},"GRAVE_ACCENT":{"bits":256,"key":61493}},
     ascii: [
       44, 94, 95, 49, 97, 98, 100, 52, 102, 103, 101, 110,
@@ -240,7 +240,7 @@ const LAYOUTS = {
     id: 14,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 255, deadkeysMask: 0, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {},
     ascii: [
       44, 94, 95, 180, 97, 98, 99, 45, 101, 102, 112, 48,
@@ -257,7 +257,7 @@ const LAYOUTS = {
     id: 15,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61552},"ACUTE_ACCENT":{"bits":512,"key":61614},"GRAVE_ACCENT":{"bits":768,"key":61550},"TILDE":{"bits":1024,"key":61616},"DIAERESIS":{"bits":1280,"key":61488}},
     ascii: [
       44, 94, 95, 96, 161, 98, 99, 49, 101, 102, 113, 45,
@@ -274,7 +274,7 @@ const LAYOUTS = {
     id: 16,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61489},"ACUTE_ACCENT":{"bits":512,"key":61552},"GRAVE_ACCENT":{"bits":768,"key":61552},"TILDE":{"bits":1024,"key":61489},"DIAERESIS":{"bits":1280,"key":61551}},
     ascii: [
       44, 94, 95, 160, 97, 98, 99, 45, 101, 102, 111, 47,
@@ -291,7 +291,7 @@ const LAYOUTS = {
     id: 17,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61556},"ACUTE_ACCENT":{"bits":512,"key":61487},"GRAVE_ACCENT":{"bits":768,"key":61551},"TILDE":{"bits":1024,"key":61492},"DIAERESIS":{"bits":1280,"key":61539}},
     ascii: [
       44, 94, 117, 160, 97, 98, 100, 53, 102, 103, 100, 110,
@@ -308,7 +308,7 @@ const LAYOUTS = {
     id: 18,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61551},"ACUTE_ACCENT":{"bits":512,"key":61492},"GRAVE_ACCENT":{"bits":768,"key":61487},"TILDE":{"bits":1024,"key":61601},"DIAERESIS":{"bits":1280,"key":61556}},
     ascii: [
       44, 94, 95, 160, 97, 98, 99, 45, 101, 102, 112, 48,
@@ -325,7 +325,7 @@ const LAYOUTS = {
     id: 19,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61620},"ACUTE_ACCENT":{"bits":512,"key":61487},"GRAVE_ACCENT":{"bits":768,"key":61617},"DIAERESIS":{"bits":1024,"key":61551}},
     ascii: [
       44, 94, 95, 160, 97, 98, 99, 45, 101, 102, 112, 48,
@@ -342,7 +342,7 @@ const LAYOUTS = {
     id: 20,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61552},"ACUTE_ACCENT":{"bits":512,"key":61486},"GRAVE_ACCENT":{"bits":768,"key":61550},"TILDE":{"bits":1024,"key":61616},"DIAERESIS":{"bits":1280,"key":61488}},
     ascii: [
       44, 94, 95, 96, 161, 98, 99, 49, 101, 102, 113, 45,
@@ -359,7 +359,7 @@ const LAYOUTS = {
     id: 21,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 0,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61536},"ACUTE_ACCENT":{"bits":512,"key":61619},"GRAVE_ACCENT":{"bits":768,"key":61617},"TILDE":{"bits":1024,"key":61616},"DIAERESIS":{"bits":1280,"key":61615}},
     ascii: [
       44, 94, 53, 160, 161, 98, 99, 95, 101, 102, 45, 97,
@@ -376,7 +376,7 @@ const LAYOUTS = {
     id: 22,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 255, deadkeysMask: 0, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {},
     ascii: [
       44, 94, 95, 49, 97, 98, 100, 52, 102, 103, 101, 110,
@@ -393,7 +393,7 @@ const LAYOUTS = {
     id: 23,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 0,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61539},"ACUTE_ACCENT":{"bits":512,"key":61492},"GRAVE_ACCENT":{"bits":768,"key":61493},"TILDE":{"bits":1024,"key":61557},"DIAERESIS":{"bits":1280,"key":61556}},
     ascii: [
       44, 94, 1324, 96, 97, 98, 100, 556, 102, 103, 101, 110,
@@ -410,7 +410,7 @@ const LAYOUTS = {
     id: 24,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 4095, deadkeysMask: 3840, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"ACUTE_ACCENT":{"bits":256,"key":61486},"CEDILLA":{"bits":2816,"key":61614},"DEGREE_SIGN":{"bits":512,"key":61557},"CARON":{"bits":768,"key":61550},"BREVE":{"bits":1280,"key":61601},"OGONEK":{"bits":1536,"key":61603},"DOT_ABOVE":{"bits":2048,"key":61605},"DOUBLE_ACUTE":{"bits":2304,"key":61607}},
     ascii: [
       44, 116, 115, 155, 179, 109, 134, 113, 112, 48, 184, 30,
@@ -427,7 +427,7 @@ const LAYOUTS = {
     id: 25,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 4095, deadkeysMask: 3840, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":768,"key":61600},"ACUTE_ACCENT":{"bits":2048,"key":61606},"DIAERESIS":{"bits":2560,"key":61613},"CEDILLA":{"bits":256,"key":61493},"DEGREE_SIGN":{"bits":1280,"key":61602},"CARON":{"bits":512,"key":61599},"BREVE":{"bits":1024,"key":61601},"OGONEK":{"bits":1536,"key":61603},"DOT_ABOVE":{"bits":1792,"key":61605},"DOUBLE_ACUTE":{"bits":2304,"key":61607}},
     ascii: [
       44, 94, 95, 96, 97, 98, 99, 45, 101, 102, 110, 46,
@@ -444,7 +444,7 @@ const LAYOUTS = {
     id: 26,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 4095, deadkeysMask: 3840, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":1024,"key":61600},"ACUTE_ACCENT":{"bits":256,"key":61607},"GRAVE_ACCENT":{"bits":1792,"key":61604},"DIAERESIS":{"bits":2560,"key":61613},"CEDILLA":{"bits":2816,"key":61614},"DEGREE_SIGN":{"bits":512,"key":61602},"CARON":{"bits":768,"key":61550},"BREVE":{"bits":1280,"key":61601},"OGONEK":{"bits":1536,"key":61603},"DOT_ABOVE":{"bits":2048,"key":61605},"DOUBLE_ACUTE":{"bits":2304,"key":61607}},
     ascii: [
       44, 97, 95, 155, 179, 98, 134, 94, 101, 102, 184, 96,
@@ -461,7 +461,7 @@ const LAYOUTS = {
     id: 27,
     shiftMask: 64, altgrMask: 128, rctrlMask: 0,
     keycodeMask: 2047, deadkeysMask: 1792, nonUs100: 63,
-    compiledIn: false,
+    compiledIn: true,
     deadkeys: {"CIRCUMFLEX":{"bits":256,"key":61552},"ACUTE_ACCENT":{"bits":512,"key":61486},"GRAVE_ACCENT":{"bits":768,"key":61550},"TILDE":{"bits":1024,"key":61616},"DIAERESIS":{"bits":1280,"key":61488}},
     ascii: [
       44, 94, 95, 96, 224, 98, 99, 49, 101, 102, 113, 45,
