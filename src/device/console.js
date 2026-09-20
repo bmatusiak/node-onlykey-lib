@@ -20,6 +20,32 @@ const { IFACE } = require('../protocol/msg');
 /** Keep the tail of the console; a long session should not grow without end. */
 const DEFAULT_LIMIT = 65536;
 
+/**
+ * The console tail, with the PIN taken out of it.
+ *
+ * A tail in an error message earns its place - "timed out" against a device
+ * that printed something unexpected is close to undiagnosable from a phone,
+ * which is why these errors carry one. But on a DEBUG firmware the last thing
+ * the console said during a PIN bracket is the device acknowledging each digit
+ * BY VALUE: "password appended with 4", once per keypress, in order. An Error
+ * travels further than a log line - up through every catch, into whatever the
+ * caller renders, and off-device if anything crash-reports - so a tail must
+ * not carry one.
+ *
+ * The line survives with its digit removed. That the device was acknowledging
+ * presses is the diagnostic fact; WHICH presses is the secret, and no reader of
+ * a timeout message needs it.
+ *
+ * A production firmware never reaches this: it does not enumerate SEREMU, so
+ * the buffer is empty and the tail is "". This protects the developer key,
+ * which is the one a maintainer actually holds.
+ */
+function safeTail(text, n = 120) {
+  return JSON.stringify(
+    String(text).replace(/(password appended with\s*)\d/gi, '$1#').slice(-n),
+  );
+}
+
 class DeviceConsole {
   constructor({ limit = DEFAULT_LIMIT } = {}) {
     this.limit = limit;
@@ -146,7 +172,7 @@ class DeviceConsole {
       const timer = setTimeout(() => {
         waiter.fail(new Error(
           `timed out after ${timeoutMs}ms waiting for ${describe}; ` +
-          `console tail: ${JSON.stringify(this.buffer.slice(-120))}`,
+          `console tail: ${safeTail(this.buffer)}`,
         ));
       }, timeoutMs);
 
@@ -178,4 +204,4 @@ function pressLine(transport, digits) {
   return transport.write(IFACE.SEREMU, bytes);
 }
 
-module.exports = { DeviceConsole, pressLine, DEFAULT_LIMIT };
+module.exports = { DeviceConsole, pressLine, safeTail, DEFAULT_LIMIT };

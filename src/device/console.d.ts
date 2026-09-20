@@ -74,5 +74,26 @@ export class DeviceConsole {
  * PIN.
  */
 export function pressLine(transport: any, digits: any): any;
+/**
+ * The console tail, with the PIN taken out of it.
+ *
+ * A tail in an error message earns its place - "timed out" against a device
+ * that printed something unexpected is close to undiagnosable from a phone,
+ * which is why these errors carry one. But on a DEBUG firmware the last thing
+ * the console said during a PIN bracket is the device acknowledging each digit
+ * BY VALUE: "password appended with 4", once per keypress, in order. An Error
+ * travels further than a log line - up through every catch, into whatever the
+ * caller renders, and off-device if anything crash-reports - so a tail must
+ * not carry one.
+ *
+ * The line survives with its digit removed. That the device was acknowledging
+ * presses is the diagnostic fact; WHICH presses is the secret, and no reader of
+ * a timeout message needs it.
+ *
+ * A production firmware never reaches this: it does not enumerate SEREMU, so
+ * the buffer is empty and the tail is "". This protects the developer key,
+ * which is the one a maintainer actually holds.
+ */
+export function safeTail(text: any, n?: number): string;
 /** Keep the tail of the console; a long session should not grow without end. */
 export const DEFAULT_LIMIT: 65536;

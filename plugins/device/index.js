@@ -26,7 +26,7 @@ const presses = require('../../src/device/press');
 const encoders = require('../../src/device/encoders');
 const { MSG, FIELD } = require('../../src/protocol/msg');
 const okmsg = require('../../src/protocol/okmsg');
-const { DeviceConsole, pressLine } = require('../../src/device/console');
+const { DeviceConsole, pressLine, safeTail } = require('../../src/device/console');
 const { challengeDigits } = require('../../src/protocol/challenge');
 
 /**
@@ -1043,10 +1043,23 @@ const PREFERENCES = {
            * from a device that is not listening. Both possibilities go in the
            * message rather than guessing between them.
            */
+          /*
+           * The tail stays; the DIGITS come out of it. See safeTail.
+           *
+           * On a DEBUG firmware the last thing the console said during a PIN
+           * bracket is the device acknowledging each digit by value, so this
+           * message used to carry the PIN that had just been typed - and an
+           * Error goes further than a log line does.
+           *
+           * Removing the tail outright was the first attempt and it was wrong:
+           * "timed out" with nothing else is close to undiagnosable from a
+           * phone, which is the whole reason it was added. Redacting the acks
+           * keeps the diagnosis and drops the secret.
+           */
           done(() => reject(new Error(
             `the device did not unlock within ${timeoutMs}ms - the PIN may be wrong, ` +
             'or a previous attempt may still be in its buffer (see clearPinEntry). ' +
-            `console tail: ${JSON.stringify(console_.text.slice(-120))}`,
+            `console tail: ${safeTail(console_.text)}`,
           )));
         }, timeoutMs);
 
