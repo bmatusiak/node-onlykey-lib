@@ -328,15 +328,23 @@ function supportsFwUpdate(version) {
  * nothing is assumed forward - a released 3.0.5 reads like a release until
  * somebody measures its sources.
  */
-function vendorOrigins(info) {
+function vendorOrigins(info, unreleased) {
   const origins = ['apps.crp.to'];
+  /*
+   * `unreleased` when the CALLER knows - see capabilities() below. The keyword
+   * test is the fallback for a caller that does not, and was the whole answer
+   * until a working tree could be built as production.
+   */
   const development =
-    info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]);
+    unreleased === true ||
+    (unreleased === undefined &&
+      info.build === BUILD.DEBUG &&
+      atLeast(info.release, [3, 0, 4]));
   if (development) origins.push('onlyagent.app');
   return origins;
 }
 
-function capabilities(status) {
+function capabilities(status, { unreleased } = {}) {
   const info = typeof status === 'string' ? parseStatus(status) : status;
 
   /**
@@ -550,7 +558,11 @@ const gestures = (() => {
      *
      * ok-rn/FINDING-capability-guesses-about-the-next-release-were-wrong.md
      */
-    postQuantum: info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]),
+    postQuantum:
+      unreleased === true ||
+      (unreleased === undefined &&
+        info.build === BUILD.DEBUG &&
+        atLeast(info.release, [3, 0, 4])),
 
     /**
      * Whether this firmware answers the FIRST-PARTY origin this library sends.
@@ -601,7 +613,7 @@ const gestures = (() => {
      * library's own default, which is what every caller that does not override
      * gets.
      */
-    vendorOrigin: vendorOrigins(info).indexOf(RP_ID) !== -1,
+    vendorOrigin: vendorOrigins(info, unreleased).indexOf(RP_ID) !== -1,
 
     /**
      * HMAC-SHA1 slot keys, which the Keys tab offers as a key type.

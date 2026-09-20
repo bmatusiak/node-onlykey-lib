@@ -1,3 +1,14 @@
+export namespace HID_PROMPTS {
+    let enter: RegExp;
+    let storing: RegExp;
+    let confirm: RegExp;
+    let matched: RegExp;
+    let committed: null;
+}
+export namespace HID_ERRORS {
+    let tooShort: RegExp;
+    let mismatch: RegExp;
+}
 /**
  * Digits are BUTTON NUMBERS, not a keypad.
  *
@@ -35,15 +46,22 @@ export const BUTTONS: 6;
  */
 export const DUO_PIN_BYTES: 16;
 export namespace PROMPTS {
-    let enter: RegExp;
-    let storing: RegExp;
-    let confirm: RegExp;
-    let matched: RegExp;
-    let committed: RegExp;
+    let enter_1: RegExp;
+    export { enter_1 as enter };
+    let storing_1: RegExp;
+    export { storing_1 as storing };
+    let confirm_1: RegExp;
+    export { confirm_1 as confirm };
+    let matched_1: RegExp;
+    export { matched_1 as matched };
+    let committed_1: RegExp;
+    export { committed_1 as committed };
 }
 export namespace ERRORS {
-    let tooShort: RegExp;
-    let mismatch: RegExp;
+    let tooShort_1: RegExp;
+    export { tooShort_1 as tooShort };
+    let mismatch_1: RegExp;
+    export { mismatch_1 as mismatch };
 }
 /**
  * One print per DIGIT, so a first-match wait returns after the first one.
