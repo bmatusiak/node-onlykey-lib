@@ -24,6 +24,15 @@ export const SLOT_COUNT: {
  * onlykey-testing/FINDING-hmac-press-free-on-write.md.
  */
 export const HMAC_SLOTS: number[];
+/**
+ * The web-and-agent derivation key, okcore.h's RESERVED_KEY_WEB_AGENT_DERIVATION.
+ *
+ * Every label-derived key is expanded from this one, and from firmware 3.0.5 it
+ * is also the slot a derived X-Wing DECAPSULATION is addressed to: the derive
+ * tunnel cannot carry the 1120-byte ciphertext, so that operation is a chunked
+ * OKDECRYPT here instead. See okcrypto.deviceAge.decrypt().
+ */
+export const WEB_AGENT_DERIVATION_SLOT: 128;
 export const GLOBAL_SLOT: 0;
 export const GLOBAL_SLOT_ID: "XX";
 /**

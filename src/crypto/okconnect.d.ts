@@ -130,8 +130,32 @@ export function openResponse(response: any, appSecretKey: any, { encrypted, tran
     status: string;
     payload: Uint8Array;
 };
-/** How wide a public key is, per key type. */
-export function publicKeyWidth(keytype: any): 64 | 32 | 65;
+/**
+ * How wide a public key is, per key type.
+ *
+ * X-WING HAS TWO SHAPES AND THE CALLER MUST SAY WHICH, because the firmware
+ * changed what it hands back.
+ *
+ *   before      [ pk_X(32) | mlkem_seed(32) ]                 64 bytes
+ *   3.0.5+      [ pk_M(1184) | pk_X(32) ]                   1216 bytes
+ *
+ * The old one returned PRIVATE MATERIAL from a PUBLIC KEY request: the host
+ * was expected to expand the ML-KEM half from that seed itself. The device
+ * does the whole thing now and answers with the real recipient.
+ *
+ * Getting this wrong is not loud. The payload arrives at its full 1216 bytes
+ * either way, `payload.subarray(payload.length - 64)` happily returns the last
+ * 64 of them, and both halves look like random bytes - so a test asserting
+ * "64 bytes, and the halves differ" PASSES while holding the tail of pk_M and
+ * the real pk_X. Measured exactly that way before this was fixed.
+ *
+ * @param {number} keytype
+ * @param {object} [opts]
+ * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.0.5+)
+ */
+export function publicKeyWidth(keytype: number, { xwingCustody }?: {
+    xwingCustody?: boolean | undefined;
+}): 64 | 32 | 65 | 1216;
 /**
  * The derived public key out of a DERIVE_PUBLIC_KEY payload.
  *
@@ -139,7 +163,11 @@ export function publicKeyWidth(keytype: any): 64 | 32 | 65;
  * bare. Taken from the END of the payload, as the reference does - the device
  * appends it after whatever else the status blob carried.
  */
-export function publicKeyFrom(payload: any, keytype: any): any;
+export function publicKeyFrom(payload: any, keytype: any, opts?: {}): any;
+/** The derived X-Wing recipient once the device holds both halves: pk_M | pk_X. */
+export const XWING_PK: 1216;
+/** The older shape, before the device took custody: pk_X | mlkem_seed. */
+export const XWING_SPLIT: 64;
 /**
  * A DERIVE_SHARED_SECRET payload, which is TWO values and not one.
  *
@@ -158,7 +186,11 @@ export function publicKeyFrom(payload: any, keytype: any): any;
  * The private half is 32 bytes for every supported EC key type, so this width
  * does not vary the way the public one does.
  */
-export function sharedSecretFrom(payload: any, keytype: any): {
+export function sharedSecretFrom(payload: any, keytype: any, opts?: {}): {
+    secret: any;
+    mlkemSeed?: undefined;
+    publicKey?: undefined;
+} | {
     secret: any;
     mlkemSeed: any;
     publicKey: any;

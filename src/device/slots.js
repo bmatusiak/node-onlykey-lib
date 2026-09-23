@@ -34,6 +34,16 @@ const SLOT_COUNT = { [DEVICE_TYPE.CLASSIC]: 12, [DEVICE_TYPE.DUO]: 24 };
  */
 const HMAC_SLOTS = [129, 130];
 
+/**
+ * The web-and-agent derivation key, okcore.h's RESERVED_KEY_WEB_AGENT_DERIVATION.
+ *
+ * Every label-derived key is expanded from this one, and from firmware 3.0.5 it
+ * is also the slot a derived X-Wing DECAPSULATION is addressed to: the derive
+ * tunnel cannot carry the 1120-byte ciphertext, so that operation is a chunked
+ * OKDECRYPT here instead. See okcrypto.deviceAge.decrypt().
+ */
+const WEB_AGENT_DERIVATION_SLOT = 128;
+
 const GLOBAL_SLOT = 0;
 const GLOBAL_SLOT_ID = 'XX';
 
@@ -589,6 +599,7 @@ module.exports = {
   DEVICE_TYPE,
   SLOT_COUNT,
   HMAC_SLOTS,
+  WEB_AGENT_DERIVATION_SLOT,
   GLOBAL_SLOT,
   GLOBAL_SLOT_ID,
   LABEL_TOKENS,

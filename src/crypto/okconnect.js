@@ -328,15 +328,37 @@ function openResponse(response, appSecretKey, { encrypted = true, transitV2 = fa
   return { devicePublicKey, ...splitStatus(plaintext) };
 }
 
-/** How wide a public key is, per key type. */
-function publicKeyWidth(keytype) {
-  /*
-   * X-Wing is neither of the usual widths: it returns 64 bytes,
-   * [pk_X(32) | mlkem_seed(32)] for a public-key derive and
-   * [ss_X(32) | mlkem_seed(32)] for a shared secret
-   * (ok_extension.cpp:275-281).
-   */
-  if (keytype === KEYTYPE.XWING) return 64;
+/** The derived X-Wing recipient once the device holds both halves: pk_M | pk_X. */
+const XWING_PK = 1216;
+
+/** The older shape, before the device took custody: pk_X | mlkem_seed. */
+const XWING_SPLIT = 64;
+
+/**
+ * How wide a public key is, per key type.
+ *
+ * X-WING HAS TWO SHAPES AND THE CALLER MUST SAY WHICH, because the firmware
+ * changed what it hands back.
+ *
+ *   before      [ pk_X(32) | mlkem_seed(32) ]                 64 bytes
+ *   3.0.5+      [ pk_M(1184) | pk_X(32) ]                   1216 bytes
+ *
+ * The old one returned PRIVATE MATERIAL from a PUBLIC KEY request: the host
+ * was expected to expand the ML-KEM half from that seed itself. The device
+ * does the whole thing now and answers with the real recipient.
+ *
+ * Getting this wrong is not loud. The payload arrives at its full 1216 bytes
+ * either way, `payload.subarray(payload.length - 64)` happily returns the last
+ * 64 of them, and both halves look like random bytes - so a test asserting
+ * "64 bytes, and the halves differ" PASSES while holding the tail of pk_M and
+ * the real pk_X. Measured exactly that way before this was fixed.
+ *
+ * @param {number} keytype
+ * @param {object} [opts]
+ * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.0.5+)
+ */
+function publicKeyWidth(keytype, { xwingCustody = false } = {}) {
+  if (keytype === KEYTYPE.XWING) return xwingCustody ? XWING_PK : XWING_SPLIT;
   if (keytype === KEYTYPE.CURVE25519 || keytype === KEYTYPE.NACL) return 32;
   return 65;
 }
@@ -416,8 +438,8 @@ function peerKeyWire(publicKey, keytype) {
  * bare. Taken from the END of the payload, as the reference does - the device
  * appends it after whatever else the status blob carried.
  */
-function publicKeyFrom(payload, keytype) {
-  const width = publicKeyWidth(keytype);
+function publicKeyFrom(payload, keytype, opts = {}) {
+  const width = publicKeyWidth(keytype, opts);
   if (payload.length < width) {
     throw new Error(
       `payload is ${payload.length} bytes; a keytype-${keytype} public key is ${width}`,
@@ -444,7 +466,7 @@ function publicKeyFrom(payload, keytype) {
  * The private half is 32 bytes for every supported EC key type, so this width
  * does not vary the way the public one does.
  */
-function sharedSecretFrom(payload, keytype) {
+function sharedSecretFrom(payload, keytype, opts = {}) {
   /*
    * X-Wing is a THIRD layout, not a variation on this one. It returns 64 bytes
    * for both actions and the halves keep their positions
@@ -460,6 +482,24 @@ function sharedSecretFrom(payload, keytype) {
    * about why.
    */
   if (keytype === KEYTYPE.XWING) {
+    /*
+     * FROM 3.0.5 THERE IS NO SEED AND NO PAIR. The device holds both halves
+     * and answers a decapsulation with the finished X-Wing secret, 32 bytes and
+     * nothing else - so there is nothing to split and nothing for the host to
+     * expand. `mlkemSeed` is absent rather than zero-filled: a caller still
+     * reaching for it should fail where it asks, not carry 32 zero bytes into a
+     * KDF.
+     */
+    if (opts.xwingCustody) {
+      if (payload.length < SECRET_BYTES) {
+        throw new Error(
+          `payload is ${payload.length} bytes; an X-Wing shared secret is `
+          + `${SECRET_BYTES}`,
+        );
+      }
+      return { secret: payload.subarray(payload.length - SECRET_BYTES) };
+    }
+
     if (payload.length < XWING_PAIR) {
       throw new Error(
         `payload is ${payload.length} bytes; an X-Wing pair is ${XWING_PAIR}`,
@@ -473,7 +513,7 @@ function sharedSecretFrom(payload, keytype) {
     };
   }
 
-  const width = publicKeyWidth(keytype);
+  const width = publicKeyWidth(keytype, opts);
   if (payload.length < SECRET_BYTES + width) {
     throw new Error(
       `payload is ${payload.length} bytes; a keytype-${keytype} shared-secret `
@@ -506,6 +546,8 @@ module.exports = {
   openResponse,
   publicKeyWidth,
   publicKeyFrom,
+  XWING_PK,
+  XWING_SPLIT,
   sharedSecretFrom,
   peerKeyWire,
   SECRET_BYTES,

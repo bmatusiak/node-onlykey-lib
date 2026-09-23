@@ -68,6 +68,7 @@ const vault = require('../../src/crypto/vault');
 const vaultStore = require('../../src/crypto/vault_store');
 const okconnect = require('../../src/crypto/okconnect');
 const keys = require('../../src/device/keys');
+const slots = require('../../src/device/slots');
 const tunnelling = require('../../src/protocol/tunnel');
 const { RP_IDS } = require('../../src/protocol/ctap');
 const { CtapHid } = require('../../src/protocol/ctaphid');
@@ -681,14 +682,24 @@ function setup(imports, register, config) {
       || action === okconnect.KEYACTION.DERIVE_SHARED_SECRET_REQ_PRESS;
 
     if (isShared) {
-      const { secret, publicKey: pub } = okconnect.sharedSecretFrom(opened.payload, keytype);
+      const { secret, publicKey: pub } = okconnect.sharedSecretFrom(
+        opened.payload, keytype, { xwingCustody: deviceCan('xwingDeviceCustody') === true },
+      );
       return { status: opened.status, payload: opened.payload, secret, publicKey: pub };
     }
 
     return {
       status: opened.status,
       payload: opened.payload,
-      publicKey: okconnect.publicKeyFrom(opened.payload, keytype),
+      /*
+       * The X-Wing shape is the FIRMWARE's, read from its version - see the
+       * xwingDeviceCustody capability. Passed rather than inferred from the
+       * payload length, because both shapes arrive in a 1216-byte payload and
+       * the wrong one slices cleanly out of it.
+       */
+      publicKey: okconnect.publicKeyFrom(opened.payload, keytype, {
+        xwingCustody: deviceCan('xwingDeviceCustody') === true,
+      }),
     };
   }
   const okcrypto = {
@@ -936,6 +947,28 @@ function setup(imports, register, config) {
           ...opts,
           keytype: okconnect.KEYTYPE.XWING,
         });
+        /*
+         * FROM 3.0.5 THE DERIVED KEY IS ALREADY THE RECIPIENT.
+         *
+         * The device answers [pk_M(1184) | pk_X(32)] - the whole X-Wing
+         * recipient, 1216 bytes - so there is nothing to build and no seed to
+         * expand. Before that it answered [pk_X(32) | mlkem_seed(32)] and the
+         * host derived pk_M from the seed, which is the same thing said twice
+         * and meant a PUBLIC-KEY request carried private material.
+         *
+         * `mlkemSeed` is simply absent under custody rather than faked: a
+         * caller still reaching for it should fail where it asks.
+         */
+        if (deviceCan('xwingDeviceCustody') === true) {
+          const recipient = derived.publicKey;
+          return {
+            label,
+            pkX: recipient.subarray(recipient.length - 32),
+            recipient,
+            recipientString: pqc.encodeRecipient(recipient),
+          };
+        }
+
         const pkX = derived.publicKey.subarray(0, 32);
         const mlkemSeed = derived.publicKey.subarray(32);
         const recipient = pqc.buildRecipient(pkX, mlkemSeed);
@@ -972,8 +1005,49 @@ function setup(imports, register, config) {
        * what makes this one round trip rather than a 1120-byte upload.
        */
       async decrypt(fileBytes, label, opts = {}) {
+        const custody = deviceCan('xwingDeviceCustody') === true;
         const id = await okcrypto.deviceAge.identity(label, opts);
+
         return age.decryptAgeFile(fileBytes, async (ciphertext) => {
+          /*
+           * FROM 3.0.5 THIS IS NOT A DERIVE AT ALL. The firmware says so at the
+           * branch that used to serve it (fido2/ok_extension.cpp):
+           *
+           *   "DERIVE_SHAREDSEC is NO LONGER served here. Decapsulation now
+           *    needs the whole 1120-byte X-Wing ciphertext on the device (ct_M
+           *    included), which does not fit this single-shot client_handle
+           *    path. The browser sends it as a chunked OKDECRYPT to slot
+           *    RESERVED_KEY_WEB_AGENT_DERIVATION carrying [ label32 | ct(1120) ]"
+           *
+           * and answers a derive that asks anyway with "Error use OKDECRYPT for
+           * derived X-Wing decapsulation" - over the VENDOR interface, while the
+           * FIDO answer stays empty. So a client that keeps deriving sees only a
+           * reply it cannot open, never the sentence explaining why.
+           *
+           * The device does the whole decapsulation now, both halves, and
+           * returns the finished 32-byte X-Wing secret. ct_M no longer stays on
+           * the host, which is what makes this a 1152-byte upload rather than
+           * one round trip - the cost of the device holding sk_M rather than
+           * handing out a seed that yields it.
+           */
+          if (custody) {
+            const payload = new Uint8Array(32 + ciphertext.length);
+            payload.set(okconnect.derivationHash(label), 0);
+            payload.set(ciphertext, 32);
+            const answer = await deviceOperation(
+              MSG.OKDECRYPT, slots.WEB_AGENT_DERIVATION_SLOT, payload,
+              { expectBytes: 32, ...opts },
+            );
+            const secret = answer && (answer.data || answer.bytes || answer);
+            const bytes = Uint8Array.from(secret);
+            if (bytes.length !== 32) {
+              throw new Error(
+                `a derived X-Wing decapsulation is 32 bytes; got ${bytes.length}`,
+              );
+            }
+            return bytes;
+          }
+
           const ctX = pqc.ctXOf(ciphertext);
           const answer = await okcrypto.deriveSharedSecret(label, ctX, {
             ...opts,

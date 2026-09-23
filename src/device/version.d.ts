@@ -343,6 +343,28 @@ export function capabilities(status: any, { unreleased }?: {}): {
      */
     transitV2: boolean;
     /**
+     * Whether the device holds BOTH halves of a derived X-Wing key.
+     *
+     * It used to answer a public-key request with
+     * `[pk_X(32) | mlkem_seed(32)]` and a decapsulation with `ss_X`, leaving
+     * the host to expand the ML-KEM half from the seed and combine - which
+     * meant A PUBLIC-KEY REQUEST RETURNED PRIVATE MATERIAL. From 3.0.5 the
+     * device does the whole thing:
+     *
+     *   OKGETPUBKEY  ->  [pk_M(1184) | pk_X(32)]      the real recipient, 1216
+     *   OKDECRYPT    ->  ss(32)                       the X-Wing secret, bare
+     *
+     * A version comparison rather than a measurement because the two shapes
+     * are indistinguishable by inspection: the reply is 1216 bytes either way,
+     * and taking the last 64 of it yields something that looks exactly like the
+     * old pair. That is not a hypothetical - it is what this library did, and
+     * the test asserting "64 bytes and the halves differ" passed throughout.
+     *
+     * X-Wing is development-line only (see `xwingDerive`), so the 64-byte shape
+     * exists only on a pre-3.0.5 development build. No release has either.
+     */
+    xwingDeviceCustody: boolean;
+    /**
      * Whether the X-Wing hybrid key type exists at all.
      *
      * THE DEVELOPMENT LINE, NOT A VERSION THRESHOLD - the third capability to
