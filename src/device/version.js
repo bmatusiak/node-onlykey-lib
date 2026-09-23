@@ -858,6 +858,34 @@ const gestures = (() => {
     xwingDeviceCustody: atLeast(info.release, [3, 0, 5]),
 
     /**
+     * Whether fields 21, 22 and 30 are a 0/1/2 ENUM rather than a BITFIELD.
+     *
+     * The same byte, read two different ways, and nothing on the wire says
+     * which - so it has to be decided from the version like everything else
+     * here.
+     *
+     * Before 3.0.5, field 21 is a bitmask: bit 0 raises a three-button
+     * challenge on raw-HID derives, and BIT 3 (value 8) is what lets a FIDO2
+     * derive happen without a touch. From 3.0.5 the same field is an enum -
+     * 0 challenge, 1 press, 2 none - and `set_slot()` REFUSES anything above
+     * USER_INPUT_NONE with "Error invalid user input mode".
+     *
+     * So a host that writes 8 to a 3.0.5 key is refused, and a host that
+     * writes 1 to an older key has asked for bit 0, which is a different
+     * setting on a different code path. Neither failure names the version.
+     *
+     * Value 8 is not a hypothetical: writing it is what made five derives
+     * answer OPERATION_DENIED for a whole debugging session, because the
+     * touch-free setup silently never took (ok-rn@5230231).
+     *
+     * `2` is NOT universally available even at 3.0.5 - builds without
+     * OK_ALLOW_NO_PRESS refuse it with "unsupported user input mode", and a
+     * stale 2 in EEPROM fails closed to the challenge code. Field 30 permits
+     * it; a caller offering it on 21 or 22 is offering an error.
+     */
+    userInputModeEnum: atLeast(info.release, [3, 0, 5]),
+
+    /**
      * Whether the X-Wing hybrid key type exists at all.
      *
      * THE DEVELOPMENT LINE, NOT A VERSION THRESHOLD - the third capability to

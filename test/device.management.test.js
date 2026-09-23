@@ -325,6 +325,92 @@ test('preferences() describes the whole settings surface', async () => {
   await app.destroy();
 });
 
+test('the user-input fields change SHAPE at 3.0.5, and the table follows', async () => {
+  /*
+   * THE SAME BYTE, READ TWO WAYS, and nothing on the wire says which.
+   *
+   * Before 3.0.5 field 21 is a bitmask whose BIT 3 (value 8) is the only way
+   * to get a derive without a touch. From 3.0.5 it is a 0/1/2 enum and
+   * set_slot() refuses anything above USER_INPUT_NONE with "Error invalid
+   * user input mode" - so a screen still drawing the old shape offers a
+   * toggle that writes 8 and is refused.
+   *
+   * That is not hypothetical. Writing 8 is what made five derives answer
+   * OPERATION_DENIED for a whole session; the e2e was fixed for it and this
+   * table, which the UI renders from, was not.
+   */
+  const app = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  const device = app.services.device;
+  await device.connect();
+
+  const byName = Object.fromEntries(device.preferences().map((p) => [p.name, p]));
+
+  assert.equal(byName.derivedChallengeMode.max, 1,
+    'field 21 still accepts 255, so the screen can still offer the refused 8');
+  assert.equal(byName.derivedChallengeMode.bits, undefined,
+    'the legacy bit toggles survived the overlay - a spread leaves untouched '
+    + 'keys in place, so `bits` has to be cleared rather than omitted');
+  assert.deepEqual(Object.keys(byName.derivedChallengeMode.choices), ['0', '1']);
+
+  /* 22 gains named choices where it had a bare number box. */
+  assert.deepEqual(Object.keys(byName.storedChallengeMode.choices), ['0', '1']);
+
+  /* "No confirmation" is field 30's alone - 21 and 22 refuse it. */
+  assert.deepEqual(Object.keys(byName.webAgentDeriveMode.choices), ['0', '1', '2']);
+  assert.ok(!('2' in byName.derivedChallengeMode.choices),
+    'offering "no confirmation" on field 21 offers an error the user cannot act on');
+
+  await app.destroy();
+});
+
+test('an older key keeps the bitmask, because there the bits are correct', async () => {
+  /*
+   * THE OTHER HALF, and the half that makes it a gate rather than a rewrite.
+   * This app has to keep working against older firmware, where bit 3 is not a
+   * legacy curiosity - it is the only way to reach a touch-free derive at all.
+   */
+  const app = await start(fakeFirmware({ version: 'v3.0.4-prodc' }));
+  const device = app.services.device;
+  await device.connect();
+
+  const p = Object.fromEntries(device.preferences().map((x) => [x.name, x]));
+
+  assert.equal(p.derivedChallengeMode.max, 255);
+  assert.deepEqual(Object.keys(p.derivedChallengeMode.bits), ['0', '3']);
+  assert.equal(p.derivedChallengeMode.choices, undefined,
+    'an older key was offered the enum, which would write bit 0 while the '
+    + 'user believed they had chosen "challenge"');
+
+  await app.destroy();
+});
+
+test('an unknown version falls to the legacy shape, which fails loudly', async () => {
+  /*
+   * A LOCKED DEVICE REPORTS NO VERSION (see session.observeStatus), so this
+   * case is reachable on the ordinary path rather than being a curiosity.
+   *
+   * Legacy is the safe default: 3.0.5 REFUSES the bits with a message that
+   * names the problem, whereas handing the enum to an older key writes bit 0
+   * silently while the user believes they chose "challenge".
+   */
+  const app = await start(fakeFirmware({ pin: '1234561', version: 'v3.0.5-testc' }));
+  const device = app.services.device;
+
+  const before = await device.connect();
+  assert.equal(before.identity.version, null, 'a locked device named a version');
+
+  const locked = Object.fromEntries(device.preferences().map((x) => [x.name, x]));
+  assert.deepEqual(Object.keys(locked.derivedChallengeMode.bits), ['0', '3']);
+
+  /* And it corrects itself the moment the device says what it is. */
+  await device.unlock('1234561');
+  const after = Object.fromEntries(device.preferences().map((x) => [x.name, x]));
+  assert.equal(after.derivedChallengeMode.bits, undefined);
+  assert.deepEqual(Object.keys(after.derivedChallengeMode.choices), ['0', '1']);
+
+  await app.destroy();
+});
+
 test('the webcrypt policy is a validated bitmask, not a free byte', async () => {
   /*
    * FIELD 31 REJECTS UNDEFINED BITS rather than masking them - the firmware

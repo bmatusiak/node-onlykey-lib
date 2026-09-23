@@ -569,6 +569,48 @@ const PREFERENCES = {
   },
 };
 
+/**
+ * What fields 21, 22 and 30 become at firmware 3.0.5 - applied over the rows
+ * above by preferences(), never instead of them.
+ *
+ * An OVERLAY rather than a second table, because only the SHAPE changes:
+ * the field number, the gate and the label are the same settings either way,
+ * and duplicating them is how two descriptions of one byte drift apart.
+ *
+ * `max` drops from 255 to the largest value the firmware will take, and the
+ * bitmask is replaced outright - `bits: undefined` rather than omitted,
+ * because a spread leaves an untouched key in place and a stale `bits` would
+ * have the screen draw toggles beside the choices.
+ *
+ * "NO CONFIRMATION" IS ON FIELD 30 ONLY. Production firmware refuses 2 on 21
+ * and 22 ("unsupported user input mode") and fails a stale one closed to the
+ * challenge code, so offering it there could only produce an error the user
+ * cannot act on. Even on 30 it depends on OK_ALLOW_NO_PRESS, which is why the
+ * note says so rather than the option being silently absent.
+ */
+const USER_INPUT_ENUM_ROWS = {
+  derivedChallengeMode: {
+    max: 1,
+    bits: undefined,
+    choices: { 0: 'Three-digit challenge', 1: 'Button press' },
+    note: 'How you approve a key derived for SSH or GPG. From firmware 3.0.5 this is one of two values, not a bitmask - the old "bit 3 for no touch" is gone, and writing 8 is refused.',
+  },
+  storedChallengeMode: {
+    max: 1,
+    choices: { 0: 'Three-digit challenge', 1: 'Button press' },
+    note: 'How you approve a key the device already holds - PGP, SSH, and the RSA and ECC slots.',
+  },
+  webAgentDeriveMode: {
+    max: 2,
+    choices: {
+      0: 'Three-digit challenge',
+      1: 'Button press',
+      2: 'No confirmation',
+    },
+    note: 'How you approve a key derived on demand from a label, shared by the OnlyKey web app and by local agents over USB (onlykey-agent, python-onlykey, age). It never changes WHICH key is derived, only how you authorise it, so anything already encrypted to a label still decrypts. "No confirmation" is refused on firmware built without OK_ALLOW_NO_PRESS.',
+  },
+};
+
   /**
    * One OKGETPUBKEY read. `getPublicKey` wraps this with the retry.
    *
@@ -1676,7 +1718,35 @@ const PREFERENCES = {
 
     /** The settable preferences, for a screen that renders itself. */
     preferences() {
-      return Object.entries(PREFERENCES).map(([name, spec]) => ({ name, ...spec }));
+      /*
+       * THE SAME BYTE MEANS TWO DIFFERENT THINGS, and the version decides
+       * which. This used to hand back the static table, so every GUI drew
+       * pre-3.0.5 semantics at a 3.0.5 key.
+       *
+       * Fields 21, 22 and 30 are a BITFIELD before 3.0.5 and a 0/1/2 ENUM at
+       * and after it. A screen rendering the old shape offers a toggle that
+       * writes 8 - which `set_slot()` refuses outright with "Error invalid
+       * user input mode". That is not a hypothetical: writing 8 is what made
+       * five derives answer OPERATION_DENIED for a whole session, and the
+       * e2e was fixed for it while this table, which the UI reads, was not.
+       *
+       * Gated rather than replaced, because this app has to keep working
+       * against older firmware: below 3.0.5 the bits are still correct and
+       * still the only way to reach "derive without a touch".
+       *
+       * Version UNKNOWN (a locked device reports no version) falls to the
+       * legacy shape. That is the safe direction: the bits are refused by
+       * 3.0.5 with a message that names the problem, whereas offering the
+       * enum to an older key would write bit 0 while the user believed they
+       * had chosen "challenge", and nothing would say so.
+       */
+      const enumModes = Boolean(session.capabilities
+        && session.capabilities.userInputModeEnum);
+
+      return Object.entries(PREFERENCES).map(([name, spec]) => {
+        const shape = enumModes ? USER_INPUT_ENUM_ROWS[name] : null;
+        return shape ? { name, ...spec, ...shape } : { name, ...spec };
+      });
     },
 
     /**
