@@ -428,6 +428,25 @@ const BACKUP_REFUSALS = [
  * value in config mode and their safe value only on first use, so which rule
  * applies depends on what you are setting. `requires` names the stricter of
  * the two and `note` says so.
+ *
+ * ## `oneWay` - this write CANNOT BE TAKEN BACK
+ *
+ * A property of the FIRMWARE, so it belongs here rather than in whichever GUI
+ * happens to notice. ok-rn held the list privately for a while; the nw desktop
+ * app and the CLI can write all three fields and would each have had to
+ * rediscover the hazard, and the next irreversible field would have been added
+ * to the table and adopted silently by every screen that renders from it.
+ *
+ *   webcryptPolicy  the FIRST write ends the legacy field-21 inheritance
+ *                   permanently, in either direction, including a write of 0
+ *   backupKeyMode   locking it (1) cannot be undone
+ *   wipeMode        on a provisioned key only the destructive value is settable
+ *                   at all - the gentler ones need first use - so it is one-way
+ *                   in practice
+ *
+ * WHICH settings are irreversible is protocol. WHERE a GUI puts them and how
+ * hard it makes them to trigger is that GUI's business: ok-rn moves them to a
+ * separate screen behind a typed word, a CLI might simply require a flag.
  */
 /*
  * NAMED FOR WHAT THEY GOVERN, not for the mechanism.
@@ -535,6 +554,7 @@ const PREFERENCES = {
     max: 3,
     label: 'Browser permissions',
     requires: 'configMode',
+    oneWay: true,
     bits: {
       0: 'Let the browser use stored keys (PGP) over FIDO2',
       1: 'Turn the OnlyKey FIDO2 extension off entirely',
@@ -567,11 +587,13 @@ const PREFERENCES = {
 
   wipeMode: {
     field: FIELD.WIPEMODE, max: 2, label: 'Wipe mode', requires: 'configMode',
+    oneWay: true,
     note: 'Full wipe (2) needs config mode; the other values can only be set '
       + 'before setup is finished.',
   },
   backupKeyMode: {
     field: FIELD.BACKUPKEYMODE, max: 1, label: 'Backup key mode', requires: 'configMode',
+    oneWay: true,
     note: 'Locking it (1) needs config mode, and cannot be undone afterwards.',
   },
 

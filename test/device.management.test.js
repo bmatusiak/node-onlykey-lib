@@ -411,6 +411,41 @@ test('an unknown version falls to the legacy shape, which fails loudly', async (
   await app.destroy();
 });
 
+test('the table says which writes cannot be taken back', async () => {
+  /*
+   * WHICH SETTINGS ARE IRREVERSIBLE IS PROTOCOL, so it is described here and
+   * not in whichever GUI happens to notice. ok-rn held this list privately for
+   * a while; the nw desktop app and the CLI can write all three fields and
+   * would each have had to rediscover the hazard.
+   *
+   * The test names them exhaustively rather than checking "at least these
+   * three", so ADDING a one-way field to the table has to come here too. That
+   * is the point: the next irreversible setting should not be able to arrive
+   * quietly and be adopted by every screen that renders from this table.
+   */
+  const app = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  const device = app.services.device;
+  await device.connect();
+
+  const oneWay = device.preferences()
+    .filter((p) => p.oneWay)
+    .map((p) => p.name)
+    .sort();
+
+  assert.deepEqual(oneWay, ['backupKeyMode', 'webcryptPolicy', 'wipeMode']);
+
+  /*
+   * And every one of them needs config mode, which is not a coincidence worth
+   * relying on silently: the firmware gates the dangerous value behind it.
+   */
+  for (const p of device.preferences().filter((x) => x.oneWay)) {
+    assert.equal(p.requires, 'configMode', `${p.name} is one-way but ungated`);
+    assert.ok(p.note, `${p.name} is one-way and says nothing about why`);
+  }
+
+  await app.destroy();
+});
+
 test('the webcrypt policy is a validated bitmask, not a free byte', async () => {
   /*
    * FIELD 31 REJECTS UNDEFINED BITS rather than masking them - the firmware
