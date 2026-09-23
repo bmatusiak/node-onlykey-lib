@@ -61,6 +61,7 @@ export declare let FIELD: {
     TOUCHSENSE: number;
     YUBIANDHMAC: number;
     webAgentDeriveMode: number;
+    webcryptPolicy: number;
 };
 export declare let IFACE: {
     KEYBOARD: 0;

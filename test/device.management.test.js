@@ -325,6 +325,41 @@ test('preferences() describes the whole settings surface', async () => {
   await app.destroy();
 });
 
+test('the webcrypt policy is a validated bitmask, not a free byte', async () => {
+  /*
+   * FIELD 31 REJECTS UNDEFINED BITS rather than masking them - the firmware
+   * answers "Error invalid webcrypt policy" for anything outside
+   * OKWC_VALID_MASK (okcore.cpp:2117). So `max` is the mask, 3, and not the
+   * 255 a byte-sized preference would otherwise carry: a screen that offered
+   * 0-255 here would be offering values the device refuses.
+   *
+   * It is also the one preference that is a ONE-WAY LATCH. While unwritten
+   * (OKWC_UNSET 0xFF) the disable bit is inherited from legacy field 21 bit 1,
+   * and the first write of this byte ends that inheritance permanently. There
+   * is nothing to assert about that here - preferences are write-only and the
+   * latch is invisible from the host - but the note has to SAY so, because it
+   * is the only warning a GUI author will ever get.
+   */
+  const app = await start(fakeFirmware());
+  const byName = Object.fromEntries(
+    app.services.device.preferences().map((p) => [p.name, p]),
+  );
+
+  const wc = byName.webcryptPolicy;
+  assert.ok(wc, 'field 31 is missing from the settings surface');
+  assert.equal(wc.field, 31);
+  assert.equal(wc.max, 3, 'max must be OKWC_VALID_MASK - undefined bits are refused');
+  assert.equal(wc.requires, 'configMode');
+
+  /* Two bits, and each names a separate code path rather than a level. */
+  assert.deepEqual(Object.keys(wc.bits).sort(), ['0', '1']);
+
+  assert.match(wc.note, /permanently|once/i,
+    'the note is the only place a GUI author learns this write cannot be undone');
+
+  await app.destroy();
+});
+
 test('every preference says which gate the firmware puts on it', async () => {
   /*
    * set_slot gates these field by field, and getting it wrong is invisible:

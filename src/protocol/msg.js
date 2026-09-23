@@ -137,6 +137,29 @@ const FIELD = {
    * press. See USER_INPUT in plugins/device.
    */
   webAgentDeriveMode: 30,
+  /*
+   * Firmware 3.0.5 and later. WHAT the browser may do over the FIDO2
+   * extension, which is a different question from field 30's HOW the user
+   * confirms it - and they are deliberately separate bytes: packing "may this
+   * happen at all" together with "how is it authorised" is what produced the
+   * enum-versus-bitfield collision in field 21.
+   *
+   * A BITMASK, and a validated one: OKWC_ALLOW_STORED_KEY 0x01 permits
+   * stored-slot OKSIGN/OKDECRYPT (PGP) over the tunnel, OKWC_DISABLE_EXT 0x02
+   * turns the extension off entirely, and the firmware REJECTS any other bit
+   * with "Error invalid webcrypt policy" rather than masking it
+   * (okcore.cpp:2117). Both default off: derived keys yes, stored keys no,
+   * extension enabled.
+   *
+   * ONE-WAY LATCH. While this byte is unwritten (OKWC_UNSET 0xFF) the disable
+   * bit is INHERITED from legacy field 21 bit 1, and the first explicit write
+   * ends that inheritance permanently - it is also the marker that decides
+   * whether a 2 in field 21 means the enum's USER_INPUT_NONE or the legacy
+   * bitfield's "disable extension". So writing it AT ALL, even to 0, changes
+   * how field 21 is read afterwards and cannot be undone. Never write it as a
+   * side effect of anything.
+   */
+  webcryptPolicy: 31,
 };
 
 /* Upper-case aliases so callers need not know which three are odd. */

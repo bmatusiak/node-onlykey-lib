@@ -63,6 +63,7 @@ export let protocol: {
         TOUCHSENSE: number;
         YUBIANDHMAC: number;
         webAgentDeriveMode: number;
+        webcryptPolicy: number;
     };
     IFACE: {
         KEYBOARD: 0;

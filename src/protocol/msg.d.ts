@@ -82,6 +82,7 @@ export namespace FIELD {
     let TOUCHSENSE: number;
     let YUBIANDHMAC: number;
     let webAgentDeriveMode: number;
+    let webcryptPolicy: number;
 }
 export namespace FIELD_ALIASES {
     import DERIVEDCHALLENGEMODE = FIELD.derivedchallengeMode;

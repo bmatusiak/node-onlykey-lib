@@ -495,6 +495,40 @@ const PREFERENCES = {
     },
     note: 'How a shared-secret derive is authorised. A public-key derive is never gated. "No confirmation" is refused ("unsupported user input mode") on firmware built without OK_ALLOW_NO_PRESS.',
   },
+  /*
+   * FIELD 31 - what the browser may DO, as against field 30's how it is
+   * confirmed. Two bytes on purpose; see FIELD.webcryptPolicy.
+   *
+   * IT IS A ONE-WAY LATCH, and that makes it unlike every other row here.
+   * While unwritten (OKWC_UNSET 0xFF) the disable bit is inherited from legacy
+   * field 21 bit 1, and the FIRST write of this byte ends that inheritance
+   * permanently - it also becomes the marker deciding whether a 2 in field 21
+   * means the enum's "no press" or the legacy bitfield's "disable extension".
+   * So writing it AT ALL, even to 0, changes how field 21 is read afterwards,
+   * and a device cannot be put back.
+   *
+   * Consequences a GUI must respect: never write this as part of a "restore
+   * defaults" or a save-everything, and never write it to prove a form
+   * round-trips. Only when the user asked for this specific change.
+   *
+   * ABSENT FROM THE BACKUP BLOB entirely, so a restore silently drops the
+   * policy back to OKWC_UNSET and re-enables the legacy inheritance - unlike
+   * field 30, which does appear there when non-zero.
+   *
+   * Undefined bits are REJECTED, not masked ("Error invalid webcrypt policy",
+   * okcore.cpp:2117), so max is the valid mask rather than 255.
+   */
+  webcryptPolicy: {
+    field: FIELD.webcryptPolicy,
+    max: 3,
+    label: 'Webcrypt access',
+    requires: 'configMode',
+    bits: {
+      0: 'Let the browser use stored keys (PGP) over FIDO2',
+      1: 'Turn the OnlyKey FIDO2 extension off entirely',
+    },
+    note: 'Governs the BROWSER, which cannot set it itself - a web app reaches only the FIDO interface. Both bits default off: derived keys yes, stored keys no, extension on. Writing this once permanently ends the legacy field-21 inheritance, so set it only when you mean to.',
+  },
   storedChallengeMode:  { field: FIELD.storedchallengeMode, max: 1, label: 'Stored key challenge', requires: 'configMode' },
   hmacChallengeMode:    { field: FIELD.hmacchallengeMode, max: 1, label: 'HMAC challenge', requires: 'configMode' },
   modKeyMode:           { field: FIELD.modkeyMode, max: 1, label: 'Sysadmin mode', requires: 'configMode' },
