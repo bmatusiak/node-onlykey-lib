@@ -1436,6 +1436,28 @@ const USER_INPUT_ENUM_ROWS = {
     /** True once enterConfigMode has succeeded. Ends only at restart. */
     get inConfigMode() { return session.configMode; },
 
+    /**
+     * Hand back a status string seen somewhere other than connect() or
+     * unlock(), so capabilities can be recomputed from it.
+     *
+     * A LOCKED DEVICE DOES NOT SAY WHAT IT IS - its status is the bare word
+     * INITIALIZED - so a session that connected before unlocking has
+     * capabilities derived from `version: null`, which reads as the OLDEST
+     * firmware. unlock() hands its own status over for exactly this reason.
+     *
+     * But a GUI need not call unlock() at all. ok-rn watches the device's
+     * status broadcasts and drives the keypad itself, so it learns the version
+     * on a path the library never sees, and without this it would keep the
+     * pre-unlock capabilities for the life of the session - rendering, for
+     * one, a settings table describing firmware older than the key in hand.
+     *
+     * Only ever ADDS information; a status carrying no version is ignored.
+     * See session.observeStatus().
+     */
+    observeStatus(statusText) {
+      return session.observeStatus ? session.observeStatus(statusText) : false;
+    },
+
     /** Send button presses directly - the manual half of the PIN bracket. */
     press(digits) { return pressLine(transport, digits); },
 
