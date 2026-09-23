@@ -317,8 +317,8 @@ test('nothing is assumed about a release that does not exist yet', () => {
    * an unmeasured release reads like the newest MEASURED one, which is now
    * 3.0.5 rather than 3.0.4.
    */
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').touchFreeDerive, 'always');
-  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'always');
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').touchFreeDerive, 'preference');
+  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'preference');
   assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').postQuantum, false);
   assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').postQuantum, false);
 });

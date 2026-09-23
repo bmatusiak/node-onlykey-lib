@@ -702,26 +702,27 @@ const gestures = (() => {
       }
 
       /*
-       * v3.0.5 REMOVED THE GATE ALTOGETHER, so it is 'always' again - and for
-       * the original reason, not by accident.
+       * v3.0.5 MOVED THE GATE, it did not remove it - and this value answers
+       * for the SHARED SECRET, which is the operation that is gated.
        *
-       * `derived_key_challenge_mode` bit 3 is gone from ok_extension.cpp.
-       * Presence is now decided by WHAT IS ASKED FOR: a public-key derivation
-       * never wants a touch, a shared secret always does. There is no
-       * preference to set, so a caller told 'preference' here would send
-       * someone to a settings screen for a switch that no longer exists.
+       * This first read 'always', on the reasoning that
+       * `derived_key_challenge_mode` bit 3 is gone from ok_extension.cpp and
+       * presence is decided by what is asked for. Half right, and the wrong
+       * half to build on. Measured against a 3.0.5 device: a public-key
+       * derivation is indeed never gated, but a shared secret is gated by
+       * `web_agent_derive_gate()` reading FIELD 30, which DEFAULTS TO
+       * USER_INPUT_PRESS. Saying 'always' told callers there was nothing to
+       * turn on, so they skipped the setup and every shared-secret derive came
+       * back CTAP2_ERR_OPERATION_DENIED.
        *
-       * MEASURED, not guessed forward - which is the rule this file was
-       * rewritten around. Two independent readings agree: the source at
-       * libraries@7bd29a4 has no bit-3 test in the derive path, and a run
-       * against a 3.0.5 tree answers every REQ_PRESS opcode with
-       * CTAP2_ERR_EXTENSION_NOT_SUPPORTED while the plain opcodes work. This
-       * is a SOURCE-LEVEL removal rather than a build difference, so unlike
-       * the -test/-prod split below it applies to both builds of 3.0.5.
+       * 'preference' is the honest answer: there is a setting, and touch-free
+       * needs it. WHICH setting changed - field 30's enum, not field 21's bit 3
+       * - and that is what `deriveReqPress` distinguishes.
        *
-       * See `deriveReqPress`, which is the other half of the same change.
+       * A public-key derive needs nothing on any 3.0.5 build. Callers that only
+       * fetch public keys can ignore this value entirely.
        */
-      if (atLeast(info.release, [3, 0, 5])) return 'always';
+      if (atLeast(info.release, [3, 0, 5])) return 'preference';
 
       /*
        * FROM v3.0.2 ON IT IS BROKEN ON EVERY RELEASE, and working only in the
