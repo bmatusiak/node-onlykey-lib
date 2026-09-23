@@ -392,6 +392,38 @@ export function capabilities(status: any, { unreleased }?: {}): {
      */
     userInputModeEnum: boolean;
     /**
+     * Whether the DEVICE VAULT is offered on this firmware.
+     *
+     * NOT A LIMIT OF THE FIRMWARE, and that is why this comment is long. A
+     * v3.0.4 key derives perfectly well - measured against a production build
+     * of the last signed release, "a vault blob sealed on this device opens
+     * again" - and slot 128 is the same slot number in both lines. Read as a
+     * capability question alone, the honest answer for v3.0.4 would be yes.
+     *
+     * It is a PRODUCT decision, taken on 2026-09-23, and the reasoning is
+     * about data rather than about what the silicon can do.
+     *
+     * 3.0.5 changed how a derived key is built (libraries@40464ca: the rpId
+     * left okcrypto_hkdf()'s salt for a fixed info string), so anything sealed
+     * on older firmware stops opening after an upgrade - silently, with the
+     * blobs still present. The seed survives; the construction does not. And
+     * the obvious recovery, restoring a backup onto the new firmware, does NOT
+     * work, because a backup preserves the input rather than the expansion.
+     *
+     * No shipped release ever offered the vault: ok-rn is unreleased, and
+     * whether the web app's July 2026 version reached anyone is unknown. So
+     * the hazard is still hypothetical, and the cheapest way to keep it that
+     * way is to never let data be created where an upgrade would strand it.
+     * Offering it on v3.0.4 buys a feature nobody has asked for and creates a
+     * migration nobody needs.
+     *
+     * A GUI decides what to do with this - ok-rn fades the section and says
+     * which firmware it needs. Nothing here refuses the derive itself, because
+     * the derive is genuinely available and a caller that means it (a test, a
+     * recovery tool reading old data on purpose) must still be able to.
+     */
+    deviceVault: boolean;
+    /**
      * Whether the X-Wing hybrid key type exists at all.
      *
      * THE DEVELOPMENT LINE, NOT A VERSION THRESHOLD - the third capability to
