@@ -60,6 +60,7 @@ export declare let FIELD: {
     modkeyMode: number;
     TOUCHSENSE: number;
     YUBIANDHMAC: number;
+    webAgentDeriveMode: number;
 };
 export declare let IFACE: {
     KEYBOARD: 0;

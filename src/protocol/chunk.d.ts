@@ -60,15 +60,20 @@ export function sendChunked({ cmd, slot, payload, send, seal, interChunkDelayMs,
  *                   when known: without it both the shape guard and the length
  *                   check are disabled and the first binary reply of any size
  *                   wins.
+ * @param {boolean}  [spec.untilShortChunk]  complete when a chunk shorter than
+ *                   RESPONSE_CHUNK arrives, which is the firmware's own rule.
+ *                   For a response whose length cannot be known in advance.
+ *                   Ignored when `expected` is given.
  * @param {function} [spec.open]    applied ONCE to the concatenation, not per
  *                   chunk - see below
  * @param {number}   [spec.intervalMs]
  * @param {number}   [spec.noProgressBudgetMs]
  * @param {function} [spec.onProgress]
  */
-export function pollForResponse({ poll, expected, open, intervalMs, noProgressBudgetMs, onProgress, }: {
+export function pollForResponse({ poll, expected, untilShortChunk, open, intervalMs, noProgressBudgetMs, onProgress, }: {
     poll: Function;
     expected?: number | undefined;
+    untilShortChunk?: boolean | undefined;
     open?: Function | undefined;
     intervalMs?: number | undefined;
     noProgressBudgetMs?: number | undefined;

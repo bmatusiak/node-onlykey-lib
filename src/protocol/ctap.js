@@ -27,17 +27,26 @@ const MAX_PAYLOAD = 245;
 /**
  * The relying-party id, and it is NOT a hosting detail.
  *
- * okcrypto_hkdf() folds the RPID into the key derivation
- * (okcrypto.cpp:245 `const char rpid[] = "onlyagent.app"`, checked against the
- * incoming appid at device.cpp:112). The same OnlyKey at a different origin
- * therefore derives DIFFERENT KEYS, with no error at any layer - it surfaces
- * much later as "no identity matched any of the recipients".
+ * WHAT IT MEANS CHANGED AT FIRMWARE 3.0.5, and both halves of the old model
+ * are gone.
  *
- * The browser client never sets this: both `rpId` and the appid extension are
- * commented out, so WebAuthn falls back to the page origin, which happens to
- * be onlyagent.app only because BUILD.sh writes that CNAME. This library
- * drives CTAP2 directly and so must state it. Overriding it is deliberate and
- * loud for that reason.
+ * It used to be an INPUT TO THE KEY: okcrypto_hkdf() v1 folded SHA256(rpId) in
+ * as the HKDF info, so the same OnlyKey at a different origin derived DIFFERENT
+ * KEYS with no error at any layer - it surfaced much later as "no identity
+ * matched any of the recipients". libraries@40464ca replaced that with a fixed
+ * info string, `"onlykey/derive/ecc/v2"`, and no origin at all. Every trusted
+ * origin now derives the SAME key for a label.
+ *
+ * What it is instead is ADMISSION. webcryptcheck() compares the rpId the
+ * browser asserted, read from ctap_buffer+4, against a table of exactly two
+ * names - `apps.crp.to` and `apps.onlykey.io` - and refuses the extension to
+ * anything else. Upstream's phrasing: "With no origin in the keys, the
+ * trusted-origin table in webcryptcheck() is the whole boundary between sites."
+ *
+ * So this value must be one of those two. It is not a keyspace selector any
+ * more, and choosing a different one does not get you a different key - it gets
+ * you refused. A DEBUG build hides that completely: webcryptcheck() returns 2
+ * before the table is read.
  */
 const RP_ID = 'apps.crp.to';
 
@@ -73,12 +82,23 @@ const RP_ID = 'apps.crp.to';
  * which nobody saw because a debug build returns 2 before comparing anything.
  * ok-rn/FINDING-the-vendor-path-is-origin-gated.md
  *
- * A host overrides the list with
- * `plugins.config = { okcrypto: { rpIds: [...] } }`, which is also the door to
- * third-party mode: pass a site's own hostname and the derives land in that
- * site's keyspace instead of this one.
+ * THERE IS NO THIRD-PARTY MODE ANY MORE. This used to say that passing a
+ * site's own hostname landed its derives in that site's keyspace. That is gone
+ * twice over: the origin is not in the derivation (so it cannot separate keys),
+ * and it is not admitted (so the request is refused outright). A third-party
+ * BROWSER integration is not possible on 3.0.5 - WebAuthn requires an RP ID to
+ * be a registrable suffix of the page's own origin, so a third-party page
+ * cannot assert either trusted name. Third-party integration is native, over
+ * the VENDOR interface, which has no origin table.
+ *
+ * `onlyagent.app` is dropped from the list: no released firmware ever carried
+ * it as an rpId string, and 3.0.5 does not admit it at all.
+ *
+ * A host can still override with
+ * `plugins.config = { okcrypto: { rpIds: [...] } }` - to select the other
+ * trusted origin, not to invent one.
  */
-const RP_IDS = [RP_ID, 'onlyagent.app'];
+const RP_IDS = [RP_ID, 'apps.onlykey.io'];
 
 /**
  * CTAP status codes, transcribed from onlykey.extra.js:245-292.

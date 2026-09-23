@@ -304,9 +304,21 @@ test('nothing is assumed about a release that does not exist yet', () => {
    * The previous rule guessed one release forward and was wrong twice. An
    * unmeasured release now reads like the newest one that WAS measured, and
    * stays there until somebody measures it.
+   *
+   * 3.0.5 USED TO BE THE EXAMPLE HERE, and is no longer hypothetical: it is
+   * measured, and the answer is 'always'. The gate it used to fail is gone from
+   * the source - ok_extension.cpp has no derived_key_challenge_mode bit-3 test
+   * left, and a 3.0.5 tree answers every REQ_PRESS opcode with
+   * CTAP2_ERR_EXTENSION_NOT_SUPPORTED while the plain opcodes work. Because
+   * that is a source-level removal rather than a build difference, it holds for
+   * -prod as well as -test.
+   *
+   * The property this test exists for is unchanged, and 4.0.0 still carries it:
+   * an unmeasured release reads like the newest MEASURED one, which is now
+   * 3.0.5 rather than 3.0.4.
    */
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').touchFreeDerive, 'broken');
-  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'broken');
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').touchFreeDerive, 'always');
+  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'always');
   assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').postQuantum, false);
   assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').postQuantum, false);
 });
@@ -336,13 +348,14 @@ test('the capability follows RP_ID, so a change there cannot pass unnoticed', ()
    * threshold and went stale the moment the library changed origin; this one
    * is a comparison, so it answers for whatever RP_ID currently is.
    *
-   * `onlyagent.app` is known ONLY by the development line (libraries@a5b731f,
-   * 2026-07-08, never released), and that asymmetry is the whole reason the
-   * library leads with the other one.
+   * The second origin was `onlyagent.app`, known only by the development line
+   * (libraries@a5b731f, never released). Firmware 3.0.5 admits exactly
+   * `apps.crp.to` and `apps.onlykey.io` and drops onlyagent.app entirely
+   * (libraries@e44ff6c), so the list now names the two the device will accept.
    */
   assert.equal(ctap.RP_ID, 'apps.crp.to');
   assert.equal(ctap.RP_IDS[0], ctap.RP_ID);
-  assert.ok(ctap.RP_IDS.includes('onlyagent.app'));
+  assert.ok(ctap.RP_IDS.includes('apps.onlykey.io'));
 });
 
 test('post-quantum is the development line, not a version threshold', () => {

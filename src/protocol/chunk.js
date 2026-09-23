@@ -154,6 +154,10 @@ async function sendChunked({
  *                   when known: without it both the shape guard and the length
  *                   check are disabled and the first binary reply of any size
  *                   wins.
+ * @param {boolean}  [spec.untilShortChunk]  complete when a chunk shorter than
+ *                   RESPONSE_CHUNK arrives, which is the firmware's own rule.
+ *                   For a response whose length cannot be known in advance.
+ *                   Ignored when `expected` is given.
  * @param {function} [spec.open]    applied ONCE to the concatenation, not per
  *                   chunk - see below
  * @param {number}   [spec.intervalMs]
@@ -163,6 +167,7 @@ async function sendChunked({
 async function pollForResponse({
   poll,
   expected = null,
+  untilShortChunk = false,
   open = null,
   intervalMs = POLL_INTERVAL_MS,
   noProgressBudgetMs = NO_PROGRESS_BUDGET_MS,
@@ -233,6 +238,34 @@ async function pollForResponse({
           total += len;
           deadline = Date.now() + noProgressBudgetMs; // progress: re-arm
           if (onProgress) onProgress({ received: total, expected });
+          /*
+           * TERMINATION, three ways, in order of how much the caller knows.
+           *
+           * `untilShortChunk` is the firmware's OWN rule, for a response whose
+           * length cannot be computed in advance:
+           *
+           *     chunk_len = remaining > MAX_LARGE_RESP_CHUNK
+           *               ? MAX_LARGE_RESP_CHUNK : remaining;
+           *
+           * so a chunk shorter than RESPONSE_CHUNK is by definition the last
+           * one. Nothing has to be predicted, which matters for the transit-v2
+           * derive: its framed length depends on the status string the device
+           * embeds, and that string is INSIDE the ciphertext - knowable only
+           * after opening, which needs every chunk first.
+           *
+           * A response that is an exact multiple of RESPONSE_CHUNK costs one
+           * extra poll, which the device answers with a zero-length chunk; that
+           * fails the `reply.data.length` gate above and falls through to the
+           * budget, so it ends rather than spinning.
+           *
+           * `expected` stays the stronger rule where a caller does know the
+           * length, because it also drives the shape guard. Neither set keeps
+           * the original behaviour: the first chunk wins.
+           */
+          if (untilShortChunk && !expected) {
+            if (len < RESPONSE_CHUNK) break;
+            continue;
+          }
           if (!expected || total >= expected) break;
           continue; // more expected: poll again without sleeping
         }

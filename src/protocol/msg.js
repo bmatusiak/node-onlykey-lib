@@ -126,6 +126,17 @@ const FIELD = {
   modkeyMode: 27,
   TOUCHSENSE: 28,
   YUBIANDHMAC: 29,
+  /*
+   * Firmware 3.0.5 and later. The user-input mode for the WEB-AND-AGENT derived
+   * key (slot 128), which is a different byte from the derived-key challenge
+   * mode at 21: okcore_user_input_mode_for_slot() routes slot 128 straight to
+   * this field, and web_agent_derive_gate() calls okcore_web_agent_derive_mode()
+   * directly. Writing 21 does not change the derive gate.
+   *
+   * It is an ENUM, not a bitfield: 0 = challenge code, 1 = button press, 2 = no
+   * press. See USER_INPUT in plugins/device.
+   */
+  webAgentDeriveMode: 30,
 };
 
 /* Upper-case aliases so callers need not know which three are odd. */
@@ -134,6 +145,7 @@ const FIELD_ALIASES = {
   STOREDCHALLENGEMODE: FIELD.storedchallengeMode,
   HMACCHALLENGEMODE: FIELD.hmacchallengeMode,
   MODKEYMODE: FIELD.modkeyMode,
+  WEBAGENTDERIVEMODE: FIELD.webAgentDeriveMode,
 };
 
 /**

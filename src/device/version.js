@@ -702,6 +702,28 @@ const gestures = (() => {
       }
 
       /*
+       * v3.0.5 REMOVED THE GATE ALTOGETHER, so it is 'always' again - and for
+       * the original reason, not by accident.
+       *
+       * `derived_key_challenge_mode` bit 3 is gone from ok_extension.cpp.
+       * Presence is now decided by WHAT IS ASKED FOR: a public-key derivation
+       * never wants a touch, a shared secret always does. There is no
+       * preference to set, so a caller told 'preference' here would send
+       * someone to a settings screen for a switch that no longer exists.
+       *
+       * MEASURED, not guessed forward - which is the rule this file was
+       * rewritten around. Two independent readings agree: the source at
+       * libraries@7bd29a4 has no bit-3 test in the derive path, and a run
+       * against a 3.0.5 tree answers every REQ_PRESS opcode with
+       * CTAP2_ERR_EXTENSION_NOT_SUPPORTED while the plain opcodes work. This
+       * is a SOURCE-LEVEL removal rather than a build difference, so unlike
+       * the -test/-prod split below it applies to both builds of 3.0.5.
+       *
+       * See `deriveReqPress`, which is the other half of the same change.
+       */
+      if (atLeast(info.release, [3, 0, 5])) return 'always';
+
+      /*
        * FROM v3.0.2 ON IT IS BROKEN ON EVERY RELEASE, and working only in the
        * development line.
        *
@@ -730,6 +752,86 @@ const gestures = (() => {
       const development = info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]);
       return development ? 'preference' : 'broken';
     })(),
+
+    /**
+     * Whether the REQ_PRESS derive opcodes (3 and 4) exist on this firmware.
+     *
+     * They were DERIVE_PUBLIC_KEY_REQ_PRESS and DERIVE_SHARED_SECRET_REQ_PRESS,
+     * and v3.0.5 removed them. The numbers are deliberately left burned
+     * upstream rather than reused - ok_extension.cpp refuses anything above
+     * DERIVE_SHAREDSEC outright - with the stated reason that "an old client
+     * still sending them must fail loudly, not be silently reinterpreted".
+     * That is what a host gets for ignoring this: every derive answered with
+     * CTAP2_ERR_EXTENSION_NOT_SUPPORTED.
+     *
+     * WHY THEY WENT, because it decides what a client should do instead. The
+     * suffix had stopped meaning what it said: presence is now implied by the
+     * request, so the only thing REQ_PRESS still selected was a SECOND KEY
+     * DOMAIN, through `additional_data[0] = 1` in the HKDF salt. Two keys per
+     * label, chosen by an opcode named after touches.
+     *
+     * So the right client behaviour on v3.0.5+ is not to refuse, and not to
+     * ask for a press some other way - it is to send the plain opcode and let
+     * the firmware decide presence. derive() does exactly that.
+     *
+     * CONSEQUENCE WORTH KNOWING: on v3.0.5 `additional_data[0]` is always 0,
+     * so anything sealed against the REQ_PRESS domain on older firmware
+     * derives a different key here and will not open. That is upstream's
+     * decision and not something a host can paper over - the old domain is
+     * unreachable, because the opcode that selected it is refused.
+     */
+    deriveReqPress: !atLeast(info.release, [3, 0, 5]),
+
+    /**
+     * Whether this firmware speaks FIDO2 transit v2 (counter IV + GCM tag).
+     *
+     * v1 used AES-GCM as a stream cipher - fixed all-zero IV, a counter never
+     * incremented, tag discarded. v2 gives every message its own IV and
+     * verifies the tag. See openTransitV2() in src/crypto/okconnect.js.
+     *
+     * THE FIRMWARE STATES THIS CONTRACT ITSELF, which is why this is a version
+     * comparison and not a measurement of behaviour. onlykey.h, beside the
+     * version macros:
+     *
+     *   "3.0.5 is the FIRMWARE VERSION GATE for FIDO2 transit v2 (counter IV +
+     *    GCM tag; see okcrypto.cpp). The host reads this string out of the
+     *    plain OKCONNECT response - which is not encrypted - and picks its
+     *    framing from it, so anything below 3.0.5 keeps the legacy scheme and
+     *    anything at or above it speaks v2."
+     *
+     * So the threshold is published rather than inferred, and guessing forward
+     * - the mistake this file is built to avoid - is not a risk here: a future
+     * 4.x speaks v2 because the firmware says everything at or above 3.0.5
+     * does, not because we are extrapolating from a release we measured.
+     *
+     * NOT DETECTABLE FROM THE WIRE. A v1 body and a v2 frame are both just
+     * bytes; reading one as the other yields plausible noise, not an error.
+     * That is what made this break look like "the device did not answer"
+     * rather than like a decryption failure.
+     *
+     * THE BUILD DOES NOT AFFECT THIS, which is the property that matters for
+     * production. okcrypto_transit_seal()/open() are wrapped in
+     * `#ifdef STD_VERSION`, not `#ifdef DEBUG`, so a -prod and a -test build of
+     * the same version frame identically. Proving it on a debug build proves it
+     * for the shipped one.
+     *
+     * THE IN TRVL EDITION IS RETIRED, so the obvious caveat does not apply.
+     * That `#ifdef STD_VERSION` would matter if a non-standard build existed -
+     * it compiles both functions down to `return len`, no counter, no tag, no
+     * encryption - but OnlyKey-Firmware@4a93dab retired the International
+     * Travel Edition and resolved STD_VERSION, so from 3.0.5 there is no
+     * edition to be on the wrong side of.
+     *
+     * It would be undetectable if there were: the status string carries the
+     * model but NOT the edition. Upstream's own client (onlykey.extra.js,
+     * TRANSIT_V2_MIN) gates on version alone for the same reason, so this
+     * matches it rather than inventing a second definition of the contract.
+     *
+     * Older pinned releases still HAVE the edition, which is why nothing else
+     * in this file drops its edition handling - but they are all below 3.0.5
+     * and therefore speak v1 regardless.
+     */
+    transitV2: atLeast(info.release, [3, 0, 5]),
 
     /**
      * Whether the X-Wing hybrid key type exists at all.

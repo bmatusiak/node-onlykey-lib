@@ -465,6 +465,36 @@ const PREFERENCES = {
     },
     note: 'A bitmask. Bit 3 (value 8) is what lets a derived key be produced without pressing a button; without it the device answers "extension not supported", which is not what it means.',
   },
+
+  /*
+   * FIRMWARE 3.0.5 REINTERPRETS FIELD 21 ABOVE, and this field replaces it for
+   * the derive path.
+   *
+   * From 3.0.5 fields 21, 22 and 30 are a 0/1/2 ENUM, not bitmasks, and
+   * set_slot() refuses anything above 2 with "Error invalid user input mode" -
+   * so the value 8 documented above stops working entirely. It is left as it is
+   * because every pinned release before 3.0.5 still wants it.
+   *
+   * And 21 is the wrong byte for the web-and-agent derive in any case:
+   * okcore_user_input_mode_for_slot() routes slot 128 straight to field 30, and
+   * web_agent_derive_gate() reads okcore_web_agent_derive_mode() directly.
+   *
+   * THIS SETTING GOVERNS THE BROWSER. A web app reaches only the FIDO
+   * interface, so it can neither read nor write this - the GUI that sets it is
+   * one with VENDOR (desktop, react-native, CLI), on the browser's behalf.
+   */
+  webAgentDeriveMode: {
+    field: FIELD.webAgentDeriveMode,
+    max: 2,
+    label: 'Web derive confirmation',
+    requires: 'configMode',
+    choices: {
+      0: 'Three-digit challenge',
+      1: 'Button press',
+      2: 'No confirmation',
+    },
+    note: 'How a shared-secret derive is authorised. A public-key derive is never gated. "No confirmation" is refused ("unsupported user input mode") on firmware built without OK_ALLOW_NO_PRESS.',
+  },
   storedChallengeMode:  { field: FIELD.storedchallengeMode, max: 1, label: 'Stored key challenge', requires: 'configMode' },
   hmacChallengeMode:    { field: FIELD.hmacchallengeMode, max: 1, label: 'HMAC challenge', requires: 'configMode' },
   modKeyMode:           { field: FIELD.modkeyMode, max: 1, label: 'Sysadmin mode', requires: 'configMode' },

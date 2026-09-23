@@ -62,6 +62,7 @@ export let protocol: {
         modkeyMode: number;
         TOUCHSENSE: number;
         YUBIANDHMAC: number;
+        webAgentDeriveMode: number;
     };
     IFACE: {
         KEYBOARD: 0;

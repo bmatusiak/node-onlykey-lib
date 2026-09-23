@@ -86,6 +86,18 @@ export function transitKey(devicePublicKey: any, appSecretKey: any): Uint8Array<
  */
 export function decryptBody(key: any, body: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /**
+ * Open a device->host v2 frame, or throw.
+ *
+ * NO PARTIAL ACCEPTANCE. A frame whose tag does not verify did not come from
+ * something holding the transit key, and returning its plaintext "as far as it
+ * got" would hand a caller attacker-chosen bytes that look like a key. That is
+ * the whole reason v2 exists, so the failure is an exception and never a
+ * shorter result.
+ */
+export function openTransitV2(key: any, frame: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+/** counter(4) + tag(16) around the ciphertext. */
+export const TRANSIT_V2_OVERHEAD: 20;
+/**
  * Split a decrypted response into the device's status line and its payload.
  *
  *   [ status string, NUL-terminated ("UNLOCKEDvX.Y.Z-xxxx\0") | payload ]
@@ -110,8 +122,9 @@ export function splitStatus(plaintext: any): {
  *
  * @returns {{devicePublicKey: Uint8Array, status: string, payload: Uint8Array}}
  */
-export function openResponse(response: any, appSecretKey: any, { encrypted }?: {
+export function openResponse(response: any, appSecretKey: any, { encrypted, transitV2 }?: {
     encrypted?: boolean | undefined;
+    transitV2?: boolean | undefined;
 }): {
     devicePublicKey: Uint8Array;
     status: string;

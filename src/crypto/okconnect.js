@@ -39,7 +39,7 @@
 
 const nacl = require('tweetnacl');
 const { sha256 } = require('@noble/hashes/sha2.js');
-const { ctr } = require('@noble/ciphers/aes.js');
+const { ctr, gcm } = require('@noble/ciphers/aes.js');
 const { concat, utf8ToBytes } = require('../bytes');
 
 /** OnlyKey's vendor command for the connect/derive exchange. */
@@ -192,6 +192,92 @@ function decryptBody(key, body) {
 }
 
 /**
+ * TRANSIT V2 - the framing firmware 3.0.5 and later speaks.
+ *
+ * v1 used AES-GCM as a stream cipher: a fixed all-zero IV, a counter that was
+ * never incremented, and the tag thrown away. That is decryptBody() above, and
+ * it is why this file's header describes GCM-without-authentication. v2 gives
+ * each message its own IV and actually verifies the tag.
+ *
+ *     frame = [ counter(4, big-endian) | ciphertext | tag(16) ]
+ *     iv    = [ dir | counter(4, big-endian) | 0 x 7 ]      (12 bytes)
+ *     key   = sha256(NaCl shared secret)                    (unchanged)
+ *
+ * `dir` is 1 for host->device and 0 for device->host, so the two directions
+ * can use the same counter value without ever sharing an IV under one key.
+ *
+ * WHICH ONE TO SPEAK IS NOT NEGOTIATED. onlykey.h states the contract: the
+ * host reads the firmware version out of the PLAIN OKCONNECT response - that
+ * one is unencrypted, so it is readable before any of this applies - and picks
+ * its framing from it. Below 3.0.5 is v1, 3.0.5 and above is v2. There is no
+ * flag in the frame saying which it is, and no way to tell them apart by
+ * looking: a v1 body and a v2 frame are both just bytes. Guessing wrong yields
+ * plausible noise rather than an error, which is what the tag now prevents in
+ * one direction and what the version gate prevents in both.
+ *
+ * ONLY THE DEVICE->HOST DIRECTION IS IMPLEMENTED, because it is the only one
+ * this library uses: requests go out in the clear and `opt3` asks for the
+ * RESPONSE to be encrypted. The reference implementation has a matching
+ * transit_seal() for hosts that encrypt their requests; if this library ever
+ * does, that is the other half, and it needs the outgoing counter state and a
+ * reset on every key replacement - including every derive, because a derive is
+ * itself an OKCONNECT and the device rolls its key on each one.
+ *
+ * Ported from onlykey.extra.js (0c-coder/onlykey.github.io), which carries the
+ * matching TRANSIT_V2_MIN and was measured on hardware against v3.0.5-test.
+ */
+
+/** Host->device is 1, device->host is 0. */
+const TRANSIT_DIR_FROM_DEVICE = 0;
+
+/** counter(4) + tag(16) around the ciphertext. */
+const TRANSIT_V2_OVERHEAD = 20;
+
+function transitIv(dir, counter) {
+  const iv = new Uint8Array(12);
+  iv[0] = dir;
+  iv[1] = (counter >>> 24) & 0xff;
+  iv[2] = (counter >>> 16) & 0xff;
+  iv[3] = (counter >>> 8) & 0xff;
+  iv[4] = counter & 0xff;
+  return iv;
+}
+
+/**
+ * Open a device->host v2 frame, or throw.
+ *
+ * NO PARTIAL ACCEPTANCE. A frame whose tag does not verify did not come from
+ * something holding the transit key, and returning its plaintext "as far as it
+ * got" would hand a caller attacker-chosen bytes that look like a key. That is
+ * the whole reason v2 exists, so the failure is an exception and never a
+ * shorter result.
+ */
+function openTransitV2(key, frame) {
+  const bytes = Uint8Array.from(frame);
+  if (bytes.length < TRANSIT_V2_OVERHEAD) {
+    throw new Error(
+      `transit v2 frame is ${bytes.length} bytes; the counter and tag alone are ` +
+      `${TRANSIT_V2_OVERHEAD}`);
+  }
+  const counter = ((bytes[0] << 24) >>> 0) + (bytes[1] << 16) + (bytes[2] << 8) + bytes[3];
+  /*
+   * @noble's gcm wants [ciphertext || tag] as one buffer, which is exactly the
+   * frame minus its counter prefix - so this is a slice, not a concat.
+   */
+  const sealed = bytes.subarray(4);
+  try {
+    return gcm(Uint8Array.from(key), transitIv(TRANSIT_DIR_FROM_DEVICE, counter))
+      .decrypt(sealed);
+  } catch (err) {
+    throw new Error(
+      'transit v2 message failed authentication - the reply did not come from '
+      + 'something holding the transit key, or the framing is being read as the '
+      + `wrong version (counter ${counter}, ${sealed.length - 16} ciphertext bytes)`,
+      { cause: err });
+  }
+}
+
+/**
  * Split a decrypted response into the device's status line and its payload.
  *
  *   [ status string, NUL-terminated ("UNLOCKEDvX.Y.Z-xxxx\0") | payload ]
@@ -220,7 +306,7 @@ function splitStatus(plaintext) {
  *
  * @returns {{devicePublicKey: Uint8Array, status: string, payload: Uint8Array}}
  */
-function openResponse(response, appSecretKey, { encrypted = true } = {}) {
+function openResponse(response, appSecretKey, { encrypted = true, transitV2 = false } = {}) {
   const bytes = Uint8Array.from(response);
   if (bytes.length < 32) {
     throw new Error(`OKCONNECT response is ${bytes.length} bytes; the transit key alone is 32`);
@@ -233,7 +319,13 @@ function openResponse(response, appSecretKey, { encrypted = true } = {}) {
   }
 
   const key = transitKey(devicePublicKey, appSecretKey);
-  return { devicePublicKey, ...splitStatus(decryptBody(key, body)) };
+  /*
+   * `transitV2` is the CALLER's, from the firmware version - see openTransitV2.
+   * Defaulted false so a caller that has not been taught about it keeps the
+   * behaviour it had, rather than silently changing how it reads every reply.
+   */
+  const plaintext = transitV2 ? openTransitV2(key, body) : decryptBody(key, body);
+  return { devicePublicKey, ...splitStatus(plaintext) };
 }
 
 /** How wide a public key is, per key type. */
@@ -408,6 +500,8 @@ module.exports = {
   newTransitKeypair,
   transitKey,
   decryptBody,
+  openTransitV2,
+  TRANSIT_V2_OVERHEAD,
   splitStatus,
   openResponse,
   publicKeyWidth,

@@ -72,6 +72,9 @@ const tunnelling = require('../../src/protocol/tunnel');
 const { RP_IDS } = require('../../src/protocol/ctap');
 const { CtapHid } = require('../../src/protocol/ctaphid');
 const chunker = require('../../src/device/chunker');
+/* protocol/chunk is NOT device/chunker: that one chunks a REQUEST, this one
+ * reassembles a multi-chunk RESPONSE. See the note at the top of chunker.js. */
+const chunk = require('../../src/protocol/chunk');
 const okmsg = require('../../src/protocol/okmsg');
 const { challengeDigits } = require('../../src/protocol/challenge');
 const { toBase64Url, utf8ToBytes } = require('../../src/bytes');
@@ -385,7 +388,54 @@ function setup(imports, register, config) {
    * ok-rn/FINDING-blocking-presence-fails-a-second-shared-secret.md, which
    * this was added to settle.
    */
+  /*
+   * The REQ_PRESS opcodes do not exist on v3.0.5 and later, so they are
+   * translated here rather than at every caller.
+   *
+   * ONE PLACE, because there are four ways in - derivePublicKey,
+   * deriveSharedSecret, deriveSharedSecretFor and the age/X-Wing paths - and
+   * every one of them takes `requirePress` from its caller. Mapping at the
+   * choke point means no caller has to know the firmware changed, and a
+   * caller that passes requirePress still gets the presence behaviour it
+   * asked for on the firmware that has it.
+   *
+   * WHAT THE CALLER LOSES, stated plainly: on v3.0.5 presence is decided by
+   * the request, not by the opcode - a public-key derivation never asks for a
+   * touch and a shared secret always does. So `requirePress: true` against a
+   * public-key derivation is silently not honoured there. It cannot be: the
+   * only opcode that would have demanded a touch is refused, and refusing the
+   * whole call would break a caller that is asking for something the firmware
+   * now does correctly by default.
+   *
+   * NOT the same as falling back. A fallback would retry after a failure and
+   * derive a DIFFERENT KEY, because the press flag is an input to the
+   * derivation rather than a check in front of it
+   * (ok-rn/FINDING-the-press-flag-changes-the-derived-key.md). This picks the
+   * right opcode BEFORE sending, so one request derives one key.
+   */
+  const REQ_PRESS_TO_PLAIN = new Map([
+    [okconnect.KEYACTION.DERIVE_PUBLIC_KEY_REQ_PRESS,
+      okconnect.KEYACTION.DERIVE_PUBLIC_KEY],
+    [okconnect.KEYACTION.DERIVE_SHARED_SECRET_REQ_PRESS,
+      okconnect.KEYACTION.DERIVE_SHARED_SECRET],
+  ]);
+
+  function opcodeFor(action) {
+    /*
+     * null means connect() has not run, so nothing is known about the
+     * firmware. Sending what the caller asked for is the honest default: it is
+     * what every firmware before v3.0.5 wants, and on v3.0.5 the device
+     * refuses it by name rather than doing something unintended.
+     */
+    if (deviceCan('deriveReqPress') !== false) return action;
+    return REQ_PRESS_TO_PLAIN.get(action) ?? action;
+  }
+
   async function derive(opts) {
+    if (opts && REQ_PRESS_TO_PLAIN.has(opts.action)) {
+      const plain = opcodeFor(opts.action);
+      if (plain !== opts.action) opts = { ...opts, action: plain };
+    }
     let last = null;
     for (let attempt = 1; attempt <= DERIVE_ATTEMPTS; attempt++) {
       events.emit('progress', {
@@ -522,7 +572,59 @@ function setup(imports, register, config) {
       );
     }
 
-    const opened = okconnect.openResponse(answer.data, app.secretKey);
+    /*
+     * A DERIVE CAN EXCEED ONE ASSERTION, and X-Wing always does.
+     *
+     * The device seals the whole response ONCE and chunks it afterwards
+     * (store_FIDO_response -> send_stored_response), so the chunks carry no
+     * counter or tag of their own. A classical derive is ~105 bytes and fits
+     * in one, which is why this path worked without any of the below; an
+     * X-Wing public key is 1289 bytes framed and arrives as 512 + 512 + 265.
+     * Opening the first chunk alone cannot authenticate - there is one tag, for
+     * the whole body.
+     *
+     * The poll is OKPING with opt3 = 0, which the firmware documents as the
+     * web app's own shape and exempts from its duplicate guard:
+     *
+     *     "opt3 == 0 carries no sequence information and must never be read as
+     *      a duplicate: poll_for_response() in the web app sends OKPING with
+     *      opt3 = 0, while the request that filled the buffer (e.g.
+     *      DERIVE_PUBLIC_KEY) sets last_opt3 = 1. Treating those polls as
+     *      duplicates re-served chunk 1 forever and the cursor never moved."
+     *
+     * No `expected` is passed, deliberately. The framed length depends on the
+     * status string the device embeds, and that string is inside the
+     * ciphertext - readable only after opening, which needs every chunk first.
+     * `untilShortChunk` uses the firmware's own rule instead.
+     */
+    let body = Uint8Array.from(answer.data);
+    if (body.length === chunk.RESPONSE_CHUNK) {
+      let first = answer;
+      const collected = await chunk.pollForResponse({
+        poll: async () => {
+          if (first) { const only = first; first = null; return only; }
+          return bound.send(
+            { cmd: MSG.OKPING, opt1: 0, opt2: 0, opt3: 0, data: new Uint8Array(0) },
+            { timeoutMs },
+          );
+        },
+        untilShortChunk: true,
+      });
+      if (collected.data && collected.data.length > body.length) body = collected.data;
+    }
+
+    /*
+     * The framing is the FIRMWARE's choice, read from its version - see the
+     * transitV2 capability. deviceCan() returns null before connect() has run,
+     * which coerces to the v1 default, and that is right: the only exchange
+     * that happens before the version is known is the plain OKCONNECT, which
+     * is not encrypted at all.
+     *
+     * Opened ONCE over the reassembled body, never per chunk.
+     */
+    const opened = okconnect.openResponse(body, app.secretKey, {
+      transitV2: deviceCan('transitV2') === true,
+    });
 
     /*
      * THE STATUS IS THE PROOF THAT THIS IS AN ANSWER.

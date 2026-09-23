@@ -12,6 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const crypto = require('crypto');
 
 const transit = require('../src/session/transit');
 const { toHex, fromHex, fromLatin1 } = require('../src/bytes');
@@ -113,10 +114,36 @@ test('parseConnectReply falls back to a plaintext tail', () => {
 
 /* ---- cross-check against the hardware-proven reference ------------------ */
 
+/*
+ * THE TWO beforenm() FUNCTIONS TAKE DIFFERENT THINGS, and the reference's is
+ * not interchangeable with ours.
+ *
+ * Ours takes raw bytes. The reference computes the shared point with
+ * `crypto.diffieHellman()`, whose `privateKey` must be a KeyObject - a raw
+ * Buffer is rejected with ERR_OSSL_UNSUPPORTED, which reads like the platform
+ * lacking X25519 and is nothing of the kind. Its own selfTest() wraps the key
+ * in PKCS#8 before calling it, and that is the calling convention.
+ *
+ * This test used to hand it a Buffer. It went unnoticed because the reference
+ * treats @noble/ciphers as an optional dependency and probe() reported it
+ * missing, so the whole cross-check SKIPPED - installing that dependency in the
+ * sibling checkout is what first ran these lines.
+ */
+function referencePrivateKey(hex) {
+  return crypto.createPrivateKey({
+    key: Buffer.concat([
+      Buffer.from('302e020100300506032b656e04220420', 'hex'),
+      Buffer.from(hex, 'hex'),
+    ]),
+    format: 'der',
+    type: 'pkcs8',
+  });
+}
+
 test('beforenm matches onlykey-testing', { skip: !referenceHasNoble }, () => {
   const got = transit.beforenm(fromHex(V.bobPublic), fromHex(V.aliceSecret));
   const theirs = reference.beforenm(
-    Buffer.from(V.bobPublic, 'hex'), Buffer.from(V.aliceSecret, 'hex'),
+    Buffer.from(V.bobPublic, 'hex'), referencePrivateKey(V.aliceSecret),
   );
   assert.equal(toHex(got), theirs.toString('hex'));
 });

@@ -81,6 +81,7 @@ export namespace FIELD {
     let modkeyMode: number;
     let TOUCHSENSE: number;
     let YUBIANDHMAC: number;
+    let webAgentDeriveMode: number;
 }
 export namespace FIELD_ALIASES {
     import DERIVEDCHALLENGEMODE = FIELD.derivedchallengeMode;
@@ -91,6 +92,8 @@ export namespace FIELD_ALIASES {
     export { HMACCHALLENGEMODE };
     import MODKEYMODE = FIELD.modkeyMode;
     export { MODKEYMODE };
+    import WEBAGENTDERIVEMODE = FIELD.webAgentDeriveMode;
+    export { WEBAGENTDERIVEMODE };
 }
 export namespace KEY_TYPE_MODIFIER {
     let Backup: number;
