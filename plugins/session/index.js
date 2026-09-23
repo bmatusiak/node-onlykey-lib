@@ -151,6 +151,52 @@ function setup(imports, register) {
     get identity() { return identity; },
 
     /**
+     * Re-read the identity from a status string seen OUTSIDE connect().
+     *
+     * ## A LOCKED DEVICE DOES NOT SAY WHAT IT IS
+     *
+     * connect() parses the status string, and on a locked device that string
+     * is `INITIALIZED` - no version, no build, no model. capabilities() then
+     * answers from `version: null`, which means every version gate reads
+     * FALSE: transitV2 false, deriveReqPress TRUE, xwingDeviceCustody false.
+     * That is the pre-3.0.5 device, described exactly.
+     *
+     * And that is the ORDINARY path, not an edge case: a device must be
+     * connected before it can be unlocked, so the first connect() of every
+     * session sees the locked status. Without this, the library spends the
+     * rest of that session speaking transit v1 to a v2 device (whose
+     * responses then decrypt to noise, or fail their tag and vanish
+     * entirely), asking for derive opcodes 3 and 4 that 3.0.5 removed, and
+     * reading a 64-byte X-Wing pair from a 1216-byte answer.
+     *
+     * It was invisible for as long as it was because a full e2e run hides it:
+     * each suite connects afresh, and by the time the derive suites run the
+     * device is already unlocked, so connect() sees a status WITH a version.
+     * Running two suites in isolation is what exposed it - the connection was
+     * made while locked and then reused (2026-09-23).
+     *
+     * ## Only ever ADDS information
+     *
+     * A parse that yields no version is ignored rather than stored. unlock()
+     * can resolve with the bare marker 'UNLOCKED' when the firmware sent no
+     * status line to match, and letting that overwrite a known version would
+     * turn this into the very bug it fixes, one call later.
+     *
+     * @param {string} statusText a status string from any path
+     * @returns {boolean} whether it taught us something
+     */
+    observeStatus(statusText) {
+      if (!statusText) return false;
+      const seen = version.parseStatus(String(statusText));
+      if (!seen || !seen.version) return false;
+      /* Nothing to do when it agrees with what connect() already parsed. */
+      if (identity && identity.version === seen.version) return false;
+      identity = seen;
+      caps = version.capabilities(seen);
+      return true;
+    },
+
+    /**
      * Whether the device has been put into CONFIG MODE, and cannot leave.
      *
      * Config mode is entered by a gesture and ends ONLY AT RESTART - there is

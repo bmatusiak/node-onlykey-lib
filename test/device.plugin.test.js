@@ -961,6 +961,43 @@ async function inConfigMode() {
   return { app, device };
 }
 
+test('unlocking teaches the session what firmware it is talking to', async () => {
+  /*
+   * A LOCKED DEVICE DOES NOT SAY WHAT IT IS. Its status is the bare word
+   * `INITIALIZED` - no version, no build, no model - and connect() parses
+   * capabilities from that, i.e. from `version: null`. Every version gate then
+   * reads as the OLDEST firmware: transitV2 false, deriveReqPress true,
+   * xwingDeviceCustody false.
+   *
+   * That is the ordinary order rather than an edge case, because a device has
+   * to be connected before it can be unlocked. Without the refresh, the whole
+   * session afterwards speaks transit v1 to a v2 device - whose answers then
+   * decrypt to noise, or fail their tag and vanish entirely - and asks for
+   * derive opcodes 3.0.5 removed.
+   *
+   * Found on 2026-09-23 by running two e2e suites in isolation: a full run
+   * hides it, because each suite connects afresh and by the time the derive
+   * suites run the device is already unlocked, so connect() sees a version.
+   */
+  const app = await start(fakeFirmware({ pin: '1234561', version: 'v3.0.5-testc' }));
+  const device = app.services.device;
+
+  const before = await device.connect();
+  assert.equal(before.identity.version, null,
+    'a locked device reported a version it cannot know');
+  assert.equal(before.capabilities.transitV2, false);
+  assert.equal(before.capabilities.deriveReqPress, true);
+
+  await device.unlock('1234561');
+
+  assert.equal(device.capabilities.transitV2, true,
+    'the session still thinks this is pre-3.0.5 firmware after unlocking');
+  assert.equal(device.capabilities.deriveReqPress, false);
+  assert.equal(device.capabilities.xwingDeviceCustody, true);
+
+  await app.destroy();
+});
+
 test('a fresh session has not entered config mode', async () => {
   const app = await start(fakeFirmware());
   assert.equal(app.services.device.inConfigMode, false);

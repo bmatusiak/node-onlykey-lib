@@ -1163,6 +1163,20 @@ const PREFERENCES = {
         Promise.resolve(enter(digits)).catch((err) => done(() => reject(err)));
       });
 
+      /*
+       * THE FIRST TIME THIS DEVICE SAYS WHAT IT IS.
+       *
+       * A locked device answers `INITIALIZED` - no version - and connect()
+       * parsed its capabilities from that, i.e. from `version: null`, which
+       * every version gate reads as pre-3.0.5. Unlocking is what produces
+       * `UNLOCKEDv3.0.5-testc`, and since a device has to be connected before
+       * it can be unlocked, this is the ordinary order rather than an unusual
+       * one. Handing the status back to the session here is what stops the
+       * rest of the session being spoken in an older protocol than the device
+       * on the other end - see session.observeStatus() for what that cost.
+       */
+      if (session.observeStatus) session.observeStatus(seen);
+
       progress('unlocked', { status: seen });
       events.emit('unlocked', { status: seen });
       return seen;

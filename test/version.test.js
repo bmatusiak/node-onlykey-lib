@@ -664,3 +664,43 @@ test('atLeast orders the two version shapes the firmware ships', () => {
   assert.equal(atLeast(rel('v0.2-beta.8'), [3, 0, 3]), false);
   assert.equal(atLeast(null, [3, 0, 3]), false);
 });
+
+test('a status string with no version yields no version, and that is load-bearing', () => {
+  /*
+   * Both halves of the same fact, and each is relied on somewhere.
+   *
+   * A LOCKED device answers the bare word `INITIALIZED`. capabilities() then
+   * answers from `version: null`, which reads as the OLDEST firmware -
+   * transitV2 off, deriveReqPress on. That is the right default for an unknown
+   * device and the wrong description of this one, so plugins/session's
+   * observeStatus() refreshes the identity when unlocking finally produces a
+   * versioned status (see plugins/device unlock()).
+   *
+   * unlock() can also resolve with the bare marker 'UNLOCKED' - the firmware
+   * sent no status line to match - and observeStatus() must IGNORE that rather
+   * than store it, or it would erase a version already known and re-create the
+   * bug it exists to fix. This test is what makes that guard's premise
+   * explicit: neither string carries a version.
+   */
+  for (const bare of ['INITIALIZED', 'UNLOCKED']) {
+    const id = parseStatus(bare);
+    /*
+     * FALSY, not null, and the difference nearly mattered: locked parses to
+     * null and a bare UNLOCKED to the empty string. observeStatus() tests
+     * `!seen.version`, which covers both; a === null check would have let the
+     * empty string through and overwritten a known version with a device that
+     * has no release at all.
+     */
+    assert.ok(!id.version, `${bare} reported a version it cannot know`);
+    assert.equal(id.release, null, `${bare} produced a comparable release`);
+    const caps = capabilities(id);
+    assert.equal(caps.transitV2, false);
+    assert.equal(caps.deriveReqPress, true);
+  }
+
+  /* The contrast: unlocking a 3.0.5 key says so, and everything flips. */
+  const known = capabilities(parseStatus('UNLOCKEDv3.0.5-testc'));
+  assert.equal(known.transitV2, true);
+  assert.equal(known.deriveReqPress, false);
+  assert.equal(known.xwingDeviceCustody, true);
+});
