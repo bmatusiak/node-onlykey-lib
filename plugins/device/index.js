@@ -429,6 +429,18 @@ const BACKUP_REFUSALS = [
  * applies depends on what you are setting. `requires` names the stricter of
  * the two and `note` says so.
  */
+/*
+ * NAMED FOR WHAT THEY GOVERN, not for the mechanism.
+ *
+ * These labels are what a GUI shows, so they are the user's vocabulary rather
+ * than the firmware's. "Derived key challenge" describes the byte; "SSH/GPG
+ * derived keys" describes the thing the person is deciding about, and the
+ * choice of challenge-or-press is the row's VALUE, not its name.
+ *
+ * Fields 21, 22 and 30 all answer "how do you approve this". Field 31 answers
+ * "is this allowed at all", which is why it reads as a permission and not as a
+ * confirmation - and why its own screen, not this table, is where it is set.
+ */
 const PREFERENCES = {
   lockout:              { field: FIELD.LOCKOUT, max: 255, unit: 'minutes', label: 'Idle lockout', requires: 'always' },
   typeSpeed:            { field: FIELD.TYPESPEED, max: 10, label: 'Typing speed', requires: 'always' },
@@ -457,7 +469,7 @@ const PREFERENCES = {
   derivedChallengeMode: {
     field: FIELD.derivedchallengeMode,
     max: 255,
-    label: 'Derived key challenge',
+    label: 'SSH/GPG derived keys',
     requires: 'configMode',
     bits: {
       0: 'Three-button challenge on raw-HID derives',
@@ -486,7 +498,7 @@ const PREFERENCES = {
   webAgentDeriveMode: {
     field: FIELD.webAgentDeriveMode,
     max: 2,
-    label: 'Web derive confirmation',
+    label: 'Web and agent derived keys',
     requires: 'configMode',
     choices: {
       0: 'Three-digit challenge',
@@ -521,7 +533,7 @@ const PREFERENCES = {
   webcryptPolicy: {
     field: FIELD.webcryptPolicy,
     max: 3,
-    label: 'Webcrypt access',
+    label: 'Browser permissions',
     requires: 'configMode',
     bits: {
       0: 'Let the browser use stored keys (PGP) over FIDO2',
@@ -529,7 +541,7 @@ const PREFERENCES = {
     },
     note: 'Governs the BROWSER, which cannot set it itself - a web app reaches only the FIDO interface. Both bits default off: derived keys yes, stored keys no, extension on. Writing this once permanently ends the legacy field-21 inheritance, so set it only when you mean to.',
   },
-  storedChallengeMode:  { field: FIELD.storedchallengeMode, max: 1, label: 'Stored key challenge', requires: 'configMode' },
+  storedChallengeMode:  { field: FIELD.storedchallengeMode, max: 1, label: 'Stored keys (PGP, SSH, RSA and ECC slots)', requires: 'configMode' },
   hmacChallengeMode:    { field: FIELD.hmacchallengeMode, max: 1, label: 'HMAC challenge', requires: 'configMode' },
   modKeyMode:           { field: FIELD.modkeyMode, max: 1, label: 'Sysadmin mode', requires: 'configMode' },
 
