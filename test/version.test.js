@@ -704,3 +704,31 @@ test('a status string with no version yields no version, and that is load-bearin
   assert.equal(known.deriveReqPress, false);
   assert.equal(known.xwingDeviceCustody, true);
 });
+
+/*
+ * THE BOUNDARY IS v2.1.2, and it is a boundary in the firmware rather than a
+ * number chosen here. libraries@v2.1.1-prod's okcore.cpp base64-encodes each
+ * backup block and stops - the symbol `backuphash` does not occur in it. The
+ * rolling SHA-256 and the trailing `--<base64>` line both arrive together in
+ * the v2.1.1..v2.1.2 diff. So a backup captured from anything older has no
+ * digest to check, and parsers.verifyBackup() correctly reports
+ * 'no digest line found'.
+ *
+ * Tested from BOTH sides. A gate that only ever returns the new answer is a
+ * rewrite rather than a gate, and the releases below this line are signed ones
+ * people still carry - the whole point is that their backups are not reported
+ * as damaged. Measured: v2.1.1, v2.1.0 and v0.2-beta.8 each failed the e2e
+ * capture test on every one of their runs before this existed.
+ */
+test('the backup digest chain is a v2.1.2 feature, and older releases have none', () => {
+  for (const v of ['v2.1.2', 'v3.0.0', 'v3.0.2', 'v3.0.4', 'v3.0.5']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).backupDigest, true,
+      `${v} should carry a backup digest`);
+  }
+  for (const v of ['v2.1.1', 'v2.1.0']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).backupDigest, false,
+      `${v} predates the digest chain`);
+  }
+  assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').backupDigest, false,
+    'the beta predates the digest chain');
+});

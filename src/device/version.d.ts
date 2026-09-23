@@ -343,6 +343,33 @@ export function capabilities(status: any, { unreleased }?: {}): {
      */
     transitV2: boolean;
     /**
+     * Whether a captured backup carries a DIGEST to check it against.
+     *
+     * The backup file is armoured base64 the device TYPES at the keyboard, and
+     * from v2.1.2 its last line is `--<base64>`: a rolling SHA-256 over the
+     * data lines, each hash taken over the previous digest concatenated with
+     * the next line's bytes. Chained rather than a hash of the whole file, so a
+     * reordering is caught as well as a modification.
+     *
+     * BEFORE v2.1.2 THERE IS NO SUCH LINE AND NO INTEGRITY CHECK AT ALL.
+     * libraries@v2.1.1-prod's okcore.cpp base64-encodes each block and stops -
+     * the symbol `backuphash` does not occur in the file. The chain arrives in
+     * the v2.1.1..v2.1.2 diff as an addition, alongside the `sha256_init` /
+     * `sha256_update` / `sha256_final` calls that build it.
+     *
+     * So `parsers.verifyBackup()` on an older backup finds no digest line and
+     * reports `{ok: false, reason: 'no digest line found'}` - which is the
+     * truth about the FILE and not a fault in the capture. A caller that
+     * asserts `verified` unconditionally calls three healthy firmware versions
+     * broken: measured, v2.1.1, v2.1.0 and v0.2-beta.8 each failed
+     * 8b-backup's capture test on all three of their runs, identically.
+     *
+     * What a caller should do below this line is assert the backup PARSES.
+     * There is nothing else to check, which is itself worth knowing: a backup
+     * taken from one of those versions cannot be verified, only restored.
+     */
+    backupDigest: boolean;
+    /**
      * Whether the device holds BOTH halves of a derived X-Wing key.
      *
      * It used to answer a public-key request with
