@@ -531,7 +531,20 @@ const gestures = (() => {
      */
     pollDelayMultiplier: info.model === MODEL.ORIGINAL ? 4 : 1,
 
-    /** Firmware update from a host over USB - see supportsFwUpdate(). */
+    /**
+     * Firmware update from a host over USB - see supportsFwUpdate().
+     *
+     * NOTHING CONSUMES THIS, ON PURPOSE. It describes the OKFWUPDATE path, and
+     * no signed production update has been run through this library on a hard
+     * key yet, so there is no measured behaviour to build a feature on. The
+     * same message on a DEVELOPER key locks the bootloader and permanently
+     * makes it a production key (onlykey-testing/TODO.md:408), which is why
+     * ok-rn refuses to relay it over Bluetooth. Developer keys are reflashed
+     * through their HalfKay bootloader on a build host instead.
+     *
+     * Give it a consumer only after a signed update has been run on a
+     * production key, and never let that consumer reach a developer key.
+     */
     firmwareUpdateOverUsb: info.fwUpdateOverUsb,
 
     /**
