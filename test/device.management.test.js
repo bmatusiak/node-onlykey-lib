@@ -1273,3 +1273,74 @@ test('the opt-in does NOT excuse a digest that is present and wrong', async () =
 
   await app.destroy();
 });
+
+/*
+ * A REAL BACKUP, TYPED BY A REAL DEVICE, restored with no device present.
+ *
+ * test/fixtures/backup-v3.0.4.txt was captured from the v3.0.4 emulator slot -
+ * `node tools/e2e.js --only deviceFlow,backupCapture` in ok-rn, cut out of the
+ * log by tools/backup-fixture.js. 13 lines, 868 characters, 563 bytes of slot
+ * data, digest 87722877dbf559ca...
+ *
+ * WHY A CAPTURED FILE AND NOT A SYNTHESISED ONE. Everything above builds
+ * backups with makeBackup(), which hashes the same way parsers.js does - so it
+ * proves the two halves of THIS repo agree and nothing about the firmware. A
+ * file the device actually typed is the only evidence that the rolling digest,
+ * the 57-byte line width and the base64 alphabet are what a real OnlyKey emits.
+ * There is no command that reads a backup back; the device TYPES it, so this
+ * cost a provisioned key, a passphrase, a button gesture and 95 seconds.
+ *
+ * It is from v3.0.4 deliberately: the last SIGNED release, and comfortably
+ * above the v2.1.2 line where the digest chain begins
+ * (capabilities().backupDigest).
+ *
+ * WHAT IT HOLDS: an emulated key's slots, encrypted under a passphrase that is
+ * itself in this workspace - ok-rn's helpers/backupPassphrase.js, 'onlykey' six
+ * times. A fixture, not a secret, and it must never be produced from a real key.
+ */
+const REAL_BACKUP = require('fs').readFileSync(
+  require('path').join(__dirname, 'fixtures', 'backup-v3.0.4.txt'), 'utf8');
+
+test('a backup a real device typed verifies and restores', async () => {
+  const check = parsers.verifyBackup(REAL_BACKUP);
+  assert.equal(check.ok, true, `the captured file does not verify: ${check.reason || ''}`);
+
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const result = await app.services.device.restore(REAL_BACKUP);
+
+  assert.equal(result.bytes, 563, 'the fixture is 563 bytes of slot data');
+  assert.equal(result.digest, check.digest);
+
+  const frames = vendor(pipe);
+  assert.ok(frames.length >= 1, 'nothing was sent');
+  assert.ok(
+    frames.every((w) => w.data[4] === MSG.OKRESTORE),
+    'every frame is an OKRESTORE',
+  );
+
+  await app.destroy();
+});
+
+test('one edited line in a real backup stops the restore dead', async () => {
+  /*
+   * The same guarantee the synthesised test pins, against a file whose digest
+   * was computed by the FIRMWARE rather than by this repo. If the two ever
+   * disagreed about the chain, a tampered real file would sail through.
+   */
+  const lines = REAL_BACKUP.trim().split('\n');
+  const at = 2;                                   // a data line, not a marker
+  assert.ok(!parsers.isMarker(lines[at]), 'picked a marker by mistake');
+  lines[at] = toBase64(Uint8Array.from([9, 9, 9, 9]));
+
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  await assert.rejects(
+    () => app.services.device.restore(lines.join('\n')),
+    /failed verification/,
+  );
+  assert.equal(vendor(pipe).length, 0, 'a packet went out before verification');
+
+  await app.destroy();
+});
