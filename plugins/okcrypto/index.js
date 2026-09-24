@@ -145,6 +145,54 @@ function setup(imports, register, config) {
    * leaving it stated.
    */
 
+  /*
+   * OLD FIRMWARE NEEDS A GAP BETWEEN OPERATIONS, and this is the device's
+   * constraint rather than politeness.
+   *
+   * Two one-shot timers are armed when an operation COMPLETES:
+   *
+   *   Endfade              2500ms, clears `isfade`; a press counts only while
+   *                        it is set (okcore.cpp:174-176)
+   *   wipebuffersafter5sec 5000ms, zeroes CRYPTO_AUTH; a press arriving after
+   *                        it matches no branch at all
+   *
+   * From v2.1.0 `done_process_packets()` calls `SoftTimer.remove(&Endfade)` on
+   * entry, so neither can cross into the next operation
+   * (`capabilities().staleFadeGuard`). v0.2-beta.8 has no such call, so a timer
+   * armed by the previous signature fires inside the next one's challenge
+   * window: the early presses count, the rest are discarded, the operation
+   * completes nothing and the device says nothing at all. The host waits out
+   * its own timeout against firmware that, from its own side, had nothing go
+   * wrong.
+   *
+   * MEASURED, and the measurement is what settled it. With no gap the second
+   * signature in a run times out. With a gap only past the FADE it still times
+   * out. With a gap past the WIPE it succeeds - and the failure then moves to
+   * whichever operation comes next without one, because a SUCCESSFUL operation
+   * is what arms the timers. That last part is why this lives here and not in a
+   * caller: every operation needs it, not one.
+   *
+   * Only successful operations are recorded. A timeout never reached
+   * `fadeoff()`, so it armed nothing, which is why two signatures either side
+   * of a failed one both work and made this look slot-specific for a while.
+   *
+   * The wait is the REMAINDER, so an operation following a long pause pays
+   * nothing.
+   */
+  const STALE_TIMER_MS = 6000;
+  let lastOperationEndedAt = 0;
+
+  async function settleStaleTimers() {
+    const caps = session && session.capabilities;
+    if (!caps || caps.staleFadeGuard !== false) return;
+    if (!lastOperationEndedAt) return;
+    const since = Date.now() - lastOperationEndedAt;
+    if (since >= STALE_TIMER_MS) return;
+    const remaining = STALE_TIMER_MS - since;
+    events.emit('settle', { ms: remaining, why: 'this firmware leaves its own timers running' });
+    await new Promise((r) => setTimeout(r, remaining));
+  }
+
   /**
    * A slot-addressed crypto operation, end to end.
    *
@@ -270,6 +318,8 @@ function setup(imports, register, config) {
       });
     });
 
+    await settleStaleTimers();
+
     await chunker.sendSlotStream({
       msg,
       slot,
@@ -281,7 +331,10 @@ function setup(imports, register, config) {
 
     try {
       if (confirm) await confirm({ digits, slot, isAnswered: () => answered });
-      return await answer;
+      const out = await answer;
+      /* Only a COMPLETED operation arms the device timers - see settleStaleTimers. */
+      lastOperationEndedAt = Date.now();
+      return out;
     } catch (err) {
       if (off) off();
       throw err;
