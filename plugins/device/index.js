@@ -2542,19 +2542,62 @@ const USER_INPUT_ENUM_ROWS = {
     /* ---- backup and restore -------------------------------------------- */
 
     /**
-     * Restore from a backup file.
+     * Restore a backup file to the device.
      *
-     * VERIFIED BEFORE A BYTE IS SENT. The digest is a chain - each line hashed
-     * with the running digest - so it catches a reordering as well as an edit,
-     * and a restore is not something to discover halfway through.
+     * VERIFIED BEFORE A SINGLE BYTE GOES OUT. Verifying after the first packet
+     * is not verifying - it is finding out halfway through, with the device
+     * already holding part of a file it cannot finish.
+     *
+     * ## A file with no digest is not a file that failed
+     *
+     * The rolling digest arrived in firmware v2.1.2
+     * (`capabilities().backupDigest`). A backup written by v2.1.1, v2.1.0 or
+     * v0.2-beta.8 has no `--<base64>` line at all, so verifyBackup() reports
+     * `{ok: false, reason: 'no digest line found'}` - which is the truth about
+     * the FILE, not a fault in it.
+     *
+     * This used to throw "backup failed verification" for that case, so the
+     * library could not restore any backup from those releases and told the
+     * holder their file was bad. That is the population restore exists for: an
+     * old key that has died, whose owner has one armoured text file and no
+     * other way back.
+     *
+     * So the two cases are separated rather than the check dropped:
+     *
+     *   digest present and WRONG  -> refuse, always, unchanged
+     *   no digest line at all     -> refuse by DEFAULT and say why, and take
+     *                                `unverifiable: true` from a caller who
+     *                                knows the backup predates the chain
+     *
+     * The opt-in is deliberately not a boolean nobody reads: an unverifiable
+     * restore cannot be checked by anything, on either side, so it is a
+     * decision a person makes once and not a default a program drifts into.
+     *
+     * @param {string} text the armoured backup file
+     * @param {object} [opts]
+     * @param {boolean} [opts.unverifiable=false] allow a backup that carries no
+     *   digest line - pre-v2.1.2 firmware only. Has no effect on a file whose
+     *   digest is present and wrong.
      */
-    async restore(text, { onProgress = null } = {}) {
+    async restore(text, { onProgress = null, unverifiable = false } = {}) {
       const check = parsers.verifyBackup(text);
       if (!check.ok) {
-        throw new Error(
-          `backup failed verification (${check.reason || 'digest mismatch'}): ` +
-          `expected ${check.expected}, computed ${check.digest}`,
-        );
+        const noDigest = check.reason === 'no digest line found';
+        if (!noDigest) {
+          throw new Error(
+            `backup failed verification (${check.reason || 'digest mismatch'}): ` +
+            `expected ${check.expected}, computed ${check.digest}`,
+          );
+        }
+        if (!unverifiable) {
+          throw new Error(
+            'this backup carries no digest line, so it cannot be verified: the '
+            + 'rolling digest arrived in firmware v2.1.2 and this file predates '
+            + 'it. The file is not damaged - there is simply nothing to check '
+            + 'it against. Pass { unverifiable: true } to restore it anyway.',
+          );
+        }
+        progress('restore', { unverifiable: true });
       }
       const hex = parsers.parseBackup(text);
       await chunker.sendHexStream({

@@ -1193,3 +1193,83 @@ test('a challenge nobody answers times out saying which buttons to press', async
     },
   );
 });
+
+/*
+ * A BACKUP FROM BEFORE v2.1.2 HAS NO DIGEST LINE, and that is not a fault in
+ * the file.
+ *
+ * The rolling digest arrived in firmware v2.1.2 - v2.1.1's okcore.cpp
+ * base64-encodes each block and stops, and the symbol `backuphash` does not
+ * occur in it. verifyBackup() therefore reports 'no digest line found' for
+ * every backup taken from v2.1.1, v2.1.0 or v0.2-beta.8.
+ *
+ * restore() used to throw "backup failed verification" for that case, so the
+ * library could not restore ANY of those backups and told the holder their file
+ * was bad. That is precisely the population restore exists for: an old key that
+ * has died, whose owner has one armoured text file and no other way back.
+ *
+ * The refusal is still the default - nothing is sent - but it now says what is
+ * actually true, and a caller who knows the firmware can opt in.
+ */
+function makeBackupWithoutDigest(chunks) {
+  return [
+    parsers.BACKUP_BEGIN,
+    ...chunks.map((c) => toBase64(Uint8Array.from(c))),
+    parsers.BACKUP_END,
+  ].join('\n');
+}
+
+test('a backup with no digest line is refused by default, and SENDS NOTHING', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  const text = makeBackupWithoutDigest([[1, 2, 3, 4], [5, 6, 7, 8]]);
+
+  await assert.rejects(
+    () => app.services.device.restore(text),
+    /carries no digest line/,
+    'the refusal should name the missing digest, not claim the file failed',
+  );
+  assert.equal(vendor(pipe).length, 0, 'a packet went out before the refusal');
+
+  await app.destroy();
+});
+
+test('the same backup restores when the caller opts in', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  const text = makeBackupWithoutDigest([[1, 2, 3, 4], [5, 6, 7, 8]]);
+  const result = await app.services.device.restore(text, { unverifiable: true });
+
+  assert.equal(result.bytes, 8);
+  const frames = vendor(pipe);
+  assert.ok(frames.length >= 1, 'nothing was sent');
+  assert.ok(
+    frames.every((w) => w.data[4] === MSG.OKRESTORE),
+    'every frame is an OKRESTORE',
+  );
+
+  await app.destroy();
+});
+
+test('the opt-in does NOT excuse a digest that is present and wrong', async () => {
+  /*
+   * The distinction the whole change rests on. `unverifiable` says "this file
+   * predates the chain", not "skip the check" - a tampered file has a digest
+   * and it does not match, which is a different claim and still refused.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+
+  const lines = makeBackup([[1, 2, 3, 4], [5, 6, 7, 8]]).split('\n');
+  lines[1] = toBase64(Uint8Array.from([9, 9, 9, 9]));
+
+  await assert.rejects(
+    () => app.services.device.restore(lines.join('\n'), { unverifiable: true }),
+    /failed verification/,
+  );
+  assert.equal(vendor(pipe).length, 0, 'a tampered file was sent under the opt-in');
+
+  await app.destroy();
+});
