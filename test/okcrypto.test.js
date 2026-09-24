@@ -668,3 +668,58 @@ test('a policy set before the credential exists is written when it is saved', as
   assert.equal(record.policy, 'startup');
   await app.destroy();
 });
+
+test('the challenge digits follow the DEVICE formula, not a default', async () => {
+  /*
+   * THE FIRMWARE HAS HAD THREE FORMULAS and the plugin used to know about one.
+   *
+   * v0.2-beta.8 computes `temp[0] % 5` under a floor that forces button 1
+   * (okcore.cpp:7182-7186); from v0.2-beta.9 it is `% 6`; a DUO takes `% 3`
+   * (okcore.cpp:6992-6996). challengeDigits() has implemented all three all
+   * along and device/version.js resolves which one a status line means - but
+   * both call sites passed `{ duo }` alone, and `duo` is an option defaulting
+   * to false rather than anything read from the device. So every call resolved
+   * to 'modern', the 'legacy' branch was unreachable, and
+   * capabilities().challengeFormula had no consumers.
+   *
+   * The cost was not theoretical: a host pressed mod-6 digits at a beta-8c key
+   * computing base 5, which is indistinguishable from not pressing at all
+   * until the window shuts with "Error incorrect challenge was entered". Five
+   * cryptoSign tests failed that way on every run of the version matrix.
+   *
+   * This payload is chosen because the two formulas DISAGREE on it - 1-6-1
+   * modern against 1-5-1 legacy - so the assertion cannot pass by coincidence.
+   * Button 6 is unreachable under the legacy formula, which is what makes the
+   * disagreement visible at all.
+   */
+  const pipe = fakeFirmware({ version: 'v0.2-beta.8c' });
+  const app = await start(FULL(), pipe);
+
+  /*
+   * CONNECT FIRST. The session learns the version from the status line
+   * OKCONNECT returns, so capabilities are empty until then and the formula
+   * default falls back to 'modern' - which is correct behaviour, not a bug:
+   * a device nobody has spoken to has not said what it is. Every real
+   * operation is behind a connect.
+   */
+  const state = await app.services.device.connect();
+  assert.equal(String(state.status).trim(), 'UNLOCKEDv0.2-beta.8c');
+  assert.equal(app.services.device.capabilities.challengeFormula, 'legacy',
+    'the fake did not come up as a beta-8c device');
+
+  const payload = Uint8Array.from([1]);
+  let handed = null;
+  await app.services.okcrypto.composite_sign(101, composite.HALF_ECC, payload, {
+    timeoutMs: 200,
+    confirm: ({ digits }) => { handed = digits; },
+  }).catch(() => null);
+
+  const hashed = Uint8Array.from([composite.HALF_ECC, ...payload]);
+  const legacy = challengeDigits(hashed, { formula: 'legacy' });
+  const modern = challengeDigits(hashed);
+
+  assert.notDeepEqual(legacy, modern, 'the payload no longer separates the formulas');
+  assert.deepEqual(handed, legacy, `expected the legacy digits, got ${handed}`);
+
+  await app.destroy();
+});

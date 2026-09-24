@@ -157,6 +157,31 @@ function setup(imports, register, config) {
     const {
       confirm = null,
       duo = false,
+      /*
+       * WHICH FORMULA COMPUTES THE CHALLENGE DIGITS, and by default ASK THE
+       * DEVICE rather than assume.
+       *
+       * The firmware has had three. v0.2-beta.8 takes `temp[0] % 5` under a
+       * floor that forces button 1 (okcore.cpp:7182-7186); from v0.2-beta.9 it
+       * is `% 6`; a DUO takes `% 3` because it has three buttons
+       * (okcore.cpp:6992-6996). challengeDigits() implements all three and
+       * device/version.js resolves which one a status line means.
+       *
+       * Nothing connected them. This read `{ duo }` alone, and `duo` is an
+       * option defaulting to false rather than anything read from the device -
+       * so `formula` resolved to 'modern' on every call, the 'legacy' branch
+       * was unreachable, and `capabilities().challengeFormula` had no consumers
+       * at all. A host talking to a v0.2-beta.8 key pressed mod-6 digits at a
+       * device computing base 5, which is indistinguishable from not pressing
+       * until the window shuts with "Error incorrect challenge was entered".
+       * Measured: that failed five cryptoSign tests on every run of the version
+       * matrix against that release.
+       *
+       * An explicit option still wins, for a caller that knows better than the
+       * status line - but the default is now the device's own answer.
+       */
+      formula = (session && session.capabilities
+        && session.capabilities.challengeFormula) || undefined,
       timeoutMs = 30000,
       onProgress = null,
       /*
@@ -173,7 +198,7 @@ function setup(imports, register, config) {
     const payload = Uint8Array.from(data);
     if (!payload.length) throw new Error('nothing to sign or decrypt');
 
-    const digits = challengeDigits(payload, { duo });
+    const digits = challengeDigits(payload, { duo, formula });
 
     /*
      * Whether the device has already answered.

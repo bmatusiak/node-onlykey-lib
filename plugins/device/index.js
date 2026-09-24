@@ -828,6 +828,15 @@ const USER_INPUT_ENUM_ROWS = {
   async function generateKey(slotId, keyType, {
     confirm = null,
     duo = false,
+    /*
+     * The challenge formula, defaulted from the DEVICE - see the long note at
+     * the same option in plugins/okcrypto. Three formulas exist in the
+     * firmware, challengeDigits() implements all three, and nothing used to
+     * pass this, so `capabilities().challengeFormula` had no consumers and the
+     * 'legacy' branch was unreachable.
+     */
+    formula = (session && session.capabilities
+      && session.capabilities.challengeFormula) || undefined,
     timeoutMs = 60000,
     settleMs = 60,
     /*
@@ -886,7 +895,7 @@ const USER_INPUT_ENUM_ROWS = {
     const challenged = new Uint8Array(1 + GENERATE_TRIGGER.length);
     challenged[0] = keyType;
     challenged.set(GENERATE_TRIGGER, 1);
-    const digits = challengeDigits(challenged, { duo });
+    const digits = challengeDigits(challenged, { duo, formula });
 
     let answered = false;
     let started = false;

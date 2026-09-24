@@ -584,7 +584,20 @@ test('connect reports the identity and the capabilities it implies', async () =>
   assert.equal(result.identity.build, 'production');
   assert.equal(result.capabilities.slots, 24);
   assert.equal(result.capabilities.buttons, 3);
-  assert.equal(result.capabilities.challengeFormula, 'duo');
+
+  /*
+   * THREE BUTTONS AND THE MOD-6 FORMULA, which looks like a contradiction and
+   * is the firmware's actual behaviour on this release. v3.0.2, v3.0.3 and
+   * v3.0.4 dropped the `if (onlykeyhw==OK_HW_DUO)` branch from
+   * okcore_prime_user_confirmation(), so a DUO on them is asked for digits in
+   * 1..6 while holding three buttons; master has it back.
+   *
+   * A host cannot fix that, but it must predict what will be ASKED rather than
+   * what ought to be asked - otherwise both sides are wrong and the device
+   * says only "Error incorrect challenge was entered". Asserted here, next to
+   * `buttons: 3`, because that is where the contradiction is visible.
+   */
+  assert.equal(result.capabilities.challengeFormula, 'modern');
 
   // And the same is readable from the service afterwards.
   assert.equal(app.services.device.capabilities.slots, 24);

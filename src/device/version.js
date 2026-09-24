@@ -481,13 +481,41 @@ const gestures = (() => {
      * The legacy branch is UNVERIFIED for the same reason as okconnectLayout:
      * beta-8c has no pin. The DUO branch IS measured - a DUO is a staging
      * gate, not a fixture.
+     *
+     * ## THE DUO BRANCH IS NOT PRESENT IN EVERY RELEASE
+     *
+     * It is a FIRMWARE branch, so a DUO gets mod 3 only on firmware that has
+     * it - and three signed releases do not. Read at the pins in
+     * ok-versions.json:
+     *
+     *   v2.1.0 .. v3.0.1   `if (onlykeyhw==OK_HW_DUO) { % 3 } else { % 6 }`
+     *   v3.0.2 (5d7ce7a)   the `if` is GONE; `% 6` unconditionally
+     *   v3.0.3 (a133bea)   same
+     *   v3.0.4 (c8804e3)   same - the NEWEST SIGNED RELEASE
+     *   master  (3.0.5)    restored, okcore.cpp:7913-7920
+     *
+     * Not an artefact of reading the wrong function: v3.0.1's okcore.cpp has
+     * 27 `OK_HW_DUO` references and v3.0.2's has 26, and the missing one is
+     * this branch.
+     *
+     * So a DUO on v3.0.2, v3.0.3 or v3.0.4 computes digits in 1..6 while
+     * holding three buttons, and 4, 5 and 6 cannot be pressed. That is the
+     * FIRMWARE's own defect and not something a host can repair - but a host
+     * must at least PREDICT the same digits it will be asked for, so this
+     * returns 'modern' there. Returning 'duo' would make the host wrong as
+     * well, and two wrongs would show as "Error incorrect challenge was
+     * entered" with nothing to say which side produced it.
+     *
+     * Kept as a window rather than `below 3.0.5`, because the branch existed
+     * before it and exists after it; what is unusual is the gap.
      */
     challengeFormula:
       info.versionField === BREAKING_BETA_8C
         ? 'legacy'
-        : info.model === MODEL.DUO
-          ? 'duo'
-          : 'modern',
+        : (info.model === MODEL.DUO
+          && !(atLeast(info.release, [3, 0, 2]) && !atLeast(info.release, [3, 0, 5])))
+            ? 'duo'
+            : 'modern',
 
     /**
      * Multiplier on poll and inter-chunk delays.

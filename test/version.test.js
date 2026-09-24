@@ -194,8 +194,26 @@ test('only v0.2-beta.8c takes the legacy OKCONNECT layout', () => {
 
 test('the challenge formula follows the model, then the version', () => {
   assert.equal(capabilities('UNLOCKEDv3.0.4-testc').challengeFormula, 'modern');
-  assert.equal(capabilities('UNLOCKEDv3.0.4-prodp').challengeFormula, 'duo');
   assert.equal(capabilities('UNLOCKED' + BREAKING_BETA_8C).challengeFormula, 'legacy');
+
+  /*
+   * A DUO GETS MOD 3 ONLY ON FIRMWARE THAT COMPUTES MOD 3, and three signed
+   * releases do not. This line used to assert 'duo' for v3.0.4-prodp, which
+   * was a transcription of what the model implies rather than a reading of
+   * what the firmware does. Read at the pins:
+   *
+   *   v2.1.0 .. v3.0.1   if (onlykeyhw==OK_HW_DUO) { % 3 } else { % 6 }
+   *   v3.0.2 .. v3.0.4   the branch is absent; % 6 unconditionally
+   *   master  (3.0.5)    restored, okcore.cpp:7913-7920
+   *
+   * So on those three the DEVICE asks for digits it has no buttons for, and a
+   * host predicting mod 3 would be wrong on top of it. Predict what will
+   * actually be asked.
+   */
+  assert.equal(capabilities('UNLOCKEDv3.0.1-prodp').challengeFormula, 'duo');
+  assert.equal(capabilities('UNLOCKEDv3.0.2-prodp').challengeFormula, 'modern');
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodp').challengeFormula, 'modern');
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodp').challengeFormula, 'duo');
 });
 
 test('a locked DUO already picks the three-button formula', () => {
