@@ -771,3 +771,29 @@ test('an unrecognised pubkey slot is silent only from v2.1.0', () => {
       `${v} should drop an unrecognised slot`);
   }
 });
+
+/*
+ * v3.0.2 STARTED WRITING A PRESS-MODE DEFAULT, and before it nothing did.
+ *
+ * OnlyKey.ino's single-press path tests `stored_key_challenge_mode==1`
+ * exactly, so an EEPROM byte nobody wrote falls through to the three-digit
+ * challenge. Read at the OnlyKey-Firmware pins in ok-versions.json: the
+ * assignment is absent at 159c0f2 (v2.1.0) through c3929eb (v3.0.1) and
+ * present from 7671d6f (v3.0.2). v0.2-beta.8 (697c4c0) has no such field at
+ * all - the challenge is its only path.
+ *
+ * It decides how many presses a caller must send, so it is measured here
+ * rather than assumed by whoever is pressing.
+ */
+test('a press-mode default is only written from v3.0.2', () => {
+  for (const v of ['v2.1.0', 'v2.1.2', 'v3.0.0', 'v3.0.1']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).pressModeDefaulted, false,
+      `${v} leaves the mode unwritten, so the challenge is the only path`);
+  }
+  for (const v of ['v3.0.2', 'v3.0.4', 'v3.0.5']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).pressModeDefaulted, true,
+      `${v} writes the default at first boot`);
+  }
+  assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').pressModeDefaulted, false,
+    'the beta has no such field at all');
+});

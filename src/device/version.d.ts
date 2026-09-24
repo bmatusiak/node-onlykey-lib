@@ -445,6 +445,39 @@ export function capabilities(status: any, { unreleased }?: {}): {
      */
     staleFadeGuard: boolean;
     /**
+     * Whether the firmware WRITES a press-mode default when a key is first set
+     * up - and so whether one press approves an operation without the host
+     * having asked for it.
+     *
+     * The single-press path tests the mode for EXACTLY 1
+     * (OnlyKey.ino:815 at v3.0.4):
+     *
+     *     || (stored_key_challenge_mode==1 && isfade && packet_buffer_details[0])
+     *
+     * so any other value - including an EEPROM byte nobody ever wrote - falls
+     * through to the three-digit challenge. Which value is there depends on
+     * whether setup() put one there:
+     *
+     *   v0.2-beta.8         the field does not exist at all; the challenge is
+     *                       the only path, and the beta spells the settings
+     *                       sshchallengemode / pgpchallengemode instead
+     *   v2.1.0 .. v3.0.1    the field and the ==1 path both exist, and NOTHING
+     *                       EVER WRITES A DEFAULT. The mode stays unset, the
+     *                       fast path never fires, and every signature or
+     *                       decryption wants three digits until a host writes
+     *                       the preference itself
+     *   v3.0.2 onward       setup() writes `stored_key_challenge_mode = 1`
+     *                       under `if (!initcheck)`, so a fresh key takes one
+     *                       press
+     *
+     * Not a security hole in either direction - the unset case is the STRICTER
+     * of the two - but it decides how many presses a caller must send, and a
+     * caller that assumes one will sit through a 20-second window on half the
+     * releases in ok-versions.json. A UI has a reason to say "this firmware
+     * will not default this; set it if you want single-press".
+     */
+    pressModeDefaulted: boolean;
+    /**
      * Whether the device holds BOTH halves of a derived X-Wing key.
      *
      * It used to answer a public-key request with
