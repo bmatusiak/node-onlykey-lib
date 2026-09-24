@@ -204,6 +204,21 @@ function errorKind(message) {
   if (/no backup key set|backup key mode|incorrect backup key|backup file|backup does not match/i.test(said)) {
     return 'backup';
   }
+  /*
+   * THREE confirmation failures on v3.0.5, where earlier firmware reported one.
+   * Up to v3.0.4 every failed button confirmation printed "Error incorrect
+   * challenge was entered", including a window that simply closed and a press
+   * the firmware refused. OnlyKey-Firmware 8b3d5c0 ("Stop calling every failed
+   * confirmation an incorrect challenge") gives those two their own sentences,
+   * and python-onlykey raises each by name (protocol.py CONFIRMATION_WINDOW_
+   * CLOSED and PRESS_NOT_ACCEPTED), so they get their own kinds here. Before
+   * this they matched nothing and fell through to the generic 'error'.
+   *
+   * 'challenge' keeps meaning what the firmware says it means: the digits were
+   * wrong, or the confirmation timed out.
+   */
+  if (/confirmation window closed/i.test(said)) return 'confirmationClosed';
+  if (/button press was not accepted/i.test(said)) return 'pressNotAccepted';
   if (/incorrect challenge|Timeout occured/i.test(said)) return 'challenge';
   if (/already enabled on this slot/i.test(said)) return 'needsPin';
   if (/invalid size|wrong size|bad input size|exceeded size limit|not between|out of range|invalid RSA type|ECC type incorrect|key check failed|does not match key|use (ML-KEM|X-Wing) decaps/i.test(said)) {
