@@ -919,10 +919,10 @@ const gestures = (() => {
      *
      * Every press is accepted only while `isfade` is still set, and `Endfade`
      * is a 2.5-second SoftTimer that clears it (okcore.cpp:174-176). From
-     * v2.1.2 `done_process_packets()` calls `SoftTimer.remove(&Endfade)` on the
+     * v2.1.0 `done_process_packets()` calls `SoftTimer.remove(&Endfade)` on the
      * way in, so a timer left over from the previous operation cannot fire
-     * during this one. v0.2-beta.8 does not: the call appears 0 times there and
-     * once in v2.1.2.
+     * during this one. Counted at the tags: the call appears 0 times in
+     * v0.2-beta.8 and once in v2.1.0, v2.1.1 and v2.1.2 alike.
      *
      * So on the beta a stale Endfade from the PREVIOUS signature can clear
      * `isfade` part-way through the next challenge. The presses that follow
@@ -932,12 +932,15 @@ const gestures = (() => {
      *
      * ORDER-DEPENDENT, which is what makes it look inconsistent: the first
      * signature after a quiet period works, and the one straight after it may
-     * not. Measured on the emulator - `signs when the challenge is answered`
-     * passes and the signature immediately following it times out, on every
-     * run, and a DEBUG build fails at a different point again because the extra
-     * serial output moves when the stale timer lands.
+     * not.
+     *
+     * THE FADE IS NOT THE ONLY TIMER, and this gate does not claim it is.
+     * `wipebuffersafter5sec()` zeroes CRYPTO_AUTH five seconds after an
+     * operation, and a press arriving past THAT matches no branch at all and is
+     * discarded in silence. A caller settling between operations on firmware
+     * without this guard has to clear the longer of the two, not the fade.
      */
-    staleFadeGuard: atLeast(info.release, [2, 1, 2]),
+    staleFadeGuard: atLeast(info.release, [2, 1, 0]),
 
     /**
      * Whether the firmware WRITES a press-mode default when a key is first set

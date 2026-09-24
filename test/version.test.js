@@ -797,3 +797,25 @@ test('a press-mode default is only written from v3.0.2', () => {
   assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').pressModeDefaulted, false,
     'the beta has no such field at all');
 });
+
+/*
+ * THE ENDFADE GUARD ARRIVES IN v2.1.0, and this test exists because the
+ * capability first shipped claiming v2.1.2.
+ *
+ * `done_process_packets()` calls `SoftTimer.remove(&Endfade)` so a 2.5-second
+ * timer armed by the PREVIOUS operation cannot fire inside this one's challenge
+ * window. Counted at the tags: 0 occurrences in v0.2-beta.8, exactly 1 in
+ * v2.1.0, v2.1.1 and v2.1.2 alike.
+ *
+ * The bound was wrong by two releases and nothing caught it, because this was
+ * the one capability added that day without a test pinning both sides. The
+ * three that had one were all correct.
+ */
+test('the stale-fade guard arrives in v2.1.0, not later', () => {
+  assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').staleFadeGuard, false,
+    'the beta leaves a previous operation\'s fade timer running');
+  for (const v of ['v2.1.0', 'v2.1.1', 'v2.1.2', 'v3.0.4']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).staleFadeGuard, true,
+      `${v} removes the stale Endfade`);
+  }
+});
