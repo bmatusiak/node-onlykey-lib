@@ -913,6 +913,37 @@ const gestures = (() => {
      * reading a derived one.
      */
     unknownSlotIsSilent: atLeast(info.release, [2, 1, 0]),
+    /**
+     * Whether the FIDO2 extension can DERIVE a key on demand from a label.
+     *
+     * The derive pair - a public key for a label, and a shared secret against
+     * someone else's point - is answered by `fido2/ok_extension.cpp` over
+     * CTAPHID, not by the vendor interface. That file gained the opcodes in
+     * v2.1.0:
+     *
+     *     // Functions for use with derived key (RESERVED_KEY_WEB_DERIVATION)
+     *     #define DERIVE_PUBLIC_KEY 1
+     *     #define DERIVE_SHAREDSEC 2
+     *     #define DERIVE_PUBLIC_KEY_REQ_PRESS 3
+     *
+     * v0.2-beta.8 HAS THE FILE AND NONE OF THE FEATURE. Counted in the staged
+     * trees, which is what actually compiles: its ok_extension.cpp is 291 lines
+     * with two matches for "derive", BOTH IN THE BSD LICENCE HEADER; v2.1.0's
+     * is 399 lines with 22, v3.0.4's 411 with 25.
+     *
+     * So a derive sent to that release is not refused, it is IGNORED - the
+     * extension has no branch for the opcode, nothing is staged, and the poll
+     * that follows lands on whatever was in the buffer. The library reports
+     * "the device did not answer this derive - the reply carries no device
+     * status", which is accurate and gives a caller nothing to act on.
+     *
+     * Measured: eight derive tests fail that way on v0.2-beta.8, reached for
+     * the first time once cryptoSign stopped bailing ahead of them.
+     *
+     * A GUI should not offer a derive at all below this line - there is no key
+     * to be had, rather than a key behind a preference.
+     */
+    webDerive: atLeast(info.release, [2, 1, 0]),
 
     /**
      * Whether a SECOND key operation can be relied on to finish.

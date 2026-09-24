@@ -819,3 +819,26 @@ test('the stale-fade guard arrives in v2.1.0, not later', () => {
       `${v} removes the stale Endfade`);
   }
 });
+
+/*
+ * DERIVE OVER CTAPHID ARRIVES IN v2.1.0, and v0.2-beta.8 has none of it.
+ *
+ * The derive pair is answered by fido2/ok_extension.cpp, which gained
+ * DERIVE_PUBLIC_KEY / DERIVE_SHAREDSEC / DERIVE_PUBLIC_KEY_REQ_PRESS in
+ * v2.1.0. Counted in the STAGED trees - what actually compiles, composed from
+ * both pinned repos plus patches - the beta's copy of that file is 291 lines
+ * with two matches for "derive", both in the BSD licence header. v2.1.0's is
+ * 399 lines with 22.
+ *
+ * So the beta does not refuse a derive, it ignores it, and the caller sees a
+ * reply that is not a response to the request. Both sides pinned, because
+ * "every firmware can derive" is exactly the sort of thing a host assumes.
+ */
+test('derive over CTAPHID is a v2.1.0 feature', () => {
+  assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').webDerive, false,
+    'the 2019 beta has no derive opcodes in its FIDO2 extension');
+  for (const v of ['v2.1.0', 'v2.1.2', 'v3.0.4', 'v3.0.5']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).webDerive, true,
+      `${v} answers the derive opcodes`);
+  }
+});
