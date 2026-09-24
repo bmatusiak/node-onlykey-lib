@@ -421,6 +421,30 @@ export function capabilities(status: any, { unreleased }?: {}): {
      */
     unknownSlotIsSilent: boolean;
     /**
+     * Whether a SECOND key operation can be relied on to finish.
+     *
+     * Every press is accepted only while `isfade` is still set, and `Endfade`
+     * is a 2.5-second SoftTimer that clears it (okcore.cpp:174-176). From
+     * v2.1.2 `done_process_packets()` calls `SoftTimer.remove(&Endfade)` on the
+     * way in, so a timer left over from the previous operation cannot fire
+     * during this one. v0.2-beta.8 does not: the call appears 0 times there and
+     * once in v2.1.2.
+     *
+     * So on the beta a stale Endfade from the PREVIOUS signature can clear
+     * `isfade` part-way through the next challenge. The presses that follow
+     * fail the guard, the operation never completes, and the host waits out its
+     * own timeout with the device having said nothing - the failure names no
+     * cause because from the firmware's side nothing went wrong.
+     *
+     * ORDER-DEPENDENT, which is what makes it look inconsistent: the first
+     * signature after a quiet period works, and the one straight after it may
+     * not. Measured on the emulator - `signs when the challenge is answered`
+     * passes and the signature immediately following it times out, on every
+     * run, and a DEBUG build fails at a different point again because the extra
+     * serial output moves when the stale timer lands.
+     */
+    staleFadeGuard: boolean;
+    /**
      * Whether the device holds BOTH halves of a derived X-Wing key.
      *
      * It used to answer a public-key request with
