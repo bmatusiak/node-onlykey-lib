@@ -750,3 +750,24 @@ test('the backup digest chain is a v2.1.2 feature, and older releases have none'
   assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').backupDigest, false,
     'the beta predates the digest chain');
 });
+
+/*
+ * v2.1.0 BOUNDED THE DERIVE BRANCH, and before it nothing did.
+ *
+ * v0.2-beta.8's okcrypto.cpp:199-202 ends OKGETPUBKEY with
+ * `else if (buffer[6] <= 3) { DERIVEKEY(...); send_transport_response(...) }` -
+ * no slot condition - so any slot past the ECC range asked with a low field
+ * byte runs a derivation and answers 64 bytes. v2.1.0 added
+ * `buffer[5] == RESERVED_KEY_DERIVATION &&`, after which an unrecognised slot
+ * falls off the end and the device says nothing at all.
+ *
+ * Both sides, because "silence means out of range" is a thing hosts assume and
+ * it is only true from v2.1.0 on.
+ */
+test('an unrecognised pubkey slot is silent only from v2.1.0', () => {
+  assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').unknownSlotIsSilent, false);
+  for (const v of ['v2.1.0', 'v2.1.2', 'v3.0.4', 'v3.0.5']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).unknownSlotIsSilent, true,
+      `${v} should drop an unrecognised slot`);
+  }
+});

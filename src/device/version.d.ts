@@ -397,6 +397,30 @@ export function capabilities(status: any, { unreleased }?: {}): {
      */
     backupDigest: boolean;
     /**
+     * Whether OKGETPUBKEY simply DROPS a slot number it does not recognise.
+     *
+     * From v2.1.0 `okcrypto_getpubkey()` is four `if`s with no final else -
+     * RSA below 5, ECC below 117, then the reserved derivation slot by number -
+     * so a slot matching none of them falls off the end and the function
+     * returns having printed nothing. A host asking about a slot it should not
+     * ask about waits out its own timeout, which is the behaviour to expect.
+     *
+     * v0.2-beta.8's last branch has NO SLOT CONDITION (okcrypto.cpp:199-202):
+     *
+     *     } else if (buffer[6] <= 3) {
+     *         DERIVEKEY(buffer[6], buffer+7);
+     *         send_transport_response(ecc_public_key, 64, false, false);
+     *     }
+     *
+     * v2.1.0 added `buffer[5] == RESERVED_KEY_DERIVATION &&` to it. So on the
+     * beta ANY slot past the ECC range, asked with a low field byte, runs a key
+     * DERIVATION and answers with 64 bytes. Nothing is leaked - a derived
+     * public key is public - but "silence means out of range" is not true
+     * there, and a caller that reads the answer as a stored slot's key would be
+     * reading a derived one.
+     */
+    unknownSlotIsSilent: boolean;
+    /**
      * Whether the device holds BOTH halves of a derived X-Wing key.
      *
      * It used to answer a public-key request with
