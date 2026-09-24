@@ -200,7 +200,12 @@ function errorKind(message) {
   if (/may not be changed|may only be changed/i.test(said)) return 'refused';
   if (/no (ECC |RSA )?(Private )?[Kk]ey set in this slot/i.test(said)) return 'emptySlot';
   if (/not set as (signature|decryption) key/i.test(said)) return 'wrongRole';
-  if (/invalid (ECC|RSA) slot|reserved slot/i.test(said)) return 'badSlot';
+  /*
+   * "invalid derived key slot" since libraries 80cacfe: the derived decrypt
+   * path whitelists its codes like the sign path, and refuses anything else -
+   * an Ed25519 code, or a code outside its derivation's table - with this.
+   */
+  if (/invalid (ECC|RSA|derived key) slot|reserved slot/i.test(said)) return 'badSlot';
   if (/no backup key set|backup key mode|incorrect backup key|backup file|backup does not match/i.test(said)) {
     return 'backup';
   }
