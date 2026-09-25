@@ -2705,6 +2705,15 @@ const USER_INPUT_ENUM_ROWS = {
      *
      * Ends on the END marker rather than on a timeout, so a backup that is
      * still arriving is not truncated into a file that verifies as damaged.
+     *
+     * `timeoutMs` IS AN INACTIVITY TIMEOUT: how long to wait with NO keystroke
+     * arriving - before the first one, or between any two - not a limit on
+     * the whole capture. It was a fixed deadline, and a real backup outran it:
+     * the app passes 120 s, and a key with its slots full, typing at ~12
+     * characters a second, was cut off mid-file while still typing (found by
+     * the bench owner, 2026-09-25). Restarted on every keyboard report, it
+     * still catches a device that has stopped - that is what it is for - but
+     * never a slow one that is still going.
      */
     async captureBackup({ trigger, timeoutMs = 60000, layout, onProgress = null } = {}) {
       const decoder = keystrokes.createDecoder(layout ? { layout } : {});
@@ -2720,18 +2729,24 @@ const USER_INPUT_ENUM_ROWS = {
           fn(arg);
         };
 
-        const timer = setTimeout(() => {
-          const text = decoder.text;
-          finish(reject, Object.assign(
-            new Error(
-              `backup capture timed out after ${timeoutMs}ms with ` +
-              `${text.length} characters and no end marker`,
-            ),
-            { partial: text },
-          ));
-        }, timeoutMs);
+        let timer = null;
+        const arm = () => {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            const text = decoder.text;
+            finish(reject, Object.assign(
+              new Error(
+                `backup capture timed out: no keystrokes for ${timeoutMs}ms, ` +
+                `with ${text.length} characters and no end marker`,
+              ),
+              { partial: text },
+            ));
+          }, timeoutMs);
+        };
+        arm();
 
         const offKeys = transport.on('keyboard', (event) => {
+          arm();   /* still typing - see "INACTIVITY TIMEOUT" above */
           decoder.push(event.data);
           if (onProgress) onProgress({ characters: decoder.text.length });
           if (!decoder.text.includes(parsers.BACKUP_END)) return;

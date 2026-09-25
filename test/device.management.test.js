@@ -891,6 +891,39 @@ test('a refusal on the vendor bus ends the capture at once', async () => {
   await app.destroy();
 });
 
+test('a slow backup outlasting the timeout is not cut off while it types', async () => {
+  /*
+   * The timeout is for a device that has STOPPED, not a slow one. Found on
+   * the bench: the app's 120 s was a fixed deadline, and a full backup typing
+   * at ~12 characters a second was cut off mid-file while still arriving.
+   *
+   * Here the whole capture takes several times timeoutMs, but no gap between
+   * keystrokes comes near it - so it must finish, and verify.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const text = makeBackup([[0xde, 0xad, 0xbe, 0xef], [1, 2, 3]]);
+  const reports = [...typeText(text)];
+  const timeoutMs = 300;
+  const gapMs = 40;
+  assert.ok(reports.length * gapMs > 3 * timeoutMs, 'the test must outlast the timeout');
+
+  const started = Date.now();
+  const captured = await app.services.device.captureBackup({
+    trigger: () => {
+      reports.forEach((report, i) => {
+        setTimeout(() => pipe.deliver(report, { iface: IFACE.KEYBOARD }), i * gapMs);
+      });
+    },
+    timeoutMs,
+  });
+
+  assert.equal(captured.verified, true, `digest mismatch: ${JSON.stringify(captured)}`);
+  assert.ok(Date.now() - started > timeoutMs, 'the capture did not outlast the timeout');
+
+  await app.destroy();
+});
+
 test('a capture that never ends times out with what it has', async () => {
   /*
    * Ending on the END marker rather than on silence is what stops a backup
