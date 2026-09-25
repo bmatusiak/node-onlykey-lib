@@ -88,6 +88,9 @@ test('an Original is classified, not looped on', () => {
   const info = parseStatus('UNLOCKEDv2.1.0-prodo');
   assert.equal(info.model, MODEL.ORIGINAL);
   assert.equal(capabilities(info).pollDelayMultiplier, 4);
+  /* The other side: only the Original is slowed; classic and DUO poll at 1x. */
+  assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').pollDelayMultiplier, 1);
+  assert.equal(capabilities('UNLOCKEDv3.0.4-prodp').pollDelayMultiplier, 1);
 });
 
 test('p and n differ only in whether a PIN is set', () => {
@@ -254,6 +257,8 @@ test('UNINITIALIZED with no version disables the updater and assumes a version',
 
 test('UNINITIALIZED with a version enables it', () => {
   assert.equal(parseStatus('UNINITIALIZEDv3.0.4-testc').fwUpdateOverUsb, true);
+  assert.equal(capabilities('UNINITIALIZEDv3.0.4-testc').firmwareUpdateOverUsb, true,
+    'the capability carries the parsed flag, not a default');
 });
 
 /* ------------------------------------------------------------------ shape */
