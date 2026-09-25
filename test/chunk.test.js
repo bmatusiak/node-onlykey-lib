@@ -162,6 +162,21 @@ test('a confirmation timeout IS terminal', async () => {
   );
 });
 
+test('a FIDO2-path device error carries the same kind as a vendor one', async () => {
+  // One lib, both transports: a GUI switching on err.kind must not have to
+  // know which interface the operation happened to use.
+  await assert.rejects(
+    chunk.pollForResponse({
+      expected: 32,
+      intervalMs: 1,
+      poll: async () => withError('Error confirmation window closed before the button was pressed'),
+    }),
+    (err) => err.kind === 'confirmationClosed'
+      && err.deviceText === 'Error confirmation window closed before the button was pressed'
+      && err.message === err.deviceText,
+  );
+});
+
 test('the no-progress budget is re-armed by each chunk, not by total time', async () => {
   // A 3309-byte ML-DSA signature needs ~52 ceremonies; a total cap stops a
   // healthy operation part-way. This run exceeds the budget in total elapsed

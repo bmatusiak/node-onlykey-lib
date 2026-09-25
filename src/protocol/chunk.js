@@ -14,6 +14,7 @@
 
 const { concat } = require('../bytes');
 const { SUCCESS } = require('./ctap');
+const { deviceError } = require('./okmsg');
 
 /**
  * 57 * 4. One vendor report holds 57 payload bytes, the keyhandle header is
@@ -191,8 +192,8 @@ async function pollForResponse({
     const reply = await poll();
 
     if (reply.error) {
-      if (TERMINAL_ERROR.test(reply.error)) throw new Error(reply.error);
-      if (!TRANSIENT_ERROR.test(reply.error)) throw new Error(reply.error);
+      if (TERMINAL_ERROR.test(reply.error)) throw deviceError(reply.error);
+      if (!TRANSIENT_ERROR.test(reply.error)) throw deviceError(reply.error);
       // Transient: the device is mid-challenge. Keep going.
     }
 

@@ -408,7 +408,7 @@ async function readLabels(transport, opts = {}) {
         clearTimeout(timer);
         off();
         const out = reader.result();
-        if (out.error) { reject(new Error(out.error)); return; }
+        if (out.error) { reject(okmsg.deviceError(out.error)); return; }
         /*
          * Resolve a beat AFTER the last label, not on it.
          *
@@ -581,7 +581,7 @@ async function readKeyLabels(transport, opts = {}) {
       clearTimeout(timer);
       off();
       const out = reader.result();
-      if (out.error) { reject(new Error(out.error)); return; }
+      if (out.error) { reject(okmsg.deviceError(out.error)); return; }
       /* The same settle readLabels takes, and for the same reason. */
       if (settleMs > 0) setTimeout(() => resolve(out), settleMs);
       else resolve(out);
