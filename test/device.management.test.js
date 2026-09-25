@@ -506,6 +506,15 @@ test('the webcrypt policy is a validated bitmask, not a free byte', async () => 
   assert.match(wc.note, /permanently|once/i,
     'the note is the only place a GUI author learns this write cannot be undone');
 
+  /*
+   * The form starts where an UNWRITTEN key is: stored keys allowed. Starting
+   * at 0 makes an untouched save turn web PGP off, one-way (0c-coder's
+   * OnlyKey-App 146e585 fixed the same thing in its form).
+   */
+  assert.equal(wc.unwritten, 1, 'an unwritten field 31 allows stored keys (bit 0)');
+  assert.match(wc.note, /stored keys \(PGP\) YES/,
+    'the note must not claim the unwritten default is "stored keys no"');
+
   await app.destroy();
 });
 

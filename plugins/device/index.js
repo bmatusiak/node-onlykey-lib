@@ -545,7 +545,7 @@ const PREFERENCES = {
       1: 'Button press',
       2: 'No confirmation',
     },
-    note: 'How a shared-secret derive is authorised. A public-key derive is never gated. "No confirmation" is refused ("unsupported user input mode") on firmware built without OK_ALLOW_NO_PRESS.',
+    note: 'How a shared-secret derive, and a derived decapsulation, is authorised. A public-key derive is never gated. "No confirmation" is refused ("unsupported user input mode") on firmware built without OK_ALLOW_NO_PRESS.',
   },
   /*
    * FIELD 31 - what the browser may DO, as against field 30's how it is
@@ -580,7 +580,26 @@ const PREFERENCES = {
       0: 'Let the browser use stored keys (PGP) over FIDO2',
       1: 'Turn the OnlyKey FIDO2 extension off entirely',
     },
-    note: 'Governs the BROWSER, which cannot set it itself - a web app reaches only the FIDO interface. Both bits default off: derived keys yes, stored keys no, extension on. Writing this once permanently ends the legacy field-21 inheritance, so set it only when you mean to.',
+    /*
+     * WHAT THE KEY DOES BEFORE THIS IS EVER WRITTEN - which is every key
+     * upgraded from v3.0.4, and every new one. okcore_webcrypt_policy()
+     * (libraries b412e78, okcore.cpp:6187) answers an unwritten byte as v3.0.4
+     * behaved: stored keys ALLOWED (bit 0), and the extension-off bit
+     * inherited from legacy field 21 bit 1.
+     *
+     * A GUI must start its form HERE, not at 0. Starting at 0 means saving an
+     * untouched form writes 0 - "derived keys only" - which turns web PGP OFF
+     * on a key that had it on, and this field is one-way. 0c-coder's
+     * OnlyKey-App fixed exactly that in 146e585 ("stored-key box starts
+     * ticked"). Bit 1 cannot be known: field 21 is write-only from here, so
+     * it starts off, and a key that had the extension turned off the old way
+     * would have it turned back on by a save - the note says so.
+     *
+     * An earlier version of the note below said "stored keys no". That was
+     * wrong for 3.0.5 and is what this corrects.
+     */
+    unwritten: 1,
+    note: 'Governs the BROWSER, which cannot set it itself - a web app reaches only the FIDO interface. Until it is first written the key behaves as v3.0.4 did: derived keys yes, stored keys (PGP) YES, and the extension off only if the old SSH/GPG setting turned it off. Writing it once permanently ends that inheritance - leaving bit 0 off turns web PGP off - so set it only when you mean to.',
   },
   storedChallengeMode:  { field: FIELD.storedchallengeMode, max: 1, label: 'Stored keys (PGP, SSH, RSA and ECC slots)', requires: 'configMode' },
   hmacChallengeMode:    { field: FIELD.hmacchallengeMode, max: 1, label: 'HMAC challenge', requires: 'configMode' },

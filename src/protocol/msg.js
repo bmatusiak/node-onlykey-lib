@@ -148,8 +148,10 @@ const FIELD = {
    * stored-slot OKSIGN/OKDECRYPT (PGP) over the tunnel, OKWC_DISABLE_EXT 0x02
    * turns the extension off entirely, and the firmware REJECTS any other bit
    * with "Error invalid webcrypt policy" rather than masking it
-   * (okcore.cpp:2117). Both default off: derived keys yes, stored keys no,
-   * extension enabled.
+   * (okcore.cpp:2117). A WRITTEN 0 means derived keys only - stored keys
+   * no, extension enabled. But an UNWRITTEN byte answers as v3.0.4 did:
+   * stored keys YES (okcore_webcrypt_policy(), libraries b412e78) - see the
+   * `unwritten` entry in plugins/device, which a settings form starts from.
    *
    * ONE-WAY LATCH. While this byte is unwritten (OKWC_UNSET 0xFF) the disable
    * bit is INHERITED from legacy field 21 bit 1, and the first explicit write
