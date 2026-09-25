@@ -842,3 +842,33 @@ test('derive over CTAPHID is a v2.1.0 feature', () => {
       `${v} answers the derive opcodes`);
   }
 });
+
+/*
+ * THREE GATES AT THE v3.0.4 -> v3.0.5 LINE, each read at the pins
+ * (libraries c8804e3 for v3.0.4, b412e78 for the working tree) and pinned on
+ * both sides here because until now none of them was.
+ *
+ * userInputModeEnum: v3.0.4's `case 21` stores buffer[7] with no check at all;
+ * "Error invalid user input mode" exists only in the newer okcore.cpp, where
+ * fields 21, 22 and 30 refuse anything above USER_INPUT_NONE.
+ *
+ * xwingDeviceCustody: no file in libraries@c8804e3 mentions X-Wing, so no
+ * release has either reply shape and the bound can only be 3.0.5.
+ *
+ * deviceVault: a product decision rather than a firmware limit (see its
+ * comment in version.js). Its premise is checkable, though: 40464ca, which
+ * moved the rpId out of the HKDF, is not an ancestor of c8804e3 - so v3.0.4
+ * really does derive the old way and a vault sealed there would strand.
+ */
+test('the enum, X-Wing custody and the vault all begin at v3.0.5', () => {
+  for (const v of ['v3.0.2', 'v3.0.4']) {
+    const caps = capabilities(`UNLOCKED${v}-prodc`);
+    assert.equal(caps.userInputModeEnum, false, `${v} stores field 21 as a raw byte`);
+    assert.equal(caps.xwingDeviceCustody, false, `${v} has no X-Wing to hold`);
+    assert.equal(caps.deviceVault, false, `${v} derives with the rpId in the salt`);
+  }
+  const caps = capabilities('UNLOCKEDv3.0.5-testc');
+  assert.equal(caps.userInputModeEnum, true, 'v3.0.5 refuses a field-21 value above 2');
+  assert.equal(caps.xwingDeviceCustody, true, 'v3.0.5 returns the 1216-byte recipient');
+  assert.equal(caps.deviceVault, true, 'v3.0.5 derives without the rpId');
+});
