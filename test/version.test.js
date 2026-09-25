@@ -872,3 +872,15 @@ test('the enum, X-Wing custody and the vault all begin at v3.0.5', () => {
   assert.equal(caps.xwingDeviceCustody, true, 'v3.0.5 returns the 1216-byte recipient');
   assert.equal(caps.deviceVault, true, 'v3.0.5 derives without the rpId');
 });
+
+test('"incorrect challenge" at OKPING is final only from v3.0.5', () => {
+  // Read at the pins: the response-too-large and ML-DSA readback fixes, and
+  // 8b3d5c0's split messages, exist only after libraries c8804e3 /
+  // OnlyKey-Firmware 9600daa.
+  for (const v of ['v2.1.2', 'v3.0.4']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).challengeErrorIsFinal, false,
+      `${v} can say it about a challenge that was entered correctly`);
+  }
+  assert.equal(capabilities('UNLOCKEDv3.0.5-testc').challengeErrorIsFinal, true,
+    'v3.0.5 says it only with nothing staged');
+});

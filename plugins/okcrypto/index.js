@@ -688,6 +688,11 @@ function setup(imports, register, config) {
           );
         },
         untilShortChunk: true,
+        /* The first chunk is already here, so the challenge is over; on 3.0.5
+         * "incorrect challenge" now can only mean the staged answer was
+         * wiped. See capabilities().challengeErrorIsFinal. */
+        challengeErrorIsFinal: Boolean(session && session.capabilities
+          && session.capabilities.challengeErrorIsFinal),
       });
       if (collected.data && collected.data.length > body.length) body = collected.data;
     }

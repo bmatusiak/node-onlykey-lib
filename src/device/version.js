@@ -1105,6 +1105,33 @@ const gestures = (() => {
     deviceVault: atLeast(info.release, [3, 0, 5]),
 
     /**
+     * Whether "Error incorrect challenge was entered", answered to an OKPING
+     * over FIDO2, means the operation is OVER.
+     *
+     * At OKPING that string is not a verdict on the digits. It is the device's
+     * NOTHING-STAGED message: ok_extension.cpp prints it whenever
+     * `!CRYPTO_AUTH && !large_resp_buffer_offset` (libraries@b412e78,
+     * :618-624). The host-side rule that keeps polling through it
+     * (protocol/chunk.js TRANSIENT_ERROR) came from onlykey-3rd-party.js,
+     * which had seen it followed by a success.
+     *
+     * On 3.0.5 a success cannot pass through that state.
+     * okcore_run_pending_op() runs the operation synchronously and
+     * store_FIDO_response() stages the answer before CRYPTO_AUTH clears, on a
+     * single-threaded loop, so no poll lands between them. The two known ways
+     * a correct entry still produced the message are fixed there - a response
+     * too large to stage (device.cpp:237) and the ML-DSA keygen readback
+     * (okpqc.cpp:169) - and OnlyKey-Firmware 8b3d5c0 gave the late press and
+     * press-mode failures their own sentences. What is left is final: a real
+     * wrong entry, a request never primed, or wipetasks() discarding the
+     * staged result on its 5-second timer. Polling on only spends the budget.
+     *
+     * Older releases keep the transient reading, because those fixes are not
+     * in them and "a success follows" was observed on one.
+     */
+    challengeErrorIsFinal: atLeast(info.release, [3, 0, 5]),
+
+    /**
      * Whether the X-Wing hybrid key type exists at all.
      *
      * THE DEVELOPMENT LINE, NOT A VERSION THRESHOLD - the third capability to

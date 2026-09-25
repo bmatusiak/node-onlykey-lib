@@ -69,8 +69,13 @@ export function sendChunked({ cmd, slot, payload, send, seal, interChunkDelayMs,
  * @param {number}   [spec.intervalMs]
  * @param {number}   [spec.noProgressBudgetMs]
  * @param {function} [spec.onProgress]
+ * @param {boolean}  [spec.challengeErrorIsFinal]  treat "incorrect challenge
+ *                   was entered" as the end of the operation rather than a
+ *                   state to poll through. Pass
+ *                   `capabilities().challengeErrorIsFinal` - true from 3.0.5,
+ *                   where the device only says it with nothing left to give.
  */
-export function pollForResponse({ poll, expected, untilShortChunk, open, intervalMs, noProgressBudgetMs, onProgress, }: {
+export function pollForResponse({ poll, expected, untilShortChunk, open, intervalMs, noProgressBudgetMs, onProgress, challengeErrorIsFinal, }: {
     poll: Function;
     expected?: number | undefined;
     untilShortChunk?: boolean | undefined;
@@ -78,6 +83,7 @@ export function pollForResponse({ poll, expected, untilShortChunk, open, interva
     intervalMs?: number | undefined;
     noProgressBudgetMs?: number | undefined;
     onProgress?: Function | undefined;
+    challengeErrorIsFinal?: boolean | undefined;
 }): Promise<{
     data: null;
     message: string;

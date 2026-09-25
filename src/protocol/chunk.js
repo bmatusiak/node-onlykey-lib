@@ -164,6 +164,11 @@ async function sendChunked({
  * @param {number}   [spec.intervalMs]
  * @param {number}   [spec.noProgressBudgetMs]
  * @param {function} [spec.onProgress]
+ * @param {boolean}  [spec.challengeErrorIsFinal]  treat "incorrect challenge
+ *                   was entered" as the end of the operation rather than a
+ *                   state to poll through. Pass
+ *                   `capabilities().challengeErrorIsFinal` - true from 3.0.5,
+ *                   where the device only says it with nothing left to give.
  */
 async function pollForResponse({
   poll,
@@ -173,6 +178,7 @@ async function pollForResponse({
   intervalMs = POLL_INTERVAL_MS,
   noProgressBudgetMs = NO_PROGRESS_BUDGET_MS,
   onProgress = null,
+  challengeErrorIsFinal = false,
 }) {
   const chunks = [];
   let total = 0;
@@ -194,7 +200,8 @@ async function pollForResponse({
     if (reply.error) {
       if (TERMINAL_ERROR.test(reply.error)) throw deviceError(reply.error);
       if (!TRANSIENT_ERROR.test(reply.error)) throw deviceError(reply.error);
-      // Transient: the device is mid-challenge. Keep going.
+      if (challengeErrorIsFinal) throw deviceError(reply.error);
+      // Transient on older firmware: the device may be mid-challenge. Keep going.
     }
 
     /*

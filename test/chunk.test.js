@@ -162,6 +162,26 @@ test('a confirmation timeout IS terminal', async () => {
   );
 });
 
+test('from 3.0.5 an incorrect challenge ends the poll instead of spending the budget', async () => {
+  // Same reply as the transient test above; only the flag differs. On 3.0.5
+  // the string means nothing is staged and nothing will be.
+  let polls = 0;
+  await assert.rejects(
+    chunk.pollForResponse({
+      expected: 32,
+      intervalMs: 1,
+      challengeErrorIsFinal: true,
+      poll: async () => {
+        polls += 1;
+        if (polls < 3) return withError('Error incorrect challenge was entered');
+        return ok(new Uint8Array(32).fill(9));
+      },
+    }),
+    (err) => err.kind === 'challenge',
+  );
+  assert.equal(polls, 1, 'polled on past a final answer');
+});
+
 test('a FIDO2-path device error carries the same kind as a vendor one', async () => {
   // One lib, both transports: a GUI switching on err.kind must not have to
   // know which interface the operation happened to use.
