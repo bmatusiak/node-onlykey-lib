@@ -622,6 +622,26 @@ const PREFERENCES = {
  * cannot act on. Even on 30 it depends on OK_ALLOW_NO_PRESS, which is why the
  * note says so rather than the option being silently absent.
  */
+/**
+ * Fields that DO NOT EXIST before 3.0.5, as against 21 and 22, which exist
+ * everywhere and only change shape.
+ *
+ * v3.0.4's set_slot() has no `case 30` or `case 31` (libraries@c8804e3); both
+ * fall to `default: return;` (okcore.cpp:2125) and the key sends NOTHING - no
+ * error, no success. sendField() then retries into silence and the caller
+ * ends with "unknown", on a write that was never going to land. Offering the
+ * row at all is the bug: a v3.0.4 user saw "Browser permissions" and a derive
+ * mode, set them, and nothing happened.
+ *
+ * Gated on userInputModeEnum because that capability IS the 3.0.5 line - both
+ * fields arrived with the enum (97c8353, 720abfe) - and a second capability
+ * with the same bound would be two names for one fact. An unknown version
+ * (locked) hides them, the same safe direction as the reshaping: a row that
+ * reappears on unlock costs nothing, a write into silence costs a confused
+ * user.
+ */
+const ENUM_ONLY_PREFERENCES = new Set(['webAgentDeriveMode', 'webcryptPolicy']);
+
 const USER_INPUT_ENUM_ROWS = {
   derivedChallengeMode: {
     max: 1,
@@ -1808,10 +1828,12 @@ const USER_INPUT_ENUM_ROWS = {
       const enumModes = Boolean(session.capabilities
         && session.capabilities.userInputModeEnum);
 
-      return Object.entries(PREFERENCES).map(([name, spec]) => {
-        const shape = enumModes ? USER_INPUT_ENUM_ROWS[name] : null;
-        return shape ? { name, ...spec, ...shape } : { name, ...spec };
-      });
+      return Object.entries(PREFERENCES)
+        .filter(([name]) => enumModes || !ENUM_ONLY_PREFERENCES.has(name))
+        .map(([name, spec]) => {
+          const shape = enumModes ? USER_INPUT_ENUM_ROWS[name] : null;
+          return shape ? { name, ...spec, ...shape } : { name, ...spec };
+        });
     },
 
     /**
@@ -1825,6 +1847,21 @@ const USER_INPUT_ENUM_ROWS = {
       if (!spec) {
         throw new Error(
           `unknown preference "${name}"; known: ${Object.keys(PREFERENCES).join(', ')}`,
+        );
+      }
+      /*
+       * Refused HERE on a key known to predate 3.0.5, because the firmware
+       * would not refuse it at all - it would say nothing, and the retries
+       * below would spend their whole budget on that silence. An unknown
+       * version is let through: hiding the row is a display choice, but a
+       * caller that writes anyway may know something this session does not.
+       */
+      if (ENUM_ONLY_PREFERENCES.has(name)
+          && session.identity && session.identity.version
+          && !(session.capabilities && session.capabilities.userInputModeEnum)) {
+        throw new Error(
+          `${name} needs firmware 3.0.5 or later; ${session.identity.version} ` +
+          'has no such field and would not answer the write',
         );
       }
       const byte = Number(value);

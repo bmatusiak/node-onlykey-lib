@@ -411,6 +411,32 @@ test('an unknown version falls to the legacy shape, which fails loudly', async (
   await app.destroy();
 });
 
+test('fields 30 and 31 are offered only where they exist', async () => {
+  /*
+   * v3.0.4 has no case 30 or 31 in set_slot() and answers neither - so the
+   * rows are absent there, and a write names the version instead of retrying
+   * into silence. Both sides, because the bug was offering them everywhere.
+   */
+  const NEW = ['webAgentDeriveMode', 'webcryptPolicy'];
+
+  const old = await start(fakeFirmware({ version: 'v3.0.4-testc' }));
+  await old.services.device.connect();
+  const oldNames = old.services.device.preferences().map((p) => p.name);
+  for (const n of NEW) assert.ok(!oldNames.includes(n), `${n} offered to v3.0.4`);
+  assert.ok(oldNames.includes('derivedChallengeMode'), 'field 21 exists on both');
+  await assert.rejects(
+    old.services.device.setPreference('webcryptPolicy', 0),
+    /needs firmware 3\.0\.5.*v3\.0\.4/,
+  );
+  await old.destroy();
+
+  const cur = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  await cur.services.device.connect();
+  const curNames = cur.services.device.preferences().map((p) => p.name);
+  for (const n of NEW) assert.ok(curNames.includes(n), `${n} missing on v3.0.5`);
+  await cur.destroy();
+});
+
 test('the table says which writes cannot be taken back', async () => {
   /*
    * WHICH SETTINGS ARE IRREVERSIBLE IS PROTOCOL, so it is described here and
@@ -461,7 +487,9 @@ test('the webcrypt policy is a validated bitmask, not a free byte', async () => 
    * latch is invisible from the host - but the note has to SAY so, because it
    * is the only warning a GUI author will ever get.
    */
-  const app = await start(fakeFirmware());
+  /* A 3.0.5 key, connected: field 31 does not exist on anything older. */
+  const app = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  await app.services.device.connect();
   const byName = Object.fromEntries(
     app.services.device.preferences().map((p) => [p.name, p]),
   );
