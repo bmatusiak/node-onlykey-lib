@@ -342,8 +342,15 @@ test('nothing is assumed about a release that does not exist yet', () => {
    */
   assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').touchFreeDerive, 'preference');
   assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'preference');
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').postQuantum, false);
-  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').postQuantum, false);
+  /*
+   * postQuantum used to be asserted FALSE here for 3.0.5-prod and 4.0.0-prod.
+   * That was the build keyword standing in for a measurement, while the
+   * working tree still declared 3.0.4. It declares 3.0.5 now and was
+   * measured - a production build of it carries the post-quantum line - so
+   * by this test's own rule a later release reads like 3.0.5: true.
+   */
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').postQuantum, true);
+  assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').postQuantum, true);
 });
 
 test('the vendor ORIGIN gates the whole FIDO2 path, and now we speak it', () => {
@@ -414,10 +421,14 @@ test('X-Wing is the development line, and absence is the default', () => {
   assert.equal(capabilities('UNLOCKEDv3.0.3-prodc').xwingDerive, false);
   assert.equal(capabilities('UNLOCKEDv3.0.4-prodc').xwingDerive, false);
   assert.equal(capabilities('UNLOCKEDv2.1.0-prodc').xwingDerive, false);
-  /* The development line, which is the only build that carries okpqc. */
+  /* The pre-bump development line, which declared 3.0.4 and carried okpqc. */
   assert.equal(capabilities('UNLOCKEDv3.0.4-testc').xwingDerive, true);
-  /* Nothing assumed forward, like the two capabilities beside it. */
-  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').xwingDerive, false);
+  /*
+   * 3.0.5 is measured - production build included - and a later release
+   * reads like the newest measured one, as for the capabilities beside it.
+   */
+  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').xwingDerive, true);
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').xwingDerive, true);
   // Unknown defaults to absent - the opposite of touchFreeDerive, because this
   // is a feature old firmware does NOT have rather than one it does.
   assert.equal(capabilities('WAT').xwingDerive, false);
@@ -888,4 +899,28 @@ test('"incorrect challenge" at OKPING is final only from v3.0.5', () => {
   }
   assert.equal(capabilities('UNLOCKEDv3.0.5-testc').challengeErrorIsFinal, true,
     'v3.0.5 says it only with nothing staged');
+});
+
+/*
+ * 3.0.5 HAS A NUMBER OF ITS OWN, so the development line's features follow
+ * the version there - not the build keyword.
+ *
+ * Before the bump the working tree declared 3.0.4 like the release, and only
+ * -test vs -prod told them apart. It declares 3.0.5 now, and a PRODUCTION
+ * build of it has post-quantum and X-Wing like a -test one: the soft key's
+ * v3.0.5 column, built production, skipped the X-Wing and age tests only
+ * because xwingDerive read the keyword. Below 3.0.5 the keyword still
+ * separates the pre-bump development tree from the release.
+ */
+test('post-quantum and X-Wing follow the version from 3.0.5, the keyword below it', () => {
+  const at = (v) => capabilities(`UNLOCKED${v}`);
+  for (const v of ['v3.0.5-prodc', 'v3.0.5-testc']) {
+    assert.equal(at(v).postQuantum, true, `${v} carries the post-quantum line`);
+    assert.equal(at(v).xwingDerive, true, `${v} carries X-Wing`);
+    assert.equal(at(v).touchFreeDerive, 'preference', `${v} gates touch-free on field 30`);
+  }
+  assert.equal(at('v3.0.4-prodc').postQuantum, false, 'the v3.0.4 release has none of it');
+  assert.equal(at('v3.0.4-prodc').xwingDerive, false);
+  assert.equal(at('v3.0.4-testc').postQuantum, true, 'a pre-bump development build does');
+  assert.equal(at('v3.0.4-testc').xwingDerive, true);
 });

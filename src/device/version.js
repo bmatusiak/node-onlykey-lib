@@ -335,6 +335,22 @@ function vendorOrigins(info, unreleased) {
    * test is the fallback for a caller that does not, and was the whole answer
    * until a working tree could be built as production.
    */
+  /*
+   * 3.0.5 HAS A NUMBER OF ITS OWN, and its origin table is not the old
+   * development line's. libraries@e44ff6c ("Production origins: apps.crp.to
+   * and apps.onlykey.io; drop onlyagent.app") - device.cpp@b412e78:118-128
+   * trusts exactly those two. So from 3.0.5 the answer is the version's,
+   * whatever the build keyword says.
+   */
+  if (atLeast(info.release, [3, 0, 5])) {
+    origins.push('apps.onlykey.io');
+    return origins;
+  }
+  /*
+   * Before the bump, the development tree declared 3.0.4 like the release,
+   * and only the build keyword (or a caller who knows) could tell them apart.
+   * Kept for keys still running a pre-bump development build.
+   */
   const development =
     unreleased === true ||
     (unreleased === undefined &&
@@ -582,9 +598,17 @@ const gestures = (() => {
      *
      * So the question is not "which version" but "release or development
      * line", and the BUILD KEYWORD answers it: a release is -prod, the
-     * development tree is -test. The version number cannot, because the
-     * development tree still declares 3.0.4 - the macro has not been bumped
-     * since 2022 - so released v3.0.4 and the bench key share a number.
+     * development tree is -test. The version number could not, because the
+     * development tree declared 3.0.4 - the macro went unbumped from 2022 -
+     * so released v3.0.4 and the bench key shared a number.
+     *
+     * IT HAS A NUMBER NOW. The working tree declares 3.0.5 (onlykey.h), and
+     * the question this used to guess at has been measured: libraries@b412e78
+     * carries the whole post-quantum line, and the soft key's v3.0.5 column -
+     * built PRODUCTION - passes the post-quantum suites. So from 3.0.5 the
+     * version answers, and a production build of it (3.0.5-prodc) has the
+     * feature just as a -testc one does. The keyword clause below stays for
+     * keys still on a pre-bump development build (v3.0.4-testc).
      *
      * The keyword only became usable when the matrix started building
      * releases as they ship. While every pinned release was forced to DEBUG
@@ -592,14 +616,14 @@ const gestures = (() => {
      * character for character what the bench key reports.
      *
      * `atLeast(3.0.4)` as well as the keyword, so that a developer building
-     * v3.0.2 with DEBUG on is not told it has post-quantum support. And
-     * nothing is assumed forward: a future 3.0.5-prod reads false until
-     * somebody measures it, because guessing one release ahead is precisely
-     * what went wrong here.
+     * v3.0.2 with DEBUG on is not told it has post-quantum support. Nothing
+     * is assumed forward past what was measured: 3.0.5 is in because it was
+     * measured, not because it is next.
      *
      * ok-rn/FINDING-capability-guesses-about-the-next-release-were-wrong.md
      */
     postQuantum:
+      atLeast(info.release, [3, 0, 5]) ||
       unreleased === true ||
       (unreleased === undefined &&
         info.build === BUILD.DEBUG &&
@@ -783,11 +807,12 @@ const gestures = (() => {
        * started building releases as they ship rather than forcing DEBUG on,
        * which had every release reporting -test too.
        *
-       * Nothing is assumed about a release that does not exist. A future
-       * 3.0.5-prod reads 'broken' like the newest release actually measured,
-       * and stays that way until somebody measures it. Guessing forward is the
-       * exact mistake this replaces, and it cost two releases of false
-       * failures before anyone noticed.
+       * This clause only answers BELOW 3.0.5 now: 3.0.5 has its own number and
+       * returned 'preference' above, whatever its build keyword. What is left
+       * here is v3.0.2-v3.0.4, where a -test build is the pre-bump development
+       * tree and a -prod build is the release. Nothing is assumed about a
+       * release that has not been measured - guessing forward is the mistake
+       * this replaced, and it cost two releases of false failures.
        *
        * ok-rn/FINDING-capability-guesses-about-the-next-release-were-wrong.md
        */
@@ -1165,7 +1190,15 @@ const gestures = (() => {
      * firmware HAS, and this is one it does not. Guessing "present" would offer
      * a screen that produces an identity the device cannot use.
      */
-    xwingDerive: info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4]),
+    /*
+     * From 3.0.5 by version - the working tree declares it, carries X-Wing
+     * (libraries@b412e78) and a PRODUCTION build of it has it too: the soft
+     * key's v3.0.5 column skipped the X-Wing and age tests only because this
+     * read the keyword. Below 3.0.5 the keyword still separates the pre-bump
+     * development tree (-test) from the release (-prod).
+     */
+    xwingDerive: atLeast(info.release, [3, 0, 5])
+      || (info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4])),
 
     /**
      * How the device asks for a touch, and therefore how a host must press.

@@ -167,9 +167,17 @@ export function capabilities(status: any, { unreleased }?: {}): {
      *
      * So the question is not "which version" but "release or development
      * line", and the BUILD KEYWORD answers it: a release is -prod, the
-     * development tree is -test. The version number cannot, because the
-     * development tree still declares 3.0.4 - the macro has not been bumped
-     * since 2022 - so released v3.0.4 and the bench key share a number.
+     * development tree is -test. The version number could not, because the
+     * development tree declared 3.0.4 - the macro went unbumped from 2022 -
+     * so released v3.0.4 and the bench key shared a number.
+     *
+     * IT HAS A NUMBER NOW. The working tree declares 3.0.5 (onlykey.h), and
+     * the question this used to guess at has been measured: libraries@b412e78
+     * carries the whole post-quantum line, and the soft key's v3.0.5 column -
+     * built PRODUCTION - passes the post-quantum suites. So from 3.0.5 the
+     * version answers, and a production build of it (3.0.5-prodc) has the
+     * feature just as a -testc one does. The keyword clause below stays for
+     * keys still on a pre-bump development build (v3.0.4-testc).
      *
      * The keyword only became usable when the matrix started building
      * releases as they ship. While every pinned release was forced to DEBUG
@@ -177,10 +185,9 @@ export function capabilities(status: any, { unreleased }?: {}): {
      * character for character what the bench key reports.
      *
      * `atLeast(3.0.4)` as well as the keyword, so that a developer building
-     * v3.0.2 with DEBUG on is not told it has post-quantum support. And
-     * nothing is assumed forward: a future 3.0.5-prod reads false until
-     * somebody measures it, because guessing one release ahead is precisely
-     * what went wrong here.
+     * v3.0.2 with DEBUG on is not told it has post-quantum support. Nothing
+     * is assumed forward past what was measured: 3.0.5 is in because it was
+     * measured, not because it is next.
      *
      * ok-rn/FINDING-capability-guesses-about-the-next-release-were-wrong.md
      */
