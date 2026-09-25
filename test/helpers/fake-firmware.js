@@ -33,6 +33,13 @@ const { toLatin1 } = require('../../src/bytes');
  * src/device/pin.js for what went wrong when it did not.
  */
 const PIN_REPLIES = ['Enter PIN\n', 'Storing PIN\n', 'Confirm PIN\n', 'Both PINs Match\nSuccessfully set PIN\n'];
+/* The same bracket as the vendor interface carries it (see `noConsole`). */
+const PIN_WIRE_REPLIES = [
+  'OnlyKey is ready, enter your PIN',
+  'Successful PIN entry',
+  'Now re-enter your PIN',
+  'Successfully set PIN',
+];
 
 /**
  * @param {object} [opts]
@@ -54,6 +61,8 @@ function fakeFirmware(opts = {}) {
     labelSlots = 12,
     dropTerminal = false,
     ackDigits = true,
+    /* No readable debug console: PIN replies on the vendor interface only. */
+    noConsole = false,
     pin = null,          // when set, the device starts LOCKED and this unlocks it
     /*
      * The model letter is part of this, because HW_MODEL() appends one
@@ -106,6 +115,18 @@ function fakeFirmware(opts = {}) {
 
     if (msg === MSG.OKPIN) {
       const at = pinStep++;
+      if (noConsole) {
+        /*
+         * A key whose console nobody can read - a production build, or any key
+         * seen from Windows, which will not open the console interface. It
+         * answers the bracket on the VENDOR interface only, in the wording the
+         * library's HID_PROMPTS match (src/device/pin.js).
+         */
+        if (at === pinFailAt) return pipe.deliver(reportText(pinError));
+        const wire = PIN_WIRE_REPLIES[at];
+        if (wire) pipe.deliver(reportText(wire));
+        return undefined;
+      }
       if (at === pinFailAt) return pipe.deliverText(`${pinError}\n`);
       const reply = PIN_REPLIES[at];
       if (reply) pipe.deliverText(reply);

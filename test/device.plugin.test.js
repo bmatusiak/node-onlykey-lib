@@ -53,6 +53,31 @@ test('device is a service, and session still is not', async () => {
 
 /* -------------------------------------------------------------------- PIN */
 
+test('setPin on a key whose console cannot be read leaves nothing to reject later', async () => {
+  /*
+   * A production key has no console, and Windows will not open one; such a
+   * key answers the PIN bracket on the vendor interface only. setPin used to
+   * build a console waiter for EVERY step and abandon the one for
+   * `committed`, which has no vendor prompt - so it rejected at the timeout,
+   * unhandled, and Node killed the process long after the PIN was set
+   * (measured on Windows USB, 2026-09-25). The short timeout here stands in
+   * for the 60 s one; waiting past it is the assertion.
+   */
+  const pipe = fakeFirmware({noConsole: true});
+  const app = await start(pipe);
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(e);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    await app.services.device.setPin(PIN, {enterDigits: async () => {}, timeoutMs: 150});
+    await new Promise((r) => setTimeout(r, 400));
+    assert.deepEqual(unhandled.map((e) => String(e && e.message)), [],
+      'a waiter nobody was listening to rejected after setPin returned');
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
 test('setPin walks the full seven-step bracket', async () => {
   const pipe = fakeFirmware();
   const app = await start(pipe);

@@ -215,18 +215,6 @@ function setup(imports, register) {
   function waitForStep(step, { timeoutMs = 10000 } = {}) {
     const names = step.reject || [];
     const onWire = pin.HID_PROMPTS[step.expect];
-    const waits = [];
-
-    if (onWire) {
-      waits.push(waitForHid(onWire, {
-        reject: names.map((name) => pin.HID_ERRORS[name]),
-        timeoutMs,
-      }));
-    }
-    waits.push(console_.waitFor(pin.PROMPTS[step.expect], {
-      reject: names.map((name) => pin.ERRORS[name]),
-      timeoutMs,
-    }));
 
     /*
      * A STEP WITH NO WIRE PROMPT IS ADVISORY, and `committed` is the only one.
@@ -242,6 +230,29 @@ function setup(imports, register) {
       if (!advisory) return Promise.resolve();
       return console_.waitFor(advisory, {timeoutMs}).catch(() => {});
     }
+
+    /*
+     * THE WAITERS ARE BUILT ONLY HERE, after the advisory case has returned.
+     *
+     * They used to be built first, for every step - so for `committed` a
+     * console waiter was created, then abandoned when the advisory branch
+     * returned its own. With no catch attached, that orphan rejected at the
+     * timeout wherever the console never answers - a production key, or a
+     * Windows host, which will not open the console interface - and Node
+     * treats an unhandled rejection as fatal. Measured 2026-09-25 on Windows
+     * USB: the PIN was set, and 60 s later the process died with "timed out
+     * after 60000ms waiting for /Successfully set PIN/; console tail: """.
+     */
+    const waits = [
+      waitForHid(onWire, {
+        reject: names.map((name) => pin.HID_ERRORS[name]),
+        timeoutMs,
+      }),
+      console_.waitFor(pin.PROMPTS[step.expect], {
+        reject: names.map((name) => pin.ERRORS[name]),
+        timeoutMs,
+      }),
+    ];
 
     /*
      * Rejections are not swallowed by the race: a refusal on either channel -
@@ -282,8 +293,18 @@ function setup(imports, register) {
       if (step.send || step.digits) console_.clear();
 
       if (step.send) {
+        /*
+         * LISTEN FIRST, THEN WRITE. The vendor reply is not buffered the way
+         * the console is, so a key that answers inside the write - a fast
+         * one, or the test fake - was answering nobody, and on a host with no
+         * readable console nothing else could satisfy the step. The catch
+         * only stops a failed write from leaving this rejecting unobserved;
+         * the await below still throws.
+         */
+        const answered = waitForStep(step, { timeoutMs });
+        answered.catch(() => {});
         await transport.write(IFACE.VENDOR, message);
-        await waitForStep(step, { timeoutMs });
+        await answered;
       } else if (step.digits) {
         if (enterDigits) await enterDigits(digits);
         else {
@@ -1102,8 +1123,11 @@ const USER_INPUT_ENUM_ROWS = {
       if (step.digits) return {label, waiting: 'digits'};
 
       if (step.send || step.digits) console_.clear();
+      /* Listening before the write, as in runPinSequence - see there. */
+      const answered = waitForStep(step, {timeoutMs});
+      answered.catch(() => {});
       if (step.send) await transport.write(IFACE.VENDOR, pin.pinMessage(kind));
-      await waitForStep(step, {timeoutMs});
+      await answered;
       progress(step.label, {kind});
       return {label, waiting: null};
     },
