@@ -227,6 +227,15 @@ function errorKind(message) {
   if (/incorrect challenge|Timeout occured/i.test(said)) return 'challenge';
   if (/already enabled on this slot/i.test(said)) return 'needsPin';
   /*
+   * A USER'S SETTING said no, not the request and not the device. Field 31
+   * bit 0 (webcryptPolicy) is off, so the browser may not use a stored (PGP)
+   * key over FIDO2 (ok_extension.cpp:658 at libraries b412e78; 6ddc82b
+   * delivers it to the browser). Its own kind because it is the one refusal a
+   * GUI can resolve by pointing somewhere - the setting that would allow it -
+   * where 'error' would leave the user retrying something that cannot work.
+   */
+  if (/stored key use over FIDO2 not enabled/i.test(said)) return 'notEnabled';
+  /*
    * The 3.0.5 caller errors, checked BEFORE the crypto rule below because
    * several of them name a decaps or X-Wing and would otherwise read as the
    * device's crypto failing. Each one is the host sending the wrong thing:
