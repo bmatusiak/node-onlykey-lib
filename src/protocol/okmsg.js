@@ -226,6 +226,19 @@ function errorKind(message) {
   if (/button press was not accepted/i.test(said)) return 'pressNotAccepted';
   if (/incorrect challenge|Timeout occured/i.test(said)) return 'challenge';
   if (/already enabled on this slot/i.test(said)) return 'needsPin';
+  /*
+   * The 3.0.5 caller errors, checked BEFORE the crypto rule below because
+   * several of them name a decaps or X-Wing and would otherwise read as the
+   * device's crypto failing. Each one is the host sending the wrong thing:
+   * a value the enum does not have (or this build does not allow), a policy
+   * bit that is not defined, the wrong opcode for the key type, a decaps
+   * chunk of the wrong size, or a decaps continuation with nothing primed.
+   * Read from the hidprint() strings added between libraries c8804e3 and
+   * b412e78; none exists on v3.0.4.
+   */
+  if (/(invalid|unsupported) user input mode|invalid webcrypt policy|use OKGETPUBKEY PQC|use OKDECRYPT for derived|derived decaps (chunk|payload) size|no derived decaps request pending/i.test(said)) {
+    return 'badInput';
+  }
   if (/invalid size|wrong size|bad input size|exceeded size limit|not between|out of range|invalid RSA type|ECC type incorrect|key check failed|does not match key|use (ML-KEM|X-Wing) decaps/i.test(said)) {
     return 'badInput';
   }
