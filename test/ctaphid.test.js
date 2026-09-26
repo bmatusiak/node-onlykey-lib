@@ -144,6 +144,47 @@ test('a fragmented REQUEST goes out as ordered packets', async () => {
   }
 });
 
+/* ------------------------------------------- INVALID_COMMAND, once */
+
+test('a multi-packet request refused as INVALID_COMMAND is sent once more', async () => {
+  /*
+   * The firmware's 5-second wipe timer could zero a multi-packet message while
+   * it was still arriving (fixed in libraries fix/ctaphid-wipe-mid-message);
+   * the request was refused as INVALID_COMMAND before anything in it ran, and
+   * the same request again succeeds. Keys in use keep that firmware.
+   */
+  let calls = 0;
+  const transport = fakeCtapHid({
+    onCbor: () => (++calls === 1 ? { status: CTAP2_STATUS.INVALID_COMMAND } : new Map([[1, 'ok']])),
+  });
+  const ctap = new CtapHid(transport);
+  await ctap.init();
+
+  const out = await ctap.send(CTAP2_CMD.GET_ASSERTION, cbor.encode(new Uint8Array(100)));
+
+  assert.equal(out.get(1), 'ok');
+  assert.equal(calls, 2, 'sent exactly twice');
+});
+
+test('INVALID_COMMAND is not resent for one packet, nor twice for many', async () => {
+  /* A one-packet request cannot be cut by the timer: a genuinely invalid
+   * command, answered as such. And one resend is the whole allowance. */
+  let calls = 0;
+  const transport = fakeCtapHid({
+    onCbor: () => { calls++; return { status: CTAP2_STATUS.INVALID_COMMAND }; },
+  });
+  const ctap = new CtapHid(transport);
+  await ctap.init();
+
+  await assert.rejects(() => ctap.send(CTAP2_CMD.GET_INFO), Ctap2Error);
+  assert.equal(calls, 1, 'a single-packet request is not resent');
+
+  calls = 0;
+  await assert.rejects(
+    () => ctap.send(CTAP2_CMD.GET_ASSERTION, cbor.encode(new Uint8Array(100))), Ctap2Error);
+  assert.equal(calls, 2, 'a multi-packet request is resent once, not more');
+});
+
 /* ------------------------------------------------------------ KEEPALIVE */
 
 test('KEEPALIVE keeps waiting instead of failing', async () => {

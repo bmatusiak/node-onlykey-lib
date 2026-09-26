@@ -464,7 +464,27 @@ class CtapHid {
    * @returns {Promise<*>} the decoded response, or undefined for an empty one
    */
   async send(cmd, data = new Uint8Array(0), opts = {}) {
-    const payload = await this.sendRaw(cmd, data, opts);
+    let payload = await this.sendRaw(cmd, data, opts);
+
+    /*
+     * ONE RESEND, on CTAP1_ERR_INVALID_COMMAND, for a request that spans more
+     * than one packet.
+     *
+     * The firmware's 5-second wipe timer zeroes ctap_buffer, and until
+     * libraries fix/ctaphid-wipe-mid-message it did so even while a
+     * multi-packet message was still arriving. The continuation was then
+     * appended after zeros, the command byte read as 0, and the request was
+     * refused as INVALID_COMMAND - BEFORE anything in it was looked at, so no
+     * PIN attempt or other state was spent (measured: retries unchanged, and
+     * the same request sent again succeeds). Every key already in use keeps
+     * that firmware, so the host recovers: the one case it applies to is the
+     * one the firmware cut, and a single-packet request - which the timer
+     * cannot cut - is never resent. It was ok-rn's intermittent fidoPin
+     * failure (getPinToken, two packets).
+     */
+    if (payload[0] === CTAP2_STATUS.INVALID_COMMAND && 1 + data.length > INIT_PAYLOAD) {
+      payload = await this.sendRaw(cmd, data, opts);
+    }
 
     /* First byte is the status, the rest is CBOR - or nothing. */
     const status = payload[0];
