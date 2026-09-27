@@ -41,7 +41,7 @@
 'use strict';
 
 const { hsalsa } = require('@noble/ciphers/salsa.js');
-const { ctr } = require('@noble/ciphers/aes.js');
+const { ctr, gcm } = require('@noble/ciphers/aes.js');
 const { x25519 } = require('@noble/curves/ed25519.js');
 const { sha256 } = require('@noble/hashes/sha2.js');
 
@@ -297,6 +297,119 @@ function parseConnectReply(reply, key) {
   };
 }
 
+/* ------------------------------------------------------------- transit v2 */
+
+/*
+ * TRANSIT v2 - the box from firmware 3.0.5 on (v1's box() above is what the
+ * releases before it speak, and the caller picks by firmware version: there is
+ * no flag in a frame saying which it is). Ported from onlykey-testing's
+ * lib/device/transit.js (f207db9, run against the device), which had BOTH
+ * directions; this library had only device -> host (crypto/okconnect.js).
+ *
+ * okcrypto_transit_seal()/okcrypto_transit_open() replaced v1's
+ * okcrypto_aes_crypto_box() - AES-256-GCM under a twelve-byte ZERO IV with the
+ * tag check commented out, i.e. one keystream reused for every message of a
+ * session, unauthenticated. The wire format is:
+ *
+ *     [counter big-endian(4)][ciphertext(n)][tag(16)]
+ *     IV = [dir(1)][counter big-endian(4)][zero(7)]
+ *     dir 0 = device -> host,  dir 1 = host -> device
+ *
+ * Three things follow, and each is otherwise an unattributable timeout rather
+ * than a clean error:
+ *
+ *   - THE COUNTER IS STATE. It travels in the clear, so neither side tracks the
+ *     other's, but each side must not repeat its own under one key - so a
+ *     session holds it, and session() is called wherever the handshake is: a
+ *     derive request is itself an OKCONNECT and replaces the key, and a counter
+ *     carried across that rekey is the one failure this shape cannot express.
+ *   - IT IS NO LONGER LENGTH-PRESERVING. A sealed frame is OVERHEAD (20) bytes
+ *     longer than its plaintext, both ways. A request chunk holds 171 plaintext
+ *     bytes, not 228 (a credential ID carries 245; 245 - 20 = 225, and every
+ *     chunk but the last must be whole 57-byte packets, so 3 * 57), and a
+ *     512-byte RSA-4096 signature is staged as 532 bytes - two response chunks.
+ *   - A BAD TAG IS A DISCARD. okcrypto_transit_open() wipes the frame and the
+ *     firmware dispatches nothing, which from the host looks like the device
+ *     ignoring the request. open() here THROWS on a bad tag for the same
+ *     reason: a caller that accepted noise would report a chunking failure, and
+ *     returning plaintext "as far as it got" would hand it attacker-chosen
+ *     bytes that look like a key.
+ *
+ * @noble's gcm, not Node's crypto: this library runs in every GUI, React
+ * Native included.
+ */
+
+/** OKCRYPTO_TRANSIT_CTR_LEN, _TAG_LEN, _OVERHEAD. */
+const CTR_LEN = 4;
+const TAG_LEN = 16;
+const OVERHEAD = CTR_LEN + TAG_LEN;
+
+/** okcrypto_transit_iv()'s direction byte. */
+const DIR_FROM_DEVICE = 0;
+const DIR_TO_DEVICE = 1;
+
+/** `[dir][counter BE(4)][zero(7)]`, which is okcrypto_transit_iv(). */
+function transitIv(dir, counter) {
+  const iv = new Uint8Array(12);
+  iv[0] = dir;
+  iv[1] = (counter >>> 24) & 0xff;
+  iv[2] = (counter >>> 16) & 0xff;
+  iv[3] = (counter >>> 8) & 0xff;
+  iv[4] = counter & 0xff;
+  return iv;
+}
+
+/**
+ * A transit session: the key, plus the host's outbound counter. Held together
+ * because they are established together - see the counter note above.
+ * @param {Uint8Array} key  the 32-byte transit key (transitKey())
+ */
+function session(key) {
+  return { key: Uint8Array.from(key), ctr: 0 };
+}
+
+/**
+ * Seal a host -> device payload and advance the session's counter.
+ * @returns {Uint8Array} `[counter(4)][ciphertext(n)][tag(16)]`
+ */
+function seal(sess, data) {
+  const counter = sess.ctr++;
+  const sealed = gcm(sess.key, transitIv(DIR_TO_DEVICE, counter)).encrypt(Uint8Array.from(data));
+  const out = new Uint8Array(CTR_LEN + sealed.length);
+  out[0] = (counter >>> 24) & 0xff;
+  out[1] = (counter >>> 16) & 0xff;
+  out[2] = (counter >>> 8) & 0xff;
+  out[3] = counter & 0xff;
+  out.set(sealed, CTR_LEN);
+  return out;
+}
+
+/**
+ * Open a device -> host frame, or throw. No partial acceptance - see above.
+ * @param {Uint8Array|{key: Uint8Array}} key  the transit key, or its session
+ */
+function open(key, frame) {
+  const k = key instanceof Uint8Array ? key : key.key;
+  const bytes = Uint8Array.from(frame);
+  if (bytes.length < OVERHEAD) {
+    throw new Error(
+      `transit v2 frame is ${bytes.length} bytes; the counter and tag alone are ` +
+      `${OVERHEAD}`);
+  }
+  const counter = ((bytes[0] << 24) >>> 0) + (bytes[1] << 16) + (bytes[2] << 8) + bytes[3];
+  /* gcm wants [ciphertext || tag] as one buffer: the frame minus its counter. */
+  const sealed = bytes.subarray(CTR_LEN);
+  try {
+    return gcm(Uint8Array.from(k), transitIv(DIR_FROM_DEVICE, counter)).decrypt(sealed);
+  } catch (err) {
+    throw new Error(
+      'transit v2 message failed authentication - the reply did not come from '
+      + 'something holding the transit key, or the framing is being read as the '
+      + `wrong version (counter ${counter}, ${sealed.length - TAG_LEN} ciphertext bytes)`,
+      { cause: err });
+  }
+}
+
 /* ------------------------------------------------------------- self tests */
 
 /**
@@ -326,4 +439,14 @@ module.exports = {
   box,
   connectPayload,
   parseConnectReply,
+  /* transit v2 (firmware 3.0.5+) */
+  CTR_LEN,
+  TAG_LEN,
+  OVERHEAD,
+  DIR_FROM_DEVICE,
+  DIR_TO_DEVICE,
+  transitIv,
+  session,
+  seal,
+  open,
 };

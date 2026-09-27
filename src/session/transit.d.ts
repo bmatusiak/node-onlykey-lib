@@ -84,3 +84,33 @@ export function parseConnectReply(reply: any, key: any): {
     status: string;
     sealed: boolean;
 };
+/** OKCRYPTO_TRANSIT_CTR_LEN, _TAG_LEN, _OVERHEAD. */
+export const CTR_LEN: 4;
+export const TAG_LEN: 16;
+export const OVERHEAD: number;
+/** okcrypto_transit_iv()'s direction byte. */
+export const DIR_FROM_DEVICE: 0;
+export const DIR_TO_DEVICE: 1;
+/** `[dir][counter BE(4)][zero(7)]`, which is okcrypto_transit_iv(). */
+export function transitIv(dir: any, counter: any): Uint8Array<ArrayBuffer>;
+/**
+ * A transit session: the key, plus the host's outbound counter. Held together
+ * because they are established together - see the counter note above.
+ * @param {Uint8Array} key  the 32-byte transit key (transitKey())
+ */
+export function session(key: Uint8Array): {
+    key: Uint8Array<ArrayBuffer>;
+    ctr: number;
+};
+/**
+ * Seal a host -> device payload and advance the session's counter.
+ * @returns {Uint8Array} `[counter(4)][ciphertext(n)][tag(16)]`
+ */
+export function seal(sess: any, data: any): Uint8Array;
+/**
+ * Open a device -> host frame, or throw. No partial acceptance - see above.
+ * @param {Uint8Array|{key: Uint8Array}} key  the transit key, or its session
+ */
+export function open(key: Uint8Array | {
+    key: Uint8Array;
+}, frame: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;

@@ -85,18 +85,10 @@ export function transitKey(devicePublicKey: any, appSecretKey: any): Uint8Array<
  * With no tag to verify, decryption is exactly that CTR stream.
  */
 export function decryptBody(key: any, body: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-/**
- * Open a device->host v2 frame, or throw.
- *
- * NO PARTIAL ACCEPTANCE. A frame whose tag does not verify did not come from
- * something holding the transit key, and returning its plaintext "as far as it
- * got" would hand a caller attacker-chosen bytes that look like a key. That is
- * the whole reason v2 exists, so the failure is an exception and never a
- * shorter result.
- */
-export function openTransitV2(key: any, frame: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-/** counter(4) + tag(16) around the ciphertext. */
-export const TRANSIT_V2_OVERHEAD: 20;
+/** Open a device->host v2 frame, or throw - session/transit.js open(). */
+export const openTransitV2: typeof transit.open;
+/** counter(4) + tag(16) around the ciphertext - session/transit.js OVERHEAD. */
+export const TRANSIT_V2_OVERHEAD: number;
 /**
  * Split a decrypted response into the device's status line and its payload.
  *
@@ -243,3 +235,4 @@ export const SECRET_BYTES: 32;
 /** X-Wing hands back two 32-byte halves together, for either action. */
 export const XWING_PAIR: 64;
 import nacl = require("tweetnacl");
+import transit = require("../session/transit");

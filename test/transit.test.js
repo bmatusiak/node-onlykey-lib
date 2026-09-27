@@ -25,8 +25,10 @@ const { toHex, fromHex, fromLatin1 } = require('../src/bytes');
  * comparison would only compare it with itself.
  */
 const KIT = require('./vectors/kit-reference.json');
-const { BOX_KEY_BYTE, BOX_DATA_BYTE, BOX_LENGTHS, CONNECT_PK_BYTE, CONNECT_WHEN } =
-  require('./vectors/cases');
+const {
+  BOX_KEY_BYTE, BOX_DATA_BYTE, BOX_LENGTHS, CONNECT_PK_BYTE, CONNECT_WHEN,
+  V2_KEY_BYTE, V2_DATA_BYTE, V2_SEAL_LENGTHS,
+} = require('./vectors/cases');
 
 const V = transit.VECTORS;
 
@@ -133,6 +135,48 @@ test('connectPayload matches the reference from offset 5 (frozen)', () => {
   assert.equal(toHex(mine.subarray(5)), KIT.transit.connectPayloadFrom5);
 });
 /* The kit's own selfTest() ran when the vectors were frozen: KIT.transit.kitSelfTest. */
+
+/* ------------------------------------------------------------- transit v2 */
+
+test('v2 seal matches onlykey-testing frame for frame, counter included (frozen)', () => {
+  const sess = transit.session(new Uint8Array(32).fill(V2_KEY_BYTE));
+  V2_SEAL_LENGTHS.forEach((n, i) => {
+    const frame = transit.seal(sess, new Uint8Array(n).fill(V2_DATA_BYTE));
+    assert.equal(frame.length, n + transit.OVERHEAD, `length ${n}: a frame is 20 bytes longer`);
+    assert.equal(toHex(frame), KIT.transitV2.seal[i], `seal ${i} (length ${n}) differs`);
+  });
+  assert.equal(sess.ctr, V2_SEAL_LENGTHS.length, 'the session counter advanced once per seal');
+});
+
+test("v2 open returns what onlykey-testing's open() returned (frozen)", () => {
+  const key = new Uint8Array(32).fill(V2_KEY_BYTE);
+  for (const { counter, frame, plaintext } of KIT.transitV2.open) {
+    assert.equal(toHex(transit.open(key, fromHex(frame))), plaintext, `counter ${counter}`);
+    /* a session is accepted in place of the key */
+    assert.equal(toHex(transit.open(transit.session(key), fromHex(frame))), plaintext);
+  }
+});
+
+test('v2 open throws on a bad tag - never returns noise', () => {
+  const key = new Uint8Array(32).fill(V2_KEY_BYTE);
+  const frame = fromHex(KIT.transitV2.open[1].frame);
+  frame[frame.length - 1] ^= 1;
+  assert.throws(() => transit.open(key, frame), /failed authentication/);
+});
+
+test('v2 open refuses a frame shorter than its own framing', () => {
+  assert.throws(() => transit.open(new Uint8Array(32), new Uint8Array(19)), /counter and tag alone/);
+});
+
+test('a v2 seal is not a v2 open: the direction byte keeps them apart', () => {
+  /*
+   * Host -> device and device -> host share a counter space under one key; the
+   * IV's direction byte is what keeps a sealed request from opening as a reply.
+   */
+  const key = new Uint8Array(32).fill(V2_KEY_BYTE);
+  const sealed = transit.seal(transit.session(key), new Uint8Array(16).fill(1));
+  assert.throws(() => transit.open(key, sealed), /failed authentication/);
+});
 
 /* -------------------------------------------- the two OKCONNECT replies */
 

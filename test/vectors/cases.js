@@ -55,7 +55,25 @@ const BOX_LENGTHS = [0, 1, 15, 16, 17, 64, 228, 512, 3309];
 const CONNECT_PK_BYTE = 0x11;
 const CONNECT_WHEN = 0x68bd1f40 * 1000;
 
+/*
+ * transit v2. Seal: one session, successive payloads, so the frames also pin
+ * the counter advancing. The lengths straddle the chunk sizes the header of
+ * src/session/transit.js explains (171 = 3 x 57 plaintext per request chunk;
+ * 228 is the old v1 chunk; 512 an RSA-4096 signature).
+ * Open: device -> host frames at counters that exercise every counter byte.
+ */
+const V2_KEY_BYTE = 0x3c;
+const V2_DATA_BYTE = 0xc3;
+const V2_SEAL_LENGTHS = [0, 1, 57, 171, 228, 512];
+const V2_OPEN_FRAMES = [
+  { counter: 0, length: 0 },
+  { counter: 1, length: 16 },
+  { counter: 0x01020304, length: 171 },
+  { counter: 0xfffffffe, length: 512 },
+];
+
 module.exports = {
   CBOR_CASES, CTAPHID_LENGTHS, ctaphidPayload,
   BOX_KEY_BYTE, BOX_DATA_BYTE, BOX_LENGTHS, CONNECT_PK_BYTE, CONNECT_WHEN,
+  V2_KEY_BYTE, V2_DATA_BYTE, V2_SEAL_LENGTHS, V2_OPEN_FRAMES,
 };

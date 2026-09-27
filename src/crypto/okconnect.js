@@ -39,7 +39,7 @@
 
 const nacl = require('tweetnacl');
 const { sha256 } = require('@noble/hashes/sha2.js');
-const { ctr, gcm } = require('@noble/ciphers/aes.js');
+const { ctr } = require('@noble/ciphers/aes.js');
 const { concat, utf8ToBytes } = require('../bytes');
 
 /** OnlyKey's vendor command for the connect/derive exchange. */
@@ -215,67 +215,25 @@ function decryptBody(key, body) {
  * plausible noise rather than an error, which is what the tag now prevents in
  * one direction and what the version gate prevents in both.
  *
- * ONLY THE DEVICE->HOST DIRECTION IS IMPLEMENTED, because it is the only one
- * this library uses: requests go out in the clear and `opt3` asks for the
- * RESPONSE to be encrypted. The reference implementation has a matching
- * transit_seal() for hosts that encrypt their requests; if this library ever
- * does, that is the other half, and it needs the outgoing counter state and a
- * reset on every key replacement - including every derive, because a derive is
- * itself an OKCONNECT and the device rolls its key on each one.
+ * BOTH DIRECTIONS NOW LIVE IN session/transit.js - open() for device -> host,
+ * which this file uses (requests go out in the clear and `opt3` asks for the
+ * RESPONSE to be encrypted), and seal() with its session counter for hosts
+ * that encrypt their requests (ported from onlykey-testing, which does). One
+ * implementation, so the two cannot drift; openTransitV2 and
+ * TRANSIT_V2_OVERHEAD stay exported under their old names.
  *
- * Ported from onlykey.extra.js (0c-coder/onlykey.github.io), which carries the
- * matching TRANSIT_V2_MIN and was measured on hardware against v3.0.5-test.
+ * The device -> host half was first ported from onlykey.extra.js
+ * (0c-coder/onlykey.github.io), which carries the matching TRANSIT_V2_MIN and
+ * was measured on hardware against v3.0.5-test.
  */
 
-/** Host->device is 1, device->host is 0. */
-const TRANSIT_DIR_FROM_DEVICE = 0;
+const transit = require('../session/transit');
 
-/** counter(4) + tag(16) around the ciphertext. */
-const TRANSIT_V2_OVERHEAD = 20;
+/** counter(4) + tag(16) around the ciphertext - session/transit.js OVERHEAD. */
+const TRANSIT_V2_OVERHEAD = transit.OVERHEAD;
 
-function transitIv(dir, counter) {
-  const iv = new Uint8Array(12);
-  iv[0] = dir;
-  iv[1] = (counter >>> 24) & 0xff;
-  iv[2] = (counter >>> 16) & 0xff;
-  iv[3] = (counter >>> 8) & 0xff;
-  iv[4] = counter & 0xff;
-  return iv;
-}
-
-/**
- * Open a device->host v2 frame, or throw.
- *
- * NO PARTIAL ACCEPTANCE. A frame whose tag does not verify did not come from
- * something holding the transit key, and returning its plaintext "as far as it
- * got" would hand a caller attacker-chosen bytes that look like a key. That is
- * the whole reason v2 exists, so the failure is an exception and never a
- * shorter result.
- */
-function openTransitV2(key, frame) {
-  const bytes = Uint8Array.from(frame);
-  if (bytes.length < TRANSIT_V2_OVERHEAD) {
-    throw new Error(
-      `transit v2 frame is ${bytes.length} bytes; the counter and tag alone are ` +
-      `${TRANSIT_V2_OVERHEAD}`);
-  }
-  const counter = ((bytes[0] << 24) >>> 0) + (bytes[1] << 16) + (bytes[2] << 8) + bytes[3];
-  /*
-   * @noble's gcm wants [ciphertext || tag] as one buffer, which is exactly the
-   * frame minus its counter prefix - so this is a slice, not a concat.
-   */
-  const sealed = bytes.subarray(4);
-  try {
-    return gcm(Uint8Array.from(key), transitIv(TRANSIT_DIR_FROM_DEVICE, counter))
-      .decrypt(sealed);
-  } catch (err) {
-    throw new Error(
-      'transit v2 message failed authentication - the reply did not come from '
-      + 'something holding the transit key, or the framing is being read as the '
-      + `wrong version (counter ${counter}, ${sealed.length - 16} ciphertext bytes)`,
-      { cause: err });
-  }
-}
+/** Open a device->host v2 frame, or throw - session/transit.js open(). */
+const openTransitV2 = transit.open;
 
 /**
  * Split a decrypted response into the device's status line and its payload.
