@@ -1,17 +1,27 @@
-/**
- * The client protocol, bound to a transport.
- *
- * Takes anything satisfying src/transport/contract.js, so the same ceremony
- * runs over the embedded emulator, a USB key, or a socket.
- */
 export class CtapHid {
     /**
      * @param {object} transport  must provide on() and write()
-     * @param {object} [opts] {iface}
+     * @param {object} [opts]
+     * @param {number} [opts.iface]
+     * @param {AbortSignal} [opts.signal]  aborts every wait of this client; a
+     *   call's own opts.signal takes precedence. Without one, a wait ends only
+     *   by its reply or its timeout - fine for a GUI, not for a test harness
+     *   whose runner must be able to stop a stuck exchange at once (onlykey-
+     *   testing's watchdog and deadlines).
+     * @param {boolean} [opts.resendCutRequest=true]  resend a multi-packet
+     *   request the firmware refused as INVALID_COMMAND - see send(). A client
+     *   that must SEE the firmware's own answer (a test of that very defect)
+     *   turns it off; per call too, as opts.resendCutRequest.
      */
-    constructor(transport: object, { iface }?: object);
+    constructor(transport: object, { iface, signal, resendCutRequest }?: {
+        iface?: number | undefined;
+        signal?: any;
+        resendCutRequest?: boolean | undefined;
+    });
     transport: object;
-    iface: any;
+    iface: number;
+    signal: any;
+    resendCutRequest: boolean;
     cid: Uint8Array<ArrayBuffer> | null;
     /** Every KEEPALIVE status seen, so a caller can tell a press was demanded. */
     keepAlives: any[];
@@ -33,14 +43,15 @@ export class CtapHid {
      *
      * @returns {{next: function, close: function}}
      */
-    _open(cid: any, { timeoutMs }?: {
+    _open(cid: any, { timeoutMs, signal }?: {
         timeoutMs?: number | undefined;
+        signal?: any;
     }): {
         next: Function;
         close: Function;
     };
     /** Write a framed message. The reader must already be open. */
-    _write(cid: any, cmd: any, payload: any): Promise<void>;
+    _write(cid: any, cmd: any, payload: any, signal?: any): Promise<void>;
     /**
      * Allocate a channel. Must happen before anything else.
      *

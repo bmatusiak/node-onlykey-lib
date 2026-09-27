@@ -336,14 +336,38 @@ class Assembler {
  * Takes anything satisfying src/transport/contract.js, so the same ceremony
  * runs over the embedded emulator, a USB key, or a socket.
  */
+/**
+ * The error an aborted exchange rejects with. name 'AbortError', as the DOM's,
+ * so a caller can tell "we stopped it" from "the device went quiet"; the
+ * signal's own reason is kept as the cause.
+ */
+function abortError(signal) {
+  const err = new Error('the CTAPHID exchange was aborted');
+  err.name = 'AbortError';
+  if (signal && signal.reason !== undefined) err.cause = signal.reason;
+  return err;
+}
+
 class CtapHid {
   /**
    * @param {object} transport  must provide on() and write()
-   * @param {object} [opts] {iface}
+   * @param {object} [opts]
+   * @param {number} [opts.iface]
+   * @param {AbortSignal} [opts.signal]  aborts every wait of this client; a
+   *   call's own opts.signal takes precedence. Without one, a wait ends only
+   *   by its reply or its timeout - fine for a GUI, not for a test harness
+   *   whose runner must be able to stop a stuck exchange at once (onlykey-
+   *   testing's watchdog and deadlines).
+   * @param {boolean} [opts.resendCutRequest=true]  resend a multi-packet
+   *   request the firmware refused as INVALID_COMMAND - see send(). A client
+   *   that must SEE the firmware's own answer (a test of that very defect)
+   *   turns it off; per call too, as opts.resendCutRequest.
    */
-  constructor(transport, { iface = IFACE.FIDO } = {}) {
+  constructor(transport, { iface = IFACE.FIDO, signal = null, resendCutRequest = true } = {}) {
     this.transport = transport;
     this.iface = iface;
+    this.signal = signal;
+    this.resendCutRequest = resendCutRequest;
     this.cid = null;
     /** Every KEEPALIVE status seen, so a caller can tell a press was demanded. */
     this.keepAlives = [];
@@ -367,7 +391,7 @@ class CtapHid {
    *
    * @returns {{next: function, close: function}}
    */
-  _open(cid, { timeoutMs = 10000 } = {}) {
+  _open(cid, { timeoutMs = 10000, signal = this.signal } = {}) {
     const ready = [];      // complete messages nobody has asked for yet
     const waiting = [];    // askers with nothing to give them yet
 
@@ -390,37 +414,47 @@ class CtapHid {
       /** @param {number} [waitMs] override for this read only. */
       next(waitMs) {
         if (ready.length) return Promise.resolve(ready.shift());
+        if (signal && signal.aborted) return Promise.reject(abortError(signal));
         const limit = waitMs === undefined ? timeoutMs : waitMs;
 
         return new Promise((resolve, reject) => {
-          const timer = setTimeout(() => {
-            const at = waiting.findIndex((w) => w.timer === timer);
+          const settle = (w) => {
+            const at = waiting.indexOf(w);
             if (at !== -1) waiting.splice(at, 1);
+            clearTimeout(w.timer);
+            if (signal) signal.removeEventListener('abort', w.onAbort);
+          };
+          const w = {};
+          w.timer = setTimeout(() => {
+            settle(w);
             const at2 = assembler.progress;
             reject(new Error(
               `no CTAPHID reply within ${limit}ms` +
               (at2 === null ? '' : ` (had ${at2.have} of ${at2.total} bytes)`),
             ));
           }, limit);
-
-          waiting.push({
-            timer,
-            resolve: (message) => { clearTimeout(timer); resolve(message); },
-            reject,
-          });
+          w.onAbort = () => { settle(w); reject(abortError(signal)); };
+          w.resolve = (message) => { settle(w); resolve(message); };
+          w.reject = reject;
+          if (signal) signal.addEventListener('abort', w.onAbort, { once: true });
+          waiting.push(w);
         });
       },
       close() {
         off();
-        for (const w of waiting.splice(0)) clearTimeout(w.timer);
+        for (const w of waiting.splice(0)) {
+          clearTimeout(w.timer);
+          if (signal) signal.removeEventListener('abort', w.onAbort);
+        }
       },
     };
     return reader;
   }
 
   /** Write a framed message. The reader must already be open. */
-  async _write(cid, cmd, payload) {
+  async _write(cid, cmd, payload, signal = this.signal) {
     for (const packet of frame(cid, cmd, payload)) {
+      if (signal && signal.aborted) throw abortError(signal);
       await this.transport.write(this.iface, packet);
     }
   }
@@ -436,7 +470,7 @@ class CtapHid {
 
     const reader = this._open(BROADCAST_CID, { timeoutMs: 5000, ...opts });
     try {
-      await this._write(BROADCAST_CID, CTAPHID.INIT, nonce);
+      await this._write(BROADCAST_CID, CTAPHID.INIT, nonce, opts.signal || this.signal);
 
       for (;;) {
         const { cmd, payload } = await reader.next();
@@ -482,7 +516,9 @@ class CtapHid {
      * cannot cut - is never resent. It was ok-rn's intermittent fidoPin
      * failure (getPinToken, two packets).
      */
-    if (payload[0] === CTAP2_STATUS.INVALID_COMMAND && 1 + data.length > INIT_PAYLOAD) {
+    const resend = opts.resendCutRequest === undefined
+      ? this.resendCutRequest : opts.resendCutRequest;
+    if (resend && payload[0] === CTAP2_STATUS.INVALID_COMMAND && 1 + data.length > INIT_PAYLOAD) {
       payload = await this.sendRaw(cmd, data, opts);
     }
 
@@ -518,7 +554,7 @@ class CtapHid {
     const reader = this._open(this.cid, opts);
 
     try {
-      await this._write(this.cid, CTAPHID.CBOR, request);
+      await this._write(this.cid, CTAPHID.CBOR, request, opts.signal || this.signal);
       return await this._await(reader, opts);
     } finally {
       reader.close();

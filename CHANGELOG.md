@@ -17,6 +17,14 @@ the commit that release ended at.
 
 ## 0.2.0 - in progress
 
+- `CtapHid` takes an `AbortSignal` (`new CtapHid(t, { signal })`, or
+  `opts.signal` per call): an aborted wait rejects at once with an
+  `AbortError` whose `cause` is the signal's reason, and an already-aborted
+  one sends nothing. And `resendCutRequest` (default `true`) switches off the
+  one resend of a multi-packet request refused as INVALID_COMMAND, for a
+  client that must see the firmware's own answer. Both for onlykey-testing,
+  whose runner stops stuck exchanges and whose test 32 is about exactly that
+  refusal; GUI behaviour is unchanged.
 - CTAP status names: the rest of the firmware's `ctap_errors.h` -
   `CTAP2_ERR_ACTION_TIMEOUT` (0x3A), `CTAP1_ERR_OTHER` (0x7F) and OnlyKey's
   vendor codes 0xF6 `DATA_READY`, 0xF7 `DATA_WIPE`, 0xF8/0xF9

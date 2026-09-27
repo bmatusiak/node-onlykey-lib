@@ -177,6 +177,70 @@ test('INVALID_COMMAND is not resent for one packet, nor twice for many', async (
   assert.equal(calls, 2, 'a multi-packet request is resent once, not more');
 });
 
+test("resendCutRequest: false shows the firmware's own INVALID_COMMAND", async () => {
+  /*
+   * A client that is testing the wipe-timer defect itself must see the refusal,
+   * not the recovery. Off in the constructor, and per call.
+   */
+  let calls = 0;
+  const transport = fakeCtapHid({
+    onCbor: () => { calls++; return { status: CTAP2_STATUS.INVALID_COMMAND }; },
+  });
+  const ctap = new CtapHid(transport, { resendCutRequest: false });
+  await ctap.init();
+  await assert.rejects(
+    () => ctap.send(CTAP2_CMD.GET_ASSERTION, cbor.encode(new Uint8Array(100))), Ctap2Error);
+  assert.equal(calls, 1, 'not resent when turned off for the client');
+
+  calls = 0;
+  const other = new CtapHid(transport);
+  await other.init();
+  await assert.rejects(() => other.send(CTAP2_CMD.GET_ASSERTION,
+    cbor.encode(new Uint8Array(100)), { resendCutRequest: false }), Ctap2Error);
+  assert.equal(calls, 1, 'not resent when turned off for the call');
+});
+
+/* --------------------------------------------------------------- abort */
+
+test('an abort ends a wait at once, as an AbortError', async () => {
+  const transport = fakeCtapHid({ onCbor: () => undefined });
+  const ctap = new CtapHid(transport);
+  await ctap.init();
+  transport.write = async () => 64;            // nothing is ever answered
+
+  const ac = new AbortController();
+  const started = Date.now();
+  const pending = ctap.send(CTAP2_CMD.GET_INFO, new Uint8Array(0),
+    { timeoutMs: 5000, signal: ac.signal });
+  setTimeout(() => ac.abort(new Error('the test deadline')), 20);
+  await assert.rejects(pending, (err) => err.name === 'AbortError' &&
+    err.cause instanceof Error && err.cause.message === 'the test deadline');
+  assert.ok(Date.now() - started < 1000, 'it did not wait out the 5 s timeout');
+});
+
+test('an already-aborted signal sends nothing', async () => {
+  const transport = fakeCtapHid({ onCbor: () => new Map([[1, 'ok']]) });
+  const ctap = new CtapHid(transport);
+  await ctap.init();
+  const before = transport.packetCount;
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(() => ctap.send(CTAP2_CMD.GET_INFO, new Uint8Array(0),
+    { signal: ac.signal }), { name: 'AbortError' });
+  assert.equal(transport.packetCount, before, 'no packet reached the device');
+});
+
+test('a client-wide signal applies to every call that brings none', async () => {
+  const transport = fakeCtapHid({ onCbor: () => undefined });
+  const ac = new AbortController();
+  const ctap = new CtapHid(transport, { signal: ac.signal });
+  await ctap.init();
+  transport.write = async () => 64;
+  const pending = ctap.send(CTAP2_CMD.GET_INFO, new Uint8Array(0), { timeoutMs: 5000 });
+  setTimeout(() => ac.abort(), 20);
+  await assert.rejects(pending, { name: 'AbortError' });
+});
+
 /* ------------------------------------------------------------ KEEPALIVE */
 
 test('KEEPALIVE keeps waiting instead of failing', async () => {
