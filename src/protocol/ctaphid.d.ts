@@ -271,6 +271,12 @@ export const CTAP2_ERROR: {
     55: string;
     56: string;
     57: string;
+    58: string;
+    127: string;
+    246: string;
+    247: string;
+    248: string;
+    249: string;
 };
 export namespace KEEPALIVE {
     let PROCESSING: number;

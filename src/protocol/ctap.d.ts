@@ -136,6 +136,12 @@ export const STATUS: {
     55: string;
     56: string;
     57: string;
+    58: string;
+    127: string;
+    246: string;
+    247: string;
+    248: string;
+    249: string;
 };
 /** The only status that carries a payload. See chunk.js for why that matters. */
 export const SUCCESS: "CTAP1_SUCCESS";

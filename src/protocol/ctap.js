@@ -158,6 +158,19 @@ const STATUS = {
   0x37: 'CTAP2_ERR_PIN_POLICY_VIOLATION',
   0x38: 'CTAP2_ERR_PIN_TOKEN_EXPIRED',
   0x39: 'CTAP2_ERR_REQUEST_TOO_LARGE',
+  /*
+   * The rest of libraries/fido2/ctap_errors.h, which this table stopped short
+   * of: onlykey-testing's CTAP2 table named 0x3A, and the header also defines
+   * CTAP1_ERR_OTHER and OnlyKey's vendor range. (The kit also carried 0x3E,
+   * UP_REQUIRED - a CTAP 2.1 code this firmware neither defines nor sends, so
+   * it is not here.)
+   */
+  0x3a: 'CTAP2_ERR_ACTION_TIMEOUT',
+  0x7f: 'CTAP1_ERR_OTHER',
+  0xf6: 'CTAP2_ERR_DATA_READY',
+  0xf7: 'CTAP2_ERR_DATA_WIPE',
+  0xf8: 'OKSIGN_ERR_USER_ACTION_PENDING',
+  0xf9: 'OKDECRYPT_ERR_USER_ACTION_PENDING',
 };
 
 /** The only status that carries a payload. See chunk.js for why that matters. */

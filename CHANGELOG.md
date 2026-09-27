@@ -17,6 +17,12 @@ the commit that release ended at.
 
 ## 0.2.0 - in progress
 
+- CTAP status names: the rest of the firmware's `ctap_errors.h` -
+  `CTAP2_ERR_ACTION_TIMEOUT` (0x3A), `CTAP1_ERR_OTHER` (0x7F) and OnlyKey's
+  vendor codes 0xF6 `DATA_READY`, 0xF7 `DATA_WIPE`, 0xF8/0xF9
+  `OKSIGN`/`OKDECRYPT_ERR_USER_ACTION_PENDING`. The table stopped at 0x39;
+  onlykey-testing's named 0x3A. Its 0x3E `UP_REQUIRED` is not added - a
+  CTAP 2.1 code this firmware neither defines nor sends.
 - **Transit v2, host -> device.** `session/transit` gains `session(key)`,
   `seal(session, data)` (advancing the session's counter) and
   `open(keyOrSession, frame)`, with `CTR_LEN`, `TAG_LEN`, `OVERHEAD`,

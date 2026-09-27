@@ -410,6 +410,12 @@ test('every status we can send is the byte the firmware calls by that name', () 
     CTAP2_ERR_PIN_POLICY_VIOLATION: 0x37,
     CTAP2_ERR_PIN_TOKEN_EXPIRED: 0x38,
     CTAP2_ERR_REQUEST_TOO_LARGE: 0x39,
+    CTAP2_ERR_ACTION_TIMEOUT: 0x3A,
+    CTAP1_ERR_OTHER: 0x7F,
+    CTAP2_ERR_DATA_READY: 0xF6,
+    CTAP2_ERR_DATA_WIPE: 0xF7,
+    OKSIGN_ERR_USER_ACTION_PENDING: 0xF8,
+    OKDECRYPT_ERR_USER_ACTION_PENDING: 0xF9,
   };
 
   for (const [name, code] of Object.entries(FIRMWARE)) {
