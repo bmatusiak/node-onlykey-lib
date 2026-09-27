@@ -22,12 +22,9 @@ const { fakeCtapHid } = require('./helpers/fake-ctaphid');
 const cbor = require('../src/protocol/cbor');
 const { toHex } = require('../src/bytes');
 
-let reference = null;
-try {
-  reference = require(
-    path.resolve(__dirname, '..', '..', 'onlykey-testing', 'lib', 'device', 'ctap2.js'),
-  );
-} catch { /* cross-checks skip themselves */ }
+/* onlykey-testing's framing, frozen - see scripts/freeze-kit-vectors.js. */
+const { CTAPHID_LENGTHS, ctaphidPayload } = require('./vectors/cases');
+const KIT = require('./vectors/kit-reference.json');
 
 /* ------------------------------------------------------------- framing */
 
@@ -51,20 +48,15 @@ test('a long message fragments into init plus continuations', () => {
   assert.equal(packets[1][4] & 0x80, 0, 'and the init bit stays CLEAR on them');
 });
 
-test('framing matches onlykey-testing byte for byte', { skip: !reference }, () => {
-  // The port is mechanical, so the original is the strongest oracle available.
-  for (const len of [0, 1, 57, 58, 116, 200, 1024]) {
-    const payload = new Uint8Array(len);
-    for (let i = 0; i < len; i++) payload[i] = (i * 7) & 0xff;
-
-    const mine = frame(BROADCAST_CID, CTAPHID.CBOR, payload);
-    const theirs = reference.frame(
-      Buffer.from(BROADCAST_CID), CTAPHID.CBOR, Buffer.from(payload),
-    );
-
+test('framing matches onlykey-testing byte for byte (frozen)', () => {
+  // The port is mechanical, so the original is the strongest oracle available -
+  // its output, recorded once at a pinned kit commit rather than loaded live.
+  for (const len of CTAPHID_LENGTHS) {
+    const mine = frame(BROADCAST_CID, CTAPHID.CBOR, ctaphidPayload(len));
+    const theirs = KIT.ctaphid[len];
     assert.equal(mine.length, theirs.length, `packet count differs at ${len} bytes`);
     for (let i = 0; i < mine.length; i++) {
-      assert.equal(toHex(mine[i]), theirs[i].toString('hex'), `packet ${i} differs at ${len} bytes`);
+      assert.equal(toHex(mine[i]), theirs[i], `packet ${i} differs at ${len} bytes`);
     }
   }
 });

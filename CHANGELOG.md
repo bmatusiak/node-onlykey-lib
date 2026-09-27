@@ -17,6 +17,14 @@ the commit that release ended at.
 
 ## 0.2.0 - in progress
 
+- The cbor, ctaphid and transit cross-checks no longer load
+  `../onlykey-testing` at test time. The kit's outputs are FROZEN in
+  `test/vectors/kit-reference.json` by `scripts/freeze-kit-vectors.js`
+  (onlykey-testing@adac782, the last commit whose transit still has `box()`),
+  on inputs shared through `test/vectors/cases.js`. The kit is moving onto
+  this library, which would make a live comparison circular - and it had
+  already broken: the kit replaced `box()` with transit v2's seal/open.
+  `npm test`: 861/861.
 - `@bmatusiak/rectify` is pinned by commit hash
   (`a0d9f0e6e537053122273b1f763ac87ae461361c`), the commit the lockfile
   already resolved - it no longer floats with rectify's default branch.

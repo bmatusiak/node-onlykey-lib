@@ -3,9 +3,11 @@
  *
  * The port is mechanical - Buffer became Uint8Array - so the strongest test
  * available is not a hand-written vector but the original itself, which has run
- * against a physical key. Every case below encodes through both and compares
- * bytes; when onlykey-testing is absent the cross-checks skip and the pinned
- * vectors still run.
+ * against a physical key. Its outputs are FROZEN in test/vectors/kit-reference.json
+ * (scripts/freeze-kit-vectors.js, onlykey-testing at a pinned commit) and every
+ * case below must encode to exactly those bytes. They used to be computed live
+ * from ../onlykey-testing - which stops meaning anything once the kit runs on
+ * this library.
  *
  * Canonical ordering is the part worth being careful about: the authenticator
  * hashes some of what it receives, so two encodings of the same map are not
@@ -15,46 +17,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const path = require('path');
 
 const cbor = require('../src/protocol/cbor');
 const { toHex, fromHex, utf8ToBytes } = require('../src/bytes');
 
-let reference = null;
-try {
-  reference = require(
-    path.resolve(__dirname, '..', '..', 'onlykey-testing', 'lib', 'device', 'cbor.js'),
-  );
-} catch { /* cross-checks skip themselves */ }
+const { CBOR_CASES: CASES } = require('./vectors/cases');
+const KIT = require('./vectors/kit-reference.json');
 
-/** Values chosen to reach every branch of head() and decodeAt(). */
-const CASES = [
-  ['null', null],
-  ['true', true],
-  ['false', false],
-  ['zero', 0],
-  ['a small int', 5],
-  ['the 1-byte boundary', 23],
-  ['the 2-byte boundary', 24],
-  ['a byte-length int', 255],
-  ['the 3-byte boundary', 256],
-  ['a 16-bit int', 65535],
-  ['the 5-byte boundary', 65536],
-  ['a 32-bit int', 4294967295],
-  ['a negative int', -1],
-  ['a larger negative', -1000],
-  ['an empty string', ''],
-  ['a string', 'onlyagent.app'],
-  ['a non-ASCII string', 'café'],
-  ['empty bytes', new Uint8Array(0)],
-  ['bytes', Uint8Array.from([0x00, 0xff, 0x10])],
-  ['an empty array', []],
-  ['an array', [1, 2, 3]],
-  ['a nested array', [[1], ['two'], [Uint8Array.of(3)]]],
-  ['an empty map', new Map()],
-  ['an integer-keyed map', new Map([[1, 'a'], [2, Uint8Array.of(9)]])],
-  ['a mixed-key map', new Map([[1, 'x'], ['long-key', 2], [10, 3]])],
-];
 
 for (const [what, value] of CASES) {
   test(`${what} round-trips`, () => {
@@ -73,12 +42,8 @@ for (const [what, value] of CASES) {
     }
   });
 
-  test(`${what} encodes identically to onlykey-testing`, { skip: !reference }, () => {
-    const mine = cbor.encode(value);
-    const theirs = reference.encode(
-      value instanceof Uint8Array ? Buffer.from(value) : value,
-    );
-    assert.equal(toHex(mine), theirs.toString('hex'), `${what} diverged`);
+  test(`${what} encodes as onlykey-testing did (frozen)`, () => {
+    assert.equal(toHex(cbor.encode(value)), KIT.cbor[what], `${what} diverged`);
   });
 }
 

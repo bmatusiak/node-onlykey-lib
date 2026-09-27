@@ -12,25 +12,21 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
-const crypto = require('crypto');
 
 const transit = require('../src/session/transit');
 const { toHex, fromHex, fromLatin1 } = require('../src/bytes');
 
-let reference = null;
-try {
-  reference = require(
-    path.resolve(__dirname, '..', '..', 'onlykey-testing', 'lib', 'device', 'transit.js'),
-  );
-} catch { /* cross-checks skip themselves */ }
-
 /*
- * The reference treats @noble/ciphers as an OPTIONAL dependency and resolves
- * it from its own node_modules, which need not have it. probe() is how it says
- * so, and beforenm() is the only part that needs it - box() and
- * connectPayload() work regardless, so they are cross-checked either way.
+ * onlykey-testing's transit, FROZEN: its outputs on test/vectors/cases.js,
+ * recorded at a pinned kit commit by scripts/freeze-kit-vectors.js. These were
+ * computed live from ../onlykey-testing until the kit replaced box() with
+ * transit v2's seal/open (f207db9) and the cross-check failed on the kit's API
+ * rather than on this library - and once the kit runs on this library a live
+ * comparison would only compare it with itself.
  */
-const referenceHasNoble = Boolean(reference) && reference.probe().ok;
+const KIT = require('./vectors/kit-reference.json');
+const { BOX_KEY_BYTE, BOX_DATA_BYTE, BOX_LENGTHS, CONNECT_PK_BYTE, CONNECT_WHEN } =
+  require('./vectors/cases');
 
 const V = transit.VECTORS;
 
@@ -114,66 +110,29 @@ test('parseConnectReply falls back to a plaintext tail', () => {
 
 /* ---- cross-check against the hardware-proven reference ------------------ */
 
-/*
- * THE TWO beforenm() FUNCTIONS TAKE DIFFERENT THINGS, and the reference's is
- * not interchangeable with ours.
- *
- * Ours takes raw bytes. The reference computes the shared point with
- * `crypto.diffieHellman()`, whose `privateKey` must be a KeyObject - a raw
- * Buffer is rejected with ERR_OSSL_UNSUPPORTED, which reads like the platform
- * lacking X25519 and is nothing of the kind. Its own selfTest() wraps the key
- * in PKCS#8 before calling it, and that is the calling convention.
- *
- * This test used to hand it a Buffer. It went unnoticed because the reference
- * treats @noble/ciphers as an optional dependency and probe() reported it
- * missing, so the whole cross-check SKIPPED - installing that dependency in the
- * sibling checkout is what first ran these lines.
- */
-function referencePrivateKey(hex) {
-  return crypto.createPrivateKey({
-    key: Buffer.concat([
-      Buffer.from('302e020100300506032b656e04220420', 'hex'),
-      Buffer.from(hex, 'hex'),
-    ]),
-    format: 'der',
-    type: 'pkcs8',
-  });
-}
-
-test('beforenm matches onlykey-testing', { skip: !referenceHasNoble }, () => {
+test('beforenm matches onlykey-testing (frozen)', () => {
+  assert.ok(KIT.transit.beforenm, 'the frozen vectors carry no beforenm - regenerate with @noble/ciphers');
   const got = transit.beforenm(fromHex(V.bobPublic), fromHex(V.aliceSecret));
-  const theirs = reference.beforenm(
-    Buffer.from(V.bobPublic, 'hex'), referencePrivateKey(V.aliceSecret),
-  );
-  assert.equal(toHex(got), theirs.toString('hex'));
+  assert.equal(toHex(got), KIT.transit.beforenm);
 });
 
-test('box matches onlykey-testing over many lengths', { skip: !reference }, () => {
-  const key = Buffer.alloc(32, 0x5a);
-  for (const n of [0, 1, 15, 16, 17, 64, 228, 512, 3309]) {
-    const data = Buffer.alloc(n, 0xa5);
-    assert.equal(
-      toHex(transit.box(new Uint8Array(key), new Uint8Array(data))),
-      reference.box(key, data).toString('hex'),
-      `length ${n} differs from the reference`,
-    );
+test('box matches onlykey-testing over many lengths (frozen)', () => {
+  const key = new Uint8Array(32).fill(BOX_KEY_BYTE);
+  for (const n of BOX_LENGTHS) {
+    const data = new Uint8Array(n).fill(BOX_DATA_BYTE);
+    assert.equal(toHex(transit.box(key, data)), KIT.transit.box[n],
+      `length ${n} differs from the reference`);
   }
 });
 
-test('connectPayload matches the reference from offset 5', { skip: !reference }, () => {
+test('connectPayload matches the reference from offset 5 (frozen)', () => {
   // The reference zero-fills [0..4]; we emit the frame header every shipped
   // client emits. Everything the firmware reads is at 5 and beyond.
-  const pk = Buffer.alloc(32, 0x11);
-  const when = 0x68bd1f40 * 1000;
-  const mine = transit.connectPayload(new Uint8Array(pk), { when });
-  const theirs = reference.connectPayload(pk, { when });
-  assert.equal(theirs.length, 43);
-  assert.equal(toHex(mine.subarray(5)), theirs.subarray(5).toString('hex'));
+  const pk = new Uint8Array(32).fill(CONNECT_PK_BYTE);
+  const mine = transit.connectPayload(pk, { when: CONNECT_WHEN });
+  assert.equal(toHex(mine.subarray(5)), KIT.transit.connectPayloadFrom5);
 });
-
-test('the reference self-test still passes', { skip: !referenceHasNoble }, () => {
-  assert.doesNotThrow(() => reference.selfTest());
-});
+/* The kit's own selfTest() ran when the vectors were frozen: KIT.transit.kitSelfTest. */
 
 /* -------------------------------------------- the two OKCONNECT replies */
 
