@@ -17,6 +17,10 @@ the commit that release ended at.
 
 ## 0.2.0 - in progress
 
+- `crypto.pqc` exports `bech32Encode`, `bech32Decode`, `RECIPIENT_HRP`,
+  `IDENTITY_HRP` and `DERIVED_MARKER` - the encoding under the recipient and
+  identity strings, which onlykey-testing's age-pqc.js carried its own copies
+  of. Checked identical to the kit's (20/20); one frozen vector from it.
 - `CtapHid` takes an `AbortSignal` (`new CtapHid(t, { signal })`, or
   `opts.signal` per call): an aborted wait rejects at once with an
   `AbortError` whose `cause` is the signal's reason, and an already-aborted

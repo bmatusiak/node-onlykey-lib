@@ -58,3 +58,14 @@ export const MLKEM_CT: 1088;
 export const XWING_PK: 1216;
 export const XWING_CT: 1120;
 export const SEED: 32;
+export function bech32Encode(hrp: any, data: any): string;
+export function bech32Decode(bech: any): {
+    hrp: null;
+    data: null;
+} | {
+    hrp: any;
+    data: Uint8Array<ArrayBuffer>;
+};
+export const RECIPIENT_HRP: "age1onlykey";
+export const IDENTITY_HRP: "age-plugin-onlykey-";
+export const DERIVED_MARKER: 255;

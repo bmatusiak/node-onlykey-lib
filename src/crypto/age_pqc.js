@@ -370,4 +370,18 @@ module.exports = {
     XWING_PK,
     XWING_CT,
     SEED,
+    /*
+     * The encoding underneath the recipient and identity strings, exported for
+     * onlykey-testing, whose age-pqc.js carried its own copies of these: a
+     * test that builds or reads an age1onlykey... / age-plugin-onlykey-...
+     * string by hand needs the same bech32 (BIP-173 checksum, no 90-character
+     * cap - a 1216-byte recipient does not fit one) and the same prefixes.
+     * Checked identical to the kit's before it switched: 20/20 encode and
+     * decode, both prefixes, 0..1216 bytes.
+     */
+    bech32Encode,
+    bech32Decode,
+    RECIPIENT_HRP,
+    IDENTITY_HRP,
+    DERIVED_MARKER,
 };
