@@ -15,7 +15,15 @@ flags. Nothing had failed - two copies of "the library" simply disagreed.
 The version in package.json names the release being worked on; the tag names
 the commit that release ended at.
 
-## 0.2.0 - in progress
+## 0.3.0 - in progress
+
+Nothing yet.
+
+## 0.2.0 - `4b74b3e93b314cd0808b04bc7733695f0f008601` (tag `v0.2.0`)
+
+Released 2026-09-27, after ok-rn ran this code through the full Pixel 6a
+version matrix: every release equal to or better than its baseline (working
+tree 104 passed / 0 failed, v3.0.4 84/0, v0.2-beta.8 still parked at 60/4).
 
 - **The release table lives here now: `node-onlykey-lib/versions`.**
   `list()`, `pinsFor(version)` (the pinned `libraries` / `OnlyKey-Firmware`
