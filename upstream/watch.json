@@ -5,23 +5,32 @@
       "name": "firmware-libraries",
       "repo": "0c-coder/libraries",
       "branch": "master",
-      "paths": ["fido2/ok_extension.cpp", "fido2/ctap.cpp", "fido2/ctaphid.cpp", "onlykey"],
-      "since": "2026-09-07",
+      "paths": [
+        "fido2/ok_extension.cpp",
+        "fido2/ctap.cpp",
+        "fido2/ctaphid.cpp",
+        "onlykey"
+      ],
+      "since": "2026-09-24",
       "why": "The device side: wire formats, transit, gates (webcrypt policy), new commands. Changes here update capabilities() and the versions table, and are the ground truth for every client."
     },
     {
       "name": "firmware-sketch",
       "repo": "0c-coder/OnlyKey-Firmware",
       "branch": "master",
-      "paths": ["OnlyKey"],
-      "since": "2026-09-07",
+      "paths": [
+        "OnlyKey"
+      ],
+      "since": "2026-09-24",
       "why": "The sketch: version string, build flags, which features a release compiles in."
     },
     {
       "name": "app-classic",
       "repo": "0c-coder/OnlyKey-App",
       "branch": "master",
-      "paths": ["app/scripts/onlyKey/OnlyKeyComm.js"],
+      "paths": [
+        "app/scripts/onlyKey/OnlyKeyComm.js"
+      ],
       "since": "2026-09-07",
       "why": "0c-coder's shipping desktop app (5.6.0/6.0.0): protocol mixed into one file - new fields and messages appear here first."
     },
@@ -29,7 +38,9 @@
       "name": "app-rewrite-0c",
       "repo": "0c-coder/OnlyKey-App",
       "branch": "release/5.7.0-modern-rewrite",
-      "paths": ["src/api"],
+      "paths": [
+        "src/api"
+      ],
       "since": "2026-09-07",
       "why": "The rewrite's device layer as 0c-coder carries it; its tests beside each file are an oracle for this library."
     },
@@ -37,7 +48,9 @@
       "name": "app-rewrite-upstream",
       "repo": "trustcrypto/OnlyKey-App",
       "branch": "release/5.7.0-modern-rewrite",
-      "paths": ["src/api"],
+      "paths": [
+        "src/api"
+      ],
       "since": "2026-09-07",
       "why": "The rewrite as upstream (trustcrypto) is building it - the App's direction is undecided, so both lines are watched."
     },
@@ -45,7 +58,9 @@
       "name": "python-onlykey",
       "repo": "0c-coder/python-onlykey",
       "branch": "master",
-      "paths": ["onlykey"],
+      "paths": [
+        "onlykey"
+      ],
       "since": "2026-09-07",
       "why": "The CLI: a second, independent implementation of the protocol and the age/X-Wing maths - parity is checked by the test kit."
     },
@@ -53,7 +68,9 @@
       "name": "lib-agent",
       "repo": "0c-coder/lib-agent",
       "branch": "master",
-      "paths": ["libagent"],
+      "paths": [
+        "libagent"
+      ],
       "since": "2026-09-07",
       "why": "onlykey-agent (SSH/GPG): derivation formats (derived v2) the library must agree with."
     },
@@ -61,7 +78,9 @@
       "name": "web-app",
       "repo": "bm-ok/0c-coder-onlykey.github.io",
       "branch": "heroku-deploy",
-      "paths": ["src/onlykey-fido2"],
+      "paths": [
+        "src/onlykey-fido2"
+      ],
       "since": "2026-09-07",
       "why": "The web app's built-in library - ours now, and being moved onto this library (plan Path W); until then its changes are ported here."
     }
