@@ -24,6 +24,7 @@
     "./plugins/transport/embedded": "./plugins/transport/embedded.js",
     "./plugins/transport/usb": "./plugins/transport/usb.js",
     "./plugins/transport/ble": "./plugins/transport/ble.js",
+    "./plugins/transport/tunnel": "./plugins/transport/tunnel.js",
     "./plugins/device": "./plugins/device/index.js",
     "./plugins/okcrypto": "./plugins/okcrypto/index.js",
     "./package.json": "./package.json",

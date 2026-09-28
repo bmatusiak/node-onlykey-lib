@@ -53,6 +53,15 @@
  *   transit key, which the argument list plainly suggests, would have
  *   decrypted noise.
  *
+ * EXCEPT OVER A SUPPLIED CTAP. A browser has no vendor interface, so when the
+ * host hands in a ctap (plugins.config.okcrypto.ctap) the composite halves and
+ * the derived X-Wing decapsulation go through the tunnel instead - see
+ * tunnelOperation. There the framing and the response are the other way
+ * round from the vendor path: every request keyhandle is SEALED under the
+ * transit key (the firmware opens it before dispatch), and from 3.0.5 the
+ * response IS sealed too (libraries a29b063). Nothing about the vendor path
+ * changes; ok-rn and the kit never supply a ctap.
+ *
  * What this does NOT hide is that both operations need a human. The firmware
  * raises a three-button challenge before it will sign or decrypt, so these
  * take a `confirm` callback and hand it the digits - the same split as
@@ -70,7 +79,14 @@ const okconnect = require('../../src/crypto/okconnect');
 const keys = require('../../src/device/keys');
 const slots = require('../../src/device/slots');
 const tunnelling = require('../../src/protocol/tunnel');
-const { RP_IDS } = require('../../src/protocol/ctap');
+const { RP_IDS, SUCCESS: CTAP_SUCCESS } = require('../../src/protocol/ctap');
+/*
+ * The transit box, for sealing stored-key requests over a SUPPLIED ctap. Used
+ * here and handed to nobody: this plugin is one of the two session.allowed
+ * names, and the package boundary (no src/session export, no .transit on the
+ * session plugin) is what keeps it from going further.
+ */
+const transit = require('../../src/session/transit');
 const { CtapHid } = require('../../src/protocol/ctaphid');
 const chunker = require('../../src/device/chunker');
 /* protocol/chunk is NOT device/chunker: that one chunks a REQUEST, this one
@@ -274,8 +290,9 @@ function setup(imports, register, config) {
     let started = false;
     const collected = [];
     let got = 0;
+    let timer = null;
     const answer = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         if (off) off();
         reject(new Error(
           `no response within ${timeoutMs}ms; the challenge was ` +
@@ -320,13 +337,27 @@ function setup(imports, register, config) {
 
     await settleStaleTimers();
 
-    await chunker.sendSlotStream({
-      msg,
-      slot,
-      data: payload,
-      send: (frame) => transport.write(IFACE.VENDOR, frame),
-      onProgress,
-    });
+    /*
+     * A write that FAILS must take the listener and the timer down with it.
+     * They were armed first (see above), and left behind they keep the process
+     * alive for timeoutMs and then reject `answer` with nobody listening - an
+     * unhandled rejection naming a challenge that was never raised. The
+     * tunnel-only transport refuses every write, so in a browser this is the
+     * ordinary outcome of calling a vendor-only operation.
+     */
+    try {
+      await chunker.sendSlotStream({
+        msg,
+        slot,
+        data: payload,
+        send: (frame) => transport.write(IFACE.VENDOR, frame),
+        onProgress,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (off) off();
+      throw err;
+    }
     events.emit('challenge', { slot, digits });
 
     try {
@@ -439,6 +470,92 @@ function setup(imports, register, config) {
       throw error;
     });
     return tunnelReady;
+  }
+
+  /*
+   * THE TUNNEL'S OWN TRANSIT SESSION - for stored-key requests over a supplied
+   * ctap, which have to be SEALED, unlike a derive.
+   *
+   * A derive sends its request in the clear (it is itself the key exchange) and
+   * asks for the response sealed. OKSIGN and OKDECRYPT are the other way round:
+   * the firmware OPENS every non-OKCONNECT keyhandle under its current transit
+   * key before it will look at it (ok_extension.cpp:566-610; okcrypto_aes_crypto_box
+   * on 3.0.4, ok_extension.cpp:296 there). So the host must hold the key the
+   * device holds, and a counter of its own for v2's IV.
+   *
+   * WHICH KEY THE DEVICE HOLDS is "the last OKCONNECT it answered", whoever sent
+   * it - every OKCONNECT regenerates the device's keypair and rederives
+   * transit_key, and from 3.0.5 resets its counter with it
+   * (okcrypto_transit_reset(), ok_extension.cpp:325). That includes every
+   * DERIVE, which is an OKCONNECT too. So this is dropped the moment a derive is
+   * sent and replaced from the derive's own reply, and a connectTunnel() sets it
+   * fresh - never carried across a key exchange, which is the counter rule
+   * session/transit.js states and the firmware comment calls the one failure the
+   * wire format cannot express.
+   *
+   * The counter persists across operations within one key: transit.session()
+   * holds it and transit.seal() advances it, so two operations under one key
+   * never reuse an IV.
+   *
+   * Null until the first stored-key operation or connectTunnel(); a stored-key
+   * operation that finds it null connects first.
+   */
+  let tunnelSession = null;
+
+  /*
+   * WHEN THE DEVICE LAST SERVED A STAGED REPLY, so the next stored-key request
+   * can wait until the device has thrown it away.
+   *
+   * A delivered reply is NOT cleared. send_stored_response() resets its cursor
+   * to 0 and leaves large_resp_buffer_offset set (ok_extension.cpp:782-786), so
+   * the NEXT request of any kind is answered with the same bytes again, until
+   * the Wipedata timer runs wipetasks() - 5000 ms after the last time anything
+   * was served (okcore.cpp:174, wipedata() re-arms it on every serve).
+   *
+   * Three things go wrong if a stored-key request arrives inside that window,
+   * and none of them is an error:
+   *
+   *   the replies to the request chunks are the stale bytes, so the host cannot
+   *   tell an accepted chunk from one the device discarded - a chunk that fails
+   *   authentication is answered with whatever is staged (ok_extension.cpp:601);
+   *
+   *   every serve re-arms the wipe and leaves pending_operation at DATA_WIPE, so
+   *   wipetasks() can fire 5 s into the challenge and zero CRYPTO_AUTH while the
+   *   user is still pressing;
+   *
+   *   the first polls collect the stale reply as if it were the result.
+   *
+   * So the tunnel path waits the window out first, once per operation. That is
+   * what lets the replies to the request itself be CHECKED (see
+   * checkRequestReply) instead of hoped about.
+   *
+   * Recorded for every CTAP1_SUCCESS reply the tunnel returns, derives included:
+   * that is the status a served buffer comes back with.
+   */
+  let lastStagedAt = 0;
+  /*
+   * The Wipedata DelayRun is 5000 ms; the margin covers the device's own loop
+   * and the time the reply spent in the browser. Overridable ONLY so a fake
+   * device can run in milliseconds - a real key's timer does not move.
+   */
+  const STAGED_WIPE_MS = Number.isFinite(settings.stagedWipeMs) ? settings.stagedWipeMs : 5500;
+
+  async function tunnelSend(bound, req, opts) {
+    const reply = await bound.send(req, opts);
+    if (reply && reply.status === CTAP_SUCCESS) lastStagedAt = Date.now();
+    return reply;
+  }
+
+  async function settleStagedReply() {
+    if (!lastStagedAt) return;
+    const since = Date.now() - lastStagedAt;
+    if (since >= STAGED_WIPE_MS) return;
+    const remaining = STAGED_WIPE_MS - since;
+    events.emit('settle', {
+      ms: remaining,
+      why: 'the device still holds its last reply and would serve it again to this request',
+    });
+    await new Promise((r) => setTimeout(r, remaining));
   }
   /**
    * One OKCONNECT derive, end to end.
@@ -670,12 +787,20 @@ function setup(imports, register, config) {
     const bound = await openTunnel();
 
     /*
+     * The device is about to replace its transit key - a derive IS an
+     * OKCONNECT - so whatever key the tunnel's stored-key session held stops
+     * being the device's the moment this goes out, answered or not. Dropped
+     * here and replaced below from this derive's own reply.
+     */
+    tunnelSession = null;
+
+    /*
      * enc_resp is always 1. ok_extension.cpp forces any truthy opt3 to
      * "encrypt everything except the transit public key", so 1 and 2 are the
      * same mode - and an unencrypted response is a derived secret in the
      * clear on the wire.
      */
-    const answer = await bound.send(
+    const answer = await tunnelSend(bound,
       { cmd: okconnect.OKCONNECT, opt1: action, opt2: keytype, opt3: 1, data },
       { timeoutMs, onKeepAlive },
     );
@@ -718,7 +843,7 @@ function setup(imports, register, config) {
       const collected = await chunk.pollForResponse({
         poll: async () => {
           if (first) { const only = first; first = null; return only; }
-          return bound.send(
+          return tunnelSend(bound,
             { cmd: MSG.OKPING, opt1: 0, opt2: 0, opt3: 0, data: new Uint8Array(0) },
             { timeoutMs },
           );
@@ -784,6 +909,21 @@ function setup(imports, register, config) {
     }
 
     /*
+     * This derive's key is now the DEVICE's transit key, so it becomes the
+     * tunnel's stored-key session - fresh counter included, because the
+     * device reset its own at the same moment. Only after the status check:
+     * a reply that is not an answer to this request carries no key the device
+     * holds, and the next stored-key operation reconnects instead.
+     *
+     * Kept only when a ctap was SUPPLIED - the only case in which anything
+     * seals with it. A host on its own CtapHid runs stored-key operations over
+     * the vendor interface and should not be left holding a key nothing uses.
+     */
+    if (suppliedCtap) {
+      tunnelSession = transit.session(okconnect.transitKey(opened.devicePublicKey, app.secretKey));
+    }
+
+    /*
      * The transit secret is wiped rather than left for the GC. It decrypts
      * this response and nothing else, and it is the only thing between the
      * captured ciphertext and the derived key.
@@ -821,6 +961,352 @@ function setup(imports, register, config) {
       }),
     };
   }
+  /**
+   * OKCONNECT through the tunnel, with no derive: the key exchange, and the
+   * firmware's own account of what it is.
+   *
+   * WHY THIS EXISTS. A browser has no vendor interface, so session.connect() -
+   * the only place capabilities() has ever been fed - cannot run there. Without
+   * a version, every gate reads its pre-3.0.5 default (see session.observeStatus
+   * for that account): transit v1 against a v2 device, whose every sealed
+   * request then fails authentication and is silently discarded.
+   *
+   * The PLAIN reply carries the version, and that is the firmware's own
+   * contract (onlykey.h; okcrypto.cpp at okcrypto_transit_seal): with opt1 = 0
+   * bridge_to_onlykey() stages [device transit pubkey(32) | "UNLOCKEDv3.0.5..."
+   * NUL] (ok_extension.cpp:564) and, with opt3 = 0, does NOT seal it - so the
+   * version is readable before the framing it decides has been chosen. opt3
+   * must be 0 here: this branch never rewrites a truthy opt3 to 2 the way the
+   * derive branch does, so 1 would seal the device's public key too and there
+   * would be no way to derive the key that opens it.
+   *
+   * The status goes to session.observeStatus(), the existing seam for "a status
+   * seen outside connect()", so capabilities() is fed from one place whichever
+   * interface the status arrived on.
+   *
+   * One WebAuthn ceremony, so one browser prompt.
+   */
+  async function connectTunnel({ timeoutMs = 60000 } = {}) {
+    if (typeof randomBytes !== 'function') {
+      throw new Error('okcrypto needs randomBytes from the host plugin to connect the tunnel');
+    }
+    const bound = await openTunnel();
+    const app = okconnect.newTransitKeypair();
+    /*
+     * buildMessage's frame, with no label: [header | OKCONNECT | epoch |
+     * transit pubkey | browser | os | 32 zero-label bytes]. The firmware reads
+     * the epoch at [5..8], the key at [9..40] and the two display bytes at
+     * [41..42]; the trailing hash is simply not read without a key action.
+     */
+    const data = okconnect.buildMessage({ transitPublicKey: app.publicKey, label: null });
+
+    tunnelSession = null;
+    const answer = await tunnelSend(bound,
+      { cmd: okconnect.OKCONNECT, opt1: 0, opt2: 0, opt3: 0, data },
+      { timeoutMs },
+    );
+
+    if (answer.error) {
+      app.secretKey.fill(0);
+      throw okmsg.deviceError(answer.error, 'the tunnel connect was refused');
+    }
+    if (answer.status !== CTAP_SUCCESS || !answer.data || answer.data.length < 33) {
+      app.secretKey.fill(0);
+      throw new Error(
+        `the device did not answer the tunnel connect (${answer.status}, `
+        + `${answer.data ? answer.data.length : 0} bytes). A device refuses the `
+        + 'extension while it is LOCKED, and to any origin outside its trusted '
+        + 'table - CTAP2_ERR_EXTENSION_NOT_SUPPORTED says one of the two.',
+      );
+    }
+
+    const opened = okconnect.openResponse(answer.data, null, { encrypted: false });
+    if (!DEVICE_STATUS.test(String(opened.status || ''))) {
+      app.secretKey.fill(0);
+      throw new Error(
+        'the tunnel connect was answered with something that is not a connect '
+        + 'reply - it carries no device status after the transit key. The usual '
+        + 'cause is a previous reply still staged on the device.',
+      );
+    }
+
+    const key = okconnect.transitKey(opened.devicePublicKey, app.secretKey);
+    app.secretKey.fill(0);
+    tunnelSession = transit.session(key);
+    key.fill(0);
+
+    if (session && typeof session.observeStatus === 'function') session.observeStatus(opened.status);
+    return {
+      status: opened.status,
+      identity: session ? session.identity : null,
+      capabilities: session ? session.capabilities : null,
+    };
+  }
+
+  /*
+   * The statuses a device answers a request chunk with when it has ACCEPTED it
+   * and is waiting - for more chunks, for the challenge, or for the result.
+   *
+   * With nothing staged (which settleStagedReply arranges), send_stored_response
+   * answers an accepted chunk with CTAP2_ERR_USER_ACTION_PENDING, because
+   * packet_buffer_offset or CRYPTO_AUTH is now set (ok_extension.cpp:787-792),
+   * or OPERATION_PENDING while it computes. The OnlyKey-range codes are listed
+   * because they are what pending_operation holds during a sign or decrypt
+   * challenge, and a firmware that returned them directly would mean the same.
+   */
+  const ACCEPTED = new Set([
+    'CTAP2_ERR_USER_ACTION_PENDING',
+    'CTAP2_ERR_OPERATION_PENDING',
+    'OKSIGN_ERR_USER_ACTION_PENDING',
+    'OKDECRYPT_ERR_USER_ACTION_PENDING',
+  ]);
+
+  function notAccepted(detail) {
+    /*
+     * The key may be what is wrong - another client, or a derive this plugin
+     * did not see through, may have re-keyed the device - so the next
+     * operation connects again rather than repeating a request that cannot
+     * authenticate.
+     */
+    tunnelSession = null;
+    const err = new Error(
+      'the device did not accept the request - transit authentication failed or '
+      + `a stale reply was returned: ${detail}`,
+    );
+    err.code = 'REQUEST_NOT_ACCEPTED';
+    return err;
+  }
+
+  /**
+   * CHECK THE REPLY TO THE REQUEST ITSELF, before sending the next chunk.
+   *
+   * The alternative - send everything, then poll - turns every refusal into the
+   * same thing: a poll loop that waits out its budget and says "no response".
+   * A chunk that failed authentication is dispatched nowhere (ok_extension.cpp:
+   * 581-608), so the device never raises a challenge, the user is shown digits
+   * that will never be asked for, and thirty seconds later nothing names why.
+   *
+   * @returns {object|null} the reply, when the FINAL chunk was answered with the
+   *   result itself (a slot whose confirmation is "none"); null otherwise
+   */
+  function checkRequestReply(reply, { chunk: n, chunks, isFinal, expected }) {
+    const where = `chunk ${n} of ${chunks}`;
+    if (!reply) throw notAccepted(`${where} got no reply at all`);
+    if (ACCEPTED.has(reply.status)) return null;
+
+    if (reply.status === CTAP_SUCCESS && reply.error) {
+      if (/failed authentication/i.test(reply.error)) {
+        throw notAccepted(
+          `${where} was answered "${reply.error}" - it was not sealed under the `
+          + "device's current transit key (another client or a derive re-keyed "
+          + 'it, or the framing does not match this firmware). The next call '
+          + 'connects again.',
+        );
+      }
+      /*
+       * A refusal the device NAMED - "Error stored key use over FIDO2 not
+       * enabled" above all, which is the webcrypt policy (field 31,
+       * OKWC_ALLOW_STORED_KEY) saying no. Passed through with the device's own
+       * sentence, the same as the vendor path does.
+       */
+      throw okmsg.deviceError(reply.error, 'the device refused the request');
+    }
+
+    if (reply.status === CTAP_SUCCESS && reply.data && reply.data.length) {
+      /*
+       * Data in answer to a request chunk is a SERVED BUFFER, never an
+       * acknowledgement. With nothing staged beforehand only the final chunk
+       * can produce one legitimately - when the slot needs no confirmation and
+       * the result is ready at once - and then it has the result's shape.
+       */
+      const len = reply.data.length;
+      if (isFinal && (len === chunk.RESPONSE_CHUNK || len === expected)) return reply;
+      if (isFinal && chunk.asDeviceMessage(reply.data)) return reply;
+      throw notAccepted(
+        `${where} was answered with ${len} bytes of data where the device should `
+        + 'have said it is waiting (CTAP2_ERR_USER_ACTION_PENDING). A reply to a '
+        + 'request carries data only when the device served something it already '
+        + 'had staged instead - which it does when the chunk FAILED '
+        + 'AUTHENTICATION and something was staged, and when the chunk was DROPPED '
+        + 'by its duplicate-packet guard (opt3 not above the last one it saw).',
+      );
+    }
+
+    const hint = reply.status === 'CTAP2_ERR_EXTENSION_NOT_SUPPORTED'
+      ? ' The device refuses the extension while locked, and to untrusted origins.'
+      : reply.status === 'CTAP2_ERR_NO_OPERATION_PENDING'
+        ? ' The device did not take the chunk: on firmware before 3.0.5 stored-key '
+          + 'operations over FIDO2 need webcryptcheck() level 2, and a lower level '
+          + 'is answered like this rather than refused by name.'
+        : '';
+    throw notAccepted(`${where} was answered ${reply.status}.${hint}`);
+  }
+
+  /**
+   * A slot-addressed crypto operation OVER THE TUNNEL: the three phases of
+   * deviceOperation, carried by a supplied ctap instead of the vendor
+   * interface.
+   *
+   *   1. the payload goes out as OKSIGN/OKDECRYPT keyhandles, each SEALED under
+   *      the tunnel's transit session - v2 frames from 3.0.5, the v1 box
+   *      before it (capabilities().transitV2) - and each reply is checked;
+   *   2. the device raises the same three-button challenge, over the same
+   *      reassembled payload, so confirm() gets the same digits;
+   *   3. the result is collected with OKPING polls and, from 3.0.5, OPENED:
+   *      libraries a29b063 seals every composite response in transit
+   *      (okpqc.cpp: send_transport_response(..., true, true)), so a 64-byte
+   *      Ed25519 signature arrives as an 84-byte v2 frame and ML-DSA-65's 3309
+   *      bytes as 3329, across seven 512-byte polls. Before 3.0.5 the composite
+   *      responses were not encrypted, and the v1 path reads them as they are.
+   *
+   * WHAT IT COSTS IN A BROWSER: every keyhandle and every poll is one
+   * navigator.credentials.get() - one ceremony each. See the report in
+   * CHANGELOG for the counts.
+   */
+  async function tunnelOperation(msg, slot, data, opts = {}) {
+    const {
+      confirm = null,
+      duo = false,
+      formula = (session && session.capabilities
+        && session.capabilities.challengeFormula) || undefined,
+      timeoutMs = 30000,
+      onProgress = null,
+      expectBytes = 0,
+      /* Each poll is a whole ceremony; the firmware-side pacing is chunk.js's. */
+      pollIntervalMs = chunk.POLL_INTERVAL_MS,
+    } = opts;
+
+    const payload = Uint8Array.from(data);
+    if (!payload.length) throw new Error('nothing to sign or decrypt');
+    if (!expectBytes) {
+      throw new Error('a tunnelled operation needs expectBytes: the result is collected by polling');
+    }
+    if (session && session.configMode) {
+      throw new Error(
+        'this device is in CONFIG MODE, where it goes silent on CTAPHID - so this '
+        + 'operation would time out rather than fail. Config mode ends only at a '
+        + 'restart.',
+      );
+    }
+
+    const bound = await openTunnel();
+    if (!tunnelSession) await connectTunnel({ timeoutMs });
+    const sess = tunnelSession;
+
+    /*
+     * THE FRAMING IS THE FIRMWARE'S, read from its version. v1 is the
+     * zero-IV box, one keystream from offset 0 per keyhandle, exactly what
+     * okcrypto_aes_crypto_box(client_handle, handle_len, true) undoes on 3.0.4;
+     * v2 is [ctr | ct | tag] under IV [1 | ctr], which okcrypto_transit_open()
+     * verifies before a byte of it is dispatched.
+     */
+    const v2 = deviceCan('transitV2') === true;
+    const seal = v2
+      ? (bytes) => transit.seal(sess, bytes)
+      : (bytes) => transit.box(sess.key, bytes);
+    const sizes = chunk.planKeyhandleChunks(payload.length, {
+      overhead: v2 ? transit.OVERHEAD : 0,
+    });
+    const framed = v2 ? expectBytes + transit.OVERHEAD : expectBytes;
+
+    const digits = challengeDigits(payload, { duo, formula });
+
+    await settleStaleTimers();
+    await settleStagedReply();
+    chunk.reservePacketRun(sizes.length);
+
+    let first = null;
+    await chunk.sendChunked({
+      cmd: msg,
+      slot,
+      payload,
+      sizes,
+      seal,
+      send: (req) => tunnelSend(bound, req, { timeoutMs }),
+      onProgress,
+      onReply: (reply, where) => {
+        const result = checkRequestReply(reply, { ...where, expected: framed });
+        if (result) first = result;
+      },
+    });
+    events.emit('challenge', { slot, digits });
+
+    /*
+     * confirm() runs ALONGSIDE the polls, not before them. Over the vendor
+     * interface the answer arrives on a listener while confirm() is still
+     * pressing, and isAnswered() is how a presser learns to stop - an extra
+     * press on an unlocked key types a slot. Here the only way to learn the
+     * device has answered is a poll, so the polls cannot wait for confirm().
+     */
+    let answered = false;
+    let finished = false;
+    let confirmError = null;
+    const confirming = confirm
+      ? Promise.resolve()
+        .then(() => confirm({ digits, slot, isAnswered: () => answered || finished }))
+        .catch((err) => { confirmError = err; })
+      : Promise.resolve();
+
+    let collected;
+    try {
+      collected = await chunk.pollForResponse({
+        poll: async () => {
+          if (confirmError) throw confirmError;
+          if (first) { const only = first; first = null; return only; }
+          /*
+           * OKPING is sealed like everything else that is not an OKCONNECT: the
+           * firmware opens it before reading the command. opt3 = 0, the value
+           * send_stored_response() exempts from its duplicate test so the
+           * cursor advances on every poll (ok_extension.cpp:745-750).
+           */
+          return tunnelSend(bound,
+            { cmd: MSG.OKPING, opt1: 0, opt2: 0, opt3: 0, data: seal(new Uint8Array(0)) },
+            { timeoutMs },
+          );
+        },
+        expected: framed,
+        intervalMs: pollIntervalMs,
+        noProgressBudgetMs: timeoutMs,
+        onProgress: () => { answered = true; },
+        challengeErrorIsFinal: deviceCan('challengeErrorIsFinal') === true,
+      });
+    } finally {
+      finished = true;
+    }
+    await confirming;
+    if (confirmError) throw confirmError;
+
+    if (!collected.data) {
+      throw okmsg.deviceError(collected.message || 'no result', 'the device did not complete the operation');
+    }
+
+    let out = collected.data;
+    if (v2) {
+      try {
+        out = transit.open(sess, out);
+      } catch (err) {
+        tunnelSession = null;
+        throw err;
+      }
+    }
+    if (out.length !== expectBytes) {
+      throw new Error(`the device returned ${out.length} bytes; this operation answers ${expectBytes}`);
+    }
+    /* Only a COMPLETED operation arms the device timers - see settleStaleTimers. */
+    lastOperationEndedAt = Date.now();
+    return out;
+  }
+
+  /*
+   * Which carrier a stored-key operation rides. A SUPPLIED ctap means the host
+   * reached the key through the tunnel - a browser has nothing else - so the
+   * operations the tunnel can carry go there. Otherwise the vendor interface,
+   * exactly as before: ok-rn and the kit never supply one.
+   */
+  const storedOperation = (...args) => (suppliedCtap
+    ? tunnelOperation(...args)
+    : deviceOperation(...args));
+
   const okcrypto = {
     /* ---- the device-free crypto, re-exported ---------------------------- */
 
@@ -920,7 +1406,7 @@ function setup(imports, register, config) {
       payload.set(bytes, 1);
       const expectBytes = half === composite.HALF_ECC
         ? composite.ED25519_SIG_LEN : composite.MLDSA_SIG_LEN;
-      return deviceOperation(MSG.OKSIGN, slot, payload, { expectBytes, ...opts });
+      return storedOperation(MSG.OKSIGN, slot, payload, { expectBytes, ...opts });
     },
     /**
      * Decrypt one half of a composite exchange: no selector - the firmware
@@ -928,7 +1414,31 @@ function setup(imports, register, config) {
      * ciphertext - and a 32-byte shared secret back either way.
      */
     async composite_decrypt(slot, data, opts = {}) {
-      return deviceOperation(MSG.OKDECRYPT, slot, data, { expectBytes: composite.SS_LEN, ...opts });
+      return storedOperation(MSG.OKDECRYPT, slot, data, { expectBytes: composite.SS_LEN, ...opts });
+    },
+
+    /**
+     * OKCONNECT over the SUPPLIED ctap: key the tunnel's transit session and
+     * learn the firmware version, for a host with no vendor interface.
+     *
+     * Resolves `{ status, identity, capabilities }` - the same capabilities
+     * session.connect() would have produced, fed through session.observeStatus.
+     * A browser calls this once after composing; a stored-key operation that
+     * finds no tunnel session calls it itself, so skipping it costs nothing but
+     * the chance to read the version before the first operation.
+     *
+     * Without a supplied ctap it would key a CtapHid tunnel nothing seals with,
+     * so it is refused rather than half-working.
+     */
+    async connectTunnel(opts = {}) {
+      if (!suppliedCtap) {
+        throw new Error(
+          'connectTunnel is for a host that reaches the key only through a '
+          + 'supplied ctap (plugins.config.okcrypto.ctap); with a vendor '
+          + 'interface, session.connect() reads the version',
+        );
+      }
+      return connectTunnel(opts);
     },
 
     /**
@@ -1153,7 +1663,7 @@ function setup(imports, register, config) {
             const payload = new Uint8Array(32 + ciphertext.length);
             payload.set(okconnect.derivationHash(label), 0);
             payload.set(ciphertext, 32);
-            const answer = await deviceOperation(
+            const answer = await storedOperation(
               MSG.OKDECRYPT, slots.WEB_AGENT_DERIVATION_SLOT, payload,
               { expectBytes: 32, ...opts },
             );

@@ -33,6 +33,43 @@ the commit that release ended at.
   INIT - which is how a browser hands in `createWebAuthnCtap()`. Omitted, which
   is every host today, the plugin builds and inits its own `CtapHid` exactly as
   before. A supplied object without `getAssertion` fails the composition.
+- **A browser composes with no vendor interface:
+  `node-onlykey-lib/plugins/transport/tunnel`.** A placeholder transport that
+  satisfies the contract so session, device and okcrypto compose unchanged;
+  every vendor write/request refuses with `code: 'NO_VENDOR_INTERFACE'`
+  instead of timing out. Existing hosts keep composing embedded/usb/ble.
+- **`okcrypto.connectTunnel()` - the key exchange and the firmware version over
+  the tunnel.** A plain OKCONNECT (opt1 = 0, opt3 = 0), whose reply carries the
+  status in the clear; it is fed to `session.observeStatus()`, so
+  `capabilities()` (transitV2 and the rest) is known in a browser too. Refused
+  without a supplied ctap. One WebAuthn ceremony.
+- **Composite sign/decrypt over a supplied ctap.** `composite_sign`,
+  `composite_decrypt` and the derived X-Wing decapsulation run as tunnelled
+  OKSIGN/OKDECRYPT when a ctap is supplied: every keyhandle (and every OKPING)
+  sealed under the tunnel's transit session - transit v2 frames from 3.0.5,
+  the v1 box on 3.0.4 - with a counter that persists across operations and
+  resets at each key exchange (a derive re-keys, and its reply becomes the
+  session). Chunks are 171 bytes sealed (v2) or 228 (v1), whole 57-byte
+  packets but the last, never a length the encoder would pad. opt2 marks the
+  final chunk and opt3 never wraps inside an operation. Results are collected
+  by OKPING and, from 3.0.5, opened as v2 frames (+20 bytes, libraries
+  a29b063). The three-button challenge and `confirm({ digits, isAnswered })`
+  are the vendor path's. The reply to each request chunk is CHECKED: a
+  transit-authentication failure, a stale staged reply or a dropped duplicate
+  fails at once with `code: 'REQUEST_NOT_ACCEPTED'`, and a device refusal
+  ("stored key use over FIDO2 not enabled") comes back as its own sentence.
+  Before the first chunk the operation waits out the firmware's 5-second
+  staged-reply wipe (`settle` event), because a reply still staged is served
+  again to the request and hides whether it was accepted. Cost per operation,
+  in ceremonies (browser prompts): one connect per session, one per request
+  keyhandle (Ed25519/X25519 1, ML-KEM 7 on v3.0.5 / 5 on v3.0.4), one per
+  1-second poll while the user enters the challenge, and one per 512-byte
+  result chunk (ML-DSA-65: 7). Vendor-HID behaviour is unchanged.
+- `protocol/chunk`: `planKeyhandleChunks`, `reservePacketRun`, `PACKET_DATA`,
+  and `sendChunked({ sizes, onReply })`; `protocol/ctap`: `dataRegionLength`.
+- okcrypto's vendor `deviceOperation` now takes its listener and timer down
+  when the write itself fails, instead of leaving an unhandled rejection
+  `timeoutMs` later.
 
 ## 0.2.0 - `4b74b3e93b314cd0808b04bc7733695f0f008601` (tag `v0.2.0`)
 
