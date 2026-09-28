@@ -76,13 +76,13 @@
     },
     {
       "name": "web-app",
-      "repo": "bm-ok/0c-coder-onlykey.github.io",
-      "branch": "heroku-deploy",
+      "repo": "trustcrypto/apps.onlykey.io",
+      "branch": "main",
       "paths": [
         "src/onlykey-fido2"
       ],
       "since": "2026-09-07",
-      "why": "The web app's built-in library - ours now, and being moved onto this library (plan Path W); until then its changes are ported here."
+      "why": "Web app 4.0.0 - the release copy (0c-coder's release table, 2026-09-28): its built-in library, being moved onto this library (plan Path W). It has its own transit v2. The bm-ok fork this entry used to watch was a stale 2026-08-08 snapshot."
     }
   ]
 }
