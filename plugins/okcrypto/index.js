@@ -1089,10 +1089,30 @@ function setup(imports, register, config) {
    * @returns {object|null} the reply, when the FINAL chunk was answered with the
    *   result itself (a slot whose confirmation is "none"); null otherwise
    */
-  function checkRequestReply(reply, { chunk: n, chunks, isFinal, expected }) {
+  function checkRequestReply(reply, { chunk: n, chunks, isFinal, expected, cmd, slot }) {
     const where = `chunk ${n} of ${chunks}`;
     if (!reply) throw notAccepted(`${where} got no reply at all`);
     if (ACCEPTED.has(reply.status)) return null;
+
+    /*
+     * THE DERIVATION SLOT SAYS "NO DATA READY" TO A CHUNK IT TOOK.
+     *
+     * A stored slot gathers its chunks in packet_buffer, so send_stored_response()
+     * answers each accepted one with USER_ACTION_PENDING (ok_extension.cpp:787).
+     * The web-and-agent derivation slot - the 3.0.5 derived X-Wing
+     * decapsulation, [label32 | ct(1120)] - gathers elsewhere and leaves
+     * packet_buffer_offset at 0, so an accepted NON-FINAL chunk falls through to
+     * CTAP2_ERR_NO_OPERATION_PENDING (:793-798). Read as a refusal, every
+     * decapsulation aborted on its first chunk - measured on the emulator
+     * 2026-09-28, where the device's console showed that chunk opened and
+     * dispatched (audit #8). A refused chunk still looks different: a failed
+     * authentication is answered by name, a duplicate-guard drop with an empty
+     * success; and on the FINAL chunk this status still means nothing started.
+     */
+    if (!isFinal && reply.status === 'CTAP2_ERR_NO_OPERATION_PENDING'
+        && cmd === MSG.OKDECRYPT && slot === slots.WEB_AGENT_DERIVATION_SLOT) {
+      return null;
+    }
 
     if (reply.status === CTAP_SUCCESS && reply.error) {
       if (/failed authentication/i.test(reply.error)) {
@@ -1225,7 +1245,7 @@ function setup(imports, register, config) {
       send: (req) => tunnelSend(bound, req, { timeoutMs }),
       onProgress,
       onReply: (reply, where) => {
-        const result = checkRequestReply(reply, { ...where, expected: framed });
+        const result = checkRequestReply(reply, { ...where, expected: framed, cmd: msg, slot });
         if (result) first = result;
       },
     });

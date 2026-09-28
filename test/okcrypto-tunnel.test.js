@@ -191,6 +191,27 @@ test('v3.0.5: an ML-KEM ciphertext goes as 171-byte sealed chunks, numbered upwa
   await app.destroy();
 });
 
+test('v3.0.5: a derived X-Wing decapsulation (slot 128) - accepted chunks are answered "no data ready", and that is not a refusal', async () => {
+  /*
+   * The web-and-agent derivation slot gathers its [label32 | ct(1120)] outside
+   * packet_buffer, so the firmware answers each ACCEPTED non-final chunk with
+   * CTAP2_ERR_NO_OPERATION_PENDING (ok_extension.cpp:793-798) where a stored slot
+   * says USER_ACTION_PENDING. Measured on the emulator 2026-09-28: the device's
+   * console showed the first chunk opened and dispatched, and this plugin
+   * aborted on it as REQUEST_NOT_ACCEPTED - the decap never ran (audit #8).
+   */
+  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
+  const app = await start(device);
+  const payload = Uint8Array.from({ length: 32 + 1120 }, (_, i) => (i * 11) & 0xff);
+
+  const ss = await app.services.okcrypto.composite_decrypt(128, payload, { ...FAST, confirm: pressing(device) });
+  assert.deepEqual(Uint8Array.from(ss), resultFor(MSG.OKDECRYPT, payload));
+  const chunks = device.requests.filter((r) => r.cmd === MSG.OKDECRYPT);
+  assert.equal(chunks.length, 7, 'the 1152-byte payload goes as seven sealed chunks');
+  assert.deepEqual(chunks.map((c) => c.opt2), [0, 0, 0, 0, 0, 0, 1], 'opt2 on the final chunk only');
+  await app.destroy();
+});
+
 test('v3.0.5: a derive re-keys the device, and the next stored-key operation seals under the derive key', async () => {
   const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
   const app = await start(device);

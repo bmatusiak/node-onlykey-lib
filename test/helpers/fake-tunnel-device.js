@@ -54,6 +54,9 @@ function resultFor(cmd, payload) {
   return Uint8Array.from({ length }, (_, i) => (seed[i % 32] + i) & 0xff);
 }
 
+/* RESERVED_KEY_WEB_AGENT_DERIVATION: the web-and-agent derivation slot. */
+const DERIVED_SLOT = 128;
+
 function fakeTunnelDevice({
   firmware = 'v3.0.5-prodc',
   webcryptLevel = 2,
@@ -70,6 +73,17 @@ function fakeTunnelDevice({
   let lastServedAt = 0;
   let lastOpt3 = 0;
   let packets = [];
+  /*
+   * Whether the gathered packets show in the answer to a chunk. On a stored
+   * slot they are packet_buffer, so send_stored_response() answers
+   * CTAP2_ERR_USER_ACTION_PENDING (ok_extension.cpp:787, packet_buffer_offset).
+   * The web-and-agent derivation slot (128) gathers its [label32 | ct] elsewhere
+   * - packet_buffer_offset stays 0 - so an ACCEPTED non-final chunk there falls
+   * through to CTAP2_ERR_NO_OPERATION_PENDING, "no data ready" (:793-798).
+   * Measured on the emulator 2026-09-28 (the device's console: transit open,
+   * OKDECRYPT chunk, message received, then "Error no data ready").
+   */
+  let packetsVisible = true;
   let cryptoAuth = false;
   let pending = null;
 
@@ -119,7 +133,7 @@ function fakeTunnelDevice({
       return answer(CODE.SUCCESS, piece);
     }
     /* ret with no writeback: sigder's default 72 bytes, 71 of them stack. */
-    if (cryptoAuth || packets.length) return answer(CODE.USER_ACTION_PENDING, new Uint8Array(71));
+    if (cryptoAuth || (packets.length && packetsVisible)) return answer(CODE.USER_ACTION_PENDING, new Uint8Array(71));
     return answer(CODE.NO_OPERATION_PENDING);
   }
 
@@ -212,6 +226,7 @@ function fakeTunnelDevice({
           record.dropped = true;
           return answer(CODE.SUCCESS, new Uint8Array(71).fill(0xcc));
         }
+        packetsVisible = !(cmd === MSG.OKDECRYPT && opt1 === DERIVED_SLOT);
         let left = plain.length;
         let at = 0;
         while (left > 0) {
