@@ -20,7 +20,12 @@ test('every row is all pinned or all blank - never half a release', () => {
   for (const v of versions.list()) {
     assert.doesNotThrow(() => versions.pinsFor(v), v);
   }
-  assert.equal(versions.pinsFor('v3.0.5'), null, 'v3.0.5 is the named-but-not-cut working tree');
+  /* Pinned 2026-09-28, both to commits that are not release tags yet: the
+   * 3.1.0 candidate at its PR heads, and the never-released 3.0.5 tree at
+   * what was built and tested (see src/versions/index.js). */
+  assert.deepEqual(versions.pinsFor('v3.1.0'), { libraries: 'eb25290', 'OnlyKey-Firmware': '9fceea1' });
+  assert.deepEqual(versions.pinsFor('v3.0.5'), { libraries: '57340df', 'OnlyKey-Firmware': '1f7e726' });
+  assert.equal(versions.list()[0], 'v3.1.0', 'the newest release is listed first');
   assert.deepEqual(versions.pinsFor('v3.0.4'),
     { libraries: 'c8804e3', 'OnlyKey-Firmware': '9600daa', file: 'Signed_OnlyKey_3_0_4_STD' });
 });

@@ -2,7 +2,7 @@
  * The OnlyKey firmware releases, as one table every consumer reads.
  *
  *   const versions = require('node-onlykey-lib/versions');
- *   versions.list()                 -> ['v3.0.5', 'v3.0.4', ...]
+ *   versions.list()                 -> ['v3.1.0', 'v3.0.5', 'v3.0.4', ...]
  *   versions.pinsFor('v3.0.4')      -> { libraries, 'OnlyKey-Firmware', file }
  *   versions.compatibilityOf('v3.0.4') -> what that release supports
  *
@@ -30,9 +30,23 @@
  *                                 fails if it drifts from capabilities().
  *
  * A row with BOTH commits blank means "the working tree": a version that has
- * been named but not cut (v3.0.5 - the compatibility feature tree). A row with
- * one pinned and one blank is an error, not a third mode: the build would be
- * neither the release nor the tree.
+ * been named but not cut. A row with one pinned and one blank is an error, not
+ * a third mode: the build would be neither the release nor the tree.
+ *
+ * The two newest rows are pinned to commits that are NOT release tags yet
+ * (2026-09-28). A blank row builds whatever happens to be checked out, which
+ * is not a version anyone can reproduce - so both are pinned to what was
+ * actually built and tested:
+ *
+ *   v3.1.0  the release candidate: trustcrypto/libraries PR #33 and
+ *           trustcrypto/OnlyKey-Firmware PR #183, branch release-3.1.0, at
+ *           their current heads. Re-pin when the PRs move or the tag lands
+ *           (upstream/watch.json and the maintainers' notes say when).
+ *   v3.0.5  never released - the "3.0.5 compatibility tree" the test kit, ok-rn
+ *           and the emulator were built against: 0c-coder's public libraries
+ *           and OnlyKey-Firmware masters. It reports v3.0.5 and carries the
+ *           CTAPHID wipe fix (0c-coder/libraries #20) that the 3.1.0 candidate
+ *           does not.
  */
 'use strict';
 
