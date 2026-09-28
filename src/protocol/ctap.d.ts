@@ -147,6 +147,26 @@ export const STATUS: {
 export const SUCCESS: "CTAP1_SUCCESS";
 export function statusName(code: any): any;
 /**
+ * How many bytes the keyhandle's data region will REALLY be for a payload of
+ * `length` - the payload plus whatever padding encodeRequest adds.
+ *
+ * Exported because the firmware does not read byte 9. bridge_to_onlykey()
+ * takes `handle_len - 10`, the whole credential ID minus the header, as the
+ * payload length (ok_extension.cpp:251), so the padding IS payload as far as
+ * the device is concerned. For a clear-text request that is harmless - the
+ * vendor handlers slice at fixed offsets. For a SEALED one it is not:
+ *
+ *   transit v2 authenticates the region it is given, so one pad byte moves the
+ *   tag and the whole request fails authentication;
+ *   transit v1 decrypts the pad to a byte of keystream noise, and a final
+ *   chunk's last packet then carries it as data (recv_buffer[6] = handle_len).
+ *
+ * So a caller sealing chunks has to choose chunk sizes for which this equals
+ * `length` - see chunk.planKeyhandleChunks - and needs the same arithmetic the
+ * encoder uses, not a copy of it.
+ */
+export function dataRegionLength(length: any): any;
+/**
  * Encode a vendor request as a fake credential ID.
  *
  *   [0]      cmd

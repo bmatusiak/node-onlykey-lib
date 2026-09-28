@@ -13,7 +13,7 @@
 'use strict';
 
 const { concat } = require('../bytes');
-const { SUCCESS } = require('./ctap');
+const { SUCCESS, MAX_PAYLOAD, dataRegionLength } = require('./ctap');
 const { deviceError } = require('./okmsg');
 
 /**
@@ -76,6 +76,85 @@ function _resetPacketCounter(to = 0) {
   packetCounter = to;
 }
 
+/**
+ * Make sure the next `count` packet numbers do not WRAP inside one operation.
+ *
+ * The wrap is the one case the monotonic counter above cannot cover, and it is
+ * not hypothetical: an ML-KEM-768 ciphertext is seven sealed keyhandles, so an
+ * operation starting at 252 would number its chunks 252..255, 1, 2, 3 - and the
+ * duplicate guard reads that 1 as `opt3 <= last` and DROPS the rest silently.
+ *
+ * Restarting at 1 is safe at an operation boundary and nowhere else. From
+ * 3.0.5 the high-water mark is cleared by the final chunk of the previous
+ * operation (`if (opt2) last_request_opt3 = 0`, ok_extension.cpp:701); on
+ * 3.0.4 and earlier it is cleared by wipetasks(), which the tunnel path waits
+ * out before a stored-key operation anyway (see okcrypto's staged-reply
+ * settle). So this is called once, before the first chunk, never between
+ * chunks.
+ */
+function reservePacketRun(count) {
+  if (packetCounter + count > 255) packetCounter = 0;
+}
+
+/** One vendor packet's payload - the unit the firmware splits a keyhandle into. */
+const PACKET_DATA = 57;
+
+/**
+ * Chunk lengths for a payload that will be SEALED into keyhandles.
+ *
+ * Two rules from bridge_to_onlykey() (ok_extension.cpp:666-698), neither of
+ * which a plain 228-byte slicing honours once a seal changes the lengths:
+ *
+ *   EVERY CHUNK BUT THE LAST IS WHOLE 57-BYTE PACKETS. The device splits a
+ *   keyhandle's plaintext into 57-byte packets and marks every one of them
+ *   "full" (recv_buffer[6] = 0xFF) unless it is the last packet of the final
+ *   keyhandle. A non-final chunk ending in a short packet has that packet read
+ *   as 57 bytes, trailing zeros and all, and the payload the device hashes is
+ *   no longer the one the host sent.
+ *
+ *   THE SEALED CHUNK MUST NOT BE PADDED. The device authenticates (v2) or
+ *   decrypts (v1) the whole data region, padding included - see
+ *   ctap.dataRegionLength. So a final chunk whose sealed length would be padded
+ *   is refused here or reshaped: 57 bytes move from the previous chunk into it,
+ *   which keeps both rules.
+ *
+ * `overhead` is what the seal adds: transit.OVERHEAD (20) for v2, which leaves
+ * 225 bytes of a 245-byte keyhandle and therefore 171 = 3 * 57 per chunk; 0 for
+ * v1, whose box is length-preserving and keeps the historical 228 = 4 * 57.
+ *
+ * @param {number} length   plaintext bytes to send
+ * @param {object} [opts]
+ * @param {number} [opts.overhead]  bytes the seal adds to each chunk
+ * @returns {number[]} chunk lengths, in order, summing to `length`
+ */
+function planKeyhandleChunks(length, { overhead = 0 } = {}) {
+  const room = MAX_PAYLOAD - overhead;
+  const full = Math.floor(room / PACKET_DATA) * PACKET_DATA;
+  const sealedIsExact = (n) => dataRegionLength(n + overhead) === n + overhead;
+
+  const sizes = [];
+  let remaining = length;
+  while (remaining > full) {
+    sizes.push(full);
+    remaining -= full;
+  }
+  let last = remaining;
+  if (!sealedIsExact(last) && sizes.length && last + PACKET_DATA <= room) {
+    sizes[sizes.length - 1] -= PACKET_DATA;
+    last += PACKET_DATA;
+  }
+  if (!sealedIsExact(last)) {
+    throw new RangeError(
+      `a ${length}-byte payload cannot be sent sealed: its final keyhandle would ` +
+        `carry ${last + overhead} bytes, which the encoder must pad, and the device ` +
+        'reads the padding as part of the sealed request (a failed tag on transit ' +
+        'v2, trailing noise in the payload on v1). See ctap.dataRegionLength.',
+    );
+  }
+  sizes.push(last);
+  return sizes;
+}
+
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /**
@@ -106,6 +185,14 @@ function asDeviceMessage(data) {
  * @param {number}   [spec.interChunkDelayMs]  1000 for the legacy PGP path,
  *                                             4000 on 'Original' hardware, 0 otherwise
  * @param {function} [spec.onProgress]
+ * @param {number[]} [spec.sizes]  the chunk lengths to use, in order - from
+ *                   planKeyhandleChunks when the chunks are sealed. Omitted,
+ *                   every chunk is REQUEST_CHUNK, as it always was.
+ * @param {function} [spec.onReply]  (reply, {chunk, chunks, isFinal}) called
+ *                   with the device's answer to EACH chunk before the next one
+ *                   goes out. Throwing stops the send - which is the point: a
+ *                   chunk the device did not accept makes every later chunk
+ *                   part of a message it will never complete.
  */
 async function sendChunked({
   cmd,
@@ -115,6 +202,8 @@ async function sendChunked({
   seal = null,
   interChunkDelayMs = 0,
   onProgress = null,
+  sizes = null,
+  onReply = null,
 }) {
   const bytes = Uint8Array.from(payload);
   let offset = 0;
@@ -124,7 +213,8 @@ async function sendChunked({
   // A zero-length payload is still one chunk: the device needs the final flag
   // to prime the challenge, and never gets it if the loop never runs.
   do {
-    const chunk = bytes.subarray(offset, offset + REQUEST_CHUNK);
+    const size = sizes ? sizes[index] : REQUEST_CHUNK;
+    const chunk = bytes.subarray(offset, offset + size);
     offset += chunk.length;
     const isFinal = offset >= bytes.length;
 
@@ -137,6 +227,14 @@ async function sendChunked({
       opt3: nextPacketNum(),
       data: seal ? seal(chunk) : chunk,
     });
+
+    if (onReply) {
+      await onReply(last, {
+        chunk: index + 1,
+        chunks: sizes ? sizes.length : Math.max(1, Math.ceil(bytes.length / REQUEST_CHUNK)),
+        isFinal,
+      });
+    }
 
     index += 1;
     if (onProgress) onProgress({ sent: offset, total: bytes.length, chunk: index });
@@ -318,7 +416,10 @@ module.exports = {
   TERMINAL_ERROR,
   POLL_INTERVAL_MS,
   NO_PROGRESS_BUDGET_MS,
+  PACKET_DATA,
   nextPacketNum,
+  reservePacketRun,
+  planKeyhandleChunks,
   asDeviceMessage,
   sendChunked,
   pollForResponse,

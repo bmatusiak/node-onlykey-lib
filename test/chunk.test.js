@@ -95,6 +95,90 @@ test('chunks are sealed individually when a seal is supplied', async () => {
   assert.equal(sent[0].data[0], 0x55, 'each chunk is sealed on its own');
 });
 
+/* ---- sealed chunking ---------------------------------------------------- */
+
+test('dataRegionLength is what encodeRequest really emits, padding included', () => {
+  for (let n = 0; n <= ctap.MAX_PAYLOAD; n++) {
+    const emitted = ctap.encodeRequest({ cmd: 1, data: new Uint8Array(n) }).length - ctap.HEADER;
+    assert.equal(ctap.dataRegionLength(n), emitted, `payload ${n}`);
+  }
+});
+
+test('sealed chunks are whole 57-byte packets except the last, and fit the keyhandle', () => {
+  /*
+   * v2 adds 20 bytes, so 225 of a 245-byte keyhandle remain and a chunk is
+   * 3 packets (171); the length-preserving v1 box keeps 4 (228).
+   */
+  assert.deepEqual(chunk.planKeyhandleChunks(1088, { overhead: 20 }), [171, 171, 171, 171, 171, 171, 62]);
+  assert.deepEqual(chunk.planKeyhandleChunks(1088), [228, 228, 228, 228, 176]);
+  assert.deepEqual(chunk.planKeyhandleChunks(33, { overhead: 20 }), [33]);
+  for (const overhead of [0, 20]) {
+    for (let n = 16; n < 4000; n += 7) {
+      let sizes;
+      try { sizes = chunk.planKeyhandleChunks(n, { overhead }); } catch (_) { continue; }
+      assert.equal(sizes.reduce((a, b) => a + b, 0), n);
+      for (const s of sizes.slice(0, -1)) assert.equal(s % chunk.PACKET_DATA, 0, `non-final ${s} for ${n}`);
+      for (const s of sizes) {
+        assert.ok(s + overhead <= ctap.MAX_PAYLOAD, `${s} + ${overhead} overflows`);
+        assert.equal(ctap.dataRegionLength(s + overhead), s + overhead, `${s} would be padded`);
+      }
+    }
+  }
+});
+
+test('a final chunk that would be padded borrows a packet from the one before it', () => {
+  /*
+   * 171 + 18: the 18-byte rest seals to 38 bytes, a 48-byte keyhandle, which
+   * the encoder pads - and the device would authenticate the pad. 57 bytes
+   * move across instead.
+   */
+  assert.deepEqual(chunk.planKeyhandleChunks(171 + 18, { overhead: 20 }), [114, 75]);
+  /* v1: an 8-byte rest would be padded to MIN_DATA and decrypted as payload. */
+  assert.deepEqual(chunk.planKeyhandleChunks(228 + 8), [171, 65]);
+});
+
+test('a payload that cannot avoid padding is refused, not sent damaged', () => {
+  assert.throws(() => chunk.planKeyhandleChunks(10), RangeError);
+  assert.throws(() => chunk.planKeyhandleChunks(18, { overhead: 20 }), /cannot be sent sealed/);
+});
+
+test('sizes steers sendChunked, and onReply sees each reply before the next chunk', async () => {
+  const sent = [];
+  const replies = [];
+  await chunk.sendChunked({
+    cmd: 0xf0,
+    payload: new Uint8Array(1088),
+    sizes: chunk.planKeyhandleChunks(1088, { overhead: 20 }),
+    send: async (m) => { sent.push(m); return pending(null); },
+    onReply: (reply, where) => { replies.push({ ...where, sentSoFar: sent.length }); },
+  });
+  assert.deepEqual(sent.map((m) => m.data.length), [171, 171, 171, 171, 171, 171, 62]);
+  assert.deepEqual(replies.map((r) => r.sentSoFar), [1, 2, 3, 4, 5, 6, 7], 'checked before the next send');
+  assert.deepEqual(replies.map((r) => r.isFinal), [false, false, false, false, false, false, true]);
+  assert.equal(replies[0].chunks, 7);
+});
+
+test('a throwing onReply stops the send at that chunk', async () => {
+  const sent = [];
+  await assert.rejects(chunk.sendChunked({
+    cmd: 0xf0,
+    payload: new Uint8Array(600),
+    send: async (m) => { sent.push(m); return ok(new Uint8Array(71)); },
+    onReply: () => { throw new Error('not accepted'); },
+  }), /not accepted/);
+  assert.equal(sent.length, 1);
+});
+
+test('an operation never wraps its packet numbers mid-way', () => {
+  /* 252..255 then 1 would be dropped by the duplicate guard as 1 <= 255. */
+  chunk._resetPacketCounter(251);
+  chunk.reservePacketRun(7);
+  assert.equal(chunk.nextPacketNum(), 1, 'restarted at the operation boundary');
+  chunk._resetPacketCounter(100);
+  chunk.reservePacketRun(7);
+  assert.equal(chunk.nextPacketNum(), 101, 'left alone when the run fits');
+});
+
 /* ---- response polling --------------------------------------------------- */
 
 test('a non-SUCCESS payload is refused even though it looks like data', async () => {
