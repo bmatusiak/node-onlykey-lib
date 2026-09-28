@@ -391,9 +391,45 @@ function setup(imports, register, config) {
     ? settings.rpIds.slice()
     : RP_IDS.slice();
 
+  /*
+   * A CTAP the HOST supplies, instead of the CtapHid this plugin builds.
+   *
+   *     plugins.config = { okcrypto: { ctap: createWebAuthnCtap({ credentials }) } };
+   *
+   * WHY: in a BROWSER there is no CTAPHID to build. A page cannot open the
+   * FIDO interface - RawHID is not exposed and WebHID blocks FIDO usage pages
+   * - so `new CtapHid(transport)` has nothing to write to. What a page does
+   * have is navigator.credentials.get(), and src/transport/webauthn.js turns
+   * that into the one method the tunnel calls, getAssertion(params). Accepting
+   * it here is what lets every derive, the vault and the X-Wing pair run in a
+   * web app unchanged: the tunnel does not care who carries the assertion.
+   *
+   * Anything with getAssertion(params, opts) -> Promise<Map{2, 3}> will do, and
+   * it is used AS GIVEN: no init(), because channel allocation is a CTAPHID
+   * concept and a supplied ctap is either already connected or, like the
+   * browser's, has no channel at all.
+   *
+   * Absent - every host today: ok-rn, the test kit, the emulator - nothing
+   * below changes: the CtapHid is built and init()ed exactly as it always was.
+   *
+   * Config, not an import, for the same reason rpIds is: it is one consumer's
+   * choice about how to reach the device, not a service anything else wants.
+   */
+  const suppliedCtap = settings.ctap || null;
+  if (suppliedCtap && typeof suppliedCtap.getAssertion !== 'function') {
+    register(new TypeError(
+      'plugins.config.okcrypto.ctap must have a getAssertion(params) method - '
+      + 'for a browser, createWebAuthnCtap() from node-onlykey-lib/transport/webauthn',
+    ));
+    return;
+  }
+
   function openTunnel() {
     if (tunnelReady) return tunnelReady;
     tunnelReady = (async () => {
+      if (suppliedCtap) {
+        return tunnelling.createTunnel(suppliedCtap, { randomBytes, rpId: rpIds[0] });
+      }
       const ctap = new CtapHid(transport);
       await ctap.init();
       return tunnelling.createTunnel(ctap, { randomBytes, rpId: rpIds[0] });

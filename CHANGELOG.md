@@ -27,6 +27,12 @@ the commit that release ended at.
   come back as a `WebAuthnError` with a `code` (`NOT_ALLOWED`, `TIMEOUT`,
   `ABORTED`, `SECURITY`, `RPID_MISMATCH`, ...). A new package test also pins
   that nothing under `src/` requires a Node built-in.
+- **okcrypto's tunnel ctap is injectable:
+  `plugins.config = { okcrypto: { ctap } }`.** When supplied, the derives, the
+  vault and the X-Wing pair run over it as given - no `CtapHid`, no CTAPHID
+  INIT - which is how a browser hands in `createWebAuthnCtap()`. Omitted, which
+  is every host today, the plugin builds and inits its own `CtapHid` exactly as
+  before. A supplied object without `getAssertion` fails the composition.
 
 ## 0.2.0 - `4b74b3e93b314cd0808b04bc7733695f0f008601` (tag `v0.2.0`)
 

@@ -723,3 +723,163 @@ test('the challenge digits follow the DEVICE formula, not a default', async () =
 
   await app.destroy();
 });
+
+/* ------------------------------------------------- an injected tunnel ctap */
+
+/*
+ * The tunnel's ctap can be SUPPLIED - plugins.config.okcrypto.ctap - so a
+ * browser, which cannot open CTAPHID, can hand in a WebAuthn-backed one.
+ *
+ * Proved with a real derive rather than a stubbed one, because the claim is
+ * that the whole derive path is indifferent to who carries the assertion. So
+ * the fake below answers the way ok_extension.cpp does: it reads the host's
+ * transit key out of the OKCONNECT frame in the keyhandle, and seals a status
+ * line and a P-256 point back to it with transit v1 - which is how a device
+ * nobody has connected to is read (deviceCan('transitV2') is null).
+ */
+const nacl = require('tweetnacl');
+const okconnectLib = require('../src/crypto/okconnect');
+const ctapLib = require('../src/protocol/ctap');
+const { CTAP2_CMD, CTAPHID } = require('../src/protocol/ctaphid');
+const { fakeCtapHid } = require('./helpers/fake-ctaphid');
+const { createWebAuthnCtap } = require('../src/transport/webauthn');
+const { fromLatin1 } = require('../src/bytes');
+
+/** The derived key the fake device hands back: 04 || x || y. */
+const DERIVED = Uint8Array.from({ length: 65 }, (_, i) => (i === 0 ? 0x04 : i));
+
+/** The keyhandle out of CTAP params, decoded the way is_extension_request() does. */
+function requestIn(params) {
+  const id = params.get(3)[0].get('id');
+  return {
+    cmd: id[0], opt1: id[1], opt2: id[2], opt3: id[3],
+    data: id.subarray(ctapLib.HEADER, ctapLib.HEADER + id[9]),
+  };
+}
+
+/** A sealed OKCONNECT derive answer, as the assertion Map a ctap returns. */
+function deriveAnswer(request) {
+  /* buildMessage: header(4) | OKCONNECT(1) | epoch(4) | transit pubkey(32) | ... */
+  const appPublicKey = request.data.subarray(9, 41);
+  const device = nacl.box.keyPair();
+  const key = okconnectLib.transitKey(appPublicKey, device.secretKey);
+  const plaintext = new Uint8Array([...fromLatin1('UNLOCKEDv3.0.4'), 0, ...DERIVED]);
+  /* v1 is AES-CTR with no tag, so the same call seals and opens. */
+  const sealed = okconnectLib.decryptBody(key, plaintext);
+  const signature = new Uint8Array([0x00, ...device.publicKey, ...sealed]);
+  return new Map([[2, new Uint8Array(37)], [3, signature]]);
+}
+
+/** A ctap object - the whole of what the tunnel needs - recording each call. */
+function fakeCtap() {
+  const calls = [];
+  return {
+    calls,
+    async getAssertion(params, opts) {
+      calls.push({ params, opts, request: requestIn(params) });
+      return deriveAnswer(requestIn(params));
+    },
+  };
+}
+
+function startWith(plugins, config) {
+  plugins.config = config;
+  return new Promise((resolve, reject) => {
+    const app = Rectify.build(plugins, (err, started) => {
+      if (err) reject(err);
+      else resolve(started);
+    });
+    app.start();
+  });
+}
+
+/** A transport plugin around any transport object - here, a CTAPHID fake. */
+function transportPlugin(transport) {
+  function setup(imports, register) { register(null, { transport }); }
+  setup.consumes = ['app'];
+  setup.provides = ['transport'];
+  return setup;
+}
+
+test('with no ctap supplied, a derive still builds and inits its own CtapHid', async () => {
+  /*
+   * The default every host has today - ok-rn, the kit, the emulator. It must
+   * be exactly what it was: a CTAPHID INIT on the FIDO interface, then the
+   * getAssertion over the channel that INIT granted.
+   */
+  const transport = fakeCtapHid({
+    onCbor: (cmd, params) => (cmd === CTAP2_CMD.GET_ASSERTION
+      ? deriveAnswer(requestIn(params)) : undefined),
+  });
+  const app = await startWith(
+    [hostPlugin, transportPlugin(transport), sessionPlugin, devicePlugin, okcryptoPlugin],
+    {},
+  );
+
+  const derived = await app.services.okcrypto.derivePublicKey('example.com', { timeoutMs: 2000 });
+  assert.deepEqual(Uint8Array.from(derived.publicKey), DERIVED);
+
+  const fido = transport.writes.filter((w) => w.iface === IFACE.FIDO);
+  assert.ok(fido.length >= 2, 'nothing went over CTAPHID');
+  assert.equal(fido[0].data[4], 0x80 | CTAPHID.INIT, 'the first FIDO frame is not an INIT');
+  assert.ok(fido.some((w) => w.data[4] === (0x80 | CTAPHID.CBOR)), 'no CBOR request followed');
+  await app.destroy();
+});
+
+test('a supplied ctap carries the derive, and CTAPHID is never touched', async () => {
+  const pipe = fakeFirmware();
+  const ctap = fakeCtap();
+  const app = await startWith(FULL(), { transport: { pipe }, okcrypto: { ctap } });
+
+  const derived = await app.services.okcrypto.derivePublicKey('example.com', { timeoutMs: 1234 });
+  assert.deepEqual(Uint8Array.from(derived.publicKey), DERIVED);
+  assert.match(derived.status, /^UNLOCKED/);
+
+  assert.equal(ctap.calls.length, 1);
+  const { params, opts, request } = ctap.calls[0];
+  assert.equal(request.cmd, okconnectLib.OKCONNECT);
+  assert.equal(request.opt1, okconnectLib.KEYACTION.DERIVE_PUBLIC_KEY);
+  assert.equal(request.opt3, 1, 'the response is asked for encrypted');
+  assert.equal(params.get(1), ctapLib.RP_ID, 'the tunnel still names its rpId');
+  assert.equal(opts.timeoutMs, 1234, 'the caller timeout reaches the ctap');
+
+  assert.equal(
+    pipe.writes.some((w) => w.iface === IFACE.FIDO), false,
+    'a CtapHid was built anyway - nothing may reach the FIDO interface',
+  );
+  await app.destroy();
+});
+
+test('the WebAuthn ctap drops straight in: a derive through navigator.credentials', async () => {
+  /* The browser-shaped path end to end, with a fake navigator.credentials. */
+  const seen = [];
+  const credentials = {
+    async get(request) {
+      seen.push(request);
+      const id = Uint8Array.from(request.publicKey.allowCredentials[0].id);
+      const params = ctapLib.assertionParams(id, { clientDataHash: new Uint8Array(32) });
+      const answer = deriveAnswer(requestIn(params));
+      return {
+        response: {
+          authenticatorData: answer.get(2).buffer,
+          signature: answer.get(3).buffer,
+        },
+      };
+    },
+  };
+  const ctap = createWebAuthnCtap({ credentials });
+  const app = await startWith(FULL(), { transport: { pipe: fakeFirmware() }, okcrypto: { ctap } });
+
+  const derived = await app.services.okcrypto.derivePublicKey('example.com');
+  assert.deepEqual(Uint8Array.from(derived.publicKey), DERIVED);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].publicKey.rpId, ctapLib.RP_ID);
+  await app.destroy();
+});
+
+test('a supplied ctap without getAssertion fails the composition, not the first derive', async () => {
+  await assert.rejects(
+    startWith(FULL(), { transport: { pipe: fakeFirmware() }, okcrypto: { ctap: {} } }),
+    /getAssertion/,
+  );
+});
