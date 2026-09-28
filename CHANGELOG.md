@@ -17,6 +17,16 @@ the commit that release ended at.
 
 ## 0.2.0 - in progress
 
+- **The release table lives here now: `node-onlykey-lib/versions`.**
+  `list()`, `pinsFor(version)` (the pinned `libraries` / `OnlyKey-Firmware`
+  commits and the signed image; `null` for the named-but-not-cut working
+  tree; a half-pinned row throws), `compatibilityOf(version)`,
+  `signedStatus()`, `expectedCompatibility()`. The table used to be copied
+  into ok-rn and node-onlykey-emulator (only the emulator's had the
+  compatibility rows); consumers read this one. Each consumer keeps its own
+  per-release stage scripts - those are build-system patches, not data.
+  `scripts/versions-compat.js --write` regenerates the compatibility rows,
+  and a test fails when they drift from `capabilities()`.
 - `crypto.pqc` exports `bech32Encode`, `bech32Decode`, `RECIPIENT_HRP`,
   `IDENTITY_HRP` and `DERIVED_MARKER` - the encoding under the recipient and
   identity strings, which onlykey-testing's age-pqc.js carried its own copies

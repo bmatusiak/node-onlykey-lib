@@ -13,6 +13,7 @@
     "./device": "./src/device/index.js",
     "./device/press": "./src/device/press.js",
     "./device/version": "./src/device/version.js",
+    "./versions": "./src/versions/index.js",
     "./crypto": "./src/crypto/index.js",
     "./crypto/pgp": "./src/crypto/pgp.js",
     "./vendor/openpgp": "./src/vendor/openpgp/openpgp.js",
