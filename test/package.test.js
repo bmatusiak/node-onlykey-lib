@@ -184,3 +184,52 @@ test('the PGP subpath yields the fork itself, not a wrapper', () => {
   assert.equal(pgp, require('../src/vendor/openpgp/openpgp.js'));
   assert.equal(typeof pgp.setHardwareHooks, 'function');
 });
+
+/* ------------------------------------------------------- the browser path */
+
+test('the WebAuthn ctap is its own subpath, and reaches neither crypto nor session', () => {
+  /*
+   * A web page that only needs the tunnel should pay for the tunnel. Loaded in
+   * a fresh process for the reason the cost tests above give: require.cache
+   * here already holds everything.
+   */
+  assert.equal(pkg.exports['./transport/webauthn'], './src/transport/webauthn.js');
+  const script = `
+    const m = require('./src/transport/webauthn.js');
+    if (typeof m.createWebAuthnCtap !== 'function') throw new Error('no factory');
+    process.stdout.write(JSON.stringify(Object.keys(require.cache)));
+  `;
+  const loaded = JSON.parse(execFileSync(process.execPath, ['-e', script], {
+    cwd: ROOT, encoding: 'utf8',
+  })).map((f) => f.replace(/\\/g, '/'));
+  for (const f of loaded.filter((file) => !file.includes('/node_modules/'))) {
+    assert.ok(!/\/src\/(session|crypto)\//.test(f), `webauthn pulled in ${f}`);
+  }
+  assert.equal(loaded.some((f) => f.includes('post-quantum')), false);
+  assert.equal('webauthn' in require('../src/transport'), false, 'subpath-only, not on the barrel');
+});
+
+test('nothing under src/ requires a Node built-in, so it bundles for a browser', () => {
+  /*
+   * A browser bundler either fails on `require('crypto')` or silently ships a
+   * polyfill of it, and neither shows up in a Node test run - Node has them
+   * all. So this reads the sources instead of running them. The same rule is
+   * why randomness and `credentials` are injected rather than reached for.
+   */
+  const { builtinModules } = require('module');
+  const builtins = new Set(builtinModules);
+  const hits = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!full.endsWith('.js')) continue;
+      const source = fs.readFileSync(full, 'utf8');
+      for (const m of source.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+        const name = m[1].replace(/^node:/, '').split('/')[0];
+        if (builtins.has(name)) hits.push(`${path.relative(ROOT, full)}: ${m[1]}`);
+      }
+    }
+  })(path.join(ROOT, 'src'));
+  assert.deepEqual(hits, []);
+});

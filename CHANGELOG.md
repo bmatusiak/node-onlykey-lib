@@ -17,7 +17,16 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
-Nothing yet.
+- **A browser can drive the tunnel: `node-onlykey-lib/transport/webauthn`.**
+  `createWebAuthnCtap({ credentials, rpId?, timeoutMs? })` is the object
+  `protocol/tunnel.js` already drives - `getAssertion(params) -> Map{2, 3}` -
+  run by `navigator.credentials.get()` instead of CTAPHID, which is the only
+  way a web page can reach the key. `credentials` is injected, never read from
+  a global. The browser hashes its own clientData, so the tunnel's
+  clientDataHash is replaced by a fresh random challenge. Browser failures
+  come back as a `WebAuthnError` with a `code` (`NOT_ALLOWED`, `TIMEOUT`,
+  `ABORTED`, `SECURITY`, `RPID_MISMATCH`, ...). A new package test also pins
+  that nothing under `src/` requires a Node built-in.
 
 ## 0.2.0 - `4b74b3e93b314cd0808b04bc7733695f0f008601` (tag `v0.2.0`)
 
