@@ -17,6 +17,15 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **Classic PGP keys on the device, in a browser too.** `crypto.classic
+  .registerClassicHooks(openpgp, ok, { signSlot, decryptSlot })` routes an RSA or
+  Ed25519/cv25519 key's private operations to device slots through the PGP fork's
+  hardware hooks, as composite_pgp does for composite keys. `okcrypto.sign/decrypt`
+  now run over the WebAuthn tunnel when a ctap is supplied, and a tunnelled
+  operation no longer needs `expectBytes`: an RSA decrypt's plaintext length is
+  collected by the firmware's short-chunk rule. Tests round-trip real openpgp
+  messages against a fake device doing real RSA / Ed25519 / X25519.
+
 - **Agent derivation: `okcrypto.agent` - SSH and GPG keys derived on the device.**
   What onlykey-agent / onlykey-gpg drive, now in the library:
   `agent.publicKey(identity, {keyType, version})`, `agent.sign(identity, message)`,

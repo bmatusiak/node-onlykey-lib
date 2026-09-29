@@ -12,6 +12,8 @@ module.exports = {
   age: require('./age_file'),
   pqc: require('./age_pqc'),
   composite: require('./composite_pgp'),
+  /* openpgp hooks for a classic RSA/ECC key held in device slots - same pattern as composite. */
+  classic: require('./classic_pgp'),
   /*
    * Messages and files. Takes the openpgp instance as an argument like
    * composite does, so requiring this costs nothing until a caller hands it
