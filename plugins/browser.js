@@ -21,12 +21,14 @@
  * @param {object} opts.credentials   navigator.credentials (injected, never read from a global)
  * @param {string} [opts.rpId]        one of the admitted origins - see RP_ID in src/protocol/ctap.js
  * @param {number} [opts.timeoutMs]   per WebAuthn request
+ * @param {function} [opts.beforeRequest]  async gate before every request
+ *                                    (focus, Safari's user gesture) - see transport/webauthn
  * @param {object} [opts.config]      further plugins.config, merged under the ctap
  * @returns {Promise<object>} the started Rectify app; its services are the API
  */
 'use strict';
 
-function startBrowser({ credentials, rpId, timeoutMs, config = {} } = {}) {
+function startBrowser({ credentials, rpId, timeoutMs, beforeRequest, config = {} } = {}) {
   if (!credentials || typeof credentials.get !== 'function') {
     return Promise.reject(new TypeError(
       'startBrowser needs { credentials } - navigator.credentials in a page',
@@ -45,7 +47,7 @@ function startBrowser({ credentials, rpId, timeoutMs, config = {} } = {}) {
     ...config,
     okcrypto: {
       ...(config.okcrypto || {}),
-      ctap: createWebAuthnCtap({ credentials, rpId, timeoutMs }),
+      ctap: createWebAuthnCtap({ credentials, rpId, timeoutMs, beforeRequest }),
     },
   };
   return new Promise((resolve, reject) => {

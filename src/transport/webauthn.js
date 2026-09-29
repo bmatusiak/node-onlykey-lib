@@ -173,6 +173,11 @@ function keyhandleOf(params) {
  *   opts.timeoutMs (tunnel.send forwards it) wins
  * @param {function} [options.randomBytes]  (n) => Uint8Array, for the challenge
  * @param {function} [options.now]  () => ms, injectable so a test can pin time
+ * @param {function} [options.beforeRequest]  async () => void, awaited before
+ *   EVERY credentials.get(). A page's gate: wait for document focus (a
+ *   request issued into an unfocused page does not reject - it hangs until
+ *   the device gives up), or ask for the user gesture Safari demands. If it
+ *   rejects, nothing is sent and the call fails with code NOT_ISSUED.
  */
 function createWebAuthnCtap({
   credentials,
@@ -180,6 +185,7 @@ function createWebAuthnCtap({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   randomBytes = nobleRandomBytes,
   now = () => Date.now(),
+  beforeRequest = null,
 } = {}) {
   if (!credentials || typeof credentials.get !== 'function') {
     throw new TypeError(
@@ -273,6 +279,18 @@ function createWebAuthnCtap({
        */
       const request = { publicKey };
       if (opts.signal) request.signal = opts.signal;
+
+      if (beforeRequest) {
+        try {
+          await beforeRequest();
+        } catch (err) {
+          throw new WebAuthnError(
+            'NOT_ISSUED',
+            `the request was not sent: ${err && err.message ? err.message : err}`,
+            err,
+          );
+        }
+      }
 
       const started = now();
       let assertion;

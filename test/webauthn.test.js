@@ -295,3 +295,39 @@ test('createTunnel drives it end to end: request in the keyhandle, answer in the
   assert.equal(publicKey.rpId, ctap.RP_ID, 'the tunnel default rpId reached the browser');
   assert.equal(publicKey.timeout, 1500, "tunnel.send's timeoutMs reached the browser");
 });
+
+/* ------------------------------------------------------ the page's gate */
+
+test('beforeRequest is awaited before every request', async () => {
+  /*
+   * A page's gate - document focus, Safari's user gesture. A request issued
+   * into an unfocused page does not reject; it hangs until the device gives
+   * up, which is why the gate runs first rather than as error handling.
+   */
+  const order = [];
+  const credentials = fakeCredentials(() => { order.push('get'); return { signature: [0x00] }; });
+  const webauthn = createWebAuthnCtap({
+    credentials,
+    randomBytes: fixedRandom,
+    beforeRequest: async () => { order.push('gate'); },
+  });
+  await webauthn.getAssertion(sampleParams());
+  await webauthn.getAssertion(sampleParams());
+  assert.deepEqual(order, ['gate', 'get', 'gate', 'get']);
+});
+
+test('a gate that says no sends nothing, and says why', async () => {
+  const credentials = fakeCredentials(() => ({ signature: [0x00] }));
+  const webauthn = createWebAuthnCtap({
+    credentials,
+    randomBytes: fixedRandom,
+    beforeRequest: async () => { throw new Error('page lost focus'); },
+  });
+  await assert.rejects(() => webauthn.getAssertion(sampleParams()), (err) => {
+    assert.ok(err instanceof WebAuthnError);
+    assert.equal(err.code, 'NOT_ISSUED');
+    assert.match(err.message, /page lost focus/);
+    return true;
+  });
+  assert.equal(credentials.seen.length, 0);
+});

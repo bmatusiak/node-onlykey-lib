@@ -10,8 +10,13 @@
  *   opts.timeoutMs (tunnel.send forwards it) wins
  * @param {function} [options.randomBytes]  (n) => Uint8Array, for the challenge
  * @param {function} [options.now]  () => ms, injectable so a test can pin time
+ * @param {function} [options.beforeRequest]  async () => void, awaited before
+ *   EVERY credentials.get(). A page's gate: wait for document focus (a
+ *   request issued into an unfocused page does not reject - it hangs until
+ *   the device gives up), or ask for the user gesture Safari demands. If it
+ *   rejects, nothing is sent and the call fails with code NOT_ISSUED.
  */
-export function createWebAuthnCtap({ credentials, rpId, timeoutMs, randomBytes, now, }?: {
+export function createWebAuthnCtap({ credentials, rpId, timeoutMs, randomBytes, now, beforeRequest, }?: {
     credentials: {
         get: Function;
     };
@@ -19,6 +24,7 @@ export function createWebAuthnCtap({ credentials, rpId, timeoutMs, randomBytes, 
     timeoutMs?: number | undefined;
     randomBytes?: Function | undefined;
     now?: Function | undefined;
+    beforeRequest?: Function | undefined;
 }): {
     rpId: string | null;
     /**
