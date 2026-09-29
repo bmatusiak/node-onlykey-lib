@@ -17,6 +17,20 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **onlykey-js step 2: python's write commands.** `setslot` (every python
+  field, python's slot names), `wipeslot`, the fifteen settings commands,
+  `settime`, `genkey`, `setkey`, `loadkey` (armored PGP) and `wipekey`, each
+  over the device plugin. What the key says is printed on stdout as python
+  prints it, and a refusal also exits 1; secrets are prompted for
+  (`cli/prompt.js`); the one-way settings need `--yes`. Still no firmware
+  update, backup or restore. See cli/README.md for each command's
+  differences from python's, most of them python bugs not copied.
+
+- **`capabilities().curve25519Keygen`** - false below 3.0.5, where
+  okcrypto_generate_random_key has no type-4 branch and a Curve25519
+  "generation" flashes the all-FF trigger itself as the key. `genkey c`
+  refuses there.
+
 - **The desktop App's six lib gaps, closed from the firmware.** OnlyKey-App's
   port onto the library (its docs/LIB-PORT.md) kept raw frames for these; each
   was read against release 3.1.0 and fixed there. `device.wipeYubiAuth()` -
