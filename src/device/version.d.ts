@@ -581,6 +581,25 @@ export function capabilities(status: any, { unreleased }?: {}): {
      */
     userInputModeEnum: boolean;
     /**
+     * Whether an ON-DEVICE Curve25519 (X25519, key type 4) generation makes a
+     * random key.
+     *
+     * Before 3.0.5 it DOES NOT, and nothing says so. okcrypto_generate_random_key
+     * has branches for types 1, 2 and 3 only (libraries c8804e3, the v3.0.4
+     * pin, okcrypto.cpp:265-272); type 4 falls through every one of them, the
+     * caller's buffer - the all-FF generate trigger itself - is what gets
+     * encrypted and flashed, and the device answers "Successfully set ECC
+     * Key". Every such key on every such device is the same key. The
+     * `KEYTYPE_CURVE25519` branch (RNG2 into the scalar) arrives with 3.0.5
+     * (57340df, okcrypto.cpp:829) and is in release 3.1.0 (eb25290:583).
+     *
+     * So a generation of type 4 is REFUSED where this is false, rather than
+     * performed and reported as a success. python-onlykey's `genkey c` has no
+     * such gate and stores the constant key on v3.0.4. Types 1-3 generate on
+     * every release; the post-quantum types are `postQuantum`.
+     */
+    curve25519Keygen: boolean;
+    /**
      * Whether the DEVICE VAULT is offered on this firmware.
      *
      * NOT A LIMIT OF THE FIRMWARE, and that is why this comment is long. A

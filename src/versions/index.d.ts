@@ -64,6 +64,7 @@ export function expectedCompatibility(version: any): {
         pressModeDefaulted: boolean;
         xwingDeviceCustody: boolean;
         userInputModeEnum: boolean;
+        curve25519Keygen: boolean;
         deviceVault: boolean;
         challengeErrorIsFinal: boolean;
         xwingDerive: boolean;

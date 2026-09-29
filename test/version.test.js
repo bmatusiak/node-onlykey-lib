@@ -904,6 +904,21 @@ test('the enum, X-Wing custody and the vault all begin at v3.0.5', () => {
   assert.equal(caps.deviceVault, true, 'v3.0.5 derives without the rpId');
 });
 
+/*
+ * curve25519Keygen: okcrypto_generate_random_key at libraries c8804e3 (v3.0.4)
+ * branches on types 1, 2 and 3 only, so a type-4 generation flashes the all-FF
+ * trigger as the key; the KEYTYPE_CURVE25519 branch is at 57340df (v3.0.5)
+ * and eb25290 (v3.1.0). Types 1-3 have no flag because every release has them.
+ */
+test('on-device Curve25519 generation makes a random key only from v3.0.5', () => {
+  for (const v of ['v2.1.0', 'v3.0.2', 'v3.0.4']) {
+    assert.equal(capabilities(`UNLOCKED${v}-prodc`).curve25519Keygen, false,
+      `${v} stores the generate trigger itself as the key`);
+  }
+  assert.equal(capabilities('UNLOCKEDv3.0.5-testc').curve25519Keygen, true);
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').curve25519Keygen, true);
+});
+
 test('"incorrect challenge" at OKPING is final only from v3.0.5', () => {
   // Read at the pins: the response-too-large and ML-DSA readback fixes, and
   // 8b3d5c0's split messages, exist only after libraries c8804e3 /
