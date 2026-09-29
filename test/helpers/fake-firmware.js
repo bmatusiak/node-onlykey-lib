@@ -82,10 +82,15 @@ function fakeFirmware(opts = {}) {
      * what happens when the firmware says no.
      */
     generates = {},
+    /* { k132, v2 } - see the agent derivation model in handleVendor. */
+    agent = null,
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
   let generations = 0;
+  /* Agent derivation: the slot stream being assembled, and every completed payload. */
+  let agentStream = null;
+  const agentPayloads = [];
   let pinStep = 0;
 
   /*
@@ -98,6 +103,44 @@ function fakeFirmware(opts = {}) {
 
   function handleVendor(frame) {
     const msg = frame[4];
+
+    /*
+     * AGENT DERIVATION, modelled from the 3.1.0 source (src/protocol/agent.js
+     * has the spec): a per-device secret K132, the v1 or v2 derivation chosen
+     * by the code, real Ed25519 / ECDSA / ECDH, one 64-byte report back.
+     * `agent: { k132, v2 = true }`; with v2 false the v2 codes go unanswered,
+     * as they do on firmware before 3.0.5.
+     */
+    if (agent && (msg === MSG.OKGETPUBKEY || msg === MSG.OKSIGN || msg === MSG.OKDECRYPT)) {
+      const code = frame[5];
+      const version = code === 132 || (code > 200 && code < 205) ? 1
+        : code === 232 || (code > 220 && code < 225) ? 2 : 0;
+      if (version) {
+        if (version === 2 && agent.v2 === false) return undefined;
+        if (msg === MSG.OKGETPUBKEY) {
+          const keyType = frame[6];
+          const sk = agentKey(agent.k132, version, frame.slice(7, 39));
+          return pipe.deliver(agentPublicReport(keyType, sk));
+        }
+        /* The slot stream: [6] = 0xFF, 57 more bytes; otherwise the last chunk's length. */
+        const more = frame[6] === 0xff;
+        const part = frame.slice(7, 7 + (more ? 57 : frame[6]));
+        agentStream = agentStream ? concatBytes(agentStream, part) : part;
+        if (more) return undefined;
+        const payload = agentStream;
+        agentStream = null;
+        agentPayloads.push(payload);
+        const keyType = code - (version === 1 ? 200 : 220);
+        const sk = agentKey(agent.k132, version, payload.slice(-32));
+        const body = payload.slice(0, -32);
+        const refused = msg === MSG.OKSIGN ? keyType === 4 : keyType === 1;
+        if (refused) return pipe.deliver(reportText('Error invalid derived key slot'));
+        return pipe.deliver(msg === MSG.OKSIGN
+          ? agentSignReport(keyType, sk, body)
+          : agentEcdhReport(keyType, sk, body));
+      }
+    }
+
 
     if (msg === MSG.OKCONNECT) {
       /*
@@ -375,6 +418,9 @@ function fakeFirmware(opts = {}) {
       }
     },
 
+    /** Every agent sign/ECDH payload the device assembled, in order. */
+    get agentPayloads() { return agentPayloads; },
+
     /** How many generate triggers have arrived. */
     get generations() { return generations; },
 
@@ -384,6 +430,56 @@ function fakeFirmware(opts = {}) {
   };
 
   return wrapped;
+}
+
+/* ---- agent derivation (see the model in handleVendor) ------------------- */
+
+const { sha256: agentSha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
+const { extract: hkdfExtract, expand: hkdfExpand } = require('../../src/vendor/exports/@noble/hashes/hkdf.js');
+const { ed25519, x25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
+const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
+const { secp256k1 } = require('../../src/vendor/exports/@noble/curves/secp256k1.js');
+
+function concatBytes(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+/* v1 SHA256(K132 || hash); v2 HKDF(salt 0x20 || hash, K132, "onlykey/agent/v2", 32). */
+function agentKey(k132, version, hash) {
+  if (version === 1) return agentSha256(concatBytes(k132, hash));
+  const prk = hkdfExtract(agentSha256, k132, concatBytes(Uint8Array.of(0x20), hash));
+  return hkdfExpand(agentSha256, prk, new TextEncoder().encode('onlykey/agent/v2'), 32);
+}
+
+/* X25519 takes the key byte-reversed (swap_buffer, okcrypto.cpp:2371-2373). */
+const reversed = (b) => Uint8Array.from(b).reverse();
+const ecdsa = (keyType) => (keyType === 2 ? p256 : secp256k1);
+
+function report64(bytes) {
+  const r = new Uint8Array(64);
+  r.set(bytes.slice(0, 64));
+  return r;
+}
+
+function agentPublicReport(keyType, sk) {
+  if (keyType === 1) return report64(ed25519.getPublicKey(sk));
+  if (keyType === 4) return report64(x25519.getPublicKey(reversed(sk)));
+  return report64(ecdsa(keyType).getPublicKey(sk, false).slice(1));
+}
+
+function agentSignReport(keyType, sk, message) {
+  if (keyType === 1) return report64(ed25519.sign(message, sk));
+  const h = message.length === 32 || message.length === 64 ? message : agentSha256(message);
+  return report64(ecdsa(keyType).sign(h, sk, { prehash: false }));
+}
+
+function agentEcdhReport(keyType, sk, peer) {
+  const p = peer.length === 33 || peer.length === 65 ? peer.slice(1) : peer;
+  if (keyType === 4) return report64(x25519.getSharedSecret(reversed(sk), p));
+  return report64(ecdsa(keyType).getSharedSecret(sk, concatBytes(Uint8Array.of(4), p), false).slice(1));
 }
 
 module.exports = { fakeFirmware, PIN_REPLIES };

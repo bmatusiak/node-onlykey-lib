@@ -1,5 +1,6 @@
 export let bytes: typeof import("./bytes");
 export let protocol: {
+    agent: typeof import("./protocol/agent");
     msg: typeof import("./protocol/msg");
     okmsg: typeof import("./protocol/okmsg");
     ctap: typeof import("./protocol/ctap");

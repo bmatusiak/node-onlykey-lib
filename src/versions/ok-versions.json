@@ -61,6 +61,8 @@
         "deviceVault": true,
         "challengeErrorIsFinal": true,
         "xwingDerive": true,
+        "agentDerivation": true,
+        "agentDerivationV2": true,
         "presenceTest": "keepalive",
         "configModeGesture": {
           "button": 6,
@@ -134,6 +136,8 @@
         "deviceVault": true,
         "challengeErrorIsFinal": true,
         "xwingDerive": true,
+        "agentDerivation": true,
+        "agentDerivationV2": true,
         "presenceTest": "keepalive",
         "configModeGesture": {
           "button": 6,
@@ -208,6 +212,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": true,
+        "agentDerivationV2": false,
         "presenceTest": "keepalive",
         "configModeGesture": {
           "button": 6,
@@ -282,6 +288,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": true,
+        "agentDerivationV2": false,
         "presenceTest": "keepalive",
         "configModeGesture": {
           "button": 6,
@@ -356,6 +364,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": true,
+        "agentDerivationV2": false,
         "presenceTest": "keepalive",
         "configModeGesture": {
           "button": 6,
@@ -430,6 +440,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": true,
+        "agentDerivationV2": false,
         "presenceTest": "keepalive",
         "configModeGesture": {
           "button": 6,
@@ -503,6 +515,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": true,
+        "agentDerivationV2": false,
         "presenceTest": "keepalive",
         "configModeGesture": {
           "button": 6,
@@ -577,6 +591,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": true,
+        "agentDerivationV2": false,
         "presenceTest": "blocking",
         "configModeGesture": {
           "button": 6,
@@ -651,6 +667,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": true,
+        "agentDerivationV2": false,
         "presenceTest": "blocking",
         "configModeGesture": {
           "button": 6,
@@ -725,6 +743,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": true,
+        "agentDerivationV2": false,
         "presenceTest": "blocking",
         "configModeGesture": {
           "button": 6,
@@ -799,6 +819,8 @@
         "deviceVault": false,
         "challengeErrorIsFinal": false,
         "xwingDerive": false,
+        "agentDerivation": false,
+        "agentDerivationV2": false,
         "presenceTest": "blocking",
         "configModeGesture": {
           "button": 6,

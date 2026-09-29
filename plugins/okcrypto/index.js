@@ -93,8 +93,9 @@ const chunker = require('../../src/device/chunker');
  * reassembles a multi-chunk RESPONSE. See the note at the top of chunker.js. */
 const chunk = require('../../src/protocol/chunk');
 const okmsg = require('../../src/protocol/okmsg');
+const agentProto = require('../../src/protocol/agent');
 const { challengeDigits } = require('../../src/protocol/challenge');
-const { toBase64Url, utf8ToBytes } = require('../../src/bytes');
+const { toBase64Url, utf8ToBytes, concat } = require('../../src/bytes');
 const { MSG } = require('../../src/protocol/msg');
 const { IFACE } = require('../../src/transport/contract');
 
@@ -217,6 +218,23 @@ function setup(imports, register, config) {
    * a listener attached afterwards would exist - the same reason
    * transport.request() subscribes first.
    */
+  /*
+   * Refuse an agent derivation the firmware is KNOWN not to have: v2's codes
+   * have no branch before 3.0.5 and would simply go unanswered, and a 132
+   * public-key request has none before 2.1.0. Unknown (not yet connected) is
+   * let through, as deviceCan() does everywhere.
+   */
+  function agentAvailable(version) {
+    const name = version === 2 ? 'agentDerivationV2' : 'agentDerivation';
+    if (deviceCan(name) === false) {
+      throw new Error(
+        version === 2
+          ? 'this firmware has no agent derivation v2 (it arrived in 3.0.5); use version 1'
+          : 'this firmware has no agent derivation public key (it arrived in 2.1.0)',
+      );
+    }
+  }
+
   async function deviceOperation(msg, slot, data, opts = {}) {
     const {
       confirm = null,
@@ -1403,6 +1421,58 @@ function setup(imports, register, config) {
     /** Decrypt with an ordinary key the device holds. OKDECRYPT, same three phases. */
     async decrypt(slot, data, opts = {}) {
       return deviceOperation(MSG.OKDECRYPT, slot, data, opts);
+    },
+    /**
+     * AGENT DERIVATION - SSH and GPG keys derived inside the device from an
+     * identity (what onlykey-agent / onlykey-gpg use). The protocol, the two
+     * versions and the reply shapes are in src/protocol/agent.js.
+     *
+     * `identity` is a 32-byte hash, `{ ssh: { user, host } }` or
+     * `{ gpg: userId }`, hashed exactly as lib-agent hashes it. `version` 1
+     * (the default, every release from 2.1.0) or 2 (3.0.5 on): DIFFERENT keys
+     * for the same identity - use the one a server already trusts.
+     *
+     * publicKey needs no press. sign and ecdh raise the derived-key
+     * confirmation (field 21: challenge, press, or none) over the whole
+     * payload, exactly as sign()/decrypt() above - same `confirm` contract.
+     */
+    agent: {
+      identityHash: agentProto.identityHash,
+
+      async publicKey(identity, { keyType = agentProto.KEY_TYPE.ED25519, version = 1, ...opts } = {}) {
+        const code = agentProto.publicKeyCode(version, keyType);
+        agentAvailable(version);
+        const report = await device.getPublicKey(code, {
+          ...opts, keyType, payload: agentProto.identityHash(identity),
+        });
+        return report.slice(0, agentProto.publicKeyLength(keyType));
+      },
+
+      /**
+       * A 64-byte signature: R||S for Ed25519 (over the whole message), r||s
+       * for ECDSA - where the device signs a 32- or 64-byte message as given
+       * and SHA-256 of anything else (okcrypto.cpp:840-848).
+       */
+      async sign(identity, message, { keyType = agentProto.KEY_TYPE.ED25519, version = 1, ...opts } = {}) {
+        const code = agentProto.signCode(version, keyType);
+        agentAvailable(version);
+        const payload = concat([Uint8Array.from(message), agentProto.identityHash(identity)]);
+        const out = await deviceOperation(MSG.OKSIGN, code, payload, opts);
+        return out.slice(0, 64);
+      },
+
+      /**
+       * ECDH with the derived key: X25519 gives the 32-byte secret, P-256 and
+       * secp256k1 the 64-byte shared point X||Y. The peer key may be 32 or 64
+       * bytes, or 33 / 65 with the prefix byte the device drops.
+       */
+      async ecdh(identity, peerPublicKey, { keyType = agentProto.KEY_TYPE.CURVE25519, version = 1, ...opts } = {}) {
+        const code = agentProto.ecdhCode(version, keyType);
+        agentAvailable(version);
+        const payload = concat([Uint8Array.from(peerPublicKey), agentProto.identityHash(identity)]);
+        const out = await deviceOperation(MSG.OKDECRYPT, code, payload, opts);
+        return out.slice(0, agentProto.sharedSecretLength(keyType));
+      },
     },
     /**
      * Sign one HALF of a composite key: `(slot, half, digest)`.

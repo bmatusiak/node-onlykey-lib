@@ -67,6 +67,8 @@ export function expectedCompatibility(version: any): {
         deviceVault: boolean;
         challengeErrorIsFinal: boolean;
         xwingDerive: boolean;
+        agentDerivation: boolean;
+        agentDerivationV2: boolean;
         presenceTest: string;
         configModeGesture: {
             button: any;

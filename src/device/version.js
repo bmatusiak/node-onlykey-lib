@@ -1201,6 +1201,25 @@ const gestures = (() => {
       || (info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4])),
 
     /**
+     * AGENT DERIVATION v1 - SSH/GPG keys derived from an identity hash
+     * (src/protocol/agent.js): public key 132, sign 201-203, ECDH 202-204.
+     * Read at the pins: the 132 public-key branch is in okcrypto.cpp from
+     * v2.1.0 on; v0.2-beta.8 has the 201 sign code but no 132 branch, so a
+     * host there could sign with a key it cannot read.
+     */
+    agentDerivation: atLeast(info.release, [2, 1, 0]),
+
+    /**
+     * AGENT DERIVATION v2 - the HKDF derivation (info "onlykey/agent/v2"),
+     * codes 232 and 221-224. Present in 3.0.5 (libraries 57340df) and release
+     * 3.1.0 (eb25290), absent from 3.0.4 and earlier, where 232 has no branch
+     * and a request goes unanswered. 3.1.0 has no capabilities report to ask
+     * ('c'), so the version is the only signal. A DIFFERENT key from v1 for the
+     * same identity - never a silent upgrade.
+     */
+    agentDerivationV2: atLeast(info.release, [3, 0, 5]),
+
+    /**
      * How the device asks for a touch, and therefore how a host must press.
      *
      *   'keepalive'  the request returns CTAP2_ERR_PROCESSING while it waits,

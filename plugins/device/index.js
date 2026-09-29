@@ -711,11 +711,13 @@ const USER_INPUT_ENUM_ROWS = {
    * One OKGETPUBKEY read. `getPublicKey` wraps this with the retry.
    *
    * @param {number|string} slotId
-   * @param {object} [opts] {bytes, keyType, timeoutMs, settleMs}
+   * @param {object} [opts] {bytes, keyType, payload, timeoutMs, settleMs}
+   *   payload: bytes after the key type - agent derivation's 32-byte
+   *   identity hash (slots 132/232); a stored slot takes none.
    */
-  async function readPublicKey(slotId, { bytes = 0, keyType = 0, timeoutMs = 8000, settleMs = 60 } = {}) {
+  async function readPublicKey(slotId, { bytes = 0, keyType = 0, payload = undefined, timeoutMs = 8000, settleMs = 60 } = {}) {
     const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
-    const frame = okmsg.build({ msg: MSG.OKGETPUBKEY, slot, field: keyType });
+    const frame = okmsg.build({ msg: MSG.OKGETPUBKEY, slot, field: keyType, payload });
 
     /*
      * Subscribed before the write, and leading status broadcasts skipped

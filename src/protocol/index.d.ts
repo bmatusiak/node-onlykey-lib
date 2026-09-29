@@ -1,3 +1,4 @@
+import agent = require("./agent");
 import msg = require("./msg");
 import okmsg = require("./okmsg");
 import ctap = require("./ctap");
@@ -83,4 +84,4 @@ export declare let KEYACTION: {
 };
 export declare let messageId: typeof import("./msg").messageId;
 export declare let fieldId: typeof import("./msg").fieldId;
-export { msg, okmsg, ctap, chunk, cbor, ctaphid, cose, clientpin, credmgmt, tunnel, challenge, bridge };
+export { agent, msg, okmsg, ctap, chunk, cbor, ctaphid, cose, clientpin, credmgmt, tunnel, challenge, bridge };

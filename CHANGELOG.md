@@ -17,6 +17,18 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **Agent derivation: `okcrypto.agent` - SSH and GPG keys derived on the device.**
+  What onlykey-agent / onlykey-gpg drive, now in the library:
+  `agent.publicKey(identity, {keyType, version})`, `agent.sign(identity, message)`,
+  `agent.ecdh(identity, peerPublicKey)`. `identity` is a 32-byte hash or
+  `{ssh: {user, host}}` / `{gpg: userId}`, hashed as lib-agent does (non-ASCII
+  refused: lib-agent transliterates it). v1 (132, 201-204; every release from
+  2.1.0; the default) and v2 (232, 221-224; HKDF "onlykey/agent/v2"; 3.0.5 on)
+  are different keys. New capabilities `agentDerivation`, `agentDerivationV2`;
+  `src/protocol/agent.js` is the spec, read at release 3.1.0. The fake firmware
+  carries a K132 and the real derivation, so the tests verify signatures and ECDH
+  against the key the library reads.
+
 - **`node-onlykey-lib/bundler-aliases` - the exports map for webpack 4.**
   The web app's bundler predates package "exports", so every subpath that is
   not a real path failed to resolve. `aliases()` generates one alias per

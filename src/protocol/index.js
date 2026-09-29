@@ -25,8 +25,10 @@ const credmgmt = require('./credmgmt');
 const tunnel = require('./tunnel');
 const challenge = require('./challenge');
 const bridge = require('./bridge');
+const agent = require('./agent');
 
 module.exports = {
+  agent,
   msg,
   okmsg,
   ctap,
