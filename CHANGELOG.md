@@ -30,8 +30,10 @@ the commit that release ended at.
   `cli/transport-hid.js`, a pipe for transport/usb over node-hid: vendor
   interface by usage page 0xffab, the 0x00 report ID hidapi takes on every
   write, clear refusals for no key, two keys (`--path`) and no node-hid.
-  `node-hid` is an optionalDependency required lazily under `cli/` only, so
-  nothing under `src/` or `plugins/` can bundle it. No firmware update path.
+  `node-hid` is an OPTIONAL PEER (not installed with the library - the web app
+  and ok-rn never download a native module; `npm install node-hid` where the
+  CLI is used), required lazily under `cli/` only. Keys found by USB id
+  1d50:60fc or 16c0:0486, the vendor interface by usage page. No firmware update path.
   Tested over the fake firmware and a fake node-hid; see `cli/README.md`.
 
 - **Classic PGP keys on the device, in a browser too.** `crypto.classic

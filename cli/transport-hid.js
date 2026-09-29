@@ -37,7 +37,14 @@ const { IFACE, DIR, REPORT_SIZE, withReportId } = require('../src/transport/cont
 const { VENDOR_ID, PRODUCT_ID, identify } = require('../src/transport/usbDescriptors');
 
 const hex4 = (n) => Number(n).toString(16).padStart(4, '0');
-const USB_ID = `${hex4(VENDOR_ID)}:${hex4(PRODUCT_ID)}`;
+/*
+ * The USB ids an OnlyKey enumerates with: 1d50:60fc, and 16c0:0486 - the
+ * Teensy RawHID id early OnlyKeys shipped under, which python-onlykey still
+ * accepts. Either way the vendor interface is then picked by usage page, so
+ * accepting the older id cannot point this protocol at another interface.
+ */
+const USB_IDS = [[VENDOR_ID, PRODUCT_ID], [0x16c0, 0x0486]];
+const USB_ID = USB_IDS.map(([v, p]) => `${hex4(v)}:${hex4(p)}`).join(' or ');
 
 /**
  * An error the CLI prints as a sentence, not a stack trace.
@@ -79,8 +86,10 @@ function loadNodeHid(loader = () => require('node-hid')) {
       && /['"]node-hid['"]/.test(String(err.message));
     if (missing) {
       throw hidError('ENOHID',
-        'onlykey-js needs the optional dependency "node-hid" to reach a USB OnlyKey, '
-        + 'and it is not installed. Install it next to node-onlykey-lib: npm install node-hid',
+        'onlykey-js needs "node-hid" to reach a USB OnlyKey, and it is not installed. '
+        + 'It is an OPTIONAL PEER of node-onlykey-lib - not installed with it, so the '
+        + 'web app and ok-rn never download a native module - install it next to the '
+        + 'library: npm install node-hid',
         err);
     }
     throw hidError('EHIDLOAD',
@@ -108,7 +117,7 @@ function loadNodeHid(loader = () => require('node-hid')) {
  */
 function findOnlyKeys(HID) {
   const all = HID.devices() || [];
-  const onlykeys = all.filter((d) => d.vendorId === VENDOR_ID && d.productId === PRODUCT_ID);
+  const onlykeys = all.filter((d) => USB_IDS.some(([v, p]) => d.vendorId === v && d.productId === p));
   const vendor = onlykeys.filter(
     (d) => identify({ usagePage: d.usagePage, usage: d.usage }) === IFACE.VENDOR);
   return { vendor, onlykeys };

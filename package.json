@@ -58,7 +58,12 @@
   "devDependencies": {
     "typescript": "^6.0.3"
   },
-  "optionalDependencies": {
+  "peerDependencies": {
     "node-hid": "^3.4.0"
+  },
+  "peerDependenciesMeta": {
+    "node-hid": {
+      "optional": true
+    }
   }
 }

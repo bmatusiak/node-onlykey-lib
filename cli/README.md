@@ -44,20 +44,27 @@ there is no firmware update command: that is not something this program can
 do. A locked key is refused straight from the connect reply, because a locked
 key answers a label read with silence rather than an error.
 
-## node-hid is an optional dependency
+## node-hid is an optional PEER dependency
 
 Reaching a USB key from Node needs `node-hid` (hidapi), a native addon. It is
-in `optionalDependencies` and is `require`d only inside `cli/transport-hid.js`,
-when a command first opens a key:
+declared in `peerDependencies` with `peerDependenciesMeta: { optional: true }`,
+so npm does NOT install it with the library (owner's decision, 2026-09-29): the
+web app and ok-rn, which install this library and never reach a key over
+hidapi, never download a native module. Install it yourself where you use the
+CLI:
 
-- nothing under `src/` or `plugins/` references it, so the web app and ok-rn
-  never bundle it, and a failed native build never fails their install;
-- if it is missing, a command that needs a key says so by name
-  (`onlykey-js: ... needs the optional dependency "node-hid" ... npm install node-hid`),
-  while `help` and `version` still work.
+    npm install node-onlykey-lib node-hid
 
-Note that npm still *installs* an optional dependency by default wherever the
-library is installed; `npm install --omit=optional` skips it.
+It is `require`d only inside `cli/transport-hid.js`, when a command first
+opens a key, so:
+
+- nothing under `src/` or `plugins/` references it;
+- if it is missing, a command that needs a key says so by name and says how to
+  install it, while `help` and `version` still work.
+
+The key is found by its USB id - `1d50:60fc`, or `16c0:0486`, the Teensy
+RawHID id early OnlyKeys shipped under (python-onlykey accepts both) - and its
+vendor interface by HID usage page `0xffab`, never by interface number.
 
 ## How it reaches the key
 

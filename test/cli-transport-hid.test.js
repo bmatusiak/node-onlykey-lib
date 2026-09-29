@@ -30,7 +30,7 @@ const notInstalled = () => {
 test('a missing node-hid is named, with the command that installs it', () => {
   assert.throws(() => loadNodeHid(notInstalled), (err) => {
     assert.equal(err.code, 'ENOHID');
-    assert.match(err.message, /optional dependency "node-hid"/);
+    assert.match(err.message, /needs "node-hid".*OPTIONAL PEER.*npm install node-hid/);
     assert.match(err.message, /npm install node-hid/);
     return true;
   });
@@ -82,7 +82,7 @@ test('no OnlyKey on the bus is a sentence, not a stack trace', async () => {
   const pipe = createHidPipe({ loadHid: () => fakeNodeHid({ devices: other }) });
   await assert.rejects(() => pipe.start(), (err) => {
     assert.equal(err.code, 'ENOONLYKEY');
-    assert.match(err.message, /No OnlyKey found \(USB 1d50:60fc\)/);
+    assert.match(err.message, /No OnlyKey found \(USB 1d50:60fc or 16c0:0486\)/);
     return true;
   });
 });
