@@ -33,24 +33,22 @@ export const RP_ID: "apps.crp.to";
 /**
  * Every origin worth trying, most compatible FIRST.
  *
- * THE ORIGIN IS PART OF THE KEY, AND THAT IS THE DESIGN. `okcrypto_hkdf()`
- * reads the rpId out of the CTAP buffer, hashes it, and mixes that hash into
- * the HKDF expand step, so the same slot and the same input data derive a
- * DIFFERENT key at every origin. That is what makes per-site derived keys work
- * at all: a third-party site asks with its own hostname and gets keys only it
- * can ask for again. `webcryptcheck()` has a branch for exactly that - it
- * answers 2 for the first-party origin and 1 for any other, given the
- * `0xFFFFFFFF` OKCONNECT bootstrap and bit 2 of `derived_key_challenge_mode`
- * (setting 21, writable in config mode or on first use).
+ * WHAT THE ORDER DECIDES DEPENDS ON THE FIRMWARE.
  *
- * WHICH MEANS THE CHOICE HERE IS WHICH KEYSPACE TO LAND IN, not whether the
- * device will answer. Send one origin, derive one set of keys; send another,
- * derive another set, with no error anywhere - it surfaces much later as a
- * file that will not open. So the order is pinned by a test rather than left
- * to whichever constant was added most recently.
+ * On v3.0.4 and earlier the origin IS part of the key: okcrypto_hkdf() v1
+ * folds SHA256(rpId) into the derivation, so the same slot and input derive a
+ * DIFFERENT key at every origin, with no error anywhere - it surfaces much
+ * later as a file that will not open. There the order chooses a KEYSPACE.
+ *
+ * From 3.0.5 (libraries@40464ca, and release 3.1.0: "The origin is not part of
+ * the derivation; webcryptcheck() decides which origins may ask") it chooses
+ * only ADMISSION - see RP_ID above. Every admitted origin derives the same key.
+ *
+ * Either way the answer depends on it, so the order is pinned by a test rather
+ * than left to whichever constant was added most recently.
  *
  * `apps.crp.to` leads because it is the FIRST-PARTY origin: it is the one that
- * answers 2, the full vendor extension, without depending on an EEPROM bit
+ * answers the full vendor extension without depending on an EEPROM bit
  * somebody has to have set. Measured byte for byte at every pin in
  * ok-versions.json from the 2019 beta to the working tree - `stored_apprpid`
  * has never changed. `onlyagent.app` is an ADDITION the working tree made in
