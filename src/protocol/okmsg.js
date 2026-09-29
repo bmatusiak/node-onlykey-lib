@@ -187,7 +187,7 @@ function errorKind(message) {
   if (!said) return null;
 
   /*
-   * TWO refusals do not begin with "Error", and both were missed by a
+   * THREE refusals do not begin with "Error" (the third is below). Two were missed by a
    * leading-Error test: "No PIN set, You must set a PIN first"
    * (okcore.cpp:576) and "Timeout occured while waiting for confirmation on
    * OnlyKey", which is the answer to an unanswered button challenge and the
@@ -198,6 +198,15 @@ function errorKind(message) {
     return 'uninitialized';
   }
   if (/^Timeout occured/i.test(said)) return 'challenge';
+  /*
+   * A THIRD: set_slot case 23 refuses the second-profile mode on a key past
+   * first use with "Second Profile Mode may only be changed on first use"
+   * (okcore.cpp:1912 at release 3.1.0) - no "Error". The 'refused' rule below
+   * already names the words, but only after the leading-Error gate, so this
+   * sentence classified as nothing and setPreference('secProfileMode') waited
+   * out its retries on a device that had answered.
+   */
+  if (/^Second Profile Mode may only be changed/i.test(said)) return 'refused';
   if (!/^Error/i.test(said)) return null;
 
   if (/device locked/i.test(said)) return 'locked';

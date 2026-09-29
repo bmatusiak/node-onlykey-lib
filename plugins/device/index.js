@@ -137,6 +137,76 @@ function setup(imports, register) {
     return /^(Success|Error)/i.test(okmsg.text(report));
   }
 
+  /**
+   * Is this text one of the device's refusal sentences?
+   *
+   * okmsg.errorKind() is the one place that knows them, including the three
+   * that do not begin with "Error" ("No PIN set...", "Timeout occured...",
+   * "Second Profile Mode may only be changed..."). A status broadcast, a
+   * success sentence and binary data are all null there.
+   */
+  function isDeviceRefusal(text) {
+    return okmsg.errorKind(text) !== null;
+  }
+
+  /**
+   * Send a frame the firmware acts on WITHOUT REPLYING, and listen only for a
+   * refusal.
+   *
+   * Some operations succeed in silence - the hidprint is missing or commented
+   * out in the firmware (each caller cites its line). Waiting for an
+   * acknowledgement there is waiting for nothing: request() times out, and a
+   * retrying sender (sendField) spends three timeouts on a device that did
+   * exactly what it was asked. What the firmware DOES still say on these
+   * paths is why it would not - "Error device locked", "Error not in config
+   * mode" - and those come back from inside the same recvmsg() call, so a
+   * short window after the write catches them.
+   *
+   * SILENCE IS NOT PROOF. It is the success answer only because the firmware
+   * has no other; a frame the key never processed looks the same. So the
+   * result says `confirmed: false`, and no retry is attempted - resending a
+   * wipe or a restart is not a harmless repeat the way a field store is.
+   *
+   * Subscribed before the write, as everywhere else here: a refusal can
+   * arrive inside the write.
+   *
+   * @param {Uint8Array} frame
+   * @param {object} opts
+   * @param {string} opts.name        prefixes a refusal's message
+   * @param {number} [opts.windowMs]  how long to listen; 0 returns once the frame is out
+   * @returns {Promise<{response: null, confirmed: false}>}
+   * @throws okmsg.deviceError on a refusal inside the window
+   */
+  async function sendUnanswered(frame, { name, windowMs = 500 } = {}) {
+    let off = null;
+    let timer = null;
+    let refusal = null;
+    const refused = new Promise((resolve) => {
+      off = transport.on('report', (event) => {
+        if (event.iface !== IFACE.VENDOR) return;
+        const text = okmsg.text(event.data).trim();
+        if (!refusal && isDeviceRefusal(text)) {
+          refusal = text;
+          resolve(text);
+        }
+      });
+    });
+    try {
+      await transport.write(IFACE.VENDOR, frame);
+      if (windowMs > 0 && !refusal) {
+        await Promise.race([
+          refused,
+          new Promise((resolve) => { timer = setTimeout(resolve, windowMs); }),
+        ]);
+      }
+      if (refusal) throw okmsg.deviceError(refusal, name);
+      return { response: null, confirmed: false };
+    } finally {
+      clearTimeout(timer);
+      if (off) off();
+    }
+  }
+
   /** Progress is emitted, not logged: a GUI needs to render these steps. */
   function progress(step, detail) {
     events.emit('progress', { step, ...detail });
@@ -227,6 +297,24 @@ function setup(imports, register) {
     if (!onWire) {
       const advisory = pin.PROMPTS[step.expect];
       if (!advisory) return Promise.resolve();
+      /*
+       * ONLY A CONSOLE THAT HAS SPOKEN IS WAITED ON. The comment above says a
+       * release "must not be held up"; the code still waited `timeoutMs` for
+       * a console that does not exist, so `committed` cost the full timeout on
+       * every release build (OnlyKey-App's LIB-PORT.md, gap 5). Why nothing
+       * arrives: release 3.1.0 prints its console "Successfully set PIN" under
+       * `#ifdef DEBUG` (okcore.cpp:878, :1150); the wire
+       * copy (:888, :1016, :1156) is what `matched` already consumed.
+       *
+       * A DEBUG build talks on the console all through the commit block -
+       * "Both PINs Match" (:841), "Generating NONCE" - before the wire line
+       * that ended `matched`, and nothing has cleared the buffer since
+       * `matched` sent. So an EMPTY buffer here means no console, and there
+       * is nothing to wait for. If a real console merely lags, skipping is
+       * still safe: the wire line that ended `matched` is printed after the
+       * flash write (:888 follows okcore_flashset_pinhashpublic at :874).
+       */
+      if (!console_.text) return Promise.resolve();
       return console_.waitFor(advisory, {timeoutMs}).catch(() => {});
     }
 
@@ -244,7 +332,21 @@ function setup(imports, register) {
      */
     const waits = [
       waitForHid(onWire, {
-        reject: names.map((name) => pin.HID_ERRORS[name]),
+        /*
+         * The step's own refusals, THEN ANY device refusal. Only the named
+         * two used to end a step; every other "Error ..." on the wire was
+         * ignored and the step waited out `timeoutMs` beside an answer
+         * (OnlyKey-App LIB-PORT.md gap 3 - the App raced its own "Error"
+         * watcher to get round it). Release 3.1.0's PIN functions print only
+         * those two (okcore.cpp:814, :894, :905 and their twins), but a
+         * refusal from the dispatcher, another firmware or a stray is still
+         * the device saying no, and okmsg.errorKind knows every sentence.
+         * The named ones stay first so their text is what the caller gets.
+         */
+        reject: [
+          ...names.map((name) => pin.HID_ERRORS[name]),
+          { test: isDeviceRefusal },
+        ],
         timeoutMs,
       }),
       console_.waitFor(pin.PROMPTS[step.expect], {
@@ -639,8 +741,26 @@ const PREFERENCES = {
     note: 'Locking it (1) needs config mode, and cannot be undone afterwards.',
   },
 
+  /*
+   * SILENT: the one preference the firmware never acknowledges. set_slot case
+   * 23 stores it on first use with its hidprint COMMENTED OUT (okcore.cpp:1910
+   * at release 3.1.0), refuses it afterwards with a sentence that has no
+   * "Error" in front (:1912), and on a non-STD build or an unencrypted profile
+   * does nothing at all (:1905, :1907). Waiting for "Success|Error" therefore
+   * cost three 10 s timeouts on exactly the path it is used on - the wizard,
+   * mid PIN bracket (OnlyKey-App LIB-PORT.md gap 2). setPreference sends it
+   * through sendUnanswered instead: silence is taken as done, a refusal
+   * (including :1912, which okmsg.errorKind reads as 'refused') throws.
+   *
+   * Its window is only reached after the primary PIN is set: before that the
+   * dispatcher answers "Error OnlyKey must be initialized first"
+   * (okcore.cpp:384), and okcore_flashset_noncehash, which the primary PIN's
+   * commit calls, is what sets `initialized` (:2977) while `initcheck` stays
+   * false until restart - the `!initcheck` branch at :387.
+   */
   secProfileMode: {
     field: FIELD.SECPROFILEMODE, max: 2, label: 'Second profile mode', requires: 'firstUse',
+    silent: true,
     note: 'Only settable before setup is finished. A provisioned key refuses it.',
   },
 };
@@ -1386,12 +1506,59 @@ const USER_INPUT_ENUM_ROWS = {
      * captures digits from its own buttons and the host only brackets that,
      * while DUO carries the PINs in the message body. They share a message id
      * and nothing else.
+     *
+     * ## Which report is the answer
+     *
+     * It took the FIRST report, and on a locked DUO that is often the status
+     * broadcast rather than the answer (OnlyKey-App LIB-PORT.md gap 6). How a
+     * locked DUO answers, from release 3.1.0: the PIN is read ONLY inside the
+     * once-a-second broadcast task, sendInitialized (OnlyKey.ino:1275-1292;
+     * the main loop does not call recvmsg while locked, :478). The tick that
+     * reads it tries the PIN and then says
+     *
+     *   UNLOCKED<version>   the PIN was right (:1288) - the answer
+     *   "Error password attempts ... exceeded"   (:1444) - the answer
+     *   nothing             the PIN was wrong
+     *
+     * and every LATER tick says INITIALIZED-D (:1291). So INITIALIZED-D is two
+     * different things: a tick that ran before the PIN reached the key (not
+     * the answer - it says nothing about the attempt), or the first tick
+     * after a wrong PIN (the only "no" a wrong PIN ever gets, and what the
+     * App shows its incorrect-PIN dialog on, OnlyKeyComm.js sendPin_DUO).
+     *
+     * They are told apart by WHEN, because the firmware gives nothing else:
+     * the tick that consumes the PIN runs within one period of it arriving,
+     * so a broadcast from before it reaches the host at most a USB latency
+     * after the write, and a broadcast after a wrong PIN comes a whole period
+     * (1000 ms, OnlyKey.ino:217) after the consuming tick. A locked broadcast
+     * inside `broadcastWindowMs` of the write is skipped; one after it is the
+     * answer. UNLOCKED is never skipped on an unlock - it IS the success.
+     *
+     * SETTING PINs (`set`) is answered from recvmsg by okcore_quick_setup's
+     * SETUP_MANUAL path: "Successfully set PIN" (okcore.cpp:888) or a
+     * refusal. No status line is ever that answer, so all of them are
+     * skipped, as readPublicKey does.
+     *
+     * The reply is RETURNED, refusal or not, as before: the App reads the
+     * attempts-exceeded sentence off it to show its own dialog.
      */
-    async duoPin(pins, { set = false, timeoutMs = 6000 } = {}) {
+    async duoPin(pins, { set = false, timeoutMs = 6000, broadcastWindowMs = 500 } = {}) {
+      const sentAt = Date.now();
       const reply = await transport.request({
         iface: IFACE.VENDOR,
         data: pin.duoPinMessage(pins, { set }),
         timeoutMs,
+        match: (report) => {
+          const { state } = okmsg.parseState(report);
+          if (state === 'error') return true;
+          if (set) {
+            return !(state === 'unlocked' || state === 'locked'
+              || state === 'uninitialized' || state === 'bootloader');
+          }
+          if (state === 'unlocked') return true;
+          if (state === 'locked') return Date.now() - sentAt >= broadcastWindowMs;
+          return !(state === 'uninitialized' || state === 'bootloader');
+        },
       });
       return reply;
     },
@@ -1870,8 +2037,12 @@ const USER_INPUT_ENUM_ROWS = {
      *
      * Goes through the same retrying send as a slot field, for the same
      * reason - an unacknowledged write is unknown, not failed.
+     *
+     * EXCEPT a `silent` row (secProfileMode), which the firmware never
+     * acknowledges: it is sent once, `refusalWindowMs` is spent listening for
+     * a refusal, and the result carries `confirmed: false`.
      */
-    async setPreference(name, value, { timeoutMs = 10000, retries = 2 } = {}) {
+    async setPreference(name, value, { timeoutMs = 10000, retries = 2, refusalWindowMs = 500 } = {}) {
       const spec = PREFERENCES[name];
       if (!spec) {
         throw new Error(
@@ -1908,6 +2079,12 @@ const USER_INPUT_ENUM_ROWS = {
         field: spec.field,
         payload: [byte],
       });
+      if (spec.silent) {
+        /* See the row's note: no acknowledgement exists, so none is awaited. */
+        await sendUnanswered(frame, { name, windowMs: refusalWindowMs });
+        progress('preference', { name, value: byte, response: null, attempts: 1 });
+        return { name, value: byte, response: null, attempts: 1, confirmed: false };
+      }
       const { text, attempts } = await sendField(
         { name, frame }, { timeoutMs, retries },
       );
@@ -2155,6 +2332,36 @@ const USER_INPUT_ENUM_ROWS = {
       if (/^Error/i.test(text)) throw new Error(`yubiAuth: ${text}`);
       progress('yubiAuth', { slot: slots.GLOBAL_SLOT, response: text, attempts });
       return { slot: slots.GLOBAL_SLOT, response: text };
+    },
+
+    /**
+     * Wipe the DEVICE-GLOBAL Yubico credential - setYubiAuth's undo.
+     *
+     * OKWIPESLOT on the global slot, field YUBIAUTH: the firmware zeroes the
+     * AES key, private id and public id (okcore.cpp:2012-2019, wipe_slot's
+     * `value == 10 && slot == 0` branch) and PRINTS NOTHING - that branch has
+     * no hidprint, unlike every per-slot wipe below it. wipeSlot(0, 'yubikey')
+     * builds the same frame but waits for "Successfully ..." and so times out
+     * on a wipe that happened; the App's old code waited for "wiped AES Key",
+     * which no release has ever sent. So this does not wait for an answer,
+     * only for a refusal (see sendUnanswered): the dispatcher still says why
+     * it would not - "Error OnlyKey must be initialized first", or "Error
+     * device locked" (okcore.cpp:405-413), which is also what a key still on
+     * first use gets, since that branch requires FTFL_FSEC == 0x44.
+     *
+     * @param {object} [opts]
+     * @param {number} [opts.refusalWindowMs] 0 returns as soon as the frame is out
+     * @returns {Promise<{slot: number, response: null, confirmed: false}>}
+     */
+    async wipeYubiAuth({ refusalWindowMs = 500 } = {}) {
+      const frame = okmsg.build({
+        msg: MSG.OKWIPESLOT,
+        slot: slots.GLOBAL_SLOT,
+        field: FIELD.YUBIAUTH,
+      });
+      const result = await sendUnanswered(frame, { name: 'wipeYubiAuth', windowMs: refusalWindowMs });
+      progress('wipeYubiAuth', { slot: slots.GLOBAL_SLOT, confirmed: false });
+      return { slot: slots.GLOBAL_SLOT, ...result };
     },
 
     /** Check a credential without sending it, so a form can mark its fields. */
@@ -2674,6 +2881,56 @@ const USER_INPUT_ENUM_ROWS = {
       });
       progress('restore', { bytes: hex.length / 2 });
       return { bytes: hex.length / 2, digest: check.digest };
+    },
+
+    /**
+     * Restart the key with an EMPTY restore - the restart a release build has.
+     *
+     * restart() goes through the debug console, which no release has. The
+     * desktop wizard's Exit on the restore step ("Reboot Requested",
+     * OnlyKeyWizard.js:458) restarts the key another way, and this is it
+     * named: ONE OKRESTORE frame whose length byte and data are all zero.
+     *
+     * What the firmware does with it (RESTORE, okcore.cpp:6477 at release
+     * 3.1.0): [5] is not 0xFF, so it is a LAST packet; it copies 0 bytes, the
+     * running offset is still 0, and `if (offset == 0) CPU_RESTART();`
+     * (:6535-6536). Nothing is decrypted, nothing written.
+     *
+     * The App sends exactly these 64 bytes, though not on purpose: it passes
+     * "000000000" (nine characters) to submitRestoreData, whose header is
+     * (9/2).toString(16) = "4.8", and hexStrToDec("4.8") is NaN, which a
+     * Uint8Array stores as 0 (OnlyKeyComm.js submitRestore, submitRestoreData,
+     * hexStrToDec). The zero header is what makes it a restart; a header of
+     * 4 would have been a 4-byte "backup" going on to decrypt.
+     *
+     * WHEN IT RESTARTS, AND WHEN IT DOES NOT:
+     *   - only where a restore is allowed: config mode, or first use
+     *     (okcore.cpp:516). Elsewhere the dispatcher refuses - "Error not in
+     *     config mode", "Error device locked", "No PIN set, You must set a
+     *     PIN first" - and that refusal is thrown.
+     *   - not on a non-STD build or an unencrypted profile: RESTORE is
+     *     compiled out / returns (:518-521, :6478) and the frame is dropped
+     *     in silence. Silence is also what success looks like, so this
+     *     cannot tell those apart.
+     *   - not after a restore was part-sent this boot: `offset` is static,
+     *     so the empty last packet would FINISH that restore instead. Only a
+     *     restart clears it.
+     *
+     * A restart acknowledges nothing (CPU_RESTART does not return); the key
+     * drops off the bus and comes back, which whoever owns the pipe sees as a
+     * disconnect. A restart is the one thing that ends config mode, so the
+     * session's flag is cleared when no refusal came.
+     *
+     * @param {object} [opts]
+     * @param {number} [opts.refusalWindowMs] 0 returns as soon as the frame is out
+     * @returns {Promise<{response: null, confirmed: false}>}
+     */
+    async restartByRestore({ refusalWindowMs = 500 } = {}) {
+      const frame = okmsg.build({ msg: MSG.OKRESTORE, slot: 0 });
+      const result = await sendUnanswered(frame, { name: 'restartByRestore', windowMs: refusalWindowMs });
+      session.configMode = false;
+      progress('restartByRestore', { confirmed: false });
+      return result;
     },
 
     /**

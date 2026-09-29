@@ -1085,3 +1085,201 @@ test('CONNECTING does not clear it, because connecting does not end it', async (
 
   await app.destroy();
 });
+
+/* ------------------------------------ operations the firmware does not answer */
+
+/*
+ * OnlyKey-App's port onto the library (its docs/LIB-PORT.md, "lib gaps")
+ * worked round each of these with a raw frame or a watcher of its own. Each
+ * test pins the firmware's behaviour at release 3.1.0, cited in the plugin.
+ */
+
+test('pinStep ends on ANY device refusal, not only the two PIN ones', async () => {
+  // A refusal the step does not name used to be ignored while the step waited
+  // out its timeout beside it.
+  const pipe = fakeFirmware({ noConsole: true, pinFailAt: 0, pinError: 'Error not in config mode' });
+  const app = await start(pipe);
+  const began = Date.now();
+  await assert.rejects(
+    app.services.device.pinStep('armed', { timeoutMs: 5000 }),
+    /Error not in config mode/,
+  );
+  assert.ok(Date.now() - began < 1000, 'ended on the refusal, not the timeout');
+  await app.destroy();
+});
+
+test('pinStep still ends on its own refusal, in the device\'s words', async () => {
+  const pipe = fakeFirmware({ noConsole: true, pinFailAt: 1 });
+  const app = await start(pipe);
+  await app.services.device.pinStep('armed', { timeoutMs: 2000 });
+  await assert.rejects(
+    app.services.device.pinStep('stored', { timeoutMs: 2000 }),
+    (err) => err.message === 'Error PIN is not between 7 - 10 digits',
+  );
+  await app.destroy();
+});
+
+test('committed does not wait for a console that never spoke', async () => {
+  // A release build prints its console "Successfully set PIN" under #ifdef
+  // DEBUG only; the wire copy already ended `matched`. The step used to wait
+  // the whole timeout for the console on every release key.
+  const pipe = fakeFirmware({ noConsole: true });
+  const app = await start(pipe);
+  const { device } = app.services;
+  for (const label of ['armed', 'stored', 'confirming', 'matched']) {
+    await device.pinStep(label, { timeoutMs: 2000 });
+  }
+  const began = Date.now();
+  await device.pinStep('committed', { timeoutMs: 3000 });
+  assert.ok(Date.now() - began < 500, 'committed returned without the timeout');
+  await app.destroy();
+});
+
+test('committed still waits for a console that is talking', async () => {
+  // The fake's console answers `matched` with "Both PINs Match" and then the
+  // commit line, as a DEBUG build does; `committed` finds it there.
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const { device } = app.services;
+  for (const label of ['armed', 'stored', 'confirming', 'matched']) {
+    await device.pinStep(label, { timeoutMs: 2000 });
+  }
+  const done = await device.pinStep('committed', { timeoutMs: 2000 });
+  assert.equal(done.label, 'committed');
+  await app.destroy();
+});
+
+test('secProfileMode is sent once and taken as set when the device stays silent', async () => {
+  // set_slot case 23 stores it with its hidprint commented out. Waiting for
+  // an acknowledgement cost three 10 s timeouts.
+  const pipe = fakeFirmware({ slotSilent: true });
+  const app = await start(pipe);
+  const began = Date.now();
+  const result = await app.services.device.setPreference('secProfileMode', 1, { refusalWindowMs: 50 });
+  assert.ok(Date.now() - began < 1000);
+  assert.deepEqual(result, { name: 'secProfileMode', value: 1, response: null, attempts: 1, confirmed: false });
+  const writes = pipe.writes.filter((w) => w.data[4] === MSG.OKSETSLOT);
+  assert.equal(writes.length, 1, 'no retry - silence is the answer');
+  assert.deepEqual([...writes[0].data.slice(5, 8)], [0, 23, 1]);
+  await app.destroy();
+});
+
+test('secProfileMode refused past first use throws, though the sentence has no "Error"', async () => {
+  const pipe = fakeFirmware({ slotError: 'Second Profile Mode may only be changed on first use' });
+  const app = await start(pipe);
+  await assert.rejects(
+    app.services.device.setPreference('secProfileMode', 2, { refusalWindowMs: 2000 }),
+    (err) => err.kind === 'refused' && /may only be changed on first use/.test(err.message),
+  );
+  await app.destroy();
+});
+
+test('wipeYubiAuth sends the global wipe and does not wait for an answer that never comes', async () => {
+  const pipe = fakeFirmware({ slotSilent: true });
+  const app = await start(pipe);
+  const result = await app.services.device.wipeYubiAuth({ refusalWindowMs: 50 });
+  assert.deepEqual(result, { slot: 0, response: null, confirmed: false });
+  const wipe = pipe.writes.find((w) => w.data[4] === MSG.OKWIPESLOT);
+  assert.deepEqual([...wipe.data.slice(5, 7)], [0, 10], 'slot 0, field YUBIAUTH');
+  await app.destroy();
+});
+
+test('wipeYubiAuth throws the dispatcher\'s refusal', async () => {
+  const pipe = fakeFirmware({ slotError: 'Error device locked' });
+  const app = await start(pipe);
+  await assert.rejects(
+    app.services.device.wipeYubiAuth({ refusalWindowMs: 2000 }),
+    (err) => err.kind === 'locked',
+  );
+  await app.destroy();
+});
+
+test('restartByRestore sends one all-zero OKRESTORE - the App\'s restart frame', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const result = await app.services.device.restartByRestore({ refusalWindowMs: 20 });
+  assert.deepEqual(result, { response: null, confirmed: false });
+  const frames = pipe.writes.filter((w) => w.iface === IFACE.VENDOR);
+  assert.equal(frames.length, 1);
+  const expected = new Uint8Array(64);
+  expected.set([0xff, 0xff, 0xff, 0xff, MSG.OKRESTORE]);
+  // Length byte 0 and no data: RESTORE's `offset == 0` -> CPU_RESTART().
+  assert.deepEqual([...frames[0].data], [...expected]);
+  await app.destroy();
+});
+
+test('restartByRestore outside config mode throws the refusal', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const original = pipe.write.bind(pipe);
+  pipe.write = async (iface, bytes) => {
+    const n = await original(iface, bytes);
+    if (iface === IFACE.VENDOR && bytes[4] === MSG.OKRESTORE) {
+      pipe.deliver(vendorText('Error not in config mode'));
+    }
+    return n;
+  };
+  await assert.rejects(
+    app.services.device.restartByRestore({ refusalWindowMs: 2000 }),
+    (err) => err.kind === 'configMode',
+  );
+  await app.destroy();
+});
+
+/*
+ * A locked DUO reads its PIN only inside the once-a-second broadcast task:
+ * the tick that reads it says UNLOCKED or nothing, and later ticks say
+ * INITIALIZED-D. `script` lays out what the key says after an OKPIN, as
+ * [delayMs, text] pairs.
+ */
+function lockedDuo(script) {
+  const pipe = fakeFirmware();
+  const original = pipe.write.bind(pipe);
+  pipe.write = async (iface, bytes) => {
+    const n = await original(iface, bytes);
+    if (iface === IFACE.VENDOR && bytes[4] === MSG.OKPIN) {
+      for (const [ms, text] of script) setTimeout(() => pipe.deliver(vendorText(text)), ms);
+    }
+    return n;
+  };
+  return pipe;
+}
+
+const replyText = (reply) => toLatin1(reply).replace(/\0+$/, '');
+
+test('duoPin skips the broadcast from before the PIN arrived and takes UNLOCKED', async () => {
+  const pipe = lockedDuo([[0, 'INITIALIZED-D'], [40, 'UNLOCKEDv3.1.0-prodp']]);
+  const app = await start(pipe);
+  const reply = await app.services.device.duoPin(['1234567'], { broadcastWindowMs: 200 });
+  assert.equal(replyText(reply), 'UNLOCKEDv3.1.0-prodp');
+  await app.destroy();
+});
+
+test('duoPin takes a LATER INITIALIZED-D as the wrong-PIN answer', async () => {
+  // A wrong PIN gets no reply of its own; the next tick's broadcast is the
+  // only "no", and the App shows its incorrect-PIN dialog on it.
+  const pipe = lockedDuo([[0, 'INITIALIZED-D'], [300, 'INITIALIZED-D']]);
+  const app = await start(pipe);
+  const began = Date.now();
+  const reply = await app.services.device.duoPin(['7654321'], { broadcastWindowMs: 200 });
+  assert.equal(replyText(reply), 'INITIALIZED-D');
+  assert.ok(Date.now() - began >= 200, 'the early broadcast was not the answer');
+  await app.destroy();
+});
+
+test('duoPin setting PINs skips every status line', async () => {
+  const pipe = lockedDuo([[0, 'UNLOCKEDv3.1.0-prodn'], [20, 'Successfully set PIN']]);
+  const app = await start(pipe);
+  const reply = await app.services.device.duoPin(['1234567', '', ''], { set: true });
+  assert.equal(replyText(reply), 'Successfully set PIN');
+  await app.destroy();
+});
+
+test('duoPin returns the attempts-exceeded refusal as the answer', async () => {
+  const text = 'Error password attempts for this session exceeded, remove OnlyKey and reinsert to attempt login';
+  const pipe = lockedDuo([[0, text]]);
+  const app = await start(pipe);
+  const reply = await app.services.device.duoPin(['1234567']);
+  assert.match(replyText(reply), /^Error password attempts/);
+  await app.destroy();
+});
