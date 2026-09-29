@@ -1,17 +1,39 @@
 // JS port of python-onlykey's onlykey/age_plugin/derived_xwing.py - the
-// browser-side twin of the derived (label-based) X-Wing split-custody math.
+// host side of derived (label-based) X-Wing age keys. It was written for the
+// SPLIT-custody design; current firmware keeps both halves - see below.
 // Ported from onlykey-testing/lib/age_pqc.js (proven byte-for-byte against
 // the Python reference there via test/fixtures/derived-xwing-vector.json
 // and test/05-age-pqc-derived.test.js), with encodeIdentity/decodeIdentity
 // replaced by the real bech32 scheme (see derived_xwing.py/bech32.py) - the
 // old scheme here was stale/superseded and `age` rejects it outright.
 //
-// Wire contract this mirrors (see okcrypto.cpp's okcrypto_xwing_web_derive,
-// RESERVED_KEY_WEB_DERIVATION + KEYTYPE_XWING dispatch):
-//   DERIVE_PUBLIC_KEY -> [ pk_X(32) | mlkem_seed(32) ]
-//   DERIVE_SHAREDSEC  -> [ ss_X(32) | mlkem_seed(32) ]
-// The device never returns sk_X or the ML-KEM secret key - only a one-way
-// SHA256(sk_X || tag)-derived seed the host expands locally.
+// THE DEVICE HOLDS BOTH HALVES NOW. What the firmware does with a derived
+// X-Wing key from 3.0.5 on - release 3.1.0, libraries onlykey/okcrypto.cpp -
+// and what plugins/okcrypto's deviceAge drives when the session reports
+// capability `xwingDeviceCustody` (src/device/version.js):
+//   OKGETPUBKEY  slot RESERVED_KEY_WEB_AGENT_DERIVATION, type XWING, label32
+//                -> [ pk_M(1184) | pk_X(32) ], the finished 1216-byte
+//                recipient (okcrypto_xwing_derive_getpubkey, :302, :390-393)
+//   OKDECRYPT    same slot, [ label32 | ct(1120) ] chunked
+//                -> ss(32), the finished X-Wing secret: the device runs
+//                ML-KEM decaps, X25519 and the combiner
+//                (okcrypto_xwing_derive_decaps, :332, :431)
+// So the host needs only encodeRecipient/decodeRecipient, xwingEncapsHost
+// (encrypting to a recipient never involves the device) and the age file
+// format; no seed, no host-side decapsulation.
+//
+// LEGACY, and why it is still here: the design this file was first ported
+// for was SPLIT CUSTODY - the device answered [ pk_X(32) | mlkem_seed(32) ]
+// and [ ss_X(32) | mlkem_seed(32) ] and the host expanded the ML-KEM half from
+// the seed, so a PUBLIC-key request carried private material. That shape only
+// ever existed on pre-3.0.5 development builds (xwingDeviceCustody's note in
+// version.js); v3.0.4, the last signed release, has no X-Wing at all.
+// mlkemKeypairFromSeed, buildRecipient, splitDecapsulate and ctXOf serve only
+// it, and are DEPRECATED: kept and exported because consumers pin this
+// library by hash, onlykey-testing's sanity test replays python-onlykey's
+// derived_xwing.py vector through them, and plugins/okcrypto still falls
+// back to them when `xwingDeviceCustody` is not true. New code must not
+// reach for them.
 
 const { ml_kem768 } = require('../vendor/exports/@noble/post-quantum/ml-kem.js');
 const { shake256, sha3_256 } = require('../vendor/exports/@noble/hashes/sha3.js');
@@ -45,6 +67,9 @@ function deriveLabelTag(label) {
     return sha256(utf8ToBytes(label));
 }
 
+// DEPRECATED - split custody only (see the header). Under device custody the
+// ML-KEM seed never leaves the device.
+//
 // Expands the 32-byte device-derived seed (SHAKE256 -> 64-byte d||z) into an
 // ML-KEM-768 keypair. Matches the firmware (xwing_shake256/keypair_derand)
 // and python-onlykey's mlkem_keypair_from_seed() (kyber_py's
@@ -59,6 +84,9 @@ function mlkemKeypairFromSeed(mlkemSeed) {
     return ml_kem768.keygen(seed64); // { publicKey, secretKey }
 }
 
+// DEPRECATED - split custody only (see the header). Under device custody the
+// device answers the finished recipient itself.
+//
 // Builds the 1216-byte X-Wing recipient public key (pk_M || pk_X).
 function buildRecipient(pkX, mlkemSeed) {
     if (pkX.length !== 32) {
@@ -74,6 +102,10 @@ function xwingCombiner(ssM, ssX, ctX, pkX) {
     return sha3_256(concatBytes(ssM, ssX, ctX, pkX, XWING_LABEL));
 }
 
+// DEPRECATED - split custody only (see the header). Under device custody the
+// device returns the finished secret from OKDECRYPT, and running the ML-KEM
+// half here as well would not be refused by anything - it would just be wrong.
+//
 // Finishes X-Wing decapsulation given the device's ss_X and the seed.
 // ssX: 32-byte X25519 shared secret from the device (sk_X stays there)
 // ciphertext: 1120-byte X-Wing ct (ct_M || ct_X) from the age stanza
@@ -92,7 +124,10 @@ function splitDecapsulate(ssX, ciphertext, pkX, mlkemSeed) {
     return xwingCombiner(ssM, ssX, ctX, pkX);
 }
 
-// Returns ct_X (the 32 bytes the device needs) from a stanza ciphertext.
+// DEPRECATED - split custody only (see the header): device custody sends the
+// whole 1120-byte ciphertext.
+//
+// Returns ct_X (the 32 bytes the old device needed) from a stanza ciphertext.
 function ctXOf(ciphertext) {
     return ciphertext.subarray(MLKEM_CT, XWING_CT);
 }
@@ -348,6 +383,11 @@ function identityMatchesKey(identity, pubkey) {
 }
 
 module.exports = {
+    /*
+     * DEPRECATED, split custody only (see the header): mlkemKeypairFromSeed,
+     * buildRecipient, splitDecapsulate, ctXOf. Still exported - consumers pin
+     * this library by hash, and a removed export breaks them at load.
+     */
     mlkemKeypairFromSeed,
     buildRecipient,
     xwingCombiner,

@@ -289,12 +289,17 @@ function encryptAgeFile(plaintext, { ciphertext, sharedSecret }) {
 // Decrypts a full age v1 file containing (at least) one mlkem768x25519
 // stanza. deriveSharedSecret(ciphertext) is called with the full 1120-byte
 // X-Wing ciphertext from the stanza and must return (sync or async) the
-// 32-byte combined X-Wing shared secret for this file's recipient - the
-// caller already knows pk_X/mlkem_seed for the label and is expected to
-// use ctXOf(ciphertext) to get the 32 bytes the device's
-// DERIVE_SHARED_SECRET call needs, then call splitDecapsulate() itself
-// (it needs the *full* ciphertext too, for the ML-KEM half - not just
-// ct_X). Returns the decrypted plaintext as a Uint8Array.
+// 32-byte combined X-Wing shared secret for this file's recipient.
+//
+// On current firmware (capability xwingDeviceCustody, 3.0.5 on) that is one
+// device call: OKDECRYPT to RESERVED_KEY_WEB_AGENT_DERIVATION carrying
+// [ label32 | ciphertext ], which answers the finished secret - the device
+// holds both halves and runs the combiner (okcrypto.cpp okcrypto_decrypt,
+// :431 at release 3.1.0). plugins/okcrypto's deviceAge.decrypt does exactly
+// that. The old split-custody route - ctXOf() to the device, then
+// splitDecapsulate() on the host with the seed - applies only to pre-3.0.5
+// development builds and is deprecated (see age_pqc.js).
+// Returns the decrypted plaintext as a Uint8Array.
 async function decryptAgeFile(fileBytes, deriveSharedSecret) {
     const bytes = fileBytes instanceof Uint8Array ? fileBytes : new Uint8Array(fileBytes);
     const { stanzas, headerNoMac, mac, headerEndOffset } = parseHeader(bytes);
