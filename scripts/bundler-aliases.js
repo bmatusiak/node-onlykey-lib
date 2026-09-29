@@ -18,9 +18,11 @@
  *   - babel over `root`: webpack 4's parser does not know the syntax this
  *     library and its vendored @noble use (BigInt literals, `??`, `?.`).
  *     preset-env `{ targets: { esmodules: true }, modules: false }` is enough.
- *   - `node: { crypto: 'empty' }`: the vendored tweetnacl names Node's
- *     `crypto` for a branch a browser never takes (it has getRandomValues);
- *     without this webpack 4 bundles a crypto polyfill for nothing.
+ *   - `node: { crypto: 'empty' }` is OPTIONAL: the vendored tweetnacl names
+ *     Node's `crypto` for a branch a browser never takes, so without it
+ *     webpack 4 bundles a crypto polyfill for nothing. But only set it when
+ *     nothing else in the app needs that polyfill - the web app's other
+ *     dependencies already bundle it, so it leaves this alone.
  * With those three the whole stack - host, tunnel transport, session, device,
  * okcrypto, the webauthn ctap, crypto and the PGP fork - bundled and composed.
  *

@@ -29,6 +29,7 @@
     "./plugins/transport/tunnel": "./plugins/transport/tunnel.js",
     "./plugins/device": "./plugins/device/index.js",
     "./plugins/okcrypto": "./plugins/okcrypto/index.js",
+    "./browser": "./plugins/browser.js",
     "./bundler-aliases": "./scripts/bundler-aliases.js",
     "./package.json": "./package.json",
     "./webcrypto": "./src/webcrypto/subtle.js",
