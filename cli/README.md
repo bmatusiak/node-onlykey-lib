@@ -24,7 +24,7 @@ one version, one pin, no second copy to drift.
 
 ## What it replaces, over time
 
-It takes over `onlykey-cli`'s commands one at a time, read-only first. Until a
+It takes over `onlykey-cli`'s commands one at a time: the reads, then the writes. Until a
 command is listed below, use python-onlykey for it. The two install side by
 side: the bin is named `onlykey-js` so it can never shadow `onlykey-cli`.
 
@@ -37,12 +37,30 @@ side: the bin is named `onlykey-js` so it can never shadow `onlykey-cli`.
 | `capabilities` | `capabilities` | reads | python's `%-14s` layout, but derived from the firmware version by `src/device/version.js`: no signed release sends the `c` report python asks for, so python prints "does not report capabilities" on every key in the field |
 | `getlabels` | `getlabels` | reads | same layout: classic in pairs, DUO in colour runs of six |
 | `getkeylabels` | `getkeylabels` | reads | same names: RSA Key 1-4, ECC Key 1-16 |
+| `setslot <id> <field> [value]` | `setslot` | writes | every python field: `label url username password 2fa gkey totpkey addchar1-5 delay1-3 typespeed ecckeylabel rsakeylabel`, python's slot names (`1a`-`6b`, `green1a`-`purple3b`) or a number. Prints the key's answer, as python does. `password`, `gkey`, `totpkey` are prompted for and refused as arguments. Exactly one value: python stores the first word of an unquoted `label My Bank` and says it worked. `gkey` takes unpadded base32, which python's `b32decode` refuses |
+| `wipeslot <id>` | `wipeslot` | writes | prints ONE line: the firmware answers ten ("Successfully wiped Label" ... "2FA Key"), python prints eight, the library's `wipeSlot` returns the first |
+| `idletimeout` `wipemode` `keytypespeed` `keylayout` `ledbrightness` `lockbutton` `touchsense` `backupkeymode` `sysadminmode` `hmackeymode` `storedkeymode` `derivedkeymode` `webagentderivemode` (`webderivemode`) `webcryptpolicy` | the same | writes | one number, through the device plugin's `setPreference` - its ranges and its version gates (a value out of range is refused with nothing sent; `webagentderivemode`/`webcryptpolicy` need 3.0.5). The three one-way settings (`wipemode`, `backupkeymode`, `webcryptpolicy`) need `--yes`. Sent on the global slot 0, where python sends slot 1 (set_slot ignores it for settings) |
+| `settime` | `settime` | writes (clock) | OKSETTIME is OKCONNECT; prints the status line, as python does |
+| `genkey <ECC1-16> <x\|n\|s\|c\|m\|w> [d\|s\|b]` | `genkey` | writes | python's letters and uses. ECC slots only (python lets `genkey HMAC1 x d` through). `c` is refused below 3.0.5, where it stores a constant key (capability `curve25519Keygen`); `m`/`w` need `postQuantum` and print a summary line instead of python's first 64 key bytes as text |
+| `setkey <slot> <type> [d\|s\|b] [hex]`, `setkey <slot> label <text>` | `setkey` | writes | RSA1-4 (type 1-4), ECC1-16 (`x n s c`), HMAC1-2 (`h`). The hex is length-checked before anything is sent; left off, it is prompted for; given, a stderr note says it is in the shell history. No `HMAC` label (python writes one to index 57/58). No `PQC`/`p` composite load |
+| `loadkey <file> [auto\|RSA1-4\|ECC1-16] [d\|s\|b]` | `loadkey` | writes | armored PGP private key; python's lines ("Found 2 key(s):", "Loading ECC key to slot 102...", the key's answer). The passphrase is asked only for a locked key. A named slot must match the key's kind (python silently moves RSA to slot 1); an ECC key there needs its use (python crashes on an odd-length type byte) |
+| `wipekey <RSA1-4\|ECC1-16\|HMAC1-2>` | `wipekey` | writes | two lines, as python: the wipe, then the label clear - which the library skips after a refused wipe and for HMAC |
 
 "Reads" means it connects - the OKCONNECT every client sends, which sets the
-key's clock - and reads. Nothing here writes a slot, a key or a setting, and
-there is no firmware update command: that is not something this program can
-do. A locked key is refused straight from the connect reply, because a locked
-key answers a label read with silence rather than an error.
+key's clock - and reads. A locked key is refused straight from the connect
+reply, because a locked key answers a label read with silence rather than an
+error; every write refuses a locked key the same way.
+
+"Writes" commands print what the KEY said, on stdout, success or refusal -
+the line python prints. A refusal also exits 1 (python exits 0), with what to
+do about it on stderr: "Error not in config mode" is followed by a note to put
+the key in config mode. A key write the key never answers is reported as
+that - outside config mode the firmware drops OKSETPRIV without a word - where
+python prints an empty line. A command line that is wrong is refused, exit 2,
+before any key is opened.
+
+There is no firmware update command - that is not something this program can
+do - and no backup or restore, which need their own safety design first.
 
 ## node-hid is an optional PEER dependency
 
@@ -83,6 +101,9 @@ that pipe, transport opened.
 
 ## Tests
 
-`test/cli.test.js` runs every command through `main(argv, io)` over the fake
-firmware; `test/cli-transport-hid.test.js` drives the pipe through a fake
-node-hid module. Neither can reach a real device.
+`test/cli.test.js` (reads) and `test/cli-write.test.js` (writes) run every
+command through `main(argv, io)` over the fake firmware - the writes pinned
+frame by frame, message, slot, field and payload, as well as by what they
+print; `test/cli-transport-hid.test.js` drives the pipe through a fake
+node-hid module. None can reach a real device: `io.prompt` and `io.readFile`
+are injected too.

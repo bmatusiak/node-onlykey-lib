@@ -62,9 +62,9 @@ test('version is this program\'s, and needs no key (as python\'s does not)', asy
 });
 
 test('an unknown command, an unknown option and extra arguments are usage errors', async () => {
-  let r = await run(['setslot']);
+  let r = await run(['bogus']);
   assert.equal(r.code, 2);
-  assert.match(r.err[0], /unknown command "setslot"/);
+  assert.match(r.err[0], /unknown command "bogus"/);
 
   r = await run(['status', '--bogus']);
   assert.equal(r.code, 2);
