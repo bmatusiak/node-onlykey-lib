@@ -30,6 +30,7 @@
     "./plugins/device": "./plugins/device/index.js",
     "./plugins/okcrypto": "./plugins/okcrypto/index.js",
     "./browser": "./plugins/browser.js",
+    "./cli/desktop": "./cli/desktop.js",
     "./bundler-aliases": "./scripts/bundler-aliases.js",
     "./package.json": "./package.json",
     "./webcrypto": "./src/webcrypto/subtle.js",
@@ -38,6 +39,7 @@
   "files": [
     "src",
     "plugins",
+    "cli",
     "scripts",
     "tsconfig.json",
     "FINDINGS.md",
@@ -52,5 +54,8 @@
   },
   "devDependencies": {
     "typescript": "^6.0.3"
+  },
+  "optionalDependencies": {
+    "node-hid": "^3.4.0"
   }
 }
