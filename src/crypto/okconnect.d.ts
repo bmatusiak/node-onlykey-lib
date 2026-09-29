@@ -234,5 +234,5 @@ export function peerKeyWire(publicKey: Uint8Array, keytype: number): Uint8Array;
 export const SECRET_BYTES: 32;
 /** X-Wing hands back two 32-byte halves together, for either action. */
 export const XWING_PAIR: 64;
-import nacl = require("tweetnacl");
+import nacl = require("../vendor/node_modules/tweetnacl/nacl.js");
 import transit = require("../session/transit");

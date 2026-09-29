@@ -13,10 +13,10 @@
 // The device never returns sk_X or the ML-KEM secret key - only a one-way
 // SHA256(sk_X || tag)-derived seed the host expands locally.
 
-const { ml_kem768 } = require('@noble/post-quantum/ml-kem.js');
-const { shake256, sha3_256 } = require('@noble/hashes/sha3.js');
-const { sha256 } = require('@noble/hashes/sha2.js');
-const { x25519 } = require('@noble/curves/ed25519.js');
+const { ml_kem768 } = require('../vendor/exports/@noble/post-quantum/ml-kem.js');
+const { shake256, sha3_256 } = require('../vendor/exports/@noble/hashes/sha3.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { x25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
 const { utf8ToBytes, bytesToUtf8 } = require('../bytes');
 
 const MLKEM_PK = 1184;

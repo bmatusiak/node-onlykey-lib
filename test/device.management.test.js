@@ -27,7 +27,7 @@ const { MSG, FIELD } = require('../src/protocol/msg');
 const parsers = require('../src/device/parsers');
 const keys = require('../src/device/keys');
 const { LAYOUTS } = require('../src/device/keylayouts.data');
-const { sha256 } = require('@noble/hashes/sha2.js');
+const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
 const { concat, toBase64 } = require('../src/bytes');
 
 function start(pipe) {

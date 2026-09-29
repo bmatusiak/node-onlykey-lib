@@ -1,0 +1,208 @@
+#!/usr/bin/env node
+/*
+ * vendor.js - the ONE copy of every third-party runtime library the project
+ * uses (@noble/*, tweetnacl), kept in this repo.
+ *
+ *   node scripts/vendor.js           fetch the pinned versions, re-vendor, rewrite the record
+ *   node scripts/vendor.js --check   offline: do the files still match the record?
+ *
+ * WHY ONE COPY. Each repo used to carry its own: this library had @noble as
+ * caret npm deps, the test kit had older ones, ok-rn had its own @noble/curves,
+ * and the web app vendors 2.2.0 by hand. They drifted (the kit's 03-gui parity
+ * guard is that drift, audit #2). One copy, here, is one place to AUDIT (the
+ * files are the npm tarball's bytes, and VENDORED.json says which tarball) and
+ * one place to SWAP for the whole project: change a version below, run this,
+ * run the tests, and every consumer gets it with its next pin of this library.
+ *
+ * WHY A DIRECTORY NAMED node_modules. @noble's packages import each other by
+ * bare name ('@noble/hashes/utils.js' inside @noble/curves). Kept byte-for-byte,
+ * those imports must resolve without an alias - and Node, Metro (React Native)
+ * and webpack all look for a bare name in the nearest node_modules directory
+ * going up. src/vendor/node_modules/ is that directory, so the copies need no
+ * edit and no resolver configuration anywhere. npm keeps a nested node_modules
+ * when it packs or git-installs this library (checked 2026-09-28; the test
+ * asserts it with `npm pack --dry-run`).
+ *
+ * WHY THE SHIMS. Node refuses a package `exports` target that passes through a
+ * node_modules segment, so the public door cannot point into the copies. Each
+ * module a package exports gets a one-line CommonJS file under src/vendor/exports/
+ * that requires it; `node-onlykey-lib/vendor/@noble/hashes/sha2.js` resolves to
+ * one of those. They are generated from each package's own exports map, never
+ * written by hand, and this library's code uses them too - so the ONLY files
+ * that name the copies are these shims.
+ */
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const {execSync} = require('child_process');
+
+const ROOT = path.resolve(__dirname, '..');
+const VENDOR = path.join(ROOT, 'src', 'vendor');
+const MODULES = path.join(VENDOR, 'node_modules');
+const EXPORTS = path.join(VENDOR, 'exports');
+const MANIFEST = path.join(VENDOR, 'VENDORED.json');
+
+/*
+ * What is vendored, at which exact version, and why. A version here is chosen,
+ * not floated: the frozen vectors in test/ must pass on it before it lands.
+ */
+const PACKAGES = [
+  {name: '@noble/hashes', version: '2.4.0',
+    why: 'SHA-256/512, SHA3/SHAKE, HMAC, HKDF - transit keys, challenge digits, vault, age, clientPIN'},
+  {name: '@noble/curves', version: '2.4.0',
+    why: 'X25519/Ed25519 (transit, age, SSH), P-256 (clientPIN, WebCrypto fallback); abstract/fft for ML-KEM'},
+  {name: '@noble/ciphers', version: '2.4.0',
+    why: 'AES-GCM/CBC (transit v2, OKCONNECT, vault, clientPIN), ChaCha20-Poly1305 (age), XSalsa20 (transit v1)'},
+  {name: '@noble/post-quantum', version: '0.7.1',
+    why: 'ML-KEM-768 - the post-quantum half of X-Wing (age PQC)'},
+  {name: 'tweetnacl', version: '1.0.3',
+    why: 'nacl.box - the OKCONNECT/legacy transit key agreement'},
+];
+
+/** Every file under dir, as sorted POSIX paths relative to it. */
+function listFiles(dir) {
+  const out = [];
+  (function walk(rel) {
+    for (const e of fs.readdirSync(path.join(dir, rel), {withFileTypes: true})) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(r);
+      else out.push(r);
+    }
+  })('');
+  return out.sort();
+}
+
+/**
+ * One hash for a whole package directory: every file's path and SHA-256, in
+ * order. Any edit, added or deleted file, or line-ending rewrite changes it.
+ */
+function treeHash(dir) {
+  const h = crypto.createHash('sha256');
+  const files = listFiles(dir);
+  for (const rel of files) {
+    const f = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, rel))).digest('hex');
+    h.update(`${rel}\0${f}\n`);
+  }
+  return {sha256: h.digest('hex'), files: files.length};
+}
+
+/**
+ * The shims a vendored package gets: {relative path under exports/ -> source}.
+ * One per ".js" subpath of its exports map; a package without an
+ * exports map (tweetnacl) gets one shim named after it, for its `main`.
+ */
+function shimsFor(name) {
+  const pkgDir = path.join(MODULES, name);
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+  /* No shim for a package root: @noble's throw on import by design ("import submodules instead"). */
+  const targets = pkg.exports
+    ? Object.keys(pkg.exports)
+      .filter((k) => k !== '.' && k.endsWith('.js'))
+      .map((k) => ({shim: `${name}/${k.slice(2)}`, target: `${name}/${k.slice(2)}`}))
+    : [{shim: `${name}.js`, target: `${name}/${pkg.main}`}];
+  const HEAD =
+    '// GENERATED by scripts/vendor.js - the public door to the vendored copy.\n' +
+    '// See src/vendor/VENDORED.md. Do not edit; re-run the script.\n';
+  const out = {};
+  for (const {shim, target} of targets) {
+    const from = path.posix.dirname(`exports/${shim}`);
+    const rel = path.posix.relative(from, `node_modules/${target}`);
+    out[shim] = `${HEAD}module.exports = require('${rel}');\n`;
+    /*
+     * And its types, re-exported from the package's own declarations. Without
+     * this, TypeScript compiles the shim and emits a declaration for it into
+     * src/vendor/exports/ (gen-types), and a TypeScript consumer (ok-rn) sees
+     * `any`. An ES module's named exports re-export as they are; a CommonJS
+     * package (tweetnacl) declares `export =`, and is re-exported the same way.
+     */
+    out[shim.replace(/\.js$/, '.d.ts')] = pkg.exports
+      ? `${HEAD}export * from '${rel}';\n`
+      : `${HEAD}import lib = require('${path.posix.relative(from, `node_modules/${name}`)}');\nexport = lib;\n`;
+  }
+  return out;
+}
+
+function allShims() {
+  return Object.assign({}, ...PACKAGES.map((p) => shimsFor(p.name)));
+}
+
+function writeShims() {
+  fs.rmSync(EXPORTS, {recursive: true, force: true});
+  for (const [rel, src] of Object.entries(allShims())) {
+    const file = path.join(EXPORTS, rel);
+    fs.mkdirSync(path.dirname(file), {recursive: true});
+    fs.writeFileSync(file, src);
+  }
+}
+
+/** Fetch one tarball from npm, check it, and replace the vendored copy. */
+function vendorOne({name, version, why}) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'okvendor-'));
+  try {
+    const [packed] = JSON.parse(execSync(
+      `npm pack ${name}@${version} --json --pack-destination .`,
+      {cwd: tmp, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit']}));
+    const tgz = path.join(tmp, packed.filename);
+    /* npm verified the download; check it again ourselves against the same record. */
+    const [algo, want] = packed.integrity.split('-');
+    const got = crypto.createHash(algo).update(fs.readFileSync(tgz)).digest('base64');
+    if (got !== want) throw new Error(`${name}@${version}: tarball does not match ${packed.integrity}`);
+    execSync(`tar -xzf ${JSON.stringify(packed.filename)}`, {cwd: tmp, stdio: 'inherit'});
+    const dest = path.join(MODULES, name);
+    fs.rmSync(dest, {recursive: true, force: true});
+    fs.mkdirSync(path.dirname(dest), {recursive: true});
+    fs.cpSync(path.join(tmp, 'package'), dest, {recursive: true});
+    const tree = treeHash(dest);
+    console.log(`vendored ${name}@${version} - ${tree.files} files, tree ${tree.sha256.slice(0, 12)}`);
+    return {name, version, integrity: packed.integrity,
+      tarball: `https://registry.npmjs.org/${name}/-/${name.split('/').pop()}-${version}.tgz`,
+      tree: tree.sha256, files: tree.files, why};
+  } finally {
+    fs.rmSync(tmp, {recursive: true, force: true});
+  }
+}
+
+/** Offline: the files against the record, and the shims against the copies. */
+function check() {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
+  const problems = [];
+  const names = PACKAGES.map((p) => `${p.name}@${p.version}`).join(' ');
+  const recorded = manifest.packages.map((p) => `${p.name}@${p.version}`).join(' ');
+  if (names !== recorded) problems.push(`VENDORED.json lists ${recorded}; this script pins ${names}`);
+  for (const p of manifest.packages) {
+    const dir = path.join(MODULES, p.name);
+    if (!fs.existsSync(dir)) { problems.push(`${p.name}: not vendored`); continue; }
+    const tree = treeHash(dir);
+    if (tree.sha256 !== p.tree) problems.push(`${p.name}: files differ from the ${p.version} tarball (tree ${tree.sha256.slice(0, 12)}, recorded ${p.tree.slice(0, 12)})`);
+  }
+  const want = allShims();
+  const have = fs.existsSync(EXPORTS) ? listFiles(EXPORTS) : [];
+  for (const rel of have) if (!(rel in want)) problems.push(`exports/${rel}: not generated by this script`);
+  for (const [rel, src] of Object.entries(want)) {
+    const file = path.join(EXPORTS, rel);
+    if (!fs.existsSync(file)) problems.push(`exports/${rel}: missing`);
+    else if (fs.readFileSync(file, 'utf8') !== src) problems.push(`exports/${rel}: edited`);
+  }
+  return problems;
+}
+
+module.exports = {PACKAGES, MODULES, EXPORTS, MANIFEST, treeHash, allShims, check};
+
+if (require.main === module) {
+  if (process.argv.includes('--check')) {
+    const problems = check();
+    for (const p of problems) console.log(`vendor: ${p}`);
+    console.log(problems.length ? `vendor: ${problems.length} problem(s)` : 'vendor: every copy matches its record');
+    process.exit(problems.length ? 1 : 0);
+  }
+  const packages = PACKAGES.map(vendorOne);
+  writeShims();
+  fs.writeFileSync(MANIFEST, JSON.stringify({
+    note: 'Written by scripts/vendor.js. Each package is its npm tarball, unmodified; tree = scripts/vendor.js treeHash(). See VENDORED.md.',
+    packages,
+  }, null, 2) + '\n');
+  console.log(`vendor: ${packages.length} packages, shims under src/vendor/exports/, record in src/vendor/VENDORED.json`);
+}

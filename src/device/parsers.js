@@ -9,7 +9,7 @@
  */
 'use strict';
 
-const { sha256 } = require('@noble/hashes/sha2.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
 const { toHex, concat, fromBase64 } = require('../bytes');
 
 const BACKUP_BEGIN = '-----BEGIN ONLYKEY BACKUP-----';

@@ -1,0 +1,50 @@
+{
+  "note": "Written by scripts/vendor.js. Each package is its npm tarball, unmodified; tree = scripts/vendor.js treeHash(). See VENDORED.md.",
+  "packages": [
+    {
+      "name": "@noble/hashes",
+      "version": "2.4.0",
+      "integrity": "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==",
+      "tarball": "https://registry.npmjs.org/@noble/hashes/-/hashes-2.4.0.tgz",
+      "tree": "bd234d5cdedb6f1be8d9d777299c45ab42613dd6745b3589c2e2a032100cb6ab",
+      "files": 60,
+      "why": "SHA-256/512, SHA3/SHAKE, HMAC, HKDF - transit keys, challenge digits, vault, age, clientPIN"
+    },
+    {
+      "name": "@noble/curves",
+      "version": "2.4.0",
+      "integrity": "sha512-P4/62zrgfH33CneE3Dn4WhJVA22YUU0eR51wKIan4NVRvwsA0YnPTwWGpNbpuacSujmSFLvyzpyuR30+fbq2Ew==",
+      "tarball": "https://registry.npmjs.org/@noble/curves/-/curves-2.4.0.tgz",
+      "tree": "64482ffa9e9b0738e957bf165fcafc3b51f3bda37c871521601498fb470e9bfe",
+      "files": 72,
+      "why": "X25519/Ed25519 (transit, age, SSH), P-256 (clientPIN, WebCrypto fallback); abstract/fft for ML-KEM"
+    },
+    {
+      "name": "@noble/ciphers",
+      "version": "2.4.0",
+      "integrity": "sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw==",
+      "tarball": "https://registry.npmjs.org/@noble/ciphers/-/ciphers-2.4.0.tgz",
+      "tree": "506a88da2b121f873735a18e8489ce4ea464b0575d7781ca00c233c2f7b411c3",
+      "files": 33,
+      "why": "AES-GCM/CBC (transit v2, OKCONNECT, vault, clientPIN), ChaCha20-Poly1305 (age), XSalsa20 (transit v1)"
+    },
+    {
+      "name": "@noble/post-quantum",
+      "version": "0.7.1",
+      "integrity": "sha512-+P9981IiAnVh+rmcubozzVwrEy3XsN/tMhTnvsjV9VDaYpOnNCqWqKo2FLWxbu92YHfjGIlE5XnW175UK+ln+Q==",
+      "tarball": "https://registry.npmjs.org/@noble/post-quantum/-/post-quantum-0.7.1.tgz",
+      "tree": "53a3ce71bd14a6e9c87bc26b253de6933e35561d76f2d8632a902ad7ed99047b",
+      "files": 30,
+      "why": "ML-KEM-768 - the post-quantum half of X-Wing (age PQC)"
+    },
+    {
+      "name": "tweetnacl",
+      "version": "1.0.3",
+      "integrity": "sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==",
+      "tarball": "https://registry.npmjs.org/tweetnacl/-/tweetnacl-1.0.3.tgz",
+      "tree": "ef88a6f77244b09d62375b8942cb816e1749297620015a36c6f40009dba6101d",
+      "files": 11,
+      "why": "nacl.box - the OKCONNECT/legacy transit key agreement"
+    }
+  ]
+}

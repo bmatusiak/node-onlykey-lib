@@ -15,11 +15,11 @@
 // HKDF-SHA256(file_key, salt="", info="header") covering everything from
 // the magic line through the literal "---" (no trailing space/MAC/newline).
 
-const { extract: hkdfExtract, expand: hkdfExpand } = require('@noble/hashes/hkdf.js');
-const { sha256 } = require('@noble/hashes/sha2.js');
-const { hmac } = require('@noble/hashes/hmac.js');
-const { chacha20poly1305 } = require('@noble/ciphers/chacha.js');
-const { randomBytes } = require('@noble/ciphers/utils.js');
+const { extract: hkdfExtract, expand: hkdfExpand } = require('../vendor/exports/@noble/hashes/hkdf.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { hmac } = require('../vendor/exports/@noble/hashes/hmac.js');
+const { chacha20poly1305 } = require('../vendor/exports/@noble/ciphers/chacha.js');
+const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
 const { utf8ToBytes, toBase64, fromBase64 } = require('../bytes');
 
 const CHUNK_SIZE = 64 * 1024;

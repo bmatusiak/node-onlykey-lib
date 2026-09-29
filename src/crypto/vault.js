@@ -24,9 +24,9 @@
  */
 'use strict';
 
-const { hkdf } = require('@noble/hashes/hkdf.js');
-const { sha256 } = require('@noble/hashes/sha2.js');
-const { gcm } = require('@noble/ciphers/aes.js');
+const { hkdf } = require('../vendor/exports/@noble/hashes/hkdf.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { gcm } = require('../vendor/exports/@noble/ciphers/aes.js');
 const { utf8ToBytes, bytesToUtf8, toBase64, fromBase64 } = require('../bytes');
 
 /**

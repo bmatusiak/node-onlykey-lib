@@ -737,7 +737,7 @@ test('the challenge digits follow the DEVICE formula, not a default', async () =
  * line and a P-256 point back to it with transit v1 - which is how a device
  * nobody has connected to is read (deviceCan('transitV2') is null).
  */
-const nacl = require('tweetnacl');
+const nacl = require('../src/vendor/exports/tweetnacl.js');
 const okconnectLib = require('../src/crypto/okconnect');
 const ctapLib = require('../src/protocol/ctap');
 const { CTAP2_CMD, CTAPHID } = require('../src/protocol/ctaphid');

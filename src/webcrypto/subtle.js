@@ -55,13 +55,13 @@
  */
 'use strict';
 
-const { sha256, sha384, sha512, sha224 } = require('@noble/hashes/sha2.js');
-const { sha1 } = require('@noble/hashes/legacy.js');
-const { hmac } = require('@noble/hashes/hmac.js');
-const { extract, expand } = require('@noble/hashes/hkdf.js');
-const { cbc, ctr, gcm, aeskw } = require('@noble/ciphers/aes.js');
-const { ed25519, x25519 } = require('@noble/curves/ed25519.js');
-const { p256, p384, p521 } = require('@noble/curves/nist.js');
+const { sha256, sha384, sha512, sha224 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { sha1 } = require('../vendor/exports/@noble/hashes/legacy.js');
+const { hmac } = require('../vendor/exports/@noble/hashes/hmac.js');
+const { extract, expand } = require('../vendor/exports/@noble/hashes/hkdf.js');
+const { cbc, ctr, gcm, aeskw } = require('../vendor/exports/@noble/ciphers/aes.js');
+const { ed25519, x25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
+const { p256, p384, p521 } = require('../vendor/exports/@noble/curves/nist.js');
 
 const { toBase64Url, fromBase64Url } = require('../bytes');
 

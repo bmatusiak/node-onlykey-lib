@@ -15,8 +15,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { ed25519 } = require('@noble/curves/ed25519.js');
-const { p256 } = require('@noble/curves/nist.js');
+const { ed25519 } = require('../src/vendor/exports/@noble/curves/ed25519.js');
+const { p256 } = require('../src/vendor/exports/@noble/curves/nist.js');
 
 const openssh = require('../src/device/openssh');
 const keys = require('../src/device/keys');

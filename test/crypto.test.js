@@ -37,7 +37,7 @@ test('a different seed gives a different keypair', () => {
 });
 
 test('a label tag is a stable SHA-256 over the label', () => {
-  const { sha256 } = require('@noble/hashes/sha2.js');
+  const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
   const { utf8ToBytes } = require('../src/bytes');
   assert.equal(toHex(pqc.deriveLabelTag('work')), toHex(sha256(utf8ToBytes('work'))));
   assert.equal(toHex(pqc.deriveLabelTag('work')), toHex(pqc.deriveLabelTag('work')));
@@ -53,7 +53,7 @@ test('the label tag is UTF-8, and a non-ASCII label proves it', () => {
    * and a mismatch here is invisible until decryption reports "no identity
    * matched any of the recipients" on a file that is perfectly intact.
    */
-  const { sha256 } = require('@noble/hashes/sha2.js');
+  const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
   const { utf8ToBytes, fromLatin1 } = require('../src/bytes');
   const label = 'café-key';
 
@@ -67,7 +67,7 @@ test('the label tag is UTF-8, and a non-ASCII label proves it', () => {
 test('X-Wing encapsulation and split decapsulation agree', () => {
   // The end-to-end property that matters: what the sender derives is what the
   // holder of both halves derives.
-  const { x25519 } = require('@noble/curves/ed25519.js');
+  const { x25519 } = require('../src/vendor/exports/@noble/curves/ed25519.js');
 
   const xSk = x25519.utils.randomSecretKey();
   const xPk = x25519.getPublicKey(xSk);

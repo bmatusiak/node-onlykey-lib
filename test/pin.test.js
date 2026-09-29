@@ -153,7 +153,7 @@ test('markers and the digest line are excluded from the data', () => {
 });
 
 test('the backup digest is a rolling chain, so reordering is caught', () => {
-  const { sha256 } = require('@noble/hashes/sha2.js');
+  const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
   const { concat } = require('../src/bytes');
 
   const l1 = Uint8Array.from([0, 1, 2]);

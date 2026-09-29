@@ -17,7 +17,7 @@
  */
 'use strict';
 
-const { randomBytes } = require('@noble/hashes/utils.js');
+const { randomBytes } = require('../../src/vendor/exports/@noble/hashes/utils.js');
 
 function setup(imports, register, config) {
   const { app } = imports;

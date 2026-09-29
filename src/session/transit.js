@@ -40,10 +40,10 @@
  */
 'use strict';
 
-const { hsalsa } = require('@noble/ciphers/salsa.js');
-const { ctr, gcm } = require('@noble/ciphers/aes.js');
-const { x25519 } = require('@noble/curves/ed25519.js');
-const { sha256 } = require('@noble/hashes/sha2.js');
+const { hsalsa } = require('../vendor/exports/@noble/ciphers/salsa.js');
+const { ctr, gcm } = require('../vendor/exports/@noble/ciphers/aes.js');
+const { x25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
 
 const { fromLatin1, concat } = require('../bytes');
 

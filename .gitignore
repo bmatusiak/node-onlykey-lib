@@ -5,3 +5,6 @@ coverage/
 
 # Scratch scripts used to make edits; never part of the package.
 .*.tmp.js
+
+# ...except the vendored third-party copies: see src/vendor/VENDORED.md.
+!/src/vendor/node_modules/

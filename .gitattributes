@@ -5,3 +5,11 @@
 # check on every machine but the one that committed it. Keep it exactly as
 # stored.
 src/vendor/openpgp/openpgp.js -text
+
+# The vendored npm packages are the published tarballs' bytes, recorded by a
+# tree hash in src/vendor/VENDORED.json (scripts/vendor.js --check). Same
+# reason as above: a checkout-time line-ending rewrite would fail that check.
+src/vendor/node_modules/** -text
+# The generated shims are compared byte-for-byte with what scripts/vendor.js
+# writes (LF), so they must not be rewritten on checkout either.
+src/vendor/exports/** -text

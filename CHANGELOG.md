@@ -17,6 +17,18 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **One copy of every third-party library, vendored here.** `@noble/hashes`,
+  `@noble/curves`, `@noble/ciphers` 2.4.0, `@noble/post-quantum` 0.7.1 and
+  `tweetnacl` 1.0.3 are no longer npm dependencies. They are their npm tarballs,
+  unmodified, under `src/vendor/node_modules/`, recorded by integrity and tree
+  hash in `src/vendor/VENDORED.json`, and reached through
+  `node-onlykey-lib/vendor/@noble/<pkg>/<module>.js` and
+  `node-onlykey-lib/vendor/tweetnacl`. `scripts/vendor.js` re-vendors
+  (`--check` verifies offline); `test/vendor.test.js` fails on an edited copy,
+  on a second copy through npm, on code that bypasses the shims, and on a
+  tarball that stops shipping them. Consumers drop their own @noble and use
+  these subpaths - one place to audit, one place to swap. See
+  `src/vendor/VENDORED.md`.
 - **A browser can drive the tunnel: `node-onlykey-lib/transport/webauthn`.**
   `createWebAuthnCtap({ credentials, rpId?, timeoutMs? })` is the object
   `protocol/tunnel.js` already drives - `getAssertion(params) -> Map{2, 3}` -

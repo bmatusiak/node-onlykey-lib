@@ -45,10 +45,10 @@
  */
 'use strict';
 
-const { p256 } = require('@noble/curves/nist.js');
-const { cbc } = require('@noble/ciphers/aes.js');
-const { sha256 } = require('@noble/hashes/sha2.js');
-const { hmac } = require('@noble/hashes/hmac.js');
+const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
+const { cbc } = require('../vendor/exports/@noble/ciphers/aes.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { hmac } = require('../vendor/exports/@noble/hashes/hmac.js');
 
 const cose = require('./cose');
 const { utf8ToBytes, concat } = require('../bytes');

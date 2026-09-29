@@ -37,9 +37,9 @@
  */
 'use strict';
 
-const nacl = require('tweetnacl');
-const { sha256 } = require('@noble/hashes/sha2.js');
-const { ctr } = require('@noble/ciphers/aes.js');
+const nacl = require('../vendor/exports/tweetnacl.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { ctr } = require('../vendor/exports/@noble/ciphers/aes.js');
 const { concat, utf8ToBytes } = require('../bytes');
 
 /** OnlyKey's vendor command for the connect/derive exchange. */

@@ -18,6 +18,8 @@
     "./crypto": "./src/crypto/index.js",
     "./crypto/pgp": "./src/crypto/pgp.js",
     "./vendor/openpgp": "./src/vendor/openpgp/openpgp.js",
+    "./vendor/@noble/*": "./src/vendor/exports/@noble/*",
+    "./vendor/tweetnacl": "./src/vendor/exports/tweetnacl.js",
     "./plugins/host": "./plugins/host/index.js",
     "./plugins/session": "./plugins/session/index.js",
     "./plugins/transport/memory": "./plugins/transport/memory.js",
@@ -44,12 +46,7 @@
     "types": "node scripts/gen-types.js"
   },
   "dependencies": {
-    "@bmatusiak/rectify": "github:bmatusiak/rectify#a0d9f0e6e537053122273b1f763ac87ae461361c",
-    "@noble/ciphers": "^2.4.0",
-    "@noble/curves": "^2.4.0",
-    "@noble/hashes": "^2.4.0",
-    "@noble/post-quantum": "^0.7.1",
-    "tweetnacl": "^1.0.3"
+    "@bmatusiak/rectify": "github:bmatusiak/rectify#a0d9f0e6e537053122273b1f763ac87ae461361c"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

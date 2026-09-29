@@ -27,9 +27,9 @@
  */
 'use strict';
 
-const nacl = require('tweetnacl');
-const { gcm } = require('@noble/ciphers/aes.js');
-const { sha256 } = require('@noble/hashes/sha2.js');
+const nacl = require('../../src/vendor/exports/tweetnacl.js');
+const { gcm } = require('../../src/vendor/exports/@noble/ciphers/aes.js');
+const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 
 const okconnect = require('../../src/crypto/okconnect');
 const transit = require('../../src/session/transit');

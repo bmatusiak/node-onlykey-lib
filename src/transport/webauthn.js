@@ -43,7 +43,7 @@
  */
 'use strict';
 
-const { randomBytes: nobleRandomBytes } = require('@noble/hashes/utils.js');
+const { randomBytes: nobleRandomBytes } = require('../vendor/exports/@noble/hashes/utils.js');
 const { RP_ID } = require('../protocol/ctap');
 
 /**

@@ -33,7 +33,7 @@
  */
 'use strict';
 
-const { sha256 } = require('@noble/hashes/sha2.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
 
 /** The buttons a standard OnlyKey has. A DUO has three - see below. */
 const BUTTONS = 6;

@@ -16,8 +16,30 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const pkg = require('../package.json');
 
-test('every exports target exists on disk', () => {
+/*
+ * The exports map as concrete [subpath, target] pairs. A pattern entry
+ * ("./vendor/@noble/*" - the vendored libraries' shims, one per module) is
+ * expanded to every file under its target directory, so each one is held to
+ * the same checks as a hand-written entry.
+ */
+function concreteExports() {
+  const out = [];
   for (const [subpath, target] of Object.entries(pkg.exports)) {
+    if (!subpath.includes('*')) { out.push([subpath, target]); continue; }
+    const dir = path.join(ROOT, target.slice(0, target.indexOf('*')));
+    (function walk(rel) {
+      for (const e of fs.readdirSync(path.join(dir, rel), {withFileTypes: true})) {
+        const r = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) walk(r);
+        else if (!r.endsWith('.d.ts')) out.push([subpath.replace('*', r), target.replace('*', r)]);
+      }
+    })('');
+  }
+  return out;
+}
+
+test('every exports target exists on disk', () => {
+  for (const [subpath, target] of concreteExports()) {
     assert.ok(
       fs.existsSync(path.join(ROOT, target)),
       `${subpath} -> ${target} does not exist`,
@@ -26,7 +48,7 @@ test('every exports target exists on disk', () => {
 });
 
 test('every exports target actually loads', () => {
-  for (const [subpath, target] of Object.entries(pkg.exports)) {
+  for (const [subpath, target] of concreteExports()) {
     assert.doesNotThrow(
       () => require(path.join(ROOT, target)),
       `${subpath} -> ${target} threw on require`,
@@ -218,7 +240,9 @@ test('nothing under src/ requires a Node built-in, so it bundles for a browser',
    */
   const { builtinModules } = require('module');
   const builtins = new Set(builtinModules);
+  const VENDORED = path.join(ROOT, 'src', 'vendor', 'node_modules');
   const hits = [];
+  const vendorHits = [];
   (function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
@@ -227,9 +251,25 @@ test('nothing under src/ requires a Node built-in, so it bundles for a browser',
       const source = fs.readFileSync(full, 'utf8');
       for (const m of source.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
         const name = m[1].replace(/^node:/, '').split('/')[0];
-        if (builtins.has(name)) hits.push(`${path.relative(ROOT, full)}: ${m[1]}`);
+        if (!builtins.has(name)) continue;
+        const hit = `${path.relative(ROOT, full).replace(/\\/g, '/')}: ${m[1]}`;
+        (full.startsWith(VENDORED) ? vendorHits : hits).push(hit);
       }
     }
   })(path.join(ROOT, 'src'));
   assert.deepEqual(hits, []);
+  /*
+   * The vendored third-party copies (src/vendor/node_modules/) are the
+   * published bytes and are not ours to edit, so they are held to a KNOWN list
+   * instead: tweetnacl reaches for Node's `crypto` only when there is no global
+   * crypto.getRandomValues - the same file this library used from npm before it
+   * was vendored. A version bump that adds a built-in fails here, where it can
+   * be looked at, rather than in a consumer's bundler.
+   */
+  assert.deepEqual(vendorHits.sort(), [
+    'src/vendor/node_modules/tweetnacl/nacl-fast.js: crypto',
+    'src/vendor/node_modules/tweetnacl/nacl-fast.min.js: crypto',
+    'src/vendor/node_modules/tweetnacl/nacl.js: crypto',
+    'src/vendor/node_modules/tweetnacl/nacl.min.js: crypto',
+  ]);
 });

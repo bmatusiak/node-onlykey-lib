@@ -197,7 +197,7 @@ test('a passphrase mismatch is reported', () => {
 });
 
 test('the backup key is SHA256 of the passphrase, at slot 131 type 161', () => {
-  const { sha256 } = require('@noble/hashes/sha2.js');
+  const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
   const { fromLatin1 } = require('../src/bytes');
   const phrase = 'correct horse battery staple xyz';
 

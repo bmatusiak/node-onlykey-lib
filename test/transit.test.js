@@ -66,7 +66,7 @@ test('the box is length-preserving', () => {
 });
 
 test('transitKey is SHA256 over raw beforenm bytes', () => {
-  const { sha256 } = require('@noble/hashes/sha2.js');
+  const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
   const expected = toHex(sha256(fromHex(V.beforenm)));
   const got = transit.transitKey(fromHex(V.bobPublic), fromHex(V.aliceSecret));
   assert.equal(toHex(got), expected);
