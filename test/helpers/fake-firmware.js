@@ -85,9 +85,8 @@ function fakeFirmware(opts = {}) {
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
+  let generations = 0;
   let pinStep = 0;
-  /* A generation that has been triggered and is waiting for three buttons. */
-  let pending = null;
 
   /*
    * The lock state, modelled because it gates almost everything. A locked
@@ -172,19 +171,31 @@ function fakeFirmware(opts = {}) {
        *
        * Modelled faithfully in the two ways that matter to a client:
        *
-       *   it does not answer, at all, until the button challenge is
-       *   confirmed - the first request only primes it and returns
-       *   (okcore.cpp:5326-5339); and
+       *   it answers the ONE request, with no button challenge - libraries
+       *   97f0149 removed the PQC keygen gate, and 3.0.5 and release 3.1.0
+       *   generate straight away (ecc_priv_flash: "No confirmation, as for ECC
+       *   keygen"). It answers from INSIDE the write here, the fastest a device
+       *   can, so a client that only starts listening after its write returns
+       *   loses the key's first reports and fails these tests; and
        *
-       *   when it does answer there is NO acknowledgement sentence, only the
-       *   raw key. ecc_priv_flash runs `quiet` for exactly this reason, and a
-       *   fake that acknowledged would let a client pass here and then read
+       *   there is NO acknowledgement sentence, only the raw key.
+       *   ecc_priv_flash runs `quiet` for exactly this reason, and a fake that
+       *   acknowledged would let a client pass here and then read
        *   "Successfully set ECC Key" as the first 64 bytes of a real key.
        */
+      /* Outside config mode the whole frame is dropped - the generate trigger too. */
+      if (setPrivSilent) return undefined;
       let sum = 0;
       for (let i = 7; i <= 14; i++) sum += frame[i];
       if (sum === 2040) {
-        pending = { slot: frame[5], keyType: frame[6] };
+        generations += 1;
+        const key = generates[frame[5]];
+        if (!key) return pipe.deliver(reportText('Error not in config mode'));
+        for (let at = 0; at < key.length; at += 64) {
+          const report = new Uint8Array(64);
+          report.set(key.subarray(at, Math.min(at + 64, key.length)));
+          pipe.deliver(report);
+        }
         return undefined;
       }
 
@@ -364,33 +375,8 @@ function fakeFirmware(opts = {}) {
       }
     },
 
-    /**
-     * The third button press, which is what actually runs a generation.
-     *
-     * The HOST does not re-send the trigger: the firmware's button handler
-     * decrypts the payload it stored, rebuilds the buffer and calls
-     * set_private() itself (OnlyKey.ino:846-859). So a fake that generated on
-     * a second write would be modelling a client bug as if it were the
-     * protocol.
-     */
-    confirmChallenge() {
-      if (!pending) throw new Error('no generation is waiting for a challenge');
-      const { slot } = pending;
-      pending = null;
-      const key = generates[slot];
-      if (!key) {
-        return pipe.deliver(reportText('Error not in config mode'));
-      }
-      for (let at = 0; at < key.length; at += 64) {
-        const report = new Uint8Array(64);
-        report.set(key.subarray(at, Math.min(at + 64, key.length)));
-        pipe.deliver(report);
-      }
-      return undefined;
-    },
-
-    /** Is a generation waiting for its button challenge? */
-    get awaitingChallenge() { return pending !== null; },
+    /** How many generate triggers have arrived. */
+    get generations() { return generations; },
 
     /** How many OKPIN messages have been received. */
     get pinStep() { return pinStep; },

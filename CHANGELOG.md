@@ -17,6 +17,16 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **`device.generateKey` asks for no button challenge - the firmware dropped it.**
+  libraries 97f0149 (2026-09-22) removed the PQC keygen gate; the bench key
+  (b412e78), 3.0.5 and release 3.1.0 all generate on the one OKSETPRIV, and no
+  signed release has PQC keygen. The lib still computed digits, emitted
+  `challenge` and called `confirm` - so a caller pressing on the user's behalf
+  typed slot contents on an unlocked key. Now no digits, no event; `confirm`,
+  `duo`, `formula` are accepted and ignored. Also fixed the race that exposed:
+  the collector marked the request sent only after `await write`, so a device
+  answering inside the write (the emulator) lost the key's first reports.
+
 - **One copy of every third-party library, vendored here.** `@noble/hashes`,
   `@noble/curves`, `@noble/ciphers` 2.4.0, `@noble/post-quantum` 0.7.1 and
   `tweetnacl` 1.0.3 are no longer npm dependencies. They are their npm tarballs,

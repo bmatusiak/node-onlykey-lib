@@ -27,7 +27,6 @@ const encoders = require('../../src/device/encoders');
 const { MSG, FIELD } = require('../../src/protocol/msg');
 const okmsg = require('../../src/protocol/okmsg');
 const { DeviceConsole, pressLine, safeTail } = require('../../src/device/console');
-const { challengeDigits } = require('../../src/protocol/challenge');
 
 /**
  * A byte the console parser recognises as neither a press nor a command.
@@ -853,31 +852,28 @@ const USER_INPUT_ENUM_ROWS = {
    * So the answer here is raw key bytes from the first report, and the only
    * thing that says how many to read is the key type.
    *
-   * ## The button challenge, and why the frame is sent ONCE
+   * ## No button challenge - the firmware dropped it
    *
-   * Generation needs a three-button confirmation. The first request primes it
-   * - ecc_priv_flash builds a nine-byte payload `[keytype, FF x8]`, hands it
-   * to process_packets(), sets a pending operation and RETURNS without
-   * generating (okcore.cpp:5326-5339).
+   * This used to model a three-button confirmation: the first request primed
+   * a challenge over `[keytype, FF x8]`, and the third press replayed it. That
+   * gate lived in 0c-coder's development tree until libraries 97f0149
+   * (2026-09-22, "stop gating PQC keygen"), which removed it: OKSETPRIV only
+   * arrives in config mode or on first use (okcore.cpp dispatches it on
+   * `configmode == true || !initcheck`), both already presence proofs, and ECC
+   * keygen never asked for more. Every tree with PQC keygen worth supporting
+   * has 97f0149 - the bench key (b412e78), 3.0.5 (57340df) and release 3.1.0
+   * (eb25290, read at ecc_priv_flash: "No confirmation, as for ECC keygen") -
+   * and no signed release has PQC keygen at all.
    *
-   * The host does not re-send. The third press replays it: the button handler
-   * decrypts the stored payload, rebuilds the buffer and calls set_private()
-   * itself (OnlyKey.ino:846-859). A client that sent the trigger again while
-   * the challenge was up would hit `CRYPTO_AUTH != 4` and be ignored, and on
-   * an unlocked device the stray presses that follow type slot contents at
-   * the keyboard.
+   * So the device answers the ONE request with the key, and nothing is shown
+   * or pressed. That matters beyond wording: a caller pressing "the challenge"
+   * on the user's behalf until the device answered would, on an unlocked key,
+   * type slot contents at the keyboard with every press that raced the
+   * answer. `confirm`, `duo` and `formula` are still accepted, so existing
+   * callers keep working, and are ignored; no `challenge` event is emitted.
    *
-   * The digits are computed over those nine bytes, NOT over the eight-byte
-   * payload - done_process_packets hashes what process_packets was given.
-   *
-   * ## One press may be enough
-   *
-   * For slots 101..116 the firmware reads the stored-key challenge
-   * preference, and when it is on it sets CRYPTO_AUTH straight to 3 and never
-   * computes the digits at all (okcore.cpp:7567-7573): ANY single press
-   * confirms. `confirm` is therefore handed `isAnswered()` so a caller
-   * pressing on the user\'s behalf can stop after the device has answered,
-   * instead of leaving two stray presses behind.
+   * The frame is still sent ONCE: a second trigger would generate a second
+   * key over the first.
    *
    * @param {number|string} slotId  101..116
    * @param {number} keyType        keys.KEY_TYPE.MLKEM768 or .XWING - the
@@ -886,17 +882,7 @@ const USER_INPUT_ENUM_ROWS = {
    * @returns {Promise<Uint8Array>} the public key, 1184 or 1216 bytes
    */
   async function generateKey(slotId, keyType, {
-    confirm = null,
-    duo = false,
-    /*
-     * The challenge formula, defaulted from the DEVICE - see the long note at
-     * the same option in plugins/okcrypto. Three formulas exist in the
-     * firmware, challengeDigits() implements all three, and nothing used to
-     * pass this, so `capabilities().challengeFormula` had no consumers and the
-     * 'legacy' branch was unreachable.
-     */
-    formula = (session && session.capabilities
-      && session.capabilities.challengeFormula) || undefined,
+    /* confirm, duo, formula: accepted from older callers and ignored - there is no challenge (see above). */
     timeoutMs = 60000,
     settleMs = 60,
     /*
@@ -951,13 +937,6 @@ const USER_INPUT_ENUM_ROWS = {
       msg: MSG.OKSETPRIV, slot, field: keyType, payload: GENERATE_TRIGGER,
     });
 
-    /* The nine bytes the firmware hashes - see the note above. */
-    const challenged = new Uint8Array(1 + GENERATE_TRIGGER.length);
-    challenged[0] = keyType;
-    challenged.set(GENERATE_TRIGGER, 1);
-    const digits = challengeDigits(challenged, { duo, formula });
-
-    let answered = false;
     let started = false;
     let off = null;
     const collected = [];
@@ -979,6 +958,12 @@ const USER_INPUT_ENUM_ROWS = {
      *
      * A timestamp rather than a drain: draining guesses how long the bus
      * needs to go quiet, and this needs no guess at all.
+     *
+     * The mark is set just BEFORE the write, not after it. With no challenge
+     * the device answers as soon as it has generated, and a fast one (the
+     * emulator) can answer while the write is still being awaited - a mark set
+     * after it dropped the key's first reports. Earlier replies are kept out
+     * by the quiet-bus wait, which comes first.
      */
     let sent = false;
 
@@ -986,8 +971,8 @@ const USER_INPUT_ENUM_ROWS = {
       const timer = setTimeout(() => {
         if (off) off();
         reject(new Error(
-          `slot ${slot} produced no key within ${timeoutMs}ms; the challenge `
-          + `was ${digits.join('-')} - were those buttons pressed?`,
+          `slot ${slot} produced no key within ${timeoutMs}ms - generation needs `
+          + 'config mode (or first use); is the key in it?',
         ));
       }, timeoutMs);
 
@@ -1000,14 +985,12 @@ const USER_INPUT_ENUM_ROWS = {
               || state.state === 'uninitialized' || state.state === 'bootloader') return;
           if (state.state === 'error') {
             clearTimeout(timer);
-            answered = true;
             if (off) off();
             reject(okmsg.deviceError(state.raw));
             return;
           }
           started = true;
         }
-        answered = true;
         collected.push(Uint8Array.from(event.data));
         got += event.data.length;
         if (got < bytes) return;
@@ -1022,14 +1005,12 @@ const USER_INPUT_ENUM_ROWS = {
 
     if (quietMs > 0) await busQuiet(quietMs, quietTimeoutMs);
 
-    await transport.write(IFACE.VENDOR, frame);
     sent = true;
-    events.emit('challenge', { slot, digits });
-    progress('generateKey', { slot, keyType, digits });
+    await transport.write(IFACE.VENDOR, frame);
+    progress('generateKey', { slot, keyType });
 
     let key;
     try {
-      if (confirm) await confirm({ digits, slot, isAnswered: () => answered });
       key = await answer;
     } catch (err) {
       if (off) off();
