@@ -17,6 +17,23 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **`onlykey-js` - a command line in the library, the start of replacing
+  python-onlykey's `onlykey-cli`.** A `bin` with no protocol code of its own:
+  each command is a few lines over the device plugin, on the stack
+  `node-onlykey-lib/cli/desktop`'s `startDesktop()` composes (host, usb
+  transport, session, device, okcrypto - the transport opened, which no plugin
+  does). Read-only first: `help`, `version`, `fwversion`, `status`,
+  `capabilities`, `getlabels`, `getkeylabels`, with python's names and output
+  layout; `capabilities` is derived from the version, since no signed release
+  sends the report python asks for. Named `onlykey-js` so it cannot shadow
+  `onlykey-cli` while both are installed. The key is reached by
+  `cli/transport-hid.js`, a pipe for transport/usb over node-hid: vendor
+  interface by usage page 0xffab, the 0x00 report ID hidapi takes on every
+  write, clear refusals for no key, two keys (`--path`) and no node-hid.
+  `node-hid` is an optionalDependency required lazily under `cli/` only, so
+  nothing under `src/` or `plugins/` can bundle it. No firmware update path.
+  Tested over the fake firmware and a fake node-hid; see `cli/README.md`.
+
 - **Classic PGP keys on the device, in a browser too.** `crypto.classic
   .registerClassicHooks(openpgp, ok, { signSlot, decryptSlot })` routes an RSA or
   Ed25519/cv25519 key's private operations to device slots through the PGP fork's
