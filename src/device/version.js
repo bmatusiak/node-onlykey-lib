@@ -162,6 +162,28 @@ function parseStatus(status) {
     out.state = 'uninitialized';
     out.version = PRE_VERSION_FIRMWARE;
     out.fwUpdateOverUsb = false; // OnlyKeyComm.js:1349
+  } else if (/BOOTLOADER/.test(trimmed)) {
+    /*
+     * BEFORE the UNLOCKED test, because the bootloader says
+     * "UNLOCKED BOOTLOADERv1". Tested after it, that parsed as an unlocked
+     * application with version " BOOTLOADERv1" - a key waiting for a firmware
+     * image offered to the user as an unlocked key. The string comes from the
+     * closed OnlyKey bootloader (no source in OnlyKey-Firmware or libraries),
+     * so the reference is how both desktops read it: the classic App tests
+     * BOOTLOADER before UNLOCKED and sets isBootloader (OnlyKeyComm.js:1821),
+     * the App rewrite does the same (ResponseParser.ts:90, pinned by
+     * ResponseParser.test.ts "does not treat UNLOCKED BOOTLOADERv1 as an
+     * initialized unlock").
+     *
+     * The version is what follows the word - "v1", the BOOTLOADER's version,
+     * not a firmware release: parseRelease() reads no release from it, so no
+     * capability is derived from it. A bootloader takes a firmware image by
+     * definition, hence fwUpdateOverUsb (the App sets fwUpdateSupport here,
+     * OnlyKeyComm.js:1827).
+     */
+    out.state = 'bootloader';
+    out.version = trimmed.slice(trimmed.indexOf('BOOTLOADER') + 'BOOTLOADER'.length).trim() || null;
+    out.fwUpdateOverUsb = true;
   } else if (/^UNLOCKED/.test(trimmed)) {
     out.state = 'unlocked';
     out.version = trimmed.slice('UNLOCKED'.length);
@@ -172,9 +194,6 @@ function parseStatus(status) {
   } else if (/^INITIALIZED/.test(trimmed)) {
     out.state = 'locked';
     out.model = MODEL.CLASSIC;
-  } else if (/BOOTLOADER/.test(trimmed)) {
-    // The desktop app treats bootloader as uninitialized (OnlyKeyComm.js:1020).
-    out.state = 'bootloader';
   } else if (/^Error/i.test(trimmed)) {
     out.state = 'error';
   }

@@ -39,6 +39,21 @@ test('the four state words are told apart', () => {
   assert.equal(parseStatus('BOOTLOADERv1').state, 'bootloader');
 });
 
+test('UNLOCKED BOOTLOADERv1 is the bootloader, not an unlocked key', () => {
+  /*
+   * The bootloader's status line starts with UNLOCKED. Read as an unlocked
+   * application it had version " BOOTLOADERv1" and offered a key waiting for
+   * firmware as one ready for use. Vector: ok-app-rewrite
+   * ResponseParser.test.ts:142 - bootloader, version "v1".
+   */
+  const s = parseStatus('UNLOCKED BOOTLOADERv1');
+  assert.equal(s.state, 'bootloader');
+  assert.equal(s.version, 'v1');
+  assert.equal(s.release, null, "the bootloader's version is not a firmware release");
+  assert.equal(s.fwUpdateOverUsb, true);
+  assert.equal(parseStatus('BOOTLOADER').version, null);
+});
+
 test('UNINITIALIZED is not read as INITIALIZED', () => {
   /*
    * "UNINITIALIZED" contains "INITIALIZED". A blank key read as a locked one

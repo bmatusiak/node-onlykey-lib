@@ -140,17 +140,22 @@ function text(bytes) {
  */
 function parseState(response) {
   const raw = typeof response === 'string' ? response : text(response);
+  /*
+   * A key that has taken the OKFWUPDATE kick re-enumerates saying
+   * BOOTLOADER (the desktop keys isBootloader off the same word,
+   * OnlyKeyComm.js:1821). It was 'unknown' here, which a host cannot tell
+   * from a garbled reply; the firmware update path needs to know.
+   *
+   * FIRST, before UNLOCKED: the bootloader's line is "UNLOCKED BOOTLOADERv1",
+   * which /^UNLOCKED/ claimed as an unlocked application key. Both desktops
+   * test BOOTLOADER first (OnlyKeyComm.js:1821, ok-app-rewrite
+   * ResponseParser.ts:90); version.parseStatus does the same.
+   */
+  if (/BOOTLOADER/.test(raw)) return { state: 'bootloader', raw };
   if (/^UNLOCKED/.test(raw)) return { state: 'unlocked', raw };
   if (/^UNINITIALIZED/.test(raw)) return { state: 'uninitialized', raw };
   if (/^INITIALIZED/.test(raw)) return { state: 'locked', raw };
   if (/^Error/i.test(raw)) return { state: 'error', raw };
-  /*
-   * A key that has taken the OKFWUPDATE kick re-enumerates saying
-   * BOOTLOADER (the desktop keys isBootloader off the same word,
-   * OnlyKeyComm.js:1447). It was 'unknown' here, which a host cannot tell
-   * from a garbled reply; the firmware update path needs to know.
-   */
-  if (/BOOTLOADER/.test(raw)) return { state: 'bootloader', raw };
   return { state: 'unknown', raw };
 }
 
