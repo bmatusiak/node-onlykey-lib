@@ -17,6 +17,14 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **`node-onlykey-lib/bundler-aliases` - the exports map for webpack 4.**
+  The web app's bundler predates package "exports", so every subpath that is
+  not a real path failed to resolve. `aliases()` generates one alias per
+  export. Measured in a webpack 4.47 spike: with it, babel over the library
+  and `node: { crypto: "empty" }`, the whole stack (host, tunnel transport,
+  session, device, okcrypto, webauthn ctap, crypto, the PGP fork) bundles with
+  no warnings and composes at runtime.
+
 - **`device.generateKey` asks for no button challenge - the firmware dropped it.**
   libraries 97f0149 (2026-09-22) removed the PQC keygen gate; the bench key
   (b412e78), 3.0.5 and release 3.1.0 all generate on the one OKSETPRIV, and no
