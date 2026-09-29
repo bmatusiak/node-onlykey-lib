@@ -5,6 +5,9 @@
   "license": "Apache-2.0",
   "type": "commonjs",
   "main": "src/index.js",
+  "bin": {
+    "onlykey-js": "cli/index.js"
+  },
   "exports": {
     ".": "./src/index.js",
     "./bytes": "./src/bytes.js",
