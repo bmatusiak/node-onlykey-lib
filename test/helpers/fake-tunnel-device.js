@@ -62,6 +62,8 @@ function fakeTunnelDevice({
   webcryptLevel = 2,
   wipeMs = 30,
   derived = Uint8Array.from({ length: 65 }, (_, i) => (i === 0 ? 0x04 : i)),
+  /* (cmd, payload) => result bytes, to model a classic RSA/ECC answer's length. */
+  results = null,
 } = {}) {
   const status = `UNLOCKED${firmware}`;
   const v2 = version.capabilities(status).transitV2 === true;
@@ -171,7 +173,7 @@ function fakeTunnelDevice({
         stageText('Error incorrect challenge was entered');
         return;
       }
-      const result = resultFor(pending.cmd, pending.payload);
+      const result = (results && results(pending.cmd, pending.payload)) || resultFor(pending.cmd, pending.payload);
       stage(v2 ? sealOut(result) : result);
       cryptoAuth = false;
       pending = null;

@@ -1107,7 +1107,7 @@ function setup(imports, register, config) {
    * @returns {object|null} the reply, when the FINAL chunk was answered with the
    *   result itself (a slot whose confirmation is "none"); null otherwise
    */
-  function checkRequestReply(reply, { chunk: n, chunks, isFinal, expected, cmd, slot }) {
+  function checkRequestReply(reply, { chunk: n, chunks, isFinal, expected, variable = false, cmd, slot }) {
     const where = `chunk ${n} of ${chunks}`;
     if (!reply) throw notAccepted(`${where} got no reply at all`);
     if (ACCEPTED.has(reply.status)) return null;
@@ -1159,6 +1159,13 @@ function setup(imports, register, config) {
        */
       const len = reply.data.length;
       if (isFinal && (len === chunk.RESPONSE_CHUNK || len === expected)) return reply;
+      /*
+       * Length unknown (a classic RSA decrypt): a final chunk answered at once -
+       * a slot that needs no confirmation - is the result if it fits one poll.
+       * A stale buffer served instead would not open under this session's
+       * transit counter, so it still fails, at the open, naming authentication.
+       */
+      if (isFinal && variable && len < chunk.RESPONSE_CHUNK) return reply;
       if (isFinal && chunk.asDeviceMessage(reply.data)) return reply;
       throw notAccepted(
         `${where} was answered with ${len} bytes of data where the device should `
@@ -1216,9 +1223,18 @@ function setup(imports, register, config) {
 
     const payload = Uint8Array.from(data);
     if (!payload.length) throw new Error('nothing to sign or decrypt');
-    if (!expectBytes) {
-      throw new Error('a tunnelled operation needs expectBytes: the result is collected by polling');
-    }
+    /*
+     * expectBytes is OPTIONAL. Without it the result is collected by the
+     * firmware's own end rule - each OKPING serves min(512, remaining), so a
+     * chunk shorter than 512 is the last (chunk.pollForResponse
+     * untilShortChunk). That is what a classic RSA decrypt needs: its answer
+     * is the unpadded plaintext, whose length nothing on the host knows in
+     * advance. Pass expectBytes where the length IS known - it also drives the
+     * shape guard, and it is the only safe rule for a result that is an exact
+     * multiple of 512 (the firmware re-serves chunk 0 to the extra poll rather
+     * than answering empty).
+     */
+    const variable = !expectBytes;
     if (session && session.configMode) {
       throw new Error(
         'this device is in CONFIG MODE, where it goes silent on CTAPHID - so this '
@@ -1245,7 +1261,7 @@ function setup(imports, register, config) {
     const sizes = chunk.planKeyhandleChunks(payload.length, {
       overhead: v2 ? transit.OVERHEAD : 0,
     });
-    const framed = v2 ? expectBytes + transit.OVERHEAD : expectBytes;
+    const framed = variable ? null : (v2 ? expectBytes + transit.OVERHEAD : expectBytes);
 
     const digits = challengeDigits(payload, { duo, formula });
 
@@ -1263,7 +1279,7 @@ function setup(imports, register, config) {
       send: (req) => tunnelSend(bound, req, { timeoutMs }),
       onProgress,
       onReply: (reply, where) => {
-        const result = checkRequestReply(reply, { ...where, expected: framed, cmd: msg, slot });
+        const result = checkRequestReply(reply, { ...where, expected: framed, variable, cmd: msg, slot });
         if (result) first = result;
       },
     });
@@ -1303,6 +1319,7 @@ function setup(imports, register, config) {
           );
         },
         expected: framed,
+        untilShortChunk: variable,
         intervalMs: pollIntervalMs,
         noProgressBudgetMs: timeoutMs,
         onProgress: () => { answered = true; },
@@ -1327,7 +1344,7 @@ function setup(imports, register, config) {
         throw err;
       }
     }
-    if (out.length !== expectBytes) {
+    if (!variable && out.length !== expectBytes) {
       throw new Error(`the device returned ${out.length} bytes; this operation answers ${expectBytes}`);
     }
     /* Only a COMPLETED operation arms the device timers - see settleStaleTimers. */
@@ -1415,12 +1432,21 @@ function setup(imports, register, config) {
      * cannot mean both, and the full run said so the moment the composite
      * shape was fixed.
      */
+    /*
+     * OVER THE TUNNEL TOO (storedOperation): a browser reaches the same slot
+     * through WebAuthn - the classic PGP pages. There the answer is collected by
+     * polling; pass expectBytes when the length is known (RSA sign: the modulus
+     * size; ECC sign: 64), leave it out for an RSA decrypt, whose plaintext
+     * length nobody knows in advance. Stored keys over the tunnel need the
+     * device to allow it (webcrypt policy, field 31 - "Error stored key use
+     * over FIDO2 not enabled" otherwise).
+     */
     async sign(slot, data, opts = {}) {
-      return deviceOperation(MSG.OKSIGN, slot, data, opts);
+      return storedOperation(MSG.OKSIGN, slot, data, opts);
     },
     /** Decrypt with an ordinary key the device holds. OKDECRYPT, same three phases. */
     async decrypt(slot, data, opts = {}) {
-      return deviceOperation(MSG.OKDECRYPT, slot, data, opts);
+      return storedOperation(MSG.OKDECRYPT, slot, data, opts);
     },
     /**
      * AGENT DERIVATION - SSH and GPG keys derived inside the device from an

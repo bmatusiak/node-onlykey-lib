@@ -67,8 +67,15 @@ test('a browser composes with no vendor interface, and the vendor side refuses b
     transport.write(IFACE.VENDOR, new Uint8Array(64)),
     (err) => err.code === 'NO_VENDOR_INTERFACE' && /only\s+through the WebAuthn tunnel/.test(err.message),
   );
-  /* A vendor-only operation fails at its write, and leaves no timer behind. */
-  await assert.rejects(app.services.okcrypto.sign(1, [1, 2, 3], { timeoutMs: 60000 }), /no vendor interface/);
+  /*
+   * A vendor-only operation fails at its write, and leaves no timer behind.
+   * Agent derivation, not sign(): stored-key sign/decrypt now run over the
+   * tunnel too (the classic PGP pages), so they no longer prove this.
+   */
+  await assert.rejects(
+    app.services.okcrypto.agent.sign(new Uint8Array(32), [1, 2, 3], { keyType: 1, timeoutMs: 60000 }),
+    /no vendor interface/,
+  );
   await app.destroy();
 });
 
@@ -339,4 +346,36 @@ test('a payload that cannot be sealed without padding is refused before anything
   );
   assert.equal(device.requests.length, before);
   await app.destroy();
+});
+
+/* ------------------------------------------ classic keys over the tunnel */
+
+test('classic RSA decrypt over the tunnel: the plaintext length is not known, and is not needed', async () => {
+  /*
+   * An RSA decrypt answers the unpadded plaintext (a PGP session key here: 34
+   * bytes), so nothing on the host can say how long it is. Collected by the
+   * firmware's own end rule - a poll shorter than 512 is the last - and
+   * opened from its v2 frame (34 + 20 on the wire).
+   */
+  const sessionKey = Uint8Array.from({ length: 34 }, (_, i) => 200 - i);
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc', results: (cmd) => (cmd === MSG.OKDECRYPT ? sessionKey : null) });
+  const app = await start(device);
+  const mpi = Uint8Array.from({ length: 256 }, (_, i) => (i * 13) & 0xff);
+  const out = await app.services.okcrypto.decrypt(1, mpi, { ...FAST, confirm: pressing(device) });
+  assert.deepEqual(Uint8Array.from(out), sessionKey);
+  await app.destroy();
+});
+
+test('classic RSA-4096 sign over the tunnel: 512 bytes arrive as 512 + 20 across two polls', async () => {
+  const signature = Uint8Array.from({ length: 512 }, (_, i) => (i * 3 + 1) & 0xff);
+  const results = (cmd) => (cmd === MSG.OKSIGN ? signature : null);
+  for (const expectBytes of [512, 0]) {
+    const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc', results });
+    const app = await start(device);
+    const out = await app.services.okcrypto.sign(2, new Uint8Array(32).fill(7), {
+      ...FAST, confirm: pressing(device), expectBytes,
+    });
+    assert.deepEqual(Uint8Array.from(out), signature, `expectBytes ${expectBytes}`);
+    await app.destroy();
+  }
 });

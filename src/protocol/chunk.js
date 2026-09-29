@@ -359,10 +359,14 @@ async function pollForResponse({
            * embeds, and that string is INSIDE the ciphertext - knowable only
            * after opening, which needs every chunk first.
            *
-           * A response that is an exact multiple of RESPONSE_CHUNK costs one
-           * extra poll, which the device answers with a zero-length chunk; that
-           * fails the `reply.data.length` gate above and falls through to the
-           * budget, so it ends rather than spinning.
+           * A response that is an EXACT MULTIPLE of RESPONSE_CHUNK is the one
+           * case this rule gets wrong. This used to say the extra poll is
+           * answered with a zero-length chunk; read at release 3.1.0
+           * (ok_extension.cpp:536-540) the firmware resets its cursor but keeps
+           * the reply staged, so the extra poll RE-SERVES CHUNK 0 - which this
+           * loop would append. Pass `expected` wherever the length can be known;
+           * this rule is for the lengths that cannot (a derive's framed status,
+           * an RSA decrypt's plaintext), which do not land on 512 in practice.
            *
            * `expected` stays the stronger rule where a caller does know the
            * length, because it also drives the shape guard. Neither set keeps
