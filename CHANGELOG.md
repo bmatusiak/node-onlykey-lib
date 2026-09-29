@@ -17,6 +17,43 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **The desktop App's six lib gaps, closed from the firmware.** OnlyKey-App's
+  port onto the library (its docs/LIB-PORT.md) kept raw frames for these; each
+  was read against release 3.1.0 and fixed there. `device.wipeYubiAuth()` -
+  the global Yubico OTP wipe, which the firmware performs WITHOUT replying
+  (okcore.cpp wipe_slot has no hidprint for slot 0 field 10), so it listens
+  only for a refusal. `setPreference('secProfileMode')` no longer spends three
+  10 s timeouts: the firmware stores it silently on first use and refuses it
+  later with "Second Profile Mode may only be changed on first use", which has
+  no "Error" and now classifies as `refused`. `device.restartByRestore()` -
+  the App's no-file restore named: one all-zero OKRESTORE, which RESTORE
+  turns into CPU_RESTART, the restart a release build has (only in config
+  mode or on first use). `pinStep` ends on any device refusal, not just the
+  two PIN sentences; `committed` no longer waits the full timeout on a release
+  build, whose console line is DEBUG-only; and `duoPin` skips the status
+  broadcast that can arrive before the answer - by timing, since a locked DUO
+  reads its PIN only in its broadcast tick and a wrong PIN's only "no" is the
+  next INITIALIZED-D. These three silent operations return
+  `confirmed: false` and are never retried.
+
+- **"UNLOCKED BOOTLOADERv1" is the bootloader.** `version.parseStatus` and
+  `okmsg.parseState` tested UNLOCKED first, so a key waiting for firmware
+  parsed as an unlocked key with version " BOOTLOADERv1". Both desktops test
+  BOOTLOADER first and read version "v1"; so does the library now.
+
+- **Key import: secp256k1, and 33-byte scalars.** secp256k1 keys map to key
+  type 3 (KEYTYPE_P256K1, which the firmware generates, signs and does ECDH
+  with) from SSH (`secp256k1` / `k256`) and OpenPGP (OID 1.3.132.0.10); they
+  were refused as unknown curves. A 33-byte ECC scalar with a zero sign byte -
+  an SSH mpint whose top bit is set - is stripped to 32 instead of thrown.
+  Vectors from the App rewrite's keyMaterial tests.
+
+- **age docs match device custody.** `crypto/age_pqc` and `crypto/age_file`
+  described the old split-custody X-Wing; from 3.0.5 the device returns the
+  finished recipient and secret. `mlkemKeypairFromSeed`, `buildRecipient`,
+  `splitDecapsulate` and `ctXOf` serve only the old design and are marked
+  deprecated - still exported, since consumers pin by hash.
+
 - **`onlykey-js` - a command line in the library, the start of replacing
   python-onlykey's `onlykey-cli`.** A `bin` with no protocol code of its own:
   each command is a few lines over the device plugin, on the stack
