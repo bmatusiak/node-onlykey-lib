@@ -17,6 +17,12 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **versions: v3.0.5 dropped from the table.** It was never released or signed,
+  and 3.1.0 supersedes it. v3.1.0 - the proposed release, pinned to its PR heads
+  (libraries eb25290, OnlyKey-Firmware 9fceea1) - is treated like the signed
+  release. `list()` no longer offers v3.0.5 and `pinsFor('v3.0.5')` refuses it
+  by name. The firmware-version gates in `src/device/version.js` are unchanged:
+  a key running a 3.0.5 build is still read correctly.
 - **onlykey-js step 2: python's write commands.** `setslot` (every python
   field, python's slot names), `wipeslot`, the fifteen settings commands,
   `settime`, `genkey`, `setkey`, `loadkey` (armored PGP) and `wipekey`, each
