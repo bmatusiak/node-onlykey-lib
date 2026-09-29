@@ -551,12 +551,15 @@ const PREFERENCES = {
    * confirmed. Two bytes on purpose; see FIELD.webcryptPolicy.
    *
    * IT IS A ONE-WAY LATCH, and that makes it unlike every other row here.
-   * While unwritten (OKWC_UNSET 0xFF) the disable bit is inherited from legacy
-   * field 21 bit 1, and the FIRST write of this byte ends that inheritance
-   * permanently - it also becomes the marker deciding whether a 2 in field 21
-   * means the enum's "no press" or the legacy bitfield's "disable extension".
-   * So writing it AT ALL, even to 0, changes how field 21 is read afterwards,
-   * and a device cannot be put back.
+   * While unwritten the disable bit is inherited from legacy field 21 bit 1,
+   * and the FIRST write of this byte ends that inheritance - it also becomes
+   * the marker deciding whether a 2 in field 21 means the enum's "no press" or
+   * the legacy bitfield's "disable extension". So writing it AT ALL, even to
+   * 0, changes how field 21 is read afterwards, and only wiping the device
+   * puts it back. "Unwritten" is blank EEPROM - 0xFF new, 0x00 after a wipe:
+   * the firmware stores every write as value | OKWC_WRITTEN (0x80), so a
+   * written 0 is 0x80 on flash and still means "derived keys only"
+   * (libraries 6546199; okcore.h OKWC_IS_WRITTEN, release 3.1.0).
    *
    * Consequences a GUI must respect: never write this as part of a "restore
    * defaults" or a save-everything, and never write it to prove a form

@@ -13,7 +13,13 @@
  *
  * READ THIS BEFORE CHANGING ANYTHING BELOW
  *
- * The transit box is NOT authenticated encryption, and calling it that is how
+ * TWO BOXES. What follows describes transit v1 - box() - which is what every
+ * firmware through v3.0.4, the last signed release, speaks, so it stays for
+ * interop. From 3.0.5 (and release 3.1.0) the firmware speaks transit v2,
+ * which IS authenticated: [ctr BE4][ct][tag16], IV [dir][ctr][0x7] - see
+ * "transit v2" further down. A session picks by capabilities().transitV2.
+ *
+ * The v1 transit box is NOT authenticated encryption, and calling it that is how
  * someone ends up trusting it. Verified in the firmware:
  *
  *   okcrypto.cpp:1016    uint8_t iv[12]; memset(iv, 0, 12);   -- every message
@@ -33,7 +39,8 @@
  * the wire to put one, and okcrypto_aes_crypto_box() takes no IV parameter. A
  * host that varied it would not get an error - the device would decrypt to
  * noise and dispatch a valid plaintext command byte against it. Fixing this
- * needs a coordinated firmware change with version negotiation.
+ * needed a coordinated firmware change with version negotiation - which is
+ * transit v2, below.
  *
  * Reproducing it is therefore required for interop. Naming it honestly is the
  * least this library can do: the export is `box`, never `encrypt`.

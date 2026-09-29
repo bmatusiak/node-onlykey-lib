@@ -64,11 +64,14 @@ async function send(ctap, req, opts = {}) {
   }
 
   /*
-   * The rpId is not a free choice. okcrypto.cpp stages "onlyagent.app" where
-   * okcrypto_hkdf() reads it, so everything derived through this path is bound
-   * to that origin - asking with a different one derives DIFFERENT KEYS, with
-   * no error at any layer. It surfaces much later as "no identity matched any
-   * of the recipients" against a file that is perfectly intact.
+   * The rpId is not a free choice, and what it decides depends on the firmware
+   * (see RP_ID and RP_IDS in ctap.js). On v3.0.4 and earlier it is an INPUT TO
+   * THE KEY - okcrypto_hkdf() v1 hashes it into the derivation - so asking with
+   * a different one derives DIFFERENT KEYS with no error at any layer; it
+   * surfaces much later as "no identity matched any of the recipients" against
+   * a file that is perfectly intact. From 3.0.5 it is ADMISSION: the origin is
+   * out of the derivation, and webcryptcheck() refuses any rpId but the two
+   * trusted names.
    */
   const params = assertionParams(credentialId, {
     rpId: opts.rpId || RP_ID,

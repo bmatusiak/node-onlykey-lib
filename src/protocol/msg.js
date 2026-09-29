@@ -153,13 +153,14 @@ const FIELD = {
    * stored keys YES (okcore_webcrypt_policy(), libraries b412e78) - see the
    * `unwritten` entry in plugins/device, which a settings form starts from.
    *
-   * ONE-WAY LATCH. While this byte is unwritten (OKWC_UNSET 0xFF) the disable
-   * bit is INHERITED from legacy field 21 bit 1, and the first explicit write
-   * ends that inheritance permanently - it is also the marker that decides
-   * whether a 2 in field 21 means the enum's USER_INPUT_NONE or the legacy
-   * bitfield's "disable extension". So writing it AT ALL, even to 0, changes
-   * how field 21 is read afterwards and cannot be undone. Never write it as a
-   * side effect of anything.
+   * ONE-WAY LATCH. While this byte is unwritten (blank EEPROM - 0xFF new,
+   * 0x00 after a wipe; every write is stored as value | 0x80, so a written 0
+   * is still written) the disable bit is INHERITED from legacy field 21 bit 1,
+   * and the first explicit write ends that inheritance - it is also the marker
+   * that decides whether a 2 in field 21 means the enum's USER_INPUT_NONE or
+   * the legacy bitfield's "disable extension". So writing it AT ALL, even to
+   * 0, changes how field 21 is read afterwards, and only a wipe undoes it.
+   * Never write it as a side effect of anything.
    */
   webcryptPolicy: 31,
 };
