@@ -68,6 +68,7 @@ export namespace CURVE {
     let ED25519_1: number;
     export { ED25519_1 as ED25519 };
     export let NIST256P1: number;
+    export let SECP256K1: number;
 }
 export namespace OID {
     let ED25519_2: number[];
@@ -76,6 +77,8 @@ export namespace OID {
     export { NIST256P1_1 as NIST256P1 };
     let CURVE25519_1: number[];
     export { CURVE25519_1 as CURVE25519 };
+    let SECP256K1_1: number[];
+    export { SECP256K1_1 as SECP256K1 };
 }
 export namespace MODIFIER {
     let BACKUP: number;
@@ -120,6 +123,20 @@ export function curveFromOid(oid: any): number;
  * general; conditional is the same result and survives a key that is not.
  */
 export function stripSignPad(bytes: any): Uint8Array<ArrayBuffer>;
+/**
+ * An ECC private scalar as the 32 bytes OKSETPRIV takes.
+ *
+ * A 33-byte scalar whose first byte is zero is the same number with a sign
+ * byte in front: an SSH mpint (and sshpk's `part.d.data`) adds one whenever
+ * the top bit of the 32-byte value is set, which is half of all P-256 and
+ * secp256k1 keys. Those were thrown here as "must be 32 bytes"; the byte is
+ * dropped instead. Only that shape is: a 32-byte scalar that happens to start
+ * with zero is kept as it is (it is a full-width value), and anything else of
+ * the wrong length is still refused, because the device takes whatever it is
+ * given and a short key signs nothing that verifies. Vectors: ok-app-rewrite
+ * keyMaterial.test.ts eccScalar32.
+ */
+export function eccScalar32(scalar: any): Uint8Array<ArrayBuffer>;
 /**
  * Extract key material from an sshpk-parsed key.
  *

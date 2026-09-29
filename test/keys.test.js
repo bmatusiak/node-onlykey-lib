@@ -211,3 +211,59 @@ test('the backup key is SHA256 of the passphrase, at slot 131 type 161', () => {
 test('a short passphrase cannot be turned into a backup key at all', () => {
   assert.throws(() => keys.backupKeyFromPassphrase('too short'), /at least 25/);
 });
+
+/* ------------------------------------------------ secp256k1, 33-byte scalars */
+
+/*
+ * Vectors from ok-app-rewrite src/api/device/__tests__/keyMaterial.test.ts
+ * (:32 eccScalar32, :108 secp256k1 SSH, :142 secp256k1 OpenPGP). The device
+ * takes secp256k1 as key type 3, KEYTYPE_P256K1 (okcore.h:231).
+ */
+
+test('secp256k1 is key type 3, from SSH under either name', () => {
+  const d = new Uint8Array(32).fill(5);
+  for (const curve of ['secp256k1', 'k256']) {
+    const out = keys.fromSshpk({ type: 'ecdsa', curve, part: { d: { data: d } } });
+    assert.deepEqual(out, { kind: 'ecc', curve: keys.CURVE.SECP256K1, scalar: d });
+  }
+  assert.equal(keys.CURVE.SECP256K1, keys.KEY_TYPE.P256K1);
+  assert.equal(keys.CURVE.SECP256K1, 3);
+  assert.throws(
+    () => keys.fromSshpk({ type: 'ecdsa', curve: 'brainpoolP256r1', part: { d: { data: d } } }),
+    /unsupported SSH key type/,
+  );
+});
+
+test('secp256k1 is key type 3, from OpenPGP by its OID 1.3.132.0.10', () => {
+  assert.deepEqual(keys.OID.SECP256K1, [0x2b, 0x81, 0x04, 0x00, 0x0a]);
+  assert.equal(keys.curveFromOid(keys.OID.SECP256K1), keys.CURVE.SECP256K1);
+  const d = new Uint8Array(32).fill(8);
+  // v5+ packet shape
+  const modern = keys.fromPgpPacket({
+    publicParams: { oid: { oid: Uint8Array.from(keys.OID.SECP256K1) } },
+    privateParams: { d },
+  });
+  assert.deepEqual(modern, { kind: 'ecc', curve: 3, scalar: d });
+  // v4 shape, primary: [oid, Q, d]
+  const v4 = keys.fromPgpPacket({ params: [{ oid: keys.OID.SECP256K1 }, {}, { data: d }] });
+  assert.equal(v4.curve, 3);
+  const prepared = keys.prepareKey(modern, { slot: 101, signature: true });
+  assert.equal(prepared.type, 0x40 | 3);
+});
+
+test('a 33-byte ECC scalar with a leading zero is the 32-byte one, not an error', () => {
+  const s = new Uint8Array(32).fill(7);
+  assert.deepEqual([...keys.eccScalar32(s)], [...s]);
+  assert.deepEqual([...keys.eccScalar32(Uint8Array.from([0, ...s]))], [...s]);
+  // A full-width 32-byte scalar that starts with zero is kept whole.
+  const startsWithZero = Uint8Array.from([0, ...new Uint8Array(31).fill(7)]);
+  assert.deepEqual([...keys.eccScalar32(startsWithZero)], [...startsWithZero]);
+  assert.throws(() => keys.eccScalar32(new Uint8Array(31)), /32 bytes/);
+  assert.throws(() => keys.eccScalar32(Uint8Array.from([1, ...s])), /32 bytes/, 'only a zero sign byte');
+
+  // And prepareKey takes the sshpk mpint shape through it.
+  const material = keys.fromSshpk({ type: 'ecdsa', curve: 'nistp256', part: { d: { data: Uint8Array.from([0, ...s]) } } });
+  const prepared = keys.prepareKey(material, { slot: 102 });
+  assert.equal(prepared.key.length, 32);
+  assert.deepEqual([...prepared.key], [...s]);
+});

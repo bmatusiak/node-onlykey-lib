@@ -19,8 +19,17 @@ const { fromLatin1 } = require('../bytes');
 /**
  * The curve identifiers the device uses. Not OIDs - the device's own numbering.
  * 0 means "unrecognised", and reaches the device as an error rather than a key.
+ *
+ * SECP256K1 is 3, KEYTYPE_P256K1 (okcore.h:231 at release 3.1.0): the
+ * firmware generates it (okcrypto.cpp:580-582), signs with it (:879), does
+ * ECDH with it (:1130-1131) and derives its public key (:2368-2369). It was
+ * missing here, so an imported secp256k1 key - SSH or OpenPGP - was refused
+ * as an unknown curve although the device takes it. The desktop rewrite maps
+ * both to 3 (ok-app-rewrite
+ * keyMaterial.test.ts "maps secp256k1 SSH ECDSA to type 3, not NIST",
+ * "maps OpenPGP secp256k1 to type 3").
  */
-const CURVE = { NONE: 0, ED25519: 1, NIST256P1: 2 };
+const CURVE = { NONE: 0, ED25519: 1, NIST256P1: 2, SECP256K1: 3 };
 
 /**
  * Every key type OKSETPRIV accepts, from okcore.h:218-228.
@@ -133,6 +142,8 @@ const OID = {
   ED25519: [43, 6, 1, 4, 1, 218, 71, 15, 1],        // 1.3.6.1.4.1.11591.15.1
   NIST256P1: [42, 134, 72, 206, 61, 3, 1, 7],       // 1.2.840.10045.3.1.7
   CURVE25519: [43, 6, 1, 4, 1, 151, 85, 1, 5, 1],   // 1.3.6.1.4.1.3029.1.5.1
+  /* RFC 4880bis / OpenPGP.js 'secp256k1'; 132 is the two base-128 bytes 0x81 0x04. */
+  SECP256K1: [43, 129, 4, 0, 10],                   // 1.3.132.0.10
 };
 
 /**
@@ -158,6 +169,7 @@ function curveFromOid(oid) {
   if (oidEquals(oid, OID.ED25519)) return CURVE.ED25519;
   if (oidEquals(oid, OID.NIST256P1)) return CURVE.NIST256P1;
   if (oidEquals(oid, OID.CURVE25519)) return CURVE.ED25519;
+  if (oidEquals(oid, OID.SECP256K1)) return CURVE.SECP256K1;
   return CURVE.NONE;
 }
 
@@ -187,6 +199,28 @@ function stripSignPad(bytes) {
 }
 
 /**
+ * An ECC private scalar as the 32 bytes OKSETPRIV takes.
+ *
+ * A 33-byte scalar whose first byte is zero is the same number with a sign
+ * byte in front: an SSH mpint (and sshpk's `part.d.data`) adds one whenever
+ * the top bit of the 32-byte value is set, which is half of all P-256 and
+ * secp256k1 keys. Those were thrown here as "must be 32 bytes"; the byte is
+ * dropped instead. Only that shape is: a 32-byte scalar that happens to start
+ * with zero is kept as it is (it is a full-width value), and anything else of
+ * the wrong length is still refused, because the device takes whatever it is
+ * given and a short key signs nothing that verifies. Vectors: ok-app-rewrite
+ * keyMaterial.test.ts eccScalar32.
+ */
+function eccScalar32(scalar) {
+  const bytes = Uint8Array.from(scalar);
+  if (bytes.length === 33 && bytes[0] === 0x00) return bytes.subarray(1);
+  if (bytes.length !== 32) {
+    throw new Error(`ECC scalar must be 32 bytes, got ${bytes.length}`);
+  }
+  return bytes;
+}
+
+/**
  * Extract key material from an sshpk-parsed key.
  *
  * WORKS, AND IS CURRENTLY UNREACHABLE FROM MOBILE. This reads an already-
@@ -209,6 +243,14 @@ function fromSshpk(key) {
   }
   if (key.curve === 'nistp256') {
     return { kind: 'ecc', curve: CURVE.NIST256P1, scalar: Uint8Array.from(key.part.d.data) };
+  }
+  /*
+   * sshpk has no secp256k1 of its own; a key that carries it arrives named
+   * either way depending on who built the object, and the rewrite accepts
+   * both (keyMaterial.test.ts "maps secp256k1 SSH ECDSA to type 3").
+   */
+  if (key.curve === 'secp256k1' || key.curve === 'k256') {
+    return { kind: 'ecc', curve: CURVE.SECP256K1, scalar: Uint8Array.from(key.part.d.data) };
   }
   if (key.type === 'rsa') {
     return {
@@ -268,7 +310,7 @@ function fromPgpPacket(packet, isSubkey = false) {
   if (oid) {
     const curve = curveFromOid(oid);
     if (curve === CURVE.NONE) {
-      throw new Error('unsupported ECC curve; expected Ed25519, NIST P-256 or Curve25519');
+      throw new Error('unsupported ECC curve; expected Ed25519, NIST P-256, secp256k1 or Curve25519');
     }
     const scalarIndex = isSubkey ? 3 : 2;
     const scalar = params[scalarIndex] && params[scalarIndex].data;
@@ -310,7 +352,7 @@ function fromModernPacket(packet) {
     const bytes = pub.oid.oid || pub.oid;
     const curve = curveFromOid(bytes);
     if (curve === CURVE.NONE) {
-      throw new Error('unsupported ECC curve; expected Ed25519, NIST P-256 or Curve25519');
+      throw new Error('unsupported ECC curve; expected Ed25519, NIST P-256, secp256k1 or Curve25519');
     }
     const scalar = priv.seed || priv.d;
     if (!scalar) {
@@ -388,11 +430,8 @@ function prepareKey(material, opts = {}) {
     if (material.curve === CURVE.NONE) {
       throw new Error('unsupported ECC key type');
     }
-    if (material.scalar.length !== 32) {
-      throw new Error(`ECC scalar must be 32 bytes, got ${material.scalar.length}`);
-    }
     type = material.curve;
-    key = material.scalar;
+    key = eccScalar32(material.scalar);
   } else {
     /*
      * 64 bytes of prime per 512 bits of modulus: 1024 -> 1, 4096 -> 4.
@@ -574,6 +613,7 @@ module.exports = {
   oidEquals,
   curveFromOid,
   stripSignPad,
+  eccScalar32,
   fromSshpk,
   fromPgpPacket,
   fromPgpKey,
