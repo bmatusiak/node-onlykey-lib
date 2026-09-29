@@ -230,7 +230,17 @@ function fakeFirmware(opts = {}) {
       if (setPrivSilent) return undefined;
       let sum = 0;
       for (let i = 7; i <= 14; i++) sum += frame[i];
-      if (sum === 2040) {
+      if (sum === 2040 && (frame[6] & 0x0f) >= 1 && (frame[6] & 0x0f) <= 4) {
+        /*
+         * An ECC generation (types 1-4) is NOT the post-quantum shape below:
+         * okcrypto_generate_random_key() writes the new scalar over the
+         * trigger in the buffer and returns, and ecc_priv_flash() goes on to
+         * flash and acknowledge it exactly as it would a loaded key
+         * (okcore.cpp:4906, then :4945, at eb25290). So it falls through to the
+         * ordinary acknowledgement.
+         */
+        generations += 1;
+      } else if (sum === 2040) {
         generations += 1;
         const key = generates[frame[5]];
         if (!key) return pipe.deliver(reportText('Error not in config mode'));
@@ -251,10 +261,15 @@ function fakeFirmware(opts = {}) {
        */
       if (setPrivSilent) return undefined;
       const slot = frame[5];
+      /*
+       * An RSA slot's sentence is rsa_priv_flash's (okcore.cpp:5138 at
+       * eb25290). The real key says it once, after the last chunk; this says
+       * it per chunk, which a client that takes the first answer cannot tell.
+       */
       return pipe.deliver(reportText(
-        slot === 131
-          ? 'Successfully set Backup Passphrase'
-          : 'Successfully set ECC Key',
+        slot === 131 ? 'Successfully set Backup Passphrase'
+          : slot >= 1 && slot <= 4 ? 'Successfully set RSA Key'
+            : 'Successfully set ECC Key',
       ));
     }
 
