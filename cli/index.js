@@ -1573,11 +1573,22 @@ COMMANDS['gpg-agent'] = {
    * lib-agent runs `gpg --export` instead; the file is the same certificate
    * and needs no gpg run from inside the agent gpg is waiting on.
    *
-   * --daemon is what run-agent.sh passes: gpg has started this detached,
-   * with no terminal, so lines also go to <homedir>/gpg-agent.log (the file
-   * lib-agent logs to). It does not fork - gpg's spawn has already detached
-   * it. The challenge digits go to the log, stderr, and the terminal gpg
-   * named in OPTION ttyname - the one the person is looking at.
+   * --daemon is what run-agent.sh passes, and it means what gpg-agent's
+   * --daemon means: start the agent in the background, and EXIT once it is
+   * serving. gpg depends on that - on POSIX it starts agent-program and
+   * WAITS FOR IT TO EXIT before it connects (common/asshelp.c
+   * start_new_service: gnupg_spawn_process_fd, then gnupg_wait_process), so
+   * an agent that simply served in the foreground left gpg waiting forever
+   * (measured: `gpg -K` hung until it was killed). Node cannot fork, so the
+   * background agent is a detached child of this same command, which says
+   * "ready" over an IPC channel once its socket is listening; this process
+   * then exits 0 and gpg connects. lib-agent gets the same from
+   * python-daemon's double fork.
+   *
+   * The background agent has no terminal: its lines go to
+   * <homedir>/gpg-agent.log (the file lib-agent logs to), and the challenge
+   * digits also to the terminal gpg named in OPTION ttyname - the one the
+   * person is looking at.
    */
   async run(io, opts) {
     const fsm = require('fs');
@@ -1589,8 +1600,9 @@ COMMANDS['gpg-agent'] = {
     if (!homedir) throw usage('gpg-agent needs --homedir (or GNUPGHOME): the home `gpg init` made');
     const skey = parseSkey(opts.skey || 'ECC32', '--skey', 'gpg-agent');
     const dkey = parseSkey(opts.dkey || 'ECC32', '--dkey', 'gpg-agent');
+    const background = io.daemonChild !== undefined ? io.daemonChild : process.env[GPG_AGENT_CHILD] === '1';
 
-    const logFile = opts.daemon ? pathm.join(homedir, 'gpg-agent.log') : null;
+    const logFile = opts.daemon || background ? pathm.join(homedir, 'gpg-agent.log') : null;
     const log = (line) => {
       io.err(`${NAME} gpg-agent: ${line}`);
       if (logFile) {
@@ -1606,6 +1618,9 @@ COMMANDS['gpg-agent'] = {
     }
     const keys = await gpgKey.readDerivedKeys(text);
     if (!keys.length) throw new CliError(`${homedir}/pubkey.asc holds no OnlyKey-derived key`);
+
+    /* Checked above, in THIS process, so a bad home fails where gpg sees the exit code. */
+    if (opts.daemon && !background) return startBackgroundAgent(io, opts, homedir, logFile, log);
 
     const gpgconf = io.gpgconf ? { gpgconf: io.gpgconf } : {};
     const version = agentSrv.gnupgVersion(gpgconf) || PKG.version;
@@ -1645,9 +1660,17 @@ COMMANDS['gpg-agent'] = {
       server = await agentSrv.serveGpgAgent({ handler, socketPath, log, onKill: () => killed() });
     } catch (err) {
       await dev.release();
+      log(err.message);
       throw new CliError(err.message);
     }
     log(`serving ${keys.length} key(s) of ${homedir} on ${server.path}`);
+    if (background) {
+      (io.notifyReady || (() => {
+        if (process.send) {
+          process.send('ready', () => process.disconnect());
+        }
+      }))();
+    }
     try {
       await Promise.race([stopped, (io.untilStopped || untilSignalled)(server)]);
       return 0;
@@ -1658,6 +1681,52 @@ COMMANDS['gpg-agent'] = {
     }
   },
 };
+
+/* Set in the environment of the background agent `gpg-agent --daemon` starts. */
+const GPG_AGENT_CHILD = 'ONLYKEY_JS_GPG_AGENT_BACKGROUND';
+
+/**
+ * gpg-agent --daemon: start the agent as a detached child of this same
+ * command, wait until it says it is serving, and return - so the process
+ * gpg started exits, which is what gpg waits for (see COMMANDS['gpg-agent']).
+ *
+ * @returns {Promise<number>} 0 once the child serves; throws when it cannot
+ */
+function startBackgroundAgent(io, opts, homedir, logFile, log) {
+  const args = [require('path').resolve(__filename), 'gpg-agent', '--homedir', homedir,
+    '--skey', opts.skey || 'ECC32', '--dkey', opts.dkey || 'ECC32'];
+  if (opts.path) args.push('--path', opts.path);
+  const env = { ...process.env, [GPG_AGENT_CHILD]: '1' };
+  const child = (io.spawnDaemon || ((file, argv, e) => require('child_process').spawn(file, argv, {
+    /*
+     * detached: its own session, so it outlives gpg and this process; no
+     * stdio of gpg's - a pipe held open by the agent would keep whoever
+     * reads gpg's output waiting; 'ipc' for the one "ready" message.
+     */
+    detached: true, env: e, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  })))(process.execPath, args, env);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (child.connected && child.disconnect) child.disconnect();
+      if (child.unref) child.unref();
+      if (err) {
+        log(err);
+        reject(new CliError(err));
+      } else {
+        resolve(0);
+      }
+    };
+    const timer = setTimeout(() => done(`the background agent did not start serving within 20 s; see ${logFile}`), 20000);
+    child.once('message', (m) => { if (m === 'ready') done(null); });
+    child.once('exit', (code) => done(`the background agent exited (${code}) before it served; see ${logFile}`));
+    child.once('error', (e) => done(`cannot start the background agent: ${e.message}`));
+  });
+}
 
 /** Resolve on Ctrl-C or a TERM: the foreground agent's whole lifetime. */
 function untilSignalled() {
@@ -1714,6 +1783,11 @@ function runWithAgent(argv, env) {
  *   init / gpg-agent: run gpgconf (the socket path, the version, --kill)
  * @param {(request: object) => Promise<Buffer>} [io.askPassphrase]
  *   gpg-agent GET_PASSPHRASE; defaults to pinentry
+ * @param {boolean} [io.daemonChild]  gpg-agent: this IS the background agent
+ *   (default: the environment says so)
+ * @param {(file: string, args: string[], env: object) => object} [io.spawnDaemon]
+ *   gpg-agent --daemon: start the background agent (a ChildProcess)
+ * @param {() => void} [io.notifyReady]  the background agent is serving
  * @returns {Promise<number>} the exit code: 0 done, 1 failed, 2 usage
  */
 async function main(argv, io = {}) {
@@ -1730,6 +1804,10 @@ async function main(argv, io = {}) {
     gpg: io.gpg,
     gpgconf: io.gpgconf,
     askPassphrase: io.askPassphrase,
+    /* gpg-agent --daemon: the background child, and how it is started and says it is up. */
+    daemonChild: io.daemonChild,
+    spawnDaemon: io.spawnDaemon,
+    notifyReady: io.notifyReady,
   };
 
   /*

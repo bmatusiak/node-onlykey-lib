@@ -564,6 +564,57 @@ test('gpg-agent: gpg\'s sign and decrypt conversations over the real socket, the
   }
 });
 
+test('gpg-agent --daemon starts the agent in the background and exits once it serves - what gpg waits for', async () => {
+  const { EventEmitter } = require('events');
+  const parent = tmpdir();
+  try {
+    const { cert } = await certificate('ed25519');
+    fs.writeFileSync(path.join(parent, 'pubkey.asc'), cert.armored);
+    const fakeChild = (script) => (file, args, env) => {
+      const c = new EventEmitter();
+      c.spawned = { file, args, env };
+      c.unref = () => { c.unrefd = true; };
+      setImmediate(() => script(c));
+      fakeChild.last = c;
+      return c;
+    };
+
+    const ok = await runCli(['gpg-agent', '--homedir', parent, '--skey', 'derived-v2', '--daemon'], {
+      start: () => assert.fail('the parent opened the key'),
+      spawnDaemon: fakeChild((c) => c.emit('message', 'ready')),
+    });
+    assert.equal(ok.code, 0, ok.err.join('\n'));
+    const { file, args, env } = fakeChild.last.spawned;
+    assert.equal(file, process.execPath);
+    assert.deepEqual(args.slice(1), ['gpg-agent', '--homedir', parent, '--skey', 'derived-v2', '--dkey', 'ECC32'],
+      'the same agent, without --daemon');
+    assert.equal(env.ONLYKEY_JS_GPG_AGENT_BACKGROUND, '1');
+    assert.ok(fakeChild.last.unrefd, 'let go of, so this process can exit');
+
+    const dead = await runCli(['gpg-agent', '--homedir', parent, '--daemon'], {
+      start: () => assert.fail('the parent opened the key'),
+      spawnDaemon: fakeChild((c) => c.emit('exit', 3)),
+    });
+    assert.equal(dead.code, 1);
+    assert.match(dead.err.join('\n'), /exited \(3\) before it served; see .*gpg-agent\.log/);
+
+    /* The background agent itself: logs to the file, says ready once it listens. */
+    let ready = 0;
+    const sockPath = path.join(parent, 'S.gpg-agent');
+    const child = await runCli(['gpg-agent', '--homedir', parent], {
+      start: () => assert.fail('opened the key with nothing to sign'),
+      gpgconf: (a) => (a[0] === '--version' ? null : sockPath),
+      daemonChild: true,
+      notifyReady: () => { ready += 1; },
+      untilStopped: async () => { assert.equal(ready, 1, 'ready only once the socket listens'); },
+    });
+    assert.equal(child.code, 0, child.err.join('\n'));
+    assert.match(fs.readFileSync(path.join(parent, 'gpg-agent.log'), 'utf8'), /serving 2 key\(s\)[\s\S]*stopped/);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
 test('gpg-agent refuses a home with no derived key, and a socket another agent answers on', async () => {
   const parent = tmpdir();
   try {
