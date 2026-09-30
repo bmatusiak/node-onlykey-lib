@@ -25,7 +25,7 @@ test('every row is all pinned or all blank - never half a release', () => {
   /* Pinned 2026-09-28 to commits that are not release tags yet: the 3.1.0
    * proposed release at its PR heads, treated like the signed release (see
    * src/versions/index.js). */
-  assert.deepEqual(versions.pinsFor('v3.1.0'), { libraries: '16d8863', 'OnlyKey-Firmware': '9fceea1' });
+  assert.deepEqual(versions.pinsFor('v3.1.0'), { libraries: '8d28305', 'OnlyKey-Firmware': '9fceea1' });
   assert.throws(() => versions.pinsFor('v3.0.5'), /v3.0.5/, 'the dropped v3.0.5 is refused by name');
   assert.equal(versions.list()[0], 'v3.1.0', 'the newest release is listed first');
   assert.deepEqual(versions.pinsFor('v3.0.4'),

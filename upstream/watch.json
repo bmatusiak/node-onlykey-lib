@@ -88,7 +88,7 @@
       "name": "release-libraries",
       "repo": "trustcrypto/libraries",
       "branch": "release-3.1.0",
-      "head": "16d8863",
+      "head": "8d28305",
       "paths": [
         "fido2",
         "onlykey"

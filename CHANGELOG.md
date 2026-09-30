@@ -17,6 +17,17 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **v3.1.0 pin follows the release again: libraries 16d8863 -> 8d28305.**
+  Re-squashed on 2026-09-30; the tree change is one file, `onlykey/okcrypto.cpp`:
+  X25519 private keys are now clamped (RFC 7748) when DERIVED and when
+  GENERATED on the device; an all-zero X25519 shared secret is refused; a
+  derived decap confirmed by a button press answers on the interface it was
+  asked on. **Compatibility:** a derived X25519 identity - an agent key of
+  type X25519, a GPG `cv25519` subkey made by `onlykey-js gpg init` or
+  `onlykey-gpg`, a website-derived X25519 key - has a different public key on
+  this firmware than on 16d8863 and earlier. P-256, secp256k1 and Ed25519
+  identities, and X-Wing/age, are unchanged. OnlyKey-Firmware stays 9fceea1.
+
 - **v3.1.0 pin follows the re-squashed release: libraries eb25290 -> 16d8863.**
   trustcrypto/libraries PR #33 (`release-3.1.0`) was re-squashed on 2026-09-29;
   the only change is the stale-staged-reply fix in `fido2/device.cpp` and
