@@ -85,6 +85,31 @@ const RESPONSE_UUID = '0c0ffab2-9f1e-4b1d-9c6a-0f0e1d2c3b4a';
 const FIDO_UUID = '0000fffd-0000-1000-8000-00805f9b34fb';
 
 const CMD_REPORT = 0x83;
+
+/**
+ * The PHONE's refusal, never a key's reply.
+ *
+ * ok-rn gates the vendor channel: a write from a computer that is not its
+ * Bluetooth target, or while its "API" switch is off, never reaches the key -
+ * the phone diverts it and answers with the framing's own ERROR command
+ * (CTAP BLE CMD_ERROR, 0xbf; payload one byte, ERR_OTHER 0x7f). No key sends
+ * that command, so it cannot be mistaken for firmware. Before it existed the
+ * refused write was dropped and this pipe waited out its timeout with no
+ * reason to give (ok-rn NativeFidoGattModule.kt refuseVendor).
+ */
+const CMD_ERROR = 0xbf;
+
+/** What a refusal says: the fix is on the phone, and it names both gates. */
+const REFUSED_MESSAGE =
+  'the phone refused this request - in ok-rn > Bluetooth, make this computer the Target and switch API on';
+
+/**
+ * The last refusal any pipe in this process saw. The CLI reads it to explain a
+ * transport timeout: the pipe contract has no error event, so a refusal that
+ * arrives while a read is waiting can only be named after the fact.
+ */
+let lastRefusal = null;
+function refusal() { return lastRefusal; }
 /* The smallest ATT MTU is 23: 20 bytes of payload per write, no negotiation needed. */
 const SMALL_FRAGMENT = 20;
 /* 64 bytes and the 3-byte header: the whole report in one write when the MTU allows. */
@@ -143,13 +168,20 @@ function fragment(payload, size = SMALL_FRAGMENT) {
 function createAssembler() {
   let buf = null;
   let want = 0;
+  let command = 0;
   return {
-    /** @returns {Uint8Array|null} a whole message, or null while one is incomplete */
+    /**
+     * @returns {Uint8Array|null} a whole message, or null while one is
+     *   incomplete. The message carries the frame's command byte as
+     *   `.command` - CMD_REPORT for a key's reply, CMD_ERROR for the phone's
+     *   own refusal (see CMD_ERROR).
+     */
     push(data) {
       const d = Uint8Array.from(data || []);
       if (!d.length) return null;
       if (d[0] & 0x80) {
         if (d.length < 3) return null;
+        command = d[0];
         want = (d[1] << 8) | d[2];
         buf = d.slice(3);
       } else {
@@ -162,6 +194,7 @@ function createAssembler() {
       }
       if (buf.length < want) return null;
       const message = buf.slice(0, want);
+      message.command = command;
       buf = null;
       return message;
     },
@@ -774,6 +807,8 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     ? (line) => process.stderr.write(`onlykey-js ble: ${line}\n`) : () => {});
   let link = null;
   let lastError = null;
+  /* A refusal from the phone; the next write fails with it. See CMD_ERROR. */
+  let refused = null;
   let assembler = createAssembler();
   /*
    * Writes are serialised: two reports' fragments interleaved on the
@@ -798,6 +833,18 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   function onData(data) {
     const message = assembler.push(data);
     if (!message) return;
+    if (message.command === CMD_ERROR) {
+      /*
+       * Not a report: nothing is emitted, so no caller mistakes it for the
+       * key's answer. It is remembered instead - the next write fails with it
+       * at once, and refusal() lets the CLI replace the transport's bare "no
+       * reply within N ms" with the reason.
+       */
+      refused = bleError('EREFUSED', REFUSED_MESSAGE);
+      trace(`the phone refused the request (error frame 0x${(message[0] || 0).toString(16)})`);
+      lastRefusal = refused;
+      return;
+    }
     const event = { iface: IFACE.VENDOR, dir: DIR.OUT, bytes: message };
     if (writing) held.push(event);
     else emit(event);
@@ -857,6 +904,11 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
           'Firmware update is refused over Bluetooth. Update a key over USB.'));
       }
       const run = async () => {
+        if (refused) {
+          const err = refused;
+          refused = null;
+          throw err;
+        }
         if (!link) {
           throw bleError('ENOTOPEN',
             lastError ? lastError.message : 'the phone is not connected');
@@ -904,6 +956,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
 }
 
 module.exports = {
-  createBlePipe, fragment, createAssembler, loadNoble, loadDbus, pickBluezDevice, findVendor,
+  createBlePipe, fragment, createAssembler, loadNoble, loadDbus, pickBluezDevice, findVendor, refusal,
+  CMD_ERROR,
   SERVICE_UUID, REQUEST_UUID, RESPONSE_UUID, FIDO_UUID, TIMEOUTS,
 };

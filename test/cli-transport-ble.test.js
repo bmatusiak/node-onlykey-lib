@@ -82,6 +82,21 @@ test('reassembly: fragments in, whole reports out; a new first fragment drops an
   assert.equal(createAssembler().push(pieces[1]), null);
 });
 
+test('the phone refusal (CMD_ERROR 0xbf) is told apart from a key report', () => {
+  /*
+   * ok-rn diverts a gated vendor write and answers [0xbf][00][01][0x7f]. The
+   * assembler keeps each message's command so the pipe can refuse instead of
+   * handing the byte 0x7f up as if the key had said it.
+   */
+  const { CMD_ERROR } = require('../cli/transport-ble');
+  const a = createAssembler();
+  const refusal = a.push(Uint8Array.from([CMD_ERROR, 0x00, 0x01, 0x7f]));
+  assert.equal(refusal.command, CMD_ERROR);
+  assert.deepEqual(Array.from(refusal), [0x7f]);
+  const r = report(0x55, [1]);
+  assert.equal(a.push(fragment(r, 67)[0]).command, 0x83);
+});
+
 /* ------------------------------------------------------------ optional deps */
 
 test('a missing noble or dbus-next is named, with the command that installs it', () => {

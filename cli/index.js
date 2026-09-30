@@ -1924,7 +1924,17 @@ async function main(argv, io = {}) {
      * One sentence for the person, the stack only when asked for. The pipe's
      * errors (no key, two keys, no node-hid) are written to be read as-is.
      */
-    full.err(`${NAME}: ${err && err.message ? err.message : err}`);
+    /*
+     * A timeout over Bluetooth that followed the PHONE's refusal is that
+     * refusal: its gate diverted the write, so no reply was ever coming. Say
+     * why instead of "no reply within N ms" (transport-ble.js CMD_ERROR).
+     */
+    let shown = err;
+    if (parsed.values.ble && /no reply on interface/.test(String(err && err.message))) {
+      const refused = require('./transport-ble').refusal();
+      if (refused) shown = refused;
+    }
+    full.err(`${NAME}: ${shown && shown.message ? shown.message : shown}`);
     if (err instanceof CliError && err.exitCode === 2 && cmd.usage) {
       full.err(`Usage: ${NAME} ${name} ${cmd.usage}`);
     }
