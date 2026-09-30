@@ -17,6 +17,21 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **`onlykey-js --ble [--address <phone>]`: every device command over Bluetooth
+  LE, to a phone running ok-rn.** `cli/transport-ble.js` is a byte pipe for
+  `plugins/transport/ble` (CTAP-over-BLE framing of 64-byte vendor reports,
+  one write per report at the phone's MTU of 517, 20-byte fragments below it;
+  replies that beat their write's acknowledgement are held until after its
+  echo). Windows goes through WinRT with `@stoprocent/noble` 2.8.0; Linux
+  talks to BlueZ's GATT API over D-Bus with `dbus-next` (vendor
+  characteristics found by UUID wherever BlueZ put them, cached GATT not
+  trusted, `PreferredBearer = le` and `Connect()` inside an LE discovery
+  session, never `Device1.Disconnect()`). Both are optional peers, loaded
+  lazily, like `node-hid`. `agent`, `gpg init` (its run-agent script) and
+  `gpg-agent --daemon` carry the option through. Firmware update is refused
+  by the pipe. Proven live 2026-09-29 against a Pixel 6a from a Windows PC
+  and a Raspberry Pi 4: status, fwversion, getlabels, capabilities and the
+  agent's ssh key read the same on both.
 - **`onlykey-js gpg init` and `onlykey-js gpg-agent`: the GPG half of lib-agent,
   dependency-less.** `gpg init "<user id>"` makes the certificate for the
   keys derived from `gpg://<user id>` (ed25519 + cv25519, or `-e nist256p1`),
