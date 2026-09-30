@@ -17,6 +17,15 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **A device refusal before the caller awaits no longer ends the process**
+  (2152942). okcrypto's deviceOperation and device.js's two key operations arm
+  their `answer` before sending and await it later (after confirm(), a write, a
+  bus-quiet wait); a refusal in between - the 20 s confirmation window closing
+  while confirm() still runs, or a reply beating the write over BLE - was an
+  unhandled rejection, and Node exits on those. apk-signer's signing helper died
+  that way mid-signature during the 0.0.5 release. Each `answer` is now handled
+  from birth; the await still throws the device's words.
+
 - **An unanswered confirmation is a refusal, not the answer** (90ec3b6).
   `deviceOperation` took only `/^Error/` as a refusal, so the firmware's 20 s
   timeout - "Timeout occured while waiting for confirmation on OnlyKey", with no
