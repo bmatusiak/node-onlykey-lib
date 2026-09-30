@@ -27,6 +27,9 @@
  * AND lib-agent's SSH HALF. `agent` is onlykey-agent: the derived key line,
  * or an ssh-agent serving it (cli/ssh-agent.js, cli/ssh-wire.js), with Node
  * built-ins only - one library then answers ssh as well as the GUIs.
+ * And its GPG half: `gpg init` is onlykey-gpg init, `gpg-agent` is
+ * onlykey-gpg-agent (cli/gpg-key.js over the vendored openpgp fork,
+ * cli/gpg-agent.js and cli/assuan.js on Node built-ins).
  *
  * WHAT IT DOES NOT DO. There is no firmware update path - that is
  * deliberately not something this program can do - and no backup or
@@ -1101,15 +1104,15 @@ function sharedDevice(io, opts, { idleMs = 10000 } = {}) {
  * default; derived-v2 / ECC32v2 / 232 is v2 (3.0.5 on). ECC1-16 - an ssh key
  * STORED in a slot - is a different feature, not built here.
  */
-function parseSkey(value) {
+function parseSkey(value, flag = '--skey', command = 'agent') {
   const v = String(value).toLowerCase();
   if (['ecc32', '132', 'derived', 'derived-v1'].includes(v)) return 1;
   if (['derived-v2', 'ecc32v2', '232'].includes(v)) return 2;
-  if (/^ecc([1-9]|1[0-6])$/.test(v)) {
-    throw usage(`--skey ${value}: an ssh key stored in an ECC slot is not supported by "${NAME} agent" yet; `
-      + 'it signs with the derived key (ECC32, or derived-v2)');
+  if (/^(ecc([1-9]|1[0-6])|rsa[1-4])$/.test(v)) {
+    throw usage(`${flag} ${value}: a key stored in an ECC slot (or an RSA slot) is not supported by "${NAME} ${command}" yet; `
+      + 'it uses the derived key (ECC32, or derived-v2)');
   }
-  throw usage(`--skey takes ECC32 (derived v1, the default) or derived-v2, not "${value}"`);
+  throw usage(`${flag} takes ECC32 (derived v1, the default) or derived-v2, not "${value}"`);
 }
 
 /* `-e`: lib-agent's curve names, and the ssh name for P-256 as a convenience. */
@@ -1300,6 +1303,362 @@ COMMANDS.agent = {
   },
 };
 
+/* ------------------------------------------------------------ gpg */
+
+/*
+ * lib-agent's GPG HALF: `gpg init` is `onlykey-gpg init`, `gpg-agent` is
+ * `onlykey-gpg-agent` - two commands because they are two programs with two
+ * callers. A person runs init once; gpg itself runs the agent (gpg.conf's
+ * agent-program), whenever it needs a private key and finds none answering.
+ * The OpenPGP side is cli/gpg-key.js, the agent cli/gpg-agent.js.
+ */
+
+const IS_WINDOWS_CLI = process.platform === 'win32';
+
+/* The comment line init writes into run-agent.sh: how --force knows a home is ours to replace. */
+const GPG_HOME_MARK = `# written by ${NAME} gpg init`;
+
+/** lib-agent's default homedir: ~/.gnupg/<device name>. */
+function defaultGpgHome() {
+  return require('path').join(require('os').homedir(), '.gnupg', 'onlykey');
+}
+
+/*
+ * -t/--time: the creation time, seconds since the epoch. lib-agent's default
+ * is 0 - the key and every self-signature dated 1970-01-01 - and that is
+ * deliberate: the fingerprint covers the creation time, so a fixed time is
+ * what makes init on another machine give back the SAME key. Kept.
+ */
+function parseTime(value) {
+  if (value === undefined) return 0;
+  if (!/^\d{1,10}$/.test(String(value)) || Number(value) > 0xffffffff) {
+    throw usage(`-t/--time takes seconds since the epoch (0 to ${0xffffffff}), not "${value}"`);
+  }
+  return Number(value);
+}
+
+/** Quote for a POSIX shell: single quotes, a ' as '\''. */
+const shQuote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+
+/**
+ * gpg, run to completion. `io.gpg` in a test; the one on PATH otherwise.
+ * @returns {Promise<{code: number, stdout: string, stderr: string}>}
+ */
+function runGpg(io, args) {
+  if (io.gpg) return io.gpg(args);
+  const { spawnSync } = require('child_process');
+  const r = spawnSync('gpg', args, { encoding: 'utf8', timeout: 60000 });
+  if (r.error) return Promise.resolve({ code: 127, stdout: '', stderr: r.error.message });
+  return Promise.resolve({ code: r.status === null ? 1 : r.status, stdout: r.stdout || '', stderr: r.stderr || '' });
+}
+
+/*
+ * The agent program gpg.conf names, in the homedir. gpg starts it with
+ * gpg-agent's own arguments (--homedir, --daemon, ...), which it ignores:
+ * everything it needs is written here, with ABSOLUTE paths to this node and
+ * this CLI, because gpg starts it with whatever PATH gpg had - lib-agent
+ * bakes its PATH into the script for the same reason.
+ */
+function agentScript(homedir, skey, dkey, windows) {
+  const node = process.execPath;
+  const cli = require('path').resolve(__filename);
+  const args = ['gpg-agent', '--homedir', homedir, '--skey', skey, '--dkey', dkey, '--daemon'];
+  if (windows) {
+    return {
+      name: 'run-agent.cmd',
+      text: `@echo off\r\nrem ${GPG_HOME_MARK.slice(2)}: gpg.conf's agent-program.\r\n`
+        + `"${node}" "${cli}" ${args.map((a) => (a === homedir ? `"${a}"` : a)).join(' ')}\r\n`,
+    };
+  }
+  return {
+    name: 'run-agent.sh',
+    text: `#!/bin/sh\n${GPG_HOME_MARK}: gpg.conf's agent-program. gpg starts it the first time\n`
+      + '# it needs a private key; it serves until `gpgconf --kill gpg-agent`.\n'
+      + `exec ${[node, cli, ...args].map(shQuote).join(' ')}\n`,
+  };
+}
+
+COMMANDS.gpg = {
+  mirrors: 'onlykey-gpg init (lib-agent)',
+  usage: 'init "<user id>" [-e ed25519|nist256p1] [-t <time>] [--homedir <dir>] '
+    + '[--skey ECC32|derived-v2] [--dkey ECC32|derived-v2] [--force]',
+  summary: 'a GPG key derived in the key: print it, and make a GnuPG home that uses it',
+  device: true,
+  /*
+   * lib-agent's names: -e/--ecdsa-curve (here also -e's long name from
+   * `agent`), -t/--time, --homedir, --skey/--dkey (its -sk/-dk are two
+   * flags to every parser but argparse). Not carried: -s/--subkey (adding
+   * device subkeys to an EXISTING gpg key, which signs through the real
+   * gpg-agent) and -i/--import-pub (a key loaded into a slot) - neither is a
+   * derived key; and -v, since stderr says what happened here. New:
+   * --force, to replace a home this command made.
+   */
+  options: {
+    'ecdsa-curve-name': { type: 'string', short: 'e' },
+    'ecdsa-curve': { type: 'string' },
+    time: { type: 'string', short: 't' },
+    homedir: { type: 'string' },
+    skey: { type: 'string' },
+    dkey: { type: 'string' },
+    force: { type: 'boolean' },
+  },
+  /**
+   * `gpg init "<user id>"`, lib-agent's run_init():
+   *
+   *   1. the two public keys, derived from "gpg://<user id>" (no press);
+   *   2. the certificate, with its two self-signatures made by the device
+   *      (two confirmations);
+   *   3. the homedir: run-agent.sh, gpg.conf (agent-program, default-key),
+   *      env, pubkey.asc - then gpg imports the key and trusts it
+   *      ultimately (it is the person's own).
+   *
+   * The armored key is printed on stdout. Unlike lib-agent, init does not
+   * end by listing the secret keys - which starts the agent and leaves it
+   * running; the agent starts the first time gpg needs it.
+   */
+  async run(io, opts, args) {
+    const fsm = require('fs');
+    const pathm = require('path');
+    const gpgKey = require('./gpg-key');
+    const agentProto = require('../src/protocol/agent');
+
+    const [action, userId, ...extra] = args;
+    if (action !== 'init') throw usage('gpg takes one action: init "<user id>"');
+    if (!userId) throw usage('gpg init needs a user id, e.g. "Alice <alice@example.com>"');
+    if (extra.length) throw usage(`gpg init takes ONE user id - quote it: "${args.slice(1).join(' ')}"`);
+    try {
+      agentProto.identityHash({ gpg: userId });
+    } catch (err) {
+      throw usage(err.message);
+    }
+    const curve = parseCurve(opts['ecdsa-curve'] || opts['ecdsa-curve-name'] || 'ed25519');
+    const created = parseTime(opts.time);
+    const skeyName = opts.skey || 'ECC32';
+    const dkeyName = opts.dkey || 'ECC32';
+    const skey = parseSkey(skeyName, '--skey', 'gpg');
+    const dkey = parseSkey(dkeyName, '--dkey', 'gpg');
+    const homedir = pathm.resolve(opts.homedir || process.env.GNUPGHOME || defaultGpgHome());
+
+    /*
+     * gpg first, as lib-agent's verify_gpg_version(): with no gpg, or one
+     * older than 2.1.11 (no agent-program, no keygrip-addressed agent),
+     * there is nothing to set up, and finding out AFTER two confirmations
+     * on the key would waste them.
+     */
+    const ver = await runGpg(io, ['--version']);
+    const m = /^gpg \(GnuPG[^)]*\)\s+(\d+)\.(\d+)\.(\d+)/m.exec(ver.stdout);
+    if (ver.code !== 0 || !m) throw new CliError(`gpg is needed and did not run: ${(ver.stderr || ver.stdout).trim().split('\n')[0]}`);
+    const [maj, min, pat] = m.slice(1).map(Number);
+    if (maj < 2 || (maj === 2 && (min < 1 || (min === 1 && pat < 11)))) {
+      throw new CliError(`GnuPG ${m.slice(1).join('.')} is too old: the agent needs 2.1.11 or later`);
+    }
+
+    /*
+     * An existing home is refused, as lib-agent refuses it: it may hold
+     * someone's keys. --force replaces only a home THIS command made (its
+     * run-agent script carries the mark) - and only after the new key is
+     * made, so a refused confirmation leaves the old home as it was.
+     */
+    const script = agentScript(homedir, skeyName, dkeyName, IS_WINDOWS_CLI);
+    if (fsm.existsSync(homedir)) {
+      if (!opts.force) throw new CliError(`GPG home directory ${homedir} exists; remove it, or pass --force to replace a home ${NAME} made`);
+      const ours = ['run-agent.sh', 'run-agent.cmd'].some((f) => {
+        try { return fsm.readFileSync(pathm.join(homedir, f), 'utf8').includes(GPG_HOME_MARK.slice(2)); } catch { return false; }
+      });
+      if (!ours) throw new CliError(`--force replaces only a home ${NAME} made, and ${homedir} is not one; remove it yourself if it should go`);
+    }
+
+    const kinds = gpgKey.CURVES[curve];
+    const identity = { gpg: userId };
+    const label = `gpg://${userId}|${curve}`;
+    let cert;
+    /*
+     * One session for the whole of it (sharedDevice, as the ssh agent uses):
+     * the two public keys and the two signatures come back to back, and the
+     * okcrypto stale-timer guard needs to see the first signature end to
+     * wait out its fade before the second.
+     */
+    const dev = sharedDevice(io, opts);
+    try {
+      const pub = await dev.use(async (okcrypto) => ({
+        sign: await okcrypto.agent.publicKey(identity, { keyType: kinds.sign.keyType, version: skey }),
+        ecdh: await okcrypto.agent.publicKey(identity, { keyType: kinds.ecdh.keyType, version: dkey }),
+      }));
+      cert = await gpgKey.buildCertificate({
+        userId,
+        curve,
+        created,
+        signPublic: pub.sign,
+        ecdhPublic: pub.ecdh,
+        sign: (digest) => dev.use((okcrypto) => okcrypto.agent.sign(identity, digest, {
+          keyType: kinds.sign.keyType,
+          version: skey,
+          confirm: ({ digits }) => {
+            io.err(`Confirm on the OnlyKey to sign the new key for <${label}>: enter ${digits.join(' ')}`
+              + ' (or press any button, if the key asks for a single press)');
+          },
+        })),
+      });
+    } finally {
+      await dev.release();
+    }
+
+    if (fsm.existsSync(homedir)) {
+      /* Stop an agent still serving the old key from this home, then replace it. */
+      if (io.gpgconf) io.gpgconf(['--kill', 'gpg-agent'], { ...process.env, GNUPGHOME: homedir });
+      else {
+        try {
+          require('child_process').execFileSync('gpgconf', ['--kill', 'gpg-agent'],
+            { env: { ...process.env, GNUPGHOME: homedir }, stdio: 'ignore', timeout: 10000 });
+        } catch { /* none running, or no gpgconf */ }
+      }
+      fsm.rmSync(homedir, { recursive: true, force: true });
+    }
+
+    const at = (name) => pathm.join(homedir, name);
+    fsm.mkdirSync(homedir, { recursive: true, mode: 0o700 });
+    fsm.chmodSync(homedir, 0o700);
+    fsm.writeFileSync(at(script.name), script.text, { mode: 0o700 });
+    fsm.chmodSync(at(script.name), 0o700);
+    /* lib-agent's gpg.conf, line for line. */
+    fsm.writeFileSync(at('gpg.conf'), '# Hardware-based GPG configuration\n'
+      + `agent-program ${at(script.name)}\n`
+      + 'personal-digest-preferences SHA512\n'
+      + `default-key "${userId}"\n`, { mode: 0o600 });
+    if (!IS_WINDOWS_CLI) {
+      /* lib-agent's `env` helper: run a command, or a shell, with GNUPGHOME set. */
+      fsm.writeFileSync(at('env'), `#!/bin/sh\nset -eu\nGNUPGHOME=${shQuote(homedir)}\nexport GNUPGHOME\n`
+        + 'if [ "$#" -eq 0 ]; then exec "${SHELL:-/bin/sh}"; else exec "$@"; fi\n', { mode: 0o700 });
+    }
+    fsm.writeFileSync(at('pubkey.asc'), cert.armored, { mode: 0o600 });
+    fsm.writeFileSync(at('ownertrust.txt'), `${cert.fingerprint}:6:\n`, { mode: 0o600 });
+
+    /*
+     * --no-autostart: importing a public key needs no agent, and gpg would
+     * otherwise start the one gpg.conf names - which opens the key - for
+     * nothing. The agent starts when a private key is first wanted.
+     */
+    for (const argv of [
+      ['--homedir', homedir, '--batch', '--no-autostart', '--import', at('pubkey.asc')],
+      ['--homedir', homedir, '--batch', '--no-autostart', '--import-ownertrust', at('ownertrust.txt')],
+    ]) {
+      const r = await runGpg(io, argv);
+      if (r.code !== 0) {
+        throw new CliError(`gpg ${argv.slice(4).join(' ')} failed (exit ${r.code}): ${r.stderr.trim().split('\n').slice(-2).join(' | ')}`);
+      }
+    }
+
+    io.out(cert.armored.trimEnd());
+    io.err(`${NAME}: ${curve} key ${cert.fingerprint} for "${userId}" (created ${new Date(created * 1000).toISOString()})`);
+    io.err(`${NAME}: GnuPG home ${homedir}; use it with GNUPGHOME=${homedir} or gpg --homedir ${homedir}`);
+    return 0;
+  },
+};
+
+COMMANDS['gpg-agent'] = {
+  mirrors: 'onlykey-gpg-agent (lib-agent)',
+  usage: '[--homedir <dir>] [--skey ECC32|derived-v2] [--dkey ECC32|derived-v2] [--daemon]',
+  summary: 'the gpg-agent for a home `gpg init` made (gpg starts it; run it by hand to watch it)',
+  device: true,
+  options: {
+    homedir: { type: 'string' },
+    skey: { type: 'string' },
+    dkey: { type: 'string' },
+    daemon: { type: 'boolean' },
+  },
+  /**
+   * Serve until KILLAGENT (`gpgconf --kill gpg-agent`) or Ctrl-C.
+   *
+   * THE KEYS are the ones in the home's pubkey.asc, which init wrote -
+   * lib-agent runs `gpg --export` instead; the file is the same certificate
+   * and needs no gpg run from inside the agent gpg is waiting on.
+   *
+   * --daemon is what run-agent.sh passes: gpg has started this detached,
+   * with no terminal, so lines also go to <homedir>/gpg-agent.log (the file
+   * lib-agent logs to). It does not fork - gpg's spawn has already detached
+   * it. The challenge digits go to the log, stderr, and the terminal gpg
+   * named in OPTION ttyname - the one the person is looking at.
+   */
+  async run(io, opts) {
+    const fsm = require('fs');
+    const pathm = require('path');
+    const gpgKey = require('./gpg-key');
+    const agentSrv = require('./gpg-agent');
+
+    const homedir = opts.homedir || process.env.GNUPGHOME;
+    if (!homedir) throw usage('gpg-agent needs --homedir (or GNUPGHOME): the home `gpg init` made');
+    const skey = parseSkey(opts.skey || 'ECC32', '--skey', 'gpg-agent');
+    const dkey = parseSkey(opts.dkey || 'ECC32', '--dkey', 'gpg-agent');
+
+    const logFile = opts.daemon ? pathm.join(homedir, 'gpg-agent.log') : null;
+    const log = (line) => {
+      io.err(`${NAME} gpg-agent: ${line}`);
+      if (logFile) {
+        try { fsm.appendFileSync(logFile, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 }); } catch { /* the log is best effort */ }
+      }
+    };
+
+    let text;
+    try {
+      text = fsm.readFileSync(pathm.join(homedir, 'pubkey.asc'), 'utf8');
+    } catch (err) {
+      throw new CliError(`cannot read ${pathm.join(homedir, 'pubkey.asc')} (${err.code || err.message}); is this a home \`${NAME} gpg init\` made?`);
+    }
+    const keys = await gpgKey.readDerivedKeys(text);
+    if (!keys.length) throw new CliError(`${homedir}/pubkey.asc holds no OnlyKey-derived key`);
+
+    const gpgconf = io.gpgconf ? { gpgconf: io.gpgconf } : {};
+    const version = agentSrv.gnupgVersion(gpgconf) || PKG.version;
+    const socketPath = agentSrv.agentSocketPath(homedir, gpgconf);
+
+    const dev = sharedDevice(io, opts);
+    const versionFor = (key) => (key.role === 'sign' ? skey : dkey);
+    const confirm = (key, session, what) => ({ digits }) => {
+      const line = `Confirm on the OnlyKey to ${what} for <gpg://${key.userId}|${key.curve}>: enter ${digits.join(' ')}`
+        + ' (or press any button, if the key asks for a single press)';
+      log(line);
+      const tty = session.options.ttyname;
+      if (typeof tty === 'string' && tty.startsWith('/dev/')) {
+        try { fsm.appendFileSync(tty, `${line}\n`); } catch { /* not ours to write, or gone */ }
+      }
+    };
+
+    const handler = agentSrv.createGpgAgentHandler({
+      keys,
+      version,
+      log,
+      publicKey: (key) => dev.use((okcrypto) => okcrypto.agent.publicKey({ gpg: key.userId },
+        { keyType: key.keyType, version: versionFor(key) })),
+      sign: (key, digest, session) => dev.use((okcrypto) => okcrypto.agent.sign({ gpg: key.userId }, digest,
+        { keyType: key.keyType, version: skey, confirm: confirm(key, session, 'sign') })),
+      ecdh: (key, point, session) => dev.use((okcrypto) => okcrypto.agent.ecdh({ gpg: key.userId }, point,
+        { keyType: key.keyType, version: dkey, confirm: confirm(key, session, 'decrypt') })),
+      askPassphrase: (session, request) => (io.askPassphrase || require('./pinentry').askPassphrase)(
+        { options: session.options, ...request },
+      ),
+    });
+
+    let killed;
+    const stopped = new Promise((resolve) => { killed = resolve; });
+    let server;
+    try {
+      server = await agentSrv.serveGpgAgent({ handler, socketPath, log, onKill: () => killed() });
+    } catch (err) {
+      await dev.release();
+      throw new CliError(err.message);
+    }
+    log(`serving ${keys.length} key(s) of ${homedir} on ${server.path}`);
+    try {
+      await Promise.race([stopped, (io.untilStopped || untilSignalled)(server)]);
+      return 0;
+    } finally {
+      await server.close();
+      await dev.release();
+      log('stopped');
+    }
+  },
+};
+
 /** Resolve on Ctrl-C or a TERM: the foreground agent's whole lifetime. */
 function untilSignalled() {
   return new Promise((resolve) => {
@@ -1349,6 +1708,12 @@ function runWithAgent(argv, env) {
  * @param {(argv: string[], env: object) => Promise<number>} [io.runCommand]
  *   agent -- cmd / -s / -c: run the command under the agent; defaults to a
  *   child process on the terminal
+ * @param {(args: string[]) => Promise<{code: number, stdout: string, stderr: string}>} [io.gpg]
+ *   gpg init: run gpg; defaults to the gpg on PATH
+ * @param {(args: string[], env: object) => string|null} [io.gpgconf]  gpg
+ *   init / gpg-agent: run gpgconf (the socket path, the version, --kill)
+ * @param {(request: object) => Promise<Buffer>} [io.askPassphrase]
+ *   gpg-agent GET_PASSPHRASE; defaults to pinentry
  * @returns {Promise<number>} the exit code: 0 done, 1 failed, 2 usage
  */
 async function main(argv, io = {}) {
@@ -1361,11 +1726,15 @@ async function main(argv, io = {}) {
     /* agent only: how long a foreground agent serves, and how a command runs under it. */
     untilStopped: io.untilStopped,
     runCommand: io.runCommand,
+    /* gpg only: gpg and gpgconf runs, and pinentry - a test replaces all three. */
+    gpg: io.gpg,
+    gpgconf: io.gpgconf,
+    askPassphrase: io.askPassphrase,
   };
 
   /*
    * The global options, plus every command's own (`cmd.options` - only
-   * `agent` has any, lib-agent's -e/--skey/-f/-s/-c/--sock-path). parseArgs
+   * `agent`, `gpg` and `gpg-agent` have any, lib-agent's names). parseArgs
    * has to know them all before it can find the command name among the
    * positionals, so the union is parsed and an option given to a command
    * that does not take it is refused afterwards.
