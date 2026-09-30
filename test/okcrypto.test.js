@@ -952,3 +952,43 @@ test('a supplied ctap without getAssertion fails the composition, not the first 
     /getAssertion/,
   );
 });
+
+/* ------------------------------------ X-Wing: the version first (G-6, G-9) */
+
+test('X-Wing on a LOCKED vendor device is refused by name - the old shape is never guessed', async () => {
+  /*
+   * ok-rn's hard key: connected while locked, so the status said INITIALIZED
+   * and no version. The derive used to go ahead in the pre-3.0.5 shape. Now
+   * the vendor OKCONNECT is asked again (set_time - a status and no prompt),
+   * and with still no version the operation refuses before a derive is sent.
+   */
+  const pipe = fakeFirmware({ pin: '1234567', version: 'v3.1.0-prodc' });
+  const app = await start(FULL(), pipe);
+  await assert.rejects(
+    app.services.okcrypto.deviceAge.identity('g6@example.com', { timeoutMs: 400 }),
+    (err) => err.code === 'XWING_VERSION_UNKNOWN' && /LOCKED/.test(err.message),
+  );
+  assert.ok(pipe.writes.some((w) => w.iface === IFACE.VENDOR && w.data[4] === MSG.OKCONNECT),
+    'the version was not asked for');
+  assert.equal(pipe.writes.some((w) => w.iface === IFACE.FIDO), false,
+    'a derive went out without knowing the X-Wing shape');
+  await app.destroy();
+});
+
+test('X-Wing, never connected: the version is learned first, so a v3.0.4 release key is refused by name', async () => {
+  /*
+   * v3.0.4 - the last signed release - has no X-Wing key type and answers a
+   * request for one with a valid status and no key. The xwingDerive gate
+   * existed, but let "unknown" through; learning the version first is what
+   * makes it fire on a session nobody connected.
+   */
+  const pipe = fakeFirmware({ version: 'v3.0.4-prodc' });
+  const app = await start(FULL(), pipe);
+  await assert.rejects(
+    app.services.okcrypto.deviceAge.identity('g6@example.com', { timeoutMs: 400 }),
+    /no X-Wing key type/,
+  );
+  assert.equal(app.services.device.identity.version, 'v3.0.4-prodc');
+  assert.equal(pipe.writes.some((w) => w.iface === IFACE.FIDO), false);
+  await app.destroy();
+});

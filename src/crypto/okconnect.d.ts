@@ -141,11 +141,18 @@ export function openResponse(response: any, appSecretKey: any, { encrypted, tran
  * "64 bytes, and the halves differ" PASSES while holding the tail of pk_M and
  * the real pk_X. Measured exactly that way before this was fixed.
  *
+ * NO DEFAULT, for the same reason. This used to default to the old shape, so a
+ * caller that did not know the firmware - a session connected while locked,
+ * or never connected - got 64 bytes from a 3.1.0 key without any error (G-9).
+ * An X-Wing width now needs the caller to have decided, from a KNOWN version;
+ * leaving it out throws here rather than guessing.
+ *
  * @param {number} keytype
  * @param {object} [opts]
- * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.0.5+)
+ * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.0.5+);
+ *   REQUIRED for X-Wing, ignored for every other key type
  */
-export function publicKeyWidth(keytype: number, { xwingCustody }?: {
+export function publicKeyWidth(keytype: number, opts?: {
     xwingCustody?: boolean | undefined;
 }): 64 | 32 | 65 | 1216;
 /**

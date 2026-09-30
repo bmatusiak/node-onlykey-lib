@@ -379,3 +379,40 @@ test('classic RSA-4096 sign over the tunnel: 512 bytes arrive as 512 + 20 across
     await app.destroy();
   }
 });
+
+/* ------------------------------------ X-Wing: the version first (G-6, G-9) */
+
+test('X-Wing with the version unknown: the tunnel connects FIRST, then reads the 3.0.5+ recipient', async () => {
+  /*
+   * No connectTunnel() by the caller - the order a GUI that skips it, or a
+   * session that connected while locked, produces. Before this, deviceCan()
+   * read "unknown" as the pre-3.0.5 world: transit v1 against a v2 device,
+   * and a 64-byte "pair" sliced from a 1216-byte recipient. Now the plain
+   * OKCONNECT goes out first and the derive is read in the shape the
+   * version says.
+   */
+  const recipient = Uint8Array.from({ length: 1216 }, (_, i) => (i * 7 + 3) & 0xff);
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc', derived: recipient });
+  const app = await start(device);
+
+  const id = await app.services.okcrypto.deviceAge.identity('g6@example.com', { timeoutMs: 3000 });
+  assert.equal(device.requests[0].cmd, okconnect.OKCONNECT);
+  assert.equal(device.requests[0].opt1, 0, 'the first request is the plain connect that reads the version');
+  assert.equal(device.requests[1].opt1, okconnect.KEYACTION.DERIVE_PUBLIC_KEY);
+  assert.deepEqual(Uint8Array.from(id.recipient), recipient, 'not the whole 1216-byte recipient');
+  assert.equal(id.mlkemSeed, undefined, 'a seed was read out of a custody-shaped key');
+  await app.destroy();
+});
+
+test('X-Wing on a device that will not say its version is REFUSED by name, not guessed', async () => {
+  /* A locked device refuses the extension, so the connect cannot read one. */
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc', webcryptLevel: 0 });
+  const app = await start(device);
+  await assert.rejects(
+    app.services.okcrypto.deviceAge.identity('g6@example.com', { timeoutMs: 3000 }),
+    /EXTENSION_NOT_SUPPORTED/,
+  );
+  assert.equal(device.requests.length, 1, 'a derive was sent after the connect failed');
+  assert.equal(device.requests[0].opt1, 0);
+  await app.destroy();
+});

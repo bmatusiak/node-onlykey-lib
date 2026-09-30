@@ -293,6 +293,27 @@ const XWING_PK = 1216;
 const XWING_SPLIT = 64;
 
 /**
+ * The caller's X-Wing shape, refused when it was not given.
+ *
+ * A boolean and nothing else: `undefined` is exactly the "I do not know the
+ * firmware" case this exists to stop, and a truthy non-boolean is a caller
+ * passing something other than the decision.
+ */
+function xwingShape(opts) {
+  const custody = opts && opts.xwingCustody;
+  if (typeof custody !== 'boolean') {
+    const err = new Error(
+      'an X-Wing key has two shapes (3.0.5+: 1216 bytes, before: 64) that '
+      + 'cannot be told apart by length - pass xwingCustody from the firmware '
+      + 'version (capabilities().xwingDeviceCustody); there is no default',
+    );
+    err.code = 'XWING_SHAPE_REQUIRED';
+    throw err;
+  }
+  return custody;
+}
+
+/**
  * How wide a public key is, per key type.
  *
  * X-WING HAS TWO SHAPES AND THE CALLER MUST SAY WHICH, because the firmware
@@ -311,12 +332,19 @@ const XWING_SPLIT = 64;
  * "64 bytes, and the halves differ" PASSES while holding the tail of pk_M and
  * the real pk_X. Measured exactly that way before this was fixed.
  *
+ * NO DEFAULT, for the same reason. This used to default to the old shape, so a
+ * caller that did not know the firmware - a session connected while locked,
+ * or never connected - got 64 bytes from a 3.1.0 key without any error (G-9).
+ * An X-Wing width now needs the caller to have decided, from a KNOWN version;
+ * leaving it out throws here rather than guessing.
+ *
  * @param {number} keytype
  * @param {object} [opts]
- * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.0.5+)
+ * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.0.5+);
+ *   REQUIRED for X-Wing, ignored for every other key type
  */
-function publicKeyWidth(keytype, { xwingCustody = false } = {}) {
-  if (keytype === KEYTYPE.XWING) return xwingCustody ? XWING_PK : XWING_SPLIT;
+function publicKeyWidth(keytype, opts = {}) {
+  if (keytype === KEYTYPE.XWING) return xwingShape(opts) ? XWING_PK : XWING_SPLIT;
   if (keytype === KEYTYPE.CURVE25519 || keytype === KEYTYPE.NACL) return 32;
   return 65;
 }
@@ -440,6 +468,7 @@ function sharedSecretFrom(payload, keytype, opts = {}) {
    * about why.
    */
   if (keytype === KEYTYPE.XWING) {
+    const custody = xwingShape(opts);
     /*
      * FROM 3.0.5 THERE IS NO SEED AND NO PAIR. The device holds both halves
      * and answers a decapsulation with the finished X-Wing secret, 32 bytes and
@@ -448,7 +477,7 @@ function sharedSecretFrom(payload, keytype, opts = {}) {
      * reaching for it should fail where it asks, not carry 32 zero bytes into a
      * KDF.
      */
-    if (opts.xwingCustody) {
+    if (custody) {
       if (payload.length < SECRET_BYTES) {
         throw new Error(
           `payload is ${payload.length} bytes; an X-Wing shared secret is `

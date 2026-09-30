@@ -17,6 +17,21 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **X-Wing asks the firmware version first, or refuses; it never guesses the
+  old shape** (G-6, G-9). okcrypto read "capabilities unknown" (never
+  connected, or connected while LOCKED - status INITIALIZED, no version) as the
+  pre-3.0.5 world: a 3.1.0 key's 1216-byte recipient was sliced into a 64-byte
+  "pair" and a decapsulation took the split path, with no error. Now
+  `deviceAge.identity` / `decrypt` and every X-Wing derive learn the version
+  first - `connectTunnel()` with a supplied ctap, `session.connect()` (set_time,
+  no prompt) on the vendor interface - and refuse with
+  `code: 'XWING_VERSION_UNKNOWN'` if the device still does not say. The split
+  shape stays only for a version KNOWN below 3.0.5. The learned version also
+  makes the `xwingDerive` gate fire on an unconnected session, so a v3.0.4
+  release key is refused by name. `okconnect.publicKeyWidth` / `publicKeyFrom` /
+  `sharedSecretFrom` no longer default X-Wing to 64 bytes: `xwingCustody` must be
+  a boolean (`code: 'XWING_SHAPE_REQUIRED'`).
+
 - **A device refusal before the caller awaits no longer ends the process**
   (2152942). okcrypto's deviceOperation and device.js's two key operations arm
   their `answer` before sending and await it later (after confirm(), a write, a

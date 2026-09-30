@@ -116,6 +116,60 @@ function setup(imports, register, config) {
   };
 
   /*
+   * WHICH X-WING SHAPE THIS DEVICE SPEAKS - asked, never assumed.
+   *
+   * X-Wing has two wire shapes and nothing on the wire tells them apart
+   * (see version.js, xwingDeviceCustody):
+   *
+   *   3.0.5+        derive -> [pk_M | pk_X] 1216 bytes; decap is a chunked
+   *                 OKDECRYPT to slot 128 that returns the finished secret
+   *   before        derive -> [pk_X | mlkem_seed] 64 bytes; the host expands
+   *                 the seed and runs the split decapsulation itself
+   *
+   * Every other gate in this plugin lets "unknown" through, because for them
+   * the pre-3.0.5 default is harmless. Here it is not: `deviceCan(...) === true`
+   * read "unknown" as "the old shape", so a session that was connected while
+   * LOCKED (status INITIALIZED, no version) or never connected at all took the
+   * split path against a 3.1.0 key - sliced the last 64 bytes of a 1216-byte
+   * recipient into a "pair", and answered a decapsulation with a secret no
+   * other client derives. Nothing failed where it went wrong (G-6, G-9).
+   *
+   * So the version is LEARNED first, from the one call that always carries it:
+   * the tunnel's plain OKCONNECT when the host reached the key through a
+   * supplied ctap (a browser - one extra ceremony, and the derive that follows
+   * re-keys anyway), or session.connect() over the vendor interface otherwise
+   * (ok-rn's hard key: connected while locked, then unlocked on the keypad,
+   * which the lib never saw - an OKCONNECT there is set_time(), a status reply
+   * and no prompt). If the device still does not say - it is locked - this
+   * REFUSES by name rather than guess. The split shape is kept only for a
+   * version KNOWN to be below 3.0.5 (a 3.0.4 development build; no release
+   * has X-Wing before 3.0.5).
+   *
+   * Asked per operation, not cached here: session.identity is the one record,
+   * and a later connect() may replace it.
+   */
+  const versionKnown = () => Boolean(session && session.identity && session.identity.version);
+
+  async function xwingCustody({ timeoutMs } = {}) {
+    if (!versionKnown() && session) {
+      if (suppliedCtap) await connectTunnel(timeoutMs ? { timeoutMs } : {});
+      else if (typeof session.connect === 'function') await session.connect(timeoutMs ? { timeoutMs } : {});
+    }
+    if (!versionKnown()) {
+      const err = new Error(
+        'X-Wing needs the firmware version, and this device has not said it - '
+        + 'it is most likely LOCKED (a locked device answers INITIALIZED with no '
+        + 'version). The two X-Wing shapes (3.0.5+ and before) cannot be told '
+        + 'apart on the wire, so this refuses rather than guess. Unlock the '
+        + 'device and try again.',
+      );
+      err.code = 'XWING_VERSION_UNKNOWN';
+      throw err;
+    }
+    return session.capabilities.xwingDeviceCustody === true;
+  }
+
+  /*
    * Randomness comes from the host plugin, not from a global. Node has crypto
    * and Hermes has nothing until a polyfill is installed, so reaching for one
    * fails at the point of use on the platform that lacks it.
@@ -808,7 +862,15 @@ function setup(imports, register, config) {
      *
      * The status guard below cannot catch that, because the status is real.
      * Only knowing what the firmware has can, so this asks before it sends.
+     *
+     * For X-Wing the version is learned FIRST (xwingCustody above), so an
+     * unconnected session reaches this gate knowing the answer instead of
+     * letting "unknown" through - a v3.0.4 release key is now refused here
+     * rather than asked for a key type it does not have.
      */
+    const custody = keytype === okconnect.KEYTYPE.XWING
+      ? await xwingCustody({ timeoutMs })
+      : false;
     if (keytype === okconnect.KEYTYPE.XWING && deviceCan('xwingDerive') === false) {
       throw new Error(
         'this firmware has no X-Wing key type, so it cannot derive one. It '
@@ -984,7 +1046,7 @@ function setup(imports, register, config) {
 
     if (isShared) {
       const { secret, publicKey: pub } = okconnect.sharedSecretFrom(
-        opened.payload, keytype, { xwingCustody: deviceCan('xwingDeviceCustody') === true },
+        opened.payload, keytype, { xwingCustody: custody },
       );
       return { status: opened.status, payload: opened.payload, secret, publicKey: pub };
     }
@@ -996,10 +1058,11 @@ function setup(imports, register, config) {
        * The X-Wing shape is the FIRMWARE's, read from its version - see the
        * xwingDeviceCustody capability. Passed rather than inferred from the
        * payload length, because both shapes arrive in a 1216-byte payload and
-       * the wrong one slices cleanly out of it.
+       * the wrong one slices cleanly out of it. `custody` is from a KNOWN
+       * version - xwingCustody() refused above if there was none.
        */
       publicKey: okconnect.publicKeyFrom(opened.payload, keytype, {
-        xwingCustody: deviceCan('xwingDeviceCustody') === true,
+        xwingCustody: custody,
       }),
     };
   }
@@ -1712,6 +1775,8 @@ function setup(imports, register, config) {
        * not need storing - only its label does.
        */
       async identity(label, opts = {}) {
+        /* Known before the derive, never read as "unknown = old shape". */
+        const custody = await xwingCustody(opts);
         const derived = await okcrypto.derivePublicKey(label, {
           ...opts,
           keytype: okconnect.KEYTYPE.XWING,
@@ -1728,7 +1793,7 @@ function setup(imports, register, config) {
          * `mlkemSeed` is simply absent under custody rather than faked: a
          * caller still reaching for it should fail where it asks.
          */
-        if (deviceCan('xwingDeviceCustody') === true) {
+        if (custody) {
           const recipient = derived.publicKey;
           return {
             label,
@@ -1774,7 +1839,8 @@ function setup(imports, register, config) {
        * what makes this one round trip rather than a 1120-byte upload.
        */
       async decrypt(fileBytes, label, opts = {}) {
-        const custody = deviceCan('xwingDeviceCustody') === true;
+        /* Asked, not read: unknown would have meant the split path (G-6). */
+        const custody = await xwingCustody(opts);
         const id = await okcrypto.deviceAge.identity(label, opts);
 
         return age.decryptAgeFile(fileBytes, async (ciphertext) => {
