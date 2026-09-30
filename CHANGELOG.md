@@ -17,6 +17,21 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **An unanswered confirmation is a refusal, not the answer** (90ec3b6).
+  `deviceOperation` took only `/^Error/` as a refusal, so the firmware's 20 s
+  timeout - "Timeout occured while waiting for confirmation on OnlyKey", with no
+  "Error" in front, the same words in every signed release - came back as the
+  RESULT: a derived X-Wing decap took its first 32 bytes as the secret and age
+  failed "invalid tag", blaming the file for a button nobody pressed. Those words
+  are now a refusal (`okmsg.errorKind`), with a test.
+- **User Input Modes as firmware 3.1.0 and the desktop App define them**
+  (17efcb6). Fields 21 (SSH/GPG derived keys), 22 (stored keys) and 30 (web and
+  agent derived keys) carry the section "User Input Modes" on every firmware
+  line, so every GUI groups them alike; the choices use the desktop App's words
+  ("Challenge Code (enter 3 digits)", "Button Press (tap any button)", and for 30
+  "None (no confirmation)"), the first-use default (press) is stated, field 26 is
+  "HMAC User Input Mode" with its choices, field 31 "Webcrypt Access".
+
 - **v3.1.0 pin follows the release again: libraries 16d8863 -> 8d28305.**
   Re-squashed on 2026-09-30; the tree change is one file, `onlykey/okcrypto.cpp`:
   X25519 private keys are now clamped (RFC 7748) when DERIVED and when
@@ -340,3 +355,13 @@ library has to deal with first (freeze the kit's originals as vectors).
 The first pinned release: the library as every consumer ran it on 2026-09-27
 (ok-rn; the emulator on Windows, Linux x64 and the Pi). Everything before this
 point was untagged development.
+
+Two changes in it that reach every GUI, recorded here afterwards (2026-09-30):
+
+- **An unwritten field 31 allows stored keys** (0c9e092). `webcryptPolicy`
+  records what a never-written Webcrypt Access field does (stored keys allowed,
+  as on v3.0.4) as `unwritten`, so a form starts there rather than at 0 - saving
+  an untouched form no longer turns web PGP off.
+- **Backup capture times out on silence** (c96c11a). `captureBackup`'s timeout
+  restarts on every keystroke, so a slow backup that is still typing is not cut
+  off.
