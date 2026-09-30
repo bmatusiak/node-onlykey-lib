@@ -120,4 +120,5 @@ export let device: {
     encoders: typeof import("./device/encoders");
     keystrokes: typeof import("./device/keystrokes");
     slotConfig: typeof import("./device/slotConfig");
+    preferences: typeof import("./device/preferences");
 };

@@ -24,4 +24,6 @@ module.exports = {
   keystrokes: require('./keystrokes'),
   /* The slot field table, so a host form is driven by it rather than restated. */
   slotConfig: require('./slotConfig'),
+  /* The settings table and its per-firmware row shapes (G-4). */
+  preferences: require('./preferences'),
 };

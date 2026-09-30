@@ -273,3 +273,21 @@ test('nothing under src/ requires a Node built-in, so it bundles for a browser',
     'src/vendor/node_modules/tweetnacl/nacl.min.js: crypto',
   ]);
 });
+
+test('the preference table is public, and shaped per firmware without composing a plugin (G-4)', () => {
+  const prefs = require('node-onlykey-lib/device/preferences');
+  assert.equal(require('node-onlykey-lib').device.preferences, prefs);
+  const { capabilities } = require('node-onlykey-lib/device/version');
+  assert.ok(prefs.PREFERENCES.lockout && prefs.USER_INPUT_ENUM_ROWS.derivedChallengeMode);
+
+  const row = (rows, name) => rows.find((r) => r.name === name);
+  const legacy = prefs.preferenceRows(capabilities('UNLOCKEDv3.0.4-prodc'));
+  const enums = prefs.preferenceRows(capabilities('UNLOCKEDv3.1.0-prodc'));
+  assert.equal(row(legacy, 'derivedChallengeMode').max, 255);
+  assert.equal(row(enums, 'derivedChallengeMode').max, 1);
+  assert.equal(row(legacy, 'webAgentDeriveMode'), undefined, 'v3.0.4 has no field 30');
+  assert.equal(row(enums, 'webAgentDeriveMode').max, 2);
+  /* Unknown (locked, never connected) is the legacy shape - the safe side. */
+  assert.deepEqual(prefs.preferenceRows(null), prefs.preferenceRows(capabilities('INITIALIZED')));
+  assert.equal(prefs.preferenceRow('nope', null), null);
+});

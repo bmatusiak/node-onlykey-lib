@@ -17,6 +17,19 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **The preference table is public, and setPreference checks the row this
+  firmware has** (G-4). PREFERENCES and its 3.0.5 enum overlay moved out of the
+  device plugin's setup() into `src/device/preferences.js`, exported as
+  `node-onlykey-lib/device/preferences` and `device.preferences`, with pure
+  `preferenceRow(name, capabilities)` / `preferenceRows(capabilities)` - a GUI
+  reads the rows for any firmware without composing a stack.
+  `device.preferences()` is now `preferenceRows(session.capabilities)`, and
+  `setPreference` validates against `preferenceRow(name, session.capabilities)`
+  instead of the static max: on 3.0.5+ `derivedChallengeMode` 8 (the old bit 3)
+  and `storedChallengeMode` 2 are refused before the wire, where they used to
+  go out for the firmware to refuse; v3.0.4 keeps the bitmask and bit 3.
+  Unknown capabilities keep the legacy row, as before.
+
 - **The host refuses low-order X25519 points and all-zero shared secrets**
   (G-12). New `src/crypto/x25519guard.js` (also `crypto.x25519guard`):
   `isLowOrderU`, `assertPeerNotLowOrder`, `assertNonZeroSecret`, throwing

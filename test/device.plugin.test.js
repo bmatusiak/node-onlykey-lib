@@ -576,6 +576,36 @@ test('the derived-key challenge mode accepts the bit that matters', async () => 
   await app.destroy();
 });
 
+test('setPreference validates against the row THIS firmware has, not the static table (G-4)', async () => {
+  /*
+   * preferences() drew field 21 as Challenge/Press on a 3.0.5+ key while
+   * setPreference still checked the static max of 255 - so 8, the old
+   * "no touch" bit, went out for the enum firmware to refuse. Both now read
+   * preferenceRow(name, capabilities).
+   */
+  const onEnum = fakeFirmware({ version: 'v3.1.0-prodc' });
+  const app = await start(onEnum);
+  const device = app.services.device;
+  await device.connect();
+  const sent = () => onEnum.writes.filter((w) => w.iface === IFACE.VENDOR && w.data[4] === MSG.OKSETSLOT).length;
+
+  await assert.rejects(() => device.setPreference('derivedChallengeMode', 8), /must be an integer 0\.\.1, got 8/);
+  await assert.rejects(() => device.setPreference('storedChallengeMode', 2), /0\.\.1/);
+  assert.equal(sent(), 0, 'a value the enum firmware refuses reached the wire');
+  await assert.doesNotReject(() => device.setPreference('derivedChallengeMode', 1));
+  /* Field 30 takes "none" (2) on every 3.0.5+ build. */
+  await assert.doesNotReject(() => device.setPreference('webAgentDeriveMode', 2));
+  assert.equal(sent(), 2);
+  await app.destroy();
+
+  /* v3.0.4, the last signed release: still the bitmask, and bit 3 still reachable. */
+  const onBits = fakeFirmware({ version: 'v3.0.4-prodc' });
+  const old = await start(onBits);
+  await old.services.device.connect();
+  await assert.doesNotReject(() => old.services.device.setPreference('derivedChallengeMode', 8));
+  await old.destroy();
+});
+
 /* --------------------------------------------------------------- identity */
 
 /*
