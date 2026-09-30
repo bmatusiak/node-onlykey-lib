@@ -180,6 +180,19 @@ test('the fingerprint depends on the device key and the time only: same time, sa
   assert.equal(a.cert.fingerprint, b.cert.fingerprint);
   assert.equal(a.cert.armored, b.cert.armored, 'Ed25519 is deterministic and there is no salt notation');
   assert.notEqual(a.cert.fingerprint, c.cert.fingerprint);
+
+  /*
+   * Time 0 (lib-agent's default): the KEY is dated 0 - lib-agent's
+   * fingerprint - but the self-signatures 1, because GnuPG takes a
+   * self-signature at 0 as undated and then shows the person's own key's
+   * signatures as [uncertain].
+   */
+  const key = await openpgp.readKey({ armoredKey: a.cert.armored });
+  assert.equal(key.keyPacket.created.getTime(), 0);
+  assert.equal(key.users[0].selfCertifications[0].created.getTime(), 1000);
+  assert.equal(key.subkeys[0].bindingSignatures[0].created.getTime(), 1000);
+  const later = await openpgp.readKey({ armoredKey: (await certificate('ed25519', { created: 1700000000 })).cert.armored });
+  assert.equal(later.users[0].selfCertifications[0].created.getTime(), 1700000000000, 'any other time is the key\'s own');
 });
 
 test('a device signature that does not verify makes no certificate', async () => {

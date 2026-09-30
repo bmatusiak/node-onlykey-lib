@@ -264,10 +264,22 @@ async function buildCertificate({ userId, curve, created, signPublic, ecdhPublic
 
   /*
    * The certificate time is the key's time, not "now": lib-agent signs with
-   * pubkey.created, and a signature younger than the key it certifies is
-   * the only thing that makes sense for a key backdated to the epoch.
+   * pubkey.created, and it keeps the whole certificate a function of
+   * (device, user id, curve, time).
+   *
+   * EXCEPT 0, lib-agent's default, which becomes 1. GnuPG reads a
+   * self-signature made at 0 as "no creation time": the user id then counts
+   * as not self-signed when gpg matches a signature's Signer's User ID
+   * against the key (gpg.conf's default-key "<user id>" puts one in every
+   * signature), and gpg --verify says "Good signature ... [uncertain]" and
+   * "WARNING: The key's User ID is not certified with a trusted signature!"
+   * for the person's OWN ultimately trusted key ("issuer ... does not match
+   * any User ID" under --debug trust). Measured on GnuPG 2.4.4: time 0 gives
+   * [uncertain], time 1 gives [ultimate]. lib-agent's certificates, signed
+   * at 0, have the same fault. Only the SIGNATURE moves: the key's creation
+   * time - and so the fingerprint - stays lib-agent's.
    */
-  const when = new Date(created * 1000);
+  const when = new Date(Math.max(created, 1) * 1000);
   /*
    * nonDeterministicSignaturesViaNotation OFF: openpgp.js v6 salts every v4
    * signature with a random notation, against fault attacks on a SOFTWARE
