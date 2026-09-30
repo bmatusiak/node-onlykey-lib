@@ -59,10 +59,18 @@
     "typescript": "^6.0.3"
   },
   "peerDependencies": {
-    "node-hid": "^3.4.0"
+    "node-hid": "^3.4.0",
+    "@stoprocent/noble": "2.8.0",
+    "dbus-next": "^0.10.2"
   },
   "peerDependenciesMeta": {
     "node-hid": {
+      "optional": true
+    },
+    "@stoprocent/noble": {
+      "optional": true
+    },
+    "dbus-next": {
       "optional": true
     }
   }

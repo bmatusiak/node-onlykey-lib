@@ -18,6 +18,11 @@
  * same transport plugin the phone uses for a hard key - only the pipe beneath it
  * differs - so a CLI command exercises the code the GUIs ship, not a copy.
  *
+ * With `ble: true` the transport is transport/ble instead, over the Bluetooth
+ * pipe in ./transport-ble.js - a phone running ok-rn, its soft key's vendor
+ * interface published as a GATT service. Nothing above the transport changes,
+ * which is what lets every command (agent and gpg-agent included) take --ble.
+ *
  * WHY A HELPER. Every Node consumer - this CLI now, the test kit's hardware
  * runs and any script after them - would otherwise repeat the composition and
  * drift: which plugins, in what order, where the pipe goes, and who OPENS the
@@ -30,18 +35,29 @@
  *                                 test fakes, or the emulator's bus
  * @param {string} [opts.path]     which key, when more than one is plugged in
  * @param {() => object} [opts.loadHid]  returns node-hid; injectable
+ * @param {boolean} [opts.ble]     reach a phone over Bluetooth LE, not USB
+ * @param {string} [opts.address]  with ble: which phone (address or name)
+ * @param {() => object} [opts.loadNoble]  returns @stoprocent/noble; injectable
+ * @param {() => object} [opts.loadDbus]   returns dbus-next; injectable
  * @param {object} [opts.config]   further plugins.config, merged under the pipe
  * @returns {Promise<object>} the started Rectify app with the transport OPEN;
  *   its services (device, okcrypto, transport) are the API
  */
 'use strict';
 
-function startDesktop({ pipe, path, loadHid, config = {} } = {}) {
+function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, loadDbus, config = {} } = {}) {
   const Rectify = require('@bmatusiak/rectify');
-  const { createHidPipe } = require('./transport-hid');
+  /*
+   * The pipe is built lazily per bus: a --ble run must not touch hidapi (it
+   * would enumerate, and on a machine with a hard key plugged in that is the
+   * wrong key's business), and a USB run must not load a Bluetooth stack.
+   */
+  const makePipe = () => (ble
+    ? require('./transport-ble').createBlePipe({ address, loadNoble, loadDbus })
+    : require('./transport-hid').createHidPipe({ path, loadHid }));
   const plugins = [
     require('../plugins/host'),
-    require('../plugins/transport/usb'),
+    ble ? require('../plugins/transport/ble') : require('../plugins/transport/usb'),
     require('../plugins/session'),
     require('../plugins/device'),
     require('../plugins/okcrypto'),
@@ -50,7 +66,7 @@ function startDesktop({ pipe, path, loadHid, config = {} } = {}) {
     ...config,
     transport: {
       ...(config.transport || {}),
-      pipe: pipe || createHidPipe({ path, loadHid }),
+      pipe: pipe || makePipe(),
     },
   };
 
