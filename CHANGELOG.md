@@ -17,6 +17,19 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **The host refuses low-order X25519 points and all-zero shared secrets**
+  (G-12). New `src/crypto/x25519guard.js` (also `crypto.x25519guard`):
+  `isLowOrderU`, `assertPeerNotLowOrder`, `assertNonZeroSecret`, throwing
+  `code: 'LOW_ORDER_POINT'`, over the seven low-order encodings (RFC 7748
+  decoding; noble's `lowOrderU` plus p and p+1, libsodium's list). Wired where
+  the vendored noble check does not reach: `okconnect.transitKey` (tweetnacl's
+  `box.before` is unchecked and turns every low-order device key into ONE fixed
+  shared key), the 25519 peer key framed for a derive (`peerKeyWire`),
+  every secret `okconnect.sharedSecretFrom` reads out of a reply, and
+  `okcrypto.agent.ecdh` (the X25519 peer before sending, the result after).
+  Firmware 8d28305 refuses the zero secret on the device; v3.0.4 does not, and
+  the library serves both.
+
 - **X-Wing asks the firmware version first, or refuses; it never guesses the
   old shape** (G-6, G-9). okcrypto read "capabilities unknown" (never
   connected, or connected while LOCKED - status INITIALIZED, no version) as the

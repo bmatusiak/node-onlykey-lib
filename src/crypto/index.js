@@ -22,4 +22,6 @@ module.exports = {
   messages: require('./pgp_messages'),
   vault: require('./vault'),
   okconnect: require('./okconnect'),
+  /* The host-side low-order X25519 guard, for a GUI doing its own ECDH (G-12). */
+  x25519guard: require('./x25519guard'),
 };

@@ -416,3 +416,20 @@ test('X-Wing on a device that will not say its version is REFUSED by name, not g
   assert.equal(device.requests[0].opt1, 0);
   await app.destroy();
 });
+
+
+test('an all-zero shared secret from the device is refused, not returned as a key (G-12)', async () => {
+  /*
+   * A firmware line without 8d28305's own check answers a low-order peer with
+   * 32 zero bytes. Before the guard, this derive returned them as the secret.
+   */
+  const pub = Uint8Array.from({ length: 65 }, (_, i) => (i === 0 ? 0x04 : i));
+  const device = fakeTunnelDevice({ firmware: 'v3.0.4-prodc', derived: Uint8Array.from([...pub, ...new Uint8Array(32)]) });
+  const app = await start(device);
+  await app.services.okcrypto.connectTunnel();
+  await assert.rejects(
+    app.services.okcrypto.deriveSharedSecret('g12@example.com', pub, { keytype: okconnect.KEYTYPE.P256R1, timeoutMs: 3000 }),
+    (err) => err.code === 'LOW_ORDER_POINT',
+  );
+  await app.destroy();
+});

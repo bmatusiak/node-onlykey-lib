@@ -97,6 +97,7 @@ const agentProto = require('../../src/protocol/agent');
 const { challengeDigits } = require('../../src/protocol/challenge');
 const { toBase64Url, utf8ToBytes, concat } = require('../../src/bytes');
 const { MSG } = require('../../src/protocol/msg');
+const { assertPeerNotLowOrder, assertNonZeroSecret } = require('../../src/crypto/x25519guard');
 const { IFACE } = require('../../src/transport/contract');
 
 function setup(imports, register, config) {
@@ -1582,9 +1583,24 @@ function setup(imports, register, config) {
       async ecdh(identity, peerPublicKey, { keyType = agentProto.KEY_TYPE.CURVE25519, version = 1, ...opts } = {}) {
         const code = agentProto.ecdhCode(version, keyType);
         agentAvailable(version);
-        const payload = concat([Uint8Array.from(peerPublicKey), agentProto.identityHash(identity)]);
+        const peer = Uint8Array.from(peerPublicKey);
+        /*
+         * A LOW-ORDER X25519 PEER IS REFUSED BEFORE THE DEVICE SEES IT, and
+         * an all-zero answer after. The peer comes from whoever asked the
+         * agent (a gpg ciphertext's ephemeral key), and the device - on any
+         * line before 8d28305 - computes X25519 with it and answers 32 zero
+         * bytes, which gpg would then use as the session-key wrap. The 33-byte
+         * form carries a prefix byte (gpg's 0x40) the device drops, so the
+         * point is the last 32. See src/crypto/x25519guard.js.
+         */
+        if (keyType === agentProto.KEY_TYPE.CURVE25519 && (peer.length === 32 || peer.length === 33)) {
+          assertPeerNotLowOrder(peer.subarray(peer.length - 32), 'the ECDH peer key');
+        }
+        const payload = concat([peer, agentProto.identityHash(identity)]);
         const out = await deviceOperation(MSG.OKDECRYPT, code, payload, opts);
-        return out.slice(0, agentProto.sharedSecretLength(keyType));
+        const secret = out.slice(0, agentProto.sharedSecretLength(keyType));
+        assertNonZeroSecret(secret, 'the ECDH secret the device returned');
+        return secret;
       },
     },
     /**

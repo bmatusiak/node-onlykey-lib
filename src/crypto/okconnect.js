@@ -38,6 +38,7 @@
 'use strict';
 
 const nacl = require('../vendor/exports/tweetnacl.js');
+const { assertPeerNotLowOrder, assertNonZeroSecret } = require('./x25519guard');
 const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
 const { ctr } = require('../vendor/exports/@noble/ciphers/aes.js');
 const { concat, utf8ToBytes } = require('../bytes');
@@ -172,6 +173,18 @@ function newTransitKeypair() {
  * rather than at its call site.
  */
 function transitKey(devicePublicKey, appSecretKey) {
+  /*
+   * tweetnacl does NOT check the point. With a low-order device key the
+   * X25519 inside box.before is 32 zero bytes, and box.before hands back
+   * HSalsa20 of those - ONE fixed value for every such point and every secret
+   * key of ours (measured: 351f86fa... for all seven). sha256 of it is a
+   * transit key anyone who sent that point can compute. The reply carrying the
+   * key came over a WebAuthn assertion or a HID report, neither of which
+   * authenticates it, so the point is checked here - BEFORE box.before, since
+   * its output no longer shows the zeros an after-the-fact check would look
+   * for (x25519guard.js).
+   */
+  assertPeerNotLowOrder(devicePublicKey, "the device's transit public key");
   const shared = nacl.box.before(
     Uint8Array.from(devicePublicKey),
     Uint8Array.from(appSecretKey),
@@ -396,6 +409,12 @@ function peerKeyWire(publicKey, keytype) {
     if (key.length !== 32) {
       throw new Error(`peer key for keytype ${keytype} must be 32 bytes, got ${key.length}`);
     }
+    /*
+     * Refused BEFORE it is sent. The device would compute X25519 with it and
+     * answer 32 zero bytes - which v3.0.4, the compatibility target, returns
+     * as the secret (only 8d28305 refuses it on the device).
+     */
+    assertPeerNotLowOrder(key, `the peer key for keytype ${keytype}`);
     return key;
   }
 
@@ -454,6 +473,17 @@ function publicKeyFrom(payload, keytype, opts = {}) {
  */
 function sharedSecretFrom(payload, keytype, opts = {}) {
   /*
+   * EVERY secret read out of a reply goes through the all-zero check (RFC 7748
+   * section 6.1). A device on a firmware line without its own check answers a
+   * low-order peer with 32 zero bytes, and those would otherwise be handed on
+   * as a derived key - x25519guard.js says why the host checks regardless.
+   */
+  const returnedSecret = (secret) => {
+    assertNonZeroSecret(secret, 'the shared secret the device returned');
+    return secret;
+  };
+
+  /*
    * X-Wing is a THIRD layout, not a variation on this one. It returns 64 bytes
    * for both actions and the halves keep their positions
    * (ok_extension.cpp:275-281):
@@ -484,7 +514,7 @@ function sharedSecretFrom(payload, keytype, opts = {}) {
           + `${SECRET_BYTES}`,
         );
       }
-      return { secret: payload.subarray(payload.length - SECRET_BYTES) };
+      return { secret: returnedSecret(payload.subarray(payload.length - SECRET_BYTES)) };
     }
 
     if (payload.length < XWING_PAIR) {
@@ -494,7 +524,7 @@ function sharedSecretFrom(payload, keytype, opts = {}) {
     }
     const pair = payload.subarray(payload.length - XWING_PAIR);
     return {
-      secret: pair.subarray(0, SECRET_BYTES),
+      secret: returnedSecret(pair.subarray(0, SECRET_BYTES)),
       mlkemSeed: pair.subarray(SECRET_BYTES),
       publicKey: pair,
     };
@@ -508,7 +538,7 @@ function sharedSecretFrom(payload, keytype, opts = {}) {
     );
   }
   return {
-    secret: payload.subarray(payload.length - SECRET_BYTES),
+    secret: returnedSecret(payload.subarray(payload.length - SECRET_BYTES)),
     publicKey: payload.subarray(
       payload.length - SECRET_BYTES - width,
       payload.length - SECRET_BYTES,

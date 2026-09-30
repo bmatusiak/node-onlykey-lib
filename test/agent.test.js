@@ -158,3 +158,25 @@ test('v2 is refused before anything is sent to firmware that lacks it', async ()
   assert.equal((await ok.agent.publicKey(SSH, { keyType: 1 })).length, 32, 'v1 still works there');
   await app.destroy();
 });
+
+/* ------------------------------------- low-order X25519 (G-12, x25519guard) */
+
+test('agent.ecdh refuses a low-order X25519 peer before the device sees it', async () => {
+  /*
+   * v3.0.4 computes X25519 with whatever it is sent and answers 32 zero
+   * bytes; only 8d28305 refuses on the device. The host refuses on every line.
+   */
+  const { LOW_ORDER_U } = require('../src/crypto/x25519guard');
+  const { app, pipe, ok } = await start();
+  const gpg = { gpg: 'Brad <b@example.com>' };
+  const before = pipe.writes.length;
+  for (const u of LOW_ORDER_U) {
+    await assert.rejects(ok.agent.ecdh(gpg, u, { keyType: 4, version: 2, timeoutMs: 300 }),
+      (err) => err.code === 'LOW_ORDER_POINT');
+    /* gpg's 33-byte form, prefix 0x40, is the same point. */
+    await assert.rejects(ok.agent.ecdh(gpg, Uint8Array.of(0x40, ...u), { keyType: 4, version: 2, timeoutMs: 300 }),
+      (err) => err.code === 'LOW_ORDER_POINT');
+  }
+  assert.equal(pipe.writes.length, before, 'a low-order point was sent to the device');
+  await app.destroy();
+});
