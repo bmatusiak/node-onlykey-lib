@@ -22,8 +22,12 @@ the commit that release ended at.
   the only change is the stale-staged-reply fix in `fido2/device.cpp` and
   `fido2/ok_extension.cpp` (a fully delivered FIDO2 reply is no longer served
   again from the start to a new request, and a duplicate poll no longer re-arms
-  the wipe timer). OnlyKey-Firmware stays 9fceea1. The lib's 5.5 s settle wait
-  stays: v3.0.4 and older still need it.
+  the wipe timer). OnlyKey-Firmware stays 9fceea1. okcrypto's stale-timer
+  settle (`settleStaleTimers`, up to 6 s) is unchanged: it already runs only on
+  firmware without the `staleFadeGuard` capability (v3.0.4 and older), so a
+  3.1.0 key never waits. Verified on 16d8863 + the CTAPHID fix: kit 01-protocol
+  144/0/6 on Windows, VM and Pi; the web app's X-Wing age round trip passes
+  (03-gui 30/0/1); Pixel e2e 104/0/34.
 - **`scripts/upstream-watch.js` watches the release PR branches by HEAD**, not
   only by new commits: a re-squash (force-push) is reported as "head moved".
 
