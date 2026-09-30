@@ -758,19 +758,6 @@ COMMANDS.settime = {
 
 /* ------------------------------------------------------------ writing: keys */
 
-/*
- * The all-FF generate trigger, python's 32 bytes of it. set_private() sums
- * buffer[7..14] and generates when the sum is 2040 (okcore.cpp:4900 at
- * eb25290). The device plugin keeps an 8-byte copy private for its
- * post-quantum generateKey, which is PQC-only (a library gap), so an ECC
- * generation goes through loadKey with this as the "key".
- *
- * loadKey RESENDS a write the key does not acknowledge, and a resent trigger
- * generates again over the first key. That is harmless here - nobody has seen
- * the first key, and the slot ends up holding one random key either way.
- */
-const GENERATE_TRIGGER = new Uint8Array(32).fill(0xff);
-
 COMMANDS.genkey = {
   mirrors: 'genkey',
   usage: '<ECC1-16> <x|n|s|c|m|w> [d|s|b]',
@@ -789,10 +776,11 @@ COMMANDS.genkey = {
         + `m (ML-KEM-768) or w (X-Wing); got "${letter}"`);
     }
     const pqc = letter === 'm' || letter === 'w';
-    let type = KEY_LETTERS[letter];
+    /* Checked before connecting, so a usage error never touches the device. */
+    let roles = null;
     if (!pqc) {
       if (feat === undefined) throw usage('genkey needs the key\'s use: d (decryption), s (signing) or b (backup)');
-      type |= parseFeatures(feat).bits;
+      roles = parseFeatures(feat).roles;
     } else if (feat !== undefined) {
       /* Accepted, as python accepts it; the firmware sets decryption itself (okcrypto.cpp:2059 at eb25290). */
       parseFeatures(feat);
@@ -801,16 +789,6 @@ COMMANDS.genkey = {
     return withDevice(io, opts, async ({ device, connected, identity }) => {
       requireUnlocked(identity, 'genkey');
       const caps = connected.capabilities || {};
-      if (letter === 'c' && !caps.curve25519Keygen) {
-        /*
-         * The gate python does not have: before 3.0.5 the firmware has no
-         * Curve25519 branch, stores the trigger itself as the key, and says
-         * "Successfully set ECC Key" (capability curve25519Keygen).
-         */
-        throw new CliError(`Firmware ${identity.version} cannot generate a Curve25519 key: it would store the `
-          + 'same fixed key every such OnlyKey gets, and report success. Nothing was written. Use 3.0.5 or '
-          + 'later, or load a key made elsewhere with setkey or loadkey.');
-      }
       if (pqc && !caps.postQuantum) {
         throw new CliError(`Firmware ${identity.version} has no post-quantum keys. Nothing was written.`);
       }
@@ -825,7 +803,14 @@ COMMANDS.genkey = {
           + `(public key ${publicKey.length} bytes)`);
         return 0;
       }
-      const result = await deviceWrite(() => device.loadKey(key.slot, { type, key: GENERATE_TRIGGER }));
+      /*
+       * The library's generateEccKey: python's all-FF trigger, sent ONCE (a
+       * resend generates again), and the Curve25519 gate python does not have
+       * - before 3.0.5 the firmware stores the trigger itself as the key and
+       * says "Successfully set ECC Key" (capability curve25519Keygen). The
+       * gate's refusal is a plain Error and reaches the user as its message.
+       */
+      const result = await deviceWrite(() => device.generateEccKey(key.slot, KEY_LETTERS[letter], roles));
       if (result.response) io.out(result.response);
       return 0;
     });

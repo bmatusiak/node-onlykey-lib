@@ -1362,3 +1362,75 @@ test('duoPin returns the attempts-exceeded refusal as the answer', async () => {
   assert.match(replyText(reply), /^Error password attempts/);
   await app.destroy();
 });
+
+/* ------------------------------------------- ECC keygen in the plugin (G-1) */
+
+const setPrivFrames = (pipe) => pipe.writes.filter((w) => w.iface === IFACE.VENDOR && w.data[4] === MSG.OKSETPRIV);
+
+test('generateEccKey: python\'s all-FF trigger with the type and use bits, sent once, the ack returned', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const out = await app.services.device.generateEccKey(101, 1, { signature: true });
+  assert.deepEqual(out, { slot: 101, type: 0x41, response: 'Successfully set ECC Key' });
+  const frames = setPrivFrames(pipe);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].data[5], 101);
+  assert.equal(frames[0].data[6], 0x41, 'Ed25519 | signature');
+  assert.deepEqual([...frames[0].data.subarray(7, 39)], new Array(32).fill(0xff), 'python sends 32 bytes of FF');
+  assert.equal(pipe.generations, 1);
+  /* Config mode drops OKGETPUBKEY, so none is asked for. */
+  assert.equal(pipe.writes.some((w) => w.data[4] === MSG.OKGETPUBKEY), false);
+  await app.destroy();
+});
+
+test('generateEccKey never resends: a resent trigger would generate a second key', async () => {
+  const pipe = fakeFirmware({ setPrivSilent: true });
+  const app = await start(pipe);
+  await assert.rejects(
+    app.services.device.generateEccKey(102, 2, { decryption: true, ackTimeoutMs: 200 }),
+    /never acknowledged after 1 attempts.*not resent/s,
+  );
+  assert.equal(setPrivFrames(pipe).length, 1, 'the trigger was sent more than once');
+  await app.destroy();
+});
+
+test('generateEccKey Curve25519: refused on v3.0.4 (connected or not), generated on 3.0.5', async () => {
+  /*
+   * v3.0.4 has no type-4 branch: it would flash the trigger itself and say
+   * "Successfully set ECC Key" - the same key on every such device. An
+   * unconnected session asks the version first instead of guessing.
+   */
+  for (const connectFirst of [true, false]) {
+    const pipe = fakeFirmware({ version: 'v3.0.4-prodc' });
+    const app = await start(pipe);
+    if (connectFirst) await app.services.device.connect();
+    await assert.rejects(
+      app.services.device.generateEccKey(102, 4, { decryption: true }),
+      /v3\.0\.4-prodc cannot generate a Curve25519 key.*Nothing was written/s,
+    );
+    assert.equal(setPrivFrames(pipe).length, 0);
+    await app.destroy();
+  }
+  const locked = fakeFirmware({ version: 'v3.1.0-prodc', pin: '1234567' });
+  const app0 = await start(locked);
+  await assert.rejects(app0.services.device.generateEccKey(102, 4, { decryption: true }), /not said its version/);
+  assert.equal(setPrivFrames(locked).length, 0);
+  await app0.destroy();
+
+  const pipe = fakeFirmware({ version: 'v3.0.5-prodc' });
+  const app = await start(pipe);
+  const out = await app.services.device.generateEccKey(102, 4, { backup: true, decryption: true });
+  assert.equal(out.type, 0x04 | 0x80 | 0x20);
+  assert.equal(setPrivFrames(pipe).length, 1);
+  await app.destroy();
+});
+
+test('generateEccKey refuses a slot or a type it cannot make, before anything is sent', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  await assert.rejects(app.services.device.generateEccKey(130, 1), /slot 101\.\.116/);
+  await assert.rejects(app.services.device.generateEccKey(101, 6), /types 1-4.*generateKey/s);
+  await assert.rejects(app.services.device.generateEccKey(101, 0x41), /types 1-4/);
+  assert.equal(setPrivFrames(pipe).length, 0);
+  await app.destroy();
+});

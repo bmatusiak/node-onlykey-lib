@@ -655,6 +655,14 @@ const BACKUP_REFUSALS = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   ]);
 
+  /*
+   * The ECC generation's trigger is python-onlykey's 32 bytes of 0xFF
+   * (cli.py setkey(..., 'ff'*32)) rather than the 8 above. The firmware only
+   * sums the first eight, so either generates; 32 keeps the frame
+   * byte-identical to the client whose genkey is the reference.
+   */
+  const ECC_GENERATE_TRIGGER = new Uint8Array(32).fill(0xff);
+
   /**
    * Ask the DEVICE to make a post-quantum key in a slot, and read the public
    * half back.
@@ -2259,6 +2267,113 @@ const BACKUP_REFUSALS = [
      * between.
      */
     generateKey,
+
+    /**
+     * Ask the DEVICE to make an ECC key - Ed25519, P-256, secp256k1 or
+     * Curve25519 (types 1-4) - in an ECC slot.
+     *
+     * ## One API, so no GUI copies the CLI
+     *
+     * The CLI's `genkey` did this with its own trigger through loadKey, which
+     * left every GUI to copy the trigger, the Curve25519 gate and the "send
+     * once" rule out of cli/index.js (G-1 of the G1 audit). They live here now
+     * and the CLI calls this.
+     *
+     * ## The wire: python-onlykey's trigger, loadKey's acknowledgement
+     *
+     * The frame is an ordinary OKSETPRIV whose key is 32 bytes of 0xFF
+     * (python cli.py `setkey(slot, letter, feat, 'ff'*32)`). set_private() sums
+     * buffer[7..14] and generates when the sum is 2040; for types 1-4
+     * okcrypto_generate_random_key() writes the new scalar over the trigger
+     * and ecc_priv_flash() flashes and acknowledges it exactly as a loaded key
+     * - "Successfully set ECC Key" (okcore.cpp at eb25290 :4906, :4945). So,
+     * unlike the post-quantum generateKey above, this DOES answer with a
+     * sentence, and loadKey's acknowledgement wait is the right collector.
+     *
+     * ## Sent ONCE
+     *
+     * loadKey resends a write that is not acknowledged; a resent trigger makes
+     * a second key over the first. So `ackRetries: 0` - a lost acknowledgement
+     * is reported as unknown rather than papered over by generating again.
+     *
+     * ## Curve25519 needs 3.0.5, and the version must be KNOWN
+     *
+     * Before 3.0.5 set_private has no type-4 branch: the trigger ITSELF is
+     * encrypted and flashed, and the device says "Successfully set ECC Key" -
+     * every such OnlyKey then holds the same constant key (capability
+     * curve25519Keygen). v3.0.4, the last signed release, is one of them. So a
+     * type-4 generation asks the version first when it is not known (a vendor
+     * OKCONNECT is set_time: a status reply, allowed in config mode) and
+     * refuses when the firmware predates it or still will not say. Types 1-3
+     * generate on every release.
+     *
+     * ## No public key comes back
+     *
+     * Generation needs config mode (or first use), and config mode drops
+     * OKGETPUBKEY without a word (okcore.cpp:335 at 8d28305 lists the eleven
+     * messages it answers). Reading the key here would time out on every
+     * config-mode generation, so it is left to the caller: getPublicKey(slot)
+     * after the restart that ends config mode.
+     *
+     * @param {number|string} slotId  101..116 (ECC1-16)
+     * @param {number} keyType        keys.KEY_TYPE.ED25519 / P256R1 / P256K1 / CURVE25519
+     * @param {object} [opts]         { signature, decryption, backup } - the
+     *                                use bits (keys.MODIFIER), as prepareKey
+     *                                takes them. python's `b` is backup AND
+     *                                decryption; pass both for that.
+     * @returns {Promise<{slot:number, type:number, response:string}>}
+     */
+    async generateEccKey(slotId, keyType, {
+      signature = false, decryption = false, backup = false, ackTimeoutMs = 8000, timeoutMs,
+    } = {}) {
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
+      if (!(slot >= 101 && slot <= 116)) {
+        throw new Error(`an ECC key lives in slot 101..116 (ECC1-16); ${slot} is not one of them`);
+      }
+      const T = deviceKeys.KEY_TYPE;
+      if (![T.ED25519, T.P256R1, T.P256K1, T.CURVE25519].includes(keyType)) {
+        throw new Error(
+          `generateEccKey makes key types 1-4 (Ed25519, P-256, secp256k1, Curve25519); got ${keyType}. `
+          + 'The post-quantum types are generateKey; the use bits go in the options, not the type.',
+        );
+      }
+      if (keyType === T.CURVE25519) {
+        const known = () => Boolean(session.identity && session.identity.version);
+        if (!known()) await session.connect(timeoutMs ? { timeoutMs } : {});
+        if (!known()) {
+          throw new Error(
+            'a Curve25519 key can only be generated on firmware 3.0.5 or later, and this device has '
+            + 'not said its version (is it locked?). Nothing was written.',
+          );
+        }
+        if (!(session.capabilities && session.capabilities.curve25519Keygen)) {
+          throw new Error(
+            `firmware ${session.identity.version} cannot generate a Curve25519 key: it would store the `
+            + 'same fixed key every such OnlyKey gets, and report success. Nothing was written. Use 3.0.5 '
+            + 'or later, or load a key made elsewhere.',
+          );
+        }
+      }
+      let type = keyType;
+      if (backup) type |= deviceKeys.MODIFIER.BACKUP;
+      if (signature) type |= deviceKeys.MODIFIER.SIGNATURE;
+      if (decryption) type |= deviceKeys.MODIFIER.DECRYPTION;
+
+      let result;
+      try {
+        result = await device.loadKey(slot, { type, key: ECC_GENERATE_TRIGGER }, { ackTimeoutMs, ackRetries: 0 });
+      } catch (err) {
+        if (err.deviceText) throw err;
+        throw new Error(
+          `${err.message}. Outside config mode (and after first use) the device drops a key write `
+          + 'without a word, so most likely nothing was generated; if it WAS in config mode, a key may '
+          + 'have been made and only its acknowledgement lost - it is not resent, because a resend '
+          + 'generates again.',
+        );
+      }
+      progress('generateEccKey', { slot, type });
+      return { slot, type, response: result.response };
+    },
 
     async getPublicKey(slotId, opts = {}) {
       const { retries = 1, ...rest } = opts;

@@ -17,6 +17,19 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **`device.generateEccKey(slot, keyType, { signature, decryption, backup })`**
+  (G-1). On-device ECC keygen, types 1-4 in ECC1-16, was CLI-only: `genkey`
+  sent its own all-FF trigger through loadKey, so a GUI had to copy the
+  trigger, the Curve25519 gate and the send-once rule. The plugin now owns
+  them: python-onlykey's 32-byte FF trigger, sent ONCE (`ackRetries: 0`; a
+  resent trigger generates again), the "Successfully set ECC Key" answer
+  returned as `response`, and Curve25519 refused unless the firmware is KNOWN
+  to be 3.0.5+ (`curve25519Keygen`; the version is asked when missing) - v3.0.4
+  would flash the trigger itself as every device's key and report success. No
+  public key is read back: generation runs in config mode, which drops
+  OKGETPUBKEY (okcore.cpp:335), so the caller reads it after the restart. The
+  CLI's `genkey x/n/s/c` calls it.
+
 - **wipeSlot returns every reply; loadKey returns the device's reply; both
   refusals carry `deviceText`** (G-3). **Breaking for wipeSlot:** it resolves
   `{ slot, response, responses }` instead of a bare string - `response` is the
