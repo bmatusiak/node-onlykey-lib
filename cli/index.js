@@ -1021,6 +1021,311 @@ COMMANDS.wipekey = {
   },
 };
 
+/* ------------------------------------------------------------ ssh agent */
+
+/**
+ * The key, opened when an agent request needs it and let go when idle.
+ *
+ * WHY NOT withDevice() PER REQUEST. That would release the key between two
+ * signatures, and the stale-timer guard in plugins/okcrypto
+ * (settleStaleTimers) lives in ONE okcrypto instance: a fresh stack per
+ * signature forgets the last one ended and cannot wait out the firmware's
+ * leftover fade timers - the measured failure where the second signature of
+ * a run times out. A `git fetch` over ssh signs more than once in a second.
+ *
+ * WHY NOT HOLD IT FOR THE AGENT'S LIFE. A held hidapi handle keeps the vendor
+ * interface busy (see withDevice): with an agent running all day, onlykey-js,
+ * the desktop app and lib-agent itself could not reach the key. lib-agent
+ * opens per request for the same reason (JustInTimeConnection).
+ *
+ * So: one session for a burst, released after `idleMs` with nothing asked -
+ * longer than the 6 s stale-timer window, so a request after a release never
+ * needed the guard anyway. A failed operation releases at once: the next
+ * request reconnects and reads the key's state afresh (it may have been
+ * unlocked since, or replugged).
+ */
+function sharedDevice(io, opts, { idleMs = 10000 } = {}) {
+  let opening = null;
+  let timer = null;
+
+  async function release() {
+    clearTimeout(timer);
+    const was = opening;
+    opening = null;
+    if (!was) return;
+    try { await (await was).app.destroy(); } catch { /* it never opened, or is gone */ }
+  }
+
+  function open() {
+    if (!opening) {
+      opening = (async () => {
+        const app = await io.start({ path: opts.path });
+        try {
+          const connected = await app.services.device.connect();
+          return { app, identity: connected.identity };
+        } catch (err) {
+          await app.destroy().catch(() => {});
+          throw err;
+        }
+      })();
+      opening.catch(() => { opening = null; });
+    }
+    return opening;
+  }
+
+  async function use(fn) {
+    clearTimeout(timer);
+    try {
+      const { app, identity } = await open();
+      requireUnlocked(identity, 'agent');
+      const out = await fn(app.services.okcrypto);
+      timer = setTimeout(release, idleMs);
+      if (timer.unref) timer.unref();
+      return out;
+    } catch (err) {
+      await release();
+      throw err;
+    }
+  }
+
+  return { use, release };
+}
+
+/*
+ * lib-agent's --skey values that name the DERIVED key (libagent/device/
+ * onlykey.py convert_keyslot, _parse_slot_value): ECC32 / 132 is v1, the
+ * default; derived-v2 / ECC32v2 / 232 is v2 (3.0.5 on). ECC1-16 - an ssh key
+ * STORED in a slot - is a different feature, not built here.
+ */
+function parseSkey(value) {
+  const v = String(value).toLowerCase();
+  if (['ecc32', '132', 'derived', 'derived-v1'].includes(v)) return 1;
+  if (['derived-v2', 'ecc32v2', '232'].includes(v)) return 2;
+  if (/^ecc([1-9]|1[0-6])$/.test(v)) {
+    throw usage(`--skey ${value}: an ssh key stored in an ECC slot is not supported by "${NAME} agent" yet; `
+      + 'it signs with the derived key (ECC32, or derived-v2)');
+  }
+  throw usage(`--skey takes ECC32 (derived v1, the default) or derived-v2, not "${value}"`);
+}
+
+/* `-e`: lib-agent's curve names, and the ssh name for P-256 as a convenience. */
+function parseCurve(value) {
+  const v = String(value).toLowerCase();
+  if (v === 'ed25519') return 'ed25519';
+  if (v === 'nist256p1' || v === 'nistp256') return 'nist256p1';
+  throw usage(`-e takes ed25519 or nist256p1, not "${value}" (ssh has no key type for the other derivations)`);
+}
+
+/*
+ * python ssh_args(): ssh to the identity, offering ONLY its key - an
+ * IdentityFile holding the public half (ssh then asks the agent for the
+ * matching private operation) and IdentitiesOnly, so ssh does not first try
+ * every other key it can find and trip the server's MaxAuthTries.
+ */
+function sshArgs(id, pubFile) {
+  const args = [];
+  if (id.port) args.push('-p', id.port);
+  if (id.user) args.push('-l', id.user);
+  args.push('-o', `IdentityFile=${pubFile}`, '-o', 'IdentitiesOnly=true');
+  return [...args, id.host];
+}
+
+/** What to tell a shell so ssh finds this agent. */
+function agentEnvLines(sockPath, windows) {
+  if (!windows) return { out: `SSH_AUTH_SOCK=${sockPath}; export SSH_AUTH_SOCK;`, notes: [] };
+  return {
+    out: `$env:SSH_AUTH_SOCK = '${sockPath}'`,
+    notes: [
+      `for Windows OpenSSH (ssh.exe, ssh-add.exe): set SSH_AUTH_SOCK as above (cmd: set SSH_AUTH_SOCK=${sockPath}),`,
+      `or pass -o IdentityAgent=${sockPath} to ssh. Git Bash's own ssh cannot use a named pipe.`,
+    ],
+  };
+}
+
+COMMANDS.agent = {
+  mirrors: 'onlykey-agent (lib-agent)',
+  usage: '<[ssh://][user@]host | identity file> [-e ed25519|nist256p1] [--skey ECC32|derived-v2] '
+    + '[-f | -s | -c | -- command...] [--sock-path <path>]',
+  summary: 'SSH keys derived in the key: print the public key, or serve them as an ssh-agent',
+  device: true,
+  /*
+   * lib-agent's names where it has one: -e/--ecdsa-curve-name, --skey (its
+   * short form is `-sk`, which is two flags to every parser but argparse),
+   * -f/--foreground, -s/--shell, -c/--connect, --sock-path. Not carried:
+   * --daemonize (python-daemon's double fork; a Node process backgrounds
+   * with the shell's `&` or a service manager), --mosh, and python's
+   * --timeout/--debug/--log-file (stderr says what happened here).
+   */
+  options: {
+    'ecdsa-curve-name': { type: 'string', short: 'e' },
+    skey: { type: 'string' },
+    foreground: { type: 'boolean', short: 'f' },
+    shell: { type: 'boolean', short: 's' },
+    connect: { type: 'boolean', short: 'c' },
+    'sock-path': { type: 'string' },
+  },
+  /**
+   * lib-agent's surface, one mode per run:
+   *
+   *   agent <identity>                  print its public key line; exit
+   *   agent <identity> -f               serve until Ctrl-C, printing the
+   *                                     SSH_AUTH_SOCK line to eval
+   *   agent <identity> -- <command...>  serve while <command> runs with
+   *                                     SSH_AUTH_SOCK set, exit with its code
+   *   agent <identity> -s               the same, with $SHELL as the command
+   *   agent <identity> -c [ssh args]    the same, with ssh to the identity
+   *
+   * <identity> is lib-agent's `[ssh://][user@]host[:port][/path]`, or a file
+   * of `<identity|curve>` entries (python's form: an absolute path) - which
+   * is how one agent serves several identities.
+   */
+  async run(io, opts, args) {
+    const wire = require('./ssh-wire');
+    const agentSrv = require('./ssh-agent');
+    const [target, ...command] = args;
+    if (!target) throw usage('agent needs an identity: [user@]host, or a file of <identity|curve> entries');
+
+    const curve = opts['ecdsa-curve-name'] ? parseCurve(opts['ecdsa-curve-name']) : 'ed25519';
+    const version = opts.skey ? parseSkey(opts.skey) : 1;
+    const modes = ['foreground', 'shell', 'connect'].filter((m) => opts[m]);
+    if (modes.length > 1) throw usage(`-f, -s and -c are one mode each; got ${modes.map((m) => `--${m}`).join(' ')}`);
+    if (command.length && (opts.foreground || opts.shell)) throw usage(`--${modes[0]} takes no command`);
+
+    let entries;
+    if (require('path').isAbsolute(target)) {
+      const text = await io.readFile(target);
+      entries = wire.parseIdentityFile(text);
+      if (!entries.length) throw new CliError(`${target} has no <identity|curve> entries`);
+    } else {
+      entries = [{ identity: wire.parseIdentity(target), curve }];
+    }
+    if (opts.connect && entries.length !== 1) throw usage('-c connects to ONE identity; the file names several');
+
+    const dev = sharedDevice(io, opts);
+    const keys = [];
+    try {
+      /*
+       * Every public key up front - no press is needed for one - so a locked
+       * key, firmware without v2, or an identity lib-agent could not hash
+       * either fails HERE, before a socket exists or SSH_AUTH_SOCK is
+       * printed, rather than as a bare "agent refused operation" inside ssh.
+       */
+      await dev.use(async (okcrypto) => {
+        for (const e of entries) {
+          const keyType = wire.CURVES[e.curve].keyType;
+          const raw = await okcrypto.agent.publicKey(wire.derivationIdentity(e.identity), { keyType, version });
+          keys.push({ ...e, raw, keyType, comment: wire.identityComment(e.identity, e.curve) });
+        }
+      });
+    } catch (err) {
+      await dev.release();
+      throw err;
+    }
+
+    const serving = modes.length || command.length;
+    if (!serving) {
+      await dev.release();
+      for (const k of keys) io.out(wire.publicKeyLine(k.curve, k.raw, k.comment));
+      return 0;
+    }
+
+    const sign = (key, data) => dev.use((okcrypto) => {
+      /*
+       * THE BYTES SENT ARE lib-agent's: the data ssh asked to have signed,
+       * then the identity hash (onlykey.py sign(): raw_message = blob + data).
+       * For Ed25519 the device runs the whole of EdDSA over it. For ECDSA it
+       * signs SHA-256 of any message that is not 32 or 64 bytes long, and a
+       * 32- or 64-byte one AS GIVEN - so such a message is hashed here first,
+       * which the device then signs as given: the same SHA-256 either way.
+       * ssh's data never is that short (a session id alone is 32), but a
+       * signature over the wrong thing would be a silent refusal at the
+       * server, so it is not left to "never".
+       */
+      let message = data;
+      if (key.keyType === 2 && (data.length === 32 || data.length === 64)) {
+        message = require('crypto').createHash('sha256').update(data).digest();
+      }
+      return okcrypto.agent.sign(wire.derivationIdentity(key.identity), message, {
+        keyType: key.keyType,
+        version,
+        confirm: ({ digits }) => {
+          io.err(`Confirm on the OnlyKey to sign for ${key.comment}: enter ${digits.join(' ')}`
+            + ' (or press any button, if the key asks for a single press)');
+        },
+      });
+    });
+
+    const handler = agentSrv.createAgentHandler({ keys, sign, log: (line) => io.err(`${NAME} agent: ${line}`) });
+    const where = opts['sock-path'] ? agentSrv.resolveAgentPath(opts['sock-path']) : agentSrv.defaultAgentPath();
+    let server;
+    try {
+      server = await agentSrv.serveAgent({ handler, where, log: (line) => io.err(`${NAME} ${line}`) });
+    } catch (err) {
+      where.cleanup();
+      await dev.release();
+      throw err;
+    }
+    const env = agentEnvLines(server.path, agentSrv.IS_WINDOWS);
+    let pubDir = null;
+
+    try {
+      if (opts.foreground) {
+        io.out(env.out);
+        for (const n of env.notes) io.err(`${NAME}: ${n}`);
+        io.err(`${NAME}: serving ${keys.length} key(s) on ${server.path}; Ctrl-C to stop`);
+        await (io.untilStopped || untilSignalled)(server);
+        return 0;
+      }
+
+      let argv = command;
+      if (opts.shell) {
+        argv = [process.env.SHELL || process.env.COMSPEC || (agentSrv.IS_WINDOWS ? 'cmd.exe' : '/bin/sh')];
+      } else if (opts.connect) {
+        const fsm = require('fs');
+        pubDir = fsm.mkdtempSync(require('path').join(require('os').tmpdir(), 'onlykey-js-pub-'));
+        const pubFile = require('path').join(pubDir, 'id.pub');
+        fsm.writeFileSync(pubFile, `${wire.publicKeyLine(keys[0].curve, keys[0].raw, keys[0].comment)}\n`, { mode: 0o600 });
+        argv = ['ssh', ...sshArgs(keys[0].identity, pubFile), ...command];
+      }
+      return await (io.runCommand || runWithAgent)(argv, { SSH_AUTH_SOCK: server.path, SSH_AGENT_PID: String(process.pid) });
+    } finally {
+      await server.close();
+      await dev.release();
+      if (pubDir) require('fs').rmSync(pubDir, { recursive: true, force: true });
+    }
+  },
+};
+
+/** Resolve on Ctrl-C or a TERM: the foreground agent's whole lifetime. */
+function untilSignalled() {
+  return new Promise((resolve) => {
+    const done = () => {
+      process.removeListener('SIGINT', done);
+      process.removeListener('SIGTERM', done);
+      resolve();
+    };
+    process.once('SIGINT', done);
+    process.once('SIGTERM', done);
+  });
+}
+
+/*
+ * python server.run_process(): the command inherits the terminal and this
+ * process's environment plus the agent's, and its exit code is ours. A
+ * command killed by a signal exits 128+n, as a shell would report it.
+ */
+function runWithAgent(argv, env) {
+  const { spawn } = require('child_process');
+  const os = require('os');
+  return new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), { stdio: 'inherit', env: { ...process.env, ...env } });
+    child.once('error', (err) => reject(new CliError(`cannot run ${argv[0]}: ${err.message}`)));
+    child.once('exit', (code, signal) => {
+      resolve(code !== null ? code : 128 + ((signal && os.constants.signals[signal]) || 1));
+    });
+  });
+}
+
 /* ------------------------------------------------------------ main */
 
 /**
@@ -1044,7 +1349,25 @@ async function main(argv, io = {}) {
     start: io.start || ((opts) => require('./desktop').startDesktop(opts)),
     prompt: io.prompt || ((question) => require('./prompt').promptSecret(question)),
     readFile: io.readFile || ((file) => require('fs').promises.readFile(file, 'utf8')),
+    /* agent only: how long a foreground agent serves, and how a command runs under it. */
+    untilStopped: io.untilStopped,
+    runCommand: io.runCommand,
   };
+
+  /*
+   * The global options, plus every command's own (`cmd.options` - only
+   * `agent` has any, lib-agent's -e/--skey/-f/-s/-c/--sock-path). parseArgs
+   * has to know them all before it can find the command name among the
+   * positionals, so the union is parsed and an option given to a command
+   * that does not take it is refused afterwards.
+   */
+  const GLOBAL_OPTIONS = {
+    help: { type: 'boolean', short: 'h' },
+    path: { type: 'string' },
+    yes: { type: 'boolean' },
+  };
+  const options = { ...GLOBAL_OPTIONS };
+  for (const c of Object.values(COMMANDS)) Object.assign(options, c.options || {});
 
   let parsed;
   try {
@@ -1052,11 +1375,7 @@ async function main(argv, io = {}) {
       args: argv,
       allowPositionals: true,
       strict: true,
-      options: {
-        help: { type: 'boolean', short: 'h' },
-        path: { type: 'string' },
-        yes: { type: 'boolean' },
-      },
+      options,
     });
   } catch (err) {
     full.err(`${NAME}: ${err.message}`);
@@ -1070,6 +1389,12 @@ async function main(argv, io = {}) {
   const cmd = Object.prototype.hasOwnProperty.call(COMMANDS, name) ? COMMANDS[name] : null;
   if (!cmd) {
     full.err(`${NAME}: unknown command "${name}". Run "${NAME} help" for the commands.`);
+    return 2;
+  }
+  const foreign = Object.keys(parsed.values)
+    .filter((k) => !(k in GLOBAL_OPTIONS) && !(cmd.options && k in cmd.options));
+  if (foreign.length) {
+    full.err(`${NAME}: "${name}" does not take ${foreign.map((k) => `--${k}`).join(', ')}.`);
     return 2;
   }
   if (rest.length && !cmd.usage) {
