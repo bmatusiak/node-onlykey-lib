@@ -31,6 +31,11 @@
  * onlykey-gpg-agent (cli/gpg-key.js over the vendored openpgp fork,
  * cli/gpg-agent.js and cli/assuan.js on Node built-ins).
  *
+ * TWO BUSES. By default a USB key over node-hid; with --ble a phone running
+ * ok-rn, over Bluetooth LE (cli/transport-ble.js). The option is global, so
+ * every device command - agent and gpg-agent included - takes it unchanged:
+ * the bus is below the transport, and nothing above it knows which one it is.
+ *
  * WHAT IT DOES NOT DO. There is no firmware update path - that is
  * deliberately not something this program can do - and no backup or
  * restore, which need their own safety design before they get a command.
@@ -104,6 +109,28 @@ const classicSlotName = (n) => (n <= 6 ? `${n}a` : `${n - 6}b`);
 /* ------------------------------------------------------------ the device */
 
 /**
+ * Which key, and over which bus - the global options every device command
+ * shares, as io.start() takes them.
+ *
+ * --ble reaches a phone running ok-rn over Bluetooth LE (cli/transport-ble.js)
+ * instead of a USB key over node-hid; --address picks the phone. Kept in one
+ * place because three things must agree on it: the command opening the key,
+ * the agent's per-burst reopen (sharedDevice), and the command lines this
+ * program writes for gpg to start later (deviceArgs) - a gpg-agent started
+ * by gpg with the USB default while the home was made over --ble would ask a
+ * key that is not there.
+ */
+function deviceOpts(opts) {
+  return opts.ble ? { ble: true, address: opts.address } : { path: opts.path };
+}
+
+/** The same choice as command-line arguments, for a program this one starts later. */
+function deviceArgs(opts) {
+  if (opts.ble) return ['--ble', ...(opts.address ? ['--address', opts.address] : [])];
+  return opts.path ? ['--path', opts.path] : [];
+}
+
+/**
  * Compose, open, connect, run `fn`, and always release the key.
  *
  * Every device command goes through here so none can forget the destroy: a
@@ -111,7 +138,7 @@ const classicSlotName = (n) => (n <= 6 ? `${n}a` : `${n - 6}b`);
  * next program that wants it.
  */
 async function withDevice(io, opts, fn) {
-  const app = await io.start({ path: opts.path });
+  const app = await io.start(deviceOpts(opts));
   try {
     const { device } = app.services;
     const connected = await device.connect();
@@ -174,7 +201,7 @@ COMMANDS.help = {
   async run(io) {
     io.out(`${NAME} v${PKG.version} - the OnlyKey command line, on node-onlykey-lib`);
     io.out('');
-    io.out(`Usage: ${NAME} <command> [arguments] [--path <hid path>] [--yes]`);
+    io.out(`Usage: ${NAME} <command> [arguments] [--path <hid path> | --ble [--address <phone>]] [--yes]`);
     io.out('');
     io.out('Commands:');
     for (const [name, cmd] of Object.entries(COMMANDS)) {
@@ -184,6 +211,8 @@ COMMANDS.help = {
     io.out('');
     io.out('Options:');
     io.out(`  ${'--path <path>'.padEnd(14)} which OnlyKey, when more than one is plugged in`);
+    io.out(`  ${'--ble'.padEnd(14)} reach a phone running ok-rn over Bluetooth LE instead of USB`);
+    io.out(`  ${'--address <a>'.padEnd(14)} with --ble: the phone's address or Bluetooth name`);
     io.out(`  ${'--yes'.padEnd(14)} confirm a setting that cannot be undone (wipemode, backupkeymode, webcryptpolicy)`);
     io.out(`  ${'-h, --help'.padEnd(14)} this list`);
     io.out('');
@@ -191,7 +220,8 @@ COMMANDS.help = {
     io.out('Secrets (password, gkey, totpkey, a PGP passphrase) are prompted for, or read as one');
     io.out('line from stdin when stdin is not a terminal - never taken as arguments. setkey also');
     io.out('takes its hex as an argument, as python\'s does, and prompts for it when left off.');
-    io.out('There is no firmware update, backup or restore command.');
+    io.out('There is no firmware update, backup or restore command; over --ble a firmware update');
+    io.out('is refused by the transport itself.');
     return 0;
   },
 };
@@ -1066,7 +1096,7 @@ function sharedDevice(io, opts, { idleMs = 10000 } = {}) {
   function open() {
     if (!opening) {
       opening = (async () => {
-        const app = await io.start({ path: opts.path });
+        const app = await io.start(deviceOpts(opts));
         try {
           const connected = await app.services.device.connect();
           return { app, identity: connected.identity };
@@ -1359,15 +1389,20 @@ function runGpg(io, args) {
  * this CLI, because gpg starts it with whatever PATH gpg had - lib-agent
  * bakes its PATH into the script for the same reason.
  */
-function agentScript(homedir, skey, dkey, windows) {
+function agentScript(homedir, skey, dkey, windows, device = []) {
   const node = process.execPath;
   const cli = require('path').resolve(__filename);
-  const args = ['gpg-agent', '--homedir', homedir, '--skey', skey, '--dkey', dkey, '--daemon'];
+  /*
+   * `device` is deviceArgs(): the bus and key `gpg init` used. gpg starts
+   * this script later with none of our options, so a home made over --ble
+   * must say --ble here, or its agent would go looking for a USB key.
+   */
+  const args = ['gpg-agent', '--homedir', homedir, '--skey', skey, '--dkey', dkey, ...device, '--daemon'];
   if (windows) {
     return {
       name: 'run-agent.cmd',
       text: `@echo off\r\nrem ${GPG_HOME_MARK.slice(2)}: gpg.conf's agent-program.\r\n`
-        + `"${node}" "${cli}" ${args.map((a) => (a === homedir ? `"${a}"` : a)).join(' ')}\r\n`,
+        + `"${node}" "${cli}" ${args.map((a) => (a === homedir || /\s/.test(a) ? `"${a}"` : a)).join(' ')}\r\n`,
     };
   }
   return {
@@ -1459,7 +1494,7 @@ COMMANDS.gpg = {
      * run-agent script carries the mark) - and only after the new key is
      * made, so a refused confirmation leaves the old home as it was.
      */
-    const script = agentScript(homedir, skeyName, dkeyName, IS_WINDOWS_CLI);
+    const script = agentScript(homedir, skeyName, dkeyName, IS_WINDOWS_CLI, deviceArgs(opts));
     if (fsm.existsSync(homedir)) {
       if (!opts.force) throw new CliError(`GPG home directory ${homedir} exists; remove it, or pass --force to replace a home ${NAME} made`);
       const ours = ['run-agent.sh', 'run-agent.cmd'].some((f) => {
@@ -1695,7 +1730,7 @@ const GPG_AGENT_CHILD = 'ONLYKEY_JS_GPG_AGENT_BACKGROUND';
 function startBackgroundAgent(io, opts, homedir, logFile, log) {
   const args = [require('path').resolve(__filename), 'gpg-agent', '--homedir', homedir,
     '--skey', opts.skey || 'ECC32', '--dkey', opts.dkey || 'ECC32'];
-  if (opts.path) args.push('--path', opts.path);
+  args.push(...deviceArgs(opts));
   const env = { ...process.env, [GPG_AGENT_CHILD]: '1' };
   const child = (io.spawnDaemon || ((file, argv, e) => require('child_process').spawn(file, argv, {
     /*
@@ -1767,8 +1802,9 @@ function runWithAgent(argv, env) {
  * @param {object} [io]
  * @param {(line: string) => void} [io.out]  one line of output
  * @param {(line: string) => void} [io.err]  one line of error
- * @param {(opts: {path?: string}) => Promise<object>} [io.start]  compose and
- *   open the stack; defaults to startDesktop over node-hid
+ * @param {(opts: {path?: string, ble?: boolean, address?: string}) => Promise<object>} [io.start]
+ *   compose and open the stack; defaults to startDesktop - over node-hid, or
+ *   over Bluetooth LE with --ble
  * @param {(question: string) => Promise<string>} [io.prompt]  read one secret;
  *   defaults to cli/prompt.js (hidden on a terminal, one stdin line otherwise)
  * @param {(file: string) => Promise<string>} [io.readFile]  read a key file
@@ -1820,6 +1856,8 @@ async function main(argv, io = {}) {
   const GLOBAL_OPTIONS = {
     help: { type: 'boolean', short: 'h' },
     path: { type: 'string' },
+    ble: { type: 'boolean' },
+    address: { type: 'string' },
     yes: { type: 'boolean' },
   };
   const options = { ...GLOBAL_OPTIONS };
@@ -1851,6 +1889,18 @@ async function main(argv, io = {}) {
     .filter((k) => !(k in GLOBAL_OPTIONS) && !(cmd.options && k in cmd.options));
   if (foreign.length) {
     full.err(`${NAME}: "${name}" does not take ${foreign.map((k) => `--${k}`).join(', ')}.`);
+    return 2;
+  }
+  /*
+   * --path names a USB key and --address a phone: each without its bus, or
+   * both buses at once, is a command line that cannot mean what it says.
+   */
+  if (parsed.values.ble && parsed.values.path) {
+    full.err(`${NAME}: --path picks a USB key and --ble a phone; use one.`);
+    return 2;
+  }
+  if (parsed.values.address && !parsed.values.ble) {
+    full.err(`${NAME}: --address picks a phone for --ble; add --ble.`);
     return 2;
   }
   if (rest.length && !cmd.usage) {

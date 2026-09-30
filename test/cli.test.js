@@ -82,6 +82,17 @@ test('there is no firmware update command, by design', () => {
   for (const f of fs.readdirSync(path.resolve(__dirname, '..', 'cli'))) {
     if (!f.endsWith('.js')) continue;
     const src = fs.readFileSync(path.resolve(__dirname, '..', 'cli', f), 'utf8');
+    if (f === 'transport-ble.js') {
+      /*
+       * The one exception, and it is the opposite of a firmware path: the
+       * Bluetooth pipe names OKFWUPDATE only to REFUSE it. Held to exactly
+       * that - one mention in code, a comparison that rejects with EFIRMWARE.
+       */
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+      assert.equal((code.match(/OKFWUPDATE/g) || []).length, 1, `${f}: OKFWUPDATE outside the refusal`);
+      assert.match(code, /=== MSG\.OKFWUPDATE\) \{\s*return Promise\.reject\(bleError\('EFIRMWARE'/);
+      continue;
+    }
     assert.ok(!/OKFWUPDATE/.test(src), `${f} mentions OKFWUPDATE`);
   }
 });
