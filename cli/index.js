@@ -396,9 +396,10 @@ const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 /**
  * The device's own sentence inside a library error, if it carries one.
  *
- * setSlot, setPreference and wipeKey attach it as `deviceText`. loadKey and
- * wipeSlot do not (a library gap: they throw a plain Error whose message
- * ends in the sentence), so it is read off the end of the message for those.
+ * The library's device refusals attach it as `deviceText` (setSlot,
+ * setPreference, wipeKey, and since G-3 loadKey and wipeSlot too). An error
+ * that does not carry it - a caller's own, or one from a transport - may
+ * still end in the device's words, so they are read off the message then.
  */
 function deviceSentence(err) {
   if (!err) return null;
@@ -522,26 +523,6 @@ function parseFeatures(arg) {
     throw usage(`features must be d (decryption), s (signing) or b (backup, which is also decryption); got "${arg}"`);
   }
   return KEY_FEATURES[arg];
-}
-
-/**
- * loadKey, with the key's acknowledgement.
- *
- * loadKey RETURNS what it wrote but not what the key said ("Successfully set
- * ECC Key") - that goes out only as a `keyAck` progress event (a library
- * gap). It is the line python prints, so it is collected here.
- */
-async function loadKeyAck(device, slot, spec, opts = {}) {
-  let response = null;
-  const off = device.on('progress', (p) => {
-    if (p && p.step === 'keyAck' && p.slot === slot) response = p.response;
-  });
-  try {
-    const result = await device.loadKey(slot, spec, opts);
-    return { ...result, response };
-  } finally {
-    off();
-  }
 }
 
 /**
@@ -683,13 +664,13 @@ COMMANDS.wipeslot = {
     return withDevice(io, opts, async ({ device, identity }) => {
       requireUnlocked(identity, 'wipeslot');
       /*
-       * ONE LINE, where python prints eight. wipe_slot() answers once per
-       * field it erases - ten "Successfully wiped ..." lines, Label through
-       * 2FA Key (okcore.cpp:2028-2082 at eb25290). python reads eight of them
-       * and leaves two in the buffer; the library's wipeSlot returns the
-       * first (a library gap - it cannot return all ten).
+       * EVERY LINE, as python prints them since e6d261c. wipe_slot() answers
+       * once per field it erases - ten "Successfully wiped ..." lines, Label
+       * through 2FA Key, on 3.x (okcore.cpp wipe_slot at 8d28305) - and the
+       * library's wipeSlot collects them all until the device goes quiet.
        */
-      io.out(await deviceWrite(() => device.wipeSlot(slot)));
+      const wiped = await deviceWrite(() => device.wipeSlot(slot));
+      for (const line of wiped.responses) io.out(line);
       return 0;
     });
   },
@@ -844,7 +825,7 @@ COMMANDS.genkey = {
           + `(public key ${publicKey.length} bytes)`);
         return 0;
       }
-      const result = await deviceWrite(() => loadKeyAck(device, key.slot, { type, key: GENERATE_TRIGGER }));
+      const result = await deviceWrite(() => device.loadKey(key.slot, { type, key: GENERATE_TRIGGER }));
       if (result.response) io.out(result.response);
       return 0;
     });
@@ -922,7 +903,7 @@ COMMANDS.setkey = {
 
     return withDevice(io, opts, async ({ device, identity }) => {
       requireUnlocked(identity, 'setkey');
-      const result = await deviceWrite(() => loadKeyAck(device, key.slot, { type, key: bytes }));
+      const result = await deviceWrite(() => device.loadKey(key.slot, { type, key: bytes }));
       if (result.response) io.out(result.response);
       warnPressFree(io, result);
       return 0;
@@ -1026,7 +1007,7 @@ COMMANDS.loadkey = {
         io.out(item.material.kind === 'rsa'
           ? `Loading RSA ${(item.type & 0x0f) * 1024} key to slot ${item.slot}...`
           : `Loading ECC key to slot ${item.slot}...`);
-        const result = await deviceWrite(() => loadKeyAck(device, item.slot, { type: item.type, key: item.key }));
+        const result = await deviceWrite(() => device.loadKey(item.slot, { type: item.type, key: item.key }));
         if (result.response) io.out(result.response);
       }
       return 0;

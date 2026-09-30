@@ -21,7 +21,7 @@ const hostPlugin = require('../plugins/host');
 const embedded = require('../plugins/transport/embedded');
 const sessionPlugin = require('../plugins/session');
 const devicePlugin = require('../plugins/device');
-const { fakeFirmware } = require('./helpers/fake-firmware');
+const { fakeFirmware, WIPED_FIELDS } = require('./helpers/fake-firmware');
 const { IFACE } = require('../src/transport/contract');
 const { MSG } = require('../src/protocol/msg');
 const { toLatin1 } = require('../src/bytes');
@@ -340,6 +340,55 @@ test('wiping a whole slot omits the field byte', async () => {
   const wipe = pipe.writes.find((w) => w.data[4] === MSG.OKWIPESLOT);
   assert.equal(wipe.data[5], 2);
   assert.equal(wipe.data[6], 0, 'no field byte - that is what makes it whole-slot');
+  await app.destroy();
+});
+
+test('wipeSlot collects EVERY answer, not the first (G-3)', async () => {
+  /*
+   * wipe_slot() answers once per field - ten on 3.x. This resolved on the
+   * first and left nine on the bus for the next read; python-onlykey e6d261c
+   * fixed its own copy of the bug the same way: first answer, then until quiet.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const wiped = await app.services.device.wipeSlot(2, null, { quietMs: 60 });
+  const expected = WIPED_FIELDS.map((f) => `Successfully wiped ${f}`);
+  assert.deepEqual(wiped.responses, expected);
+  assert.equal(wiped.response, expected[0]);
+  assert.equal(wiped.slot, 2);
+  await app.destroy();
+});
+
+test('wipeSlot and loadKey refusals carry the device sentence as deviceText (G-3)', async () => {
+  const pipe = fakeFirmware({ slotError: 'Error device locked' });
+  const app = await start(pipe);
+  await assert.rejects(app.services.device.wipeSlot(2, null, { quietMs: 60 }),
+    (err) => err.deviceText === 'Error device locked' && err.kind === 'locked');
+  await app.destroy();
+
+  const refusing = fakeFirmware();
+  const app2 = await start(refusing);
+  const original = refusing.write.bind(refusing);
+  refusing.write = async (iface, bytes) => {
+    if (iface === IFACE.VENDOR && bytes[4] === MSG.OKSETPRIV) refusing.deliver(vendorText('Error not in config mode'));
+    return original(iface, bytes);
+  };
+  await assert.rejects(
+    app2.services.device.loadKey(1, { type: 0x67, key: new Uint8Array(160).fill(7) }, { ackTimeoutMs: 500 }),
+    (err) => err.deviceText === 'Error not in config mode' && /refused: Error not in config mode/.test(err.message),
+  );
+  await assert.rejects(
+    app2.services.device.loadKey(101, { type: 1, key: new Uint8Array(32).fill(3) }, { ackTimeoutMs: 500, ackRetries: 0 }),
+    (err) => err.deviceText === 'Error not in config mode',
+  );
+  await app2.destroy();
+});
+
+test('loadKey RETURNS the device reply, not only a progress event (G-3)', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const ecc = await app.services.device.loadKey(101, { type: 1, key: new Uint8Array(32).fill(3) });
+  assert.equal(ecc.response, 'Successfully set ECC Key');
   await app.destroy();
 });
 

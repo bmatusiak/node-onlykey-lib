@@ -17,6 +17,19 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **wipeSlot returns every reply; loadKey returns the device's reply; both
+  refusals carry `deviceText`** (G-3). **Breaking for wipeSlot:** it resolves
+  `{ slot, response, responses }` instead of a bare string - `response` is the
+  string it used to return. wipe_slot() answers once per field (ten on v2.1.2 -
+  3.1.0, eleven on 2.1.0-2.1.1); wipeSlot resolved on the first and left the
+  rest on the bus. It now collects until the device is quiet (`quietMs`, 500),
+  python-onlykey e6d261c's rule. `loadKey` adds `response` ("Successfully set
+  ECC Key"), which went only to a `keyAck` progress event. Both throw
+  `okmsg.deviceError`. The CLI's `loadKeyAck` workaround is gone and `wipeslot`
+  prints all ten lines, as python does. Note: for slots 1-24 the firmware wipes
+  the WHOLE slot whatever `field` byte is sent. Consumer to update on re-pin:
+  the App port's `OnlyKeyComm.js` wipeSlot callback (`text` -> `r.response`).
+
 - **The preference table is public, and setPreference checks the row this
   firmware has** (G-4). PREFERENCES and its 3.0.5 enum overlay moved out of the
   device plugin's setup() into `src/device/preferences.js`, exported as

@@ -49,6 +49,12 @@ const PIN_WIRE_REPLIES = [
  *   labelSlots  - how many slots the device reports (12 classic, 24 duo)
  *   dropTerminal- never send the last label, to exercise the deadline
  */
+/* wipe_slot()'s replies, one per field (okcore.cpp at 8d28305). */
+const WIPED_FIELDS = [
+  'Label', 'URL', 'Additional Characters', 'Delay 1', 'Username',
+  'Delay 2', 'Password', 'Delay 3', '2FA Type', '2FA Key',
+];
+
 function fakeFirmware(opts = {}) {
   const {
     slotError = null,
@@ -184,6 +190,15 @@ function fakeFirmware(opts = {}) {
        * load-bearing.
        */
       if (slotSilent) return undefined;
+      if (!slotError && msg === MSG.OKWIPESLOT && frame[5] >= 1 && frame[5] <= 24) {
+        /*
+         * wipe_slot() answers ONCE PER FIELD it erases - these ten, in this
+         * order, on v2.1.2 through 3.1.0 (okcore.cpp wipe_slot at c8804e3 and
+         * 8d28305), whatever field byte was sent.
+         */
+        for (const name of WIPED_FIELDS) pipe.deliver(reportText(`Successfully wiped ${name}`));
+        return undefined;
+      }
       const text = slotError || (msg === MSG.OKSETSLOT
         ? 'Successfully set Label'
         : 'Successfully wiped slot');
@@ -497,4 +512,4 @@ function agentEcdhReport(keyType, sk, peer) {
   return report64(ecdsa(keyType).getSharedSecret(sk, concatBytes(Uint8Array.of(4), p), false).slice(1));
 }
 
-module.exports = { fakeFirmware, PIN_REPLIES };
+module.exports = { fakeFirmware, PIN_REPLIES, WIPED_FIELDS };

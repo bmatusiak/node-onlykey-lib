@@ -1858,6 +1858,13 @@ const BACKUP_REFUSALS = [
         return okmsg.text(reply);
       };
 
+      /*
+       * The device's own sentence ("Successfully set ECC Key"), RETURNED -
+       * it used to go only to a `keyAck` progress event, so every caller that
+       * wanted to show it (the CLI prints it, as python does) subscribed to
+       * progress around the call to catch it.
+       */
+      let response = null;
       if (bytes.length > chunker.CHUNK_BYTES) {
         /*
          * RSA keys are many frames and the device answers once, at the end, so
@@ -1896,9 +1903,10 @@ const BACKUP_REFUSALS = [
           );
         }
         if (/^Error/i.test(answer)) {
-          throw new Error(`key write to slot ${slot} refused: ${answer}`);
+          throw okmsg.deviceError(answer, `key write to slot ${slot} refused`);
         }
         progress('keyAck', { slot, response: answer });
+        response = answer;
       } else {
         const frame = okmsg.build({
           msg: MSG.OKSETPRIV, slot, field: type, payload: bytes,
@@ -1920,9 +1928,10 @@ const BACKUP_REFUSALS = [
           }
         }
         if (text && /^Error/i.test(text)) {
-          throw new Error(`key write to slot ${slot} refused: ${text}`);
+          throw okmsg.deviceError(text, `key write to slot ${slot} refused`);
         }
         if (text) progress('keyAck', { slot, response: text });
+        response = text;
       }
       /*
        * WRITING AN HMAC KEY REMOVES THAT SLOT'S PRESS REQUIREMENT, and the
@@ -1994,6 +2003,8 @@ const BACKUP_REFUSALS = [
         slot,
         type,
         bytes: bytes.length,
+        /** What the device said about the key ("Successfully set ECC Key"). */
+        response,
         /** True when this write also made the slot answer without a press. */
         clearedPressRequirement: pressFree,
         /** What the device said about the name, or null when none was given. */
@@ -2752,18 +2763,82 @@ const BACKUP_REFUSALS = [
       });
     },
 
-    /** Wipe one field, or the whole slot when no field is named. */
-    async wipeSlot(slotId, field = null, { timeoutMs = 3000 } = {}) {
+    /**
+     * Wipe a slot, and collect EVERY answer the device gives.
+     *
+     * ## The device answers once per field, and the count is not fixed
+     *
+     * wipe_slot() hidprint()s one "Successfully wiped ..." per field it
+     * erases - ten on v2.1.2 through 3.1.0 (Label, URL, Additional
+     * Characters, Delay 1, Username, Delay 2, Password, Delay 3, 2FA Type,
+     * 2FA Key; okcore.cpp wipe_slot at c8804e3 and 8d28305), eleven on
+     * v2.1.0-2.1.1. This used to resolve on the first and return it: the
+     * other nine were left on the bus for whatever read next, and a caller
+     * had no way to see that the wipe finished. python-onlykey had the same
+     * bug (it read eight) and fixed it in e6d261c by the rule used here:
+     * wait for the first answer, then read until the device goes quiet.
+     *
+     * Quiet rather than a count, because the count moves between firmware
+     * lines and nothing on the wire announces it.
+     *
+     * ## `field` does not narrow the wipe on the firmware
+     *
+     * wipe_slot() reads the field byte only for slot 0 value 10 (the Yubico
+     * key, see wipeYubiAuth). For slots 1-24 it erases every field whatever
+     * the byte says - so a caller naming one field still gets the whole slot
+     * wiped, and the replies say so. Kept in the signature because the frame
+     * carries it and callers pass it; the replies are the truth.
+     *
+     * Resolves `{ slot, response, responses }` - `response` the first answer
+     * (what this returned as a bare string before), `responses` all of them.
+     * A refusal throws okmsg.deviceError, so `err.deviceText` is the device's
+     * sentence.
+     */
+    async wipeSlot(slotId, field = null, { timeoutMs = 3000, quietMs = 500 } = {}) {
       const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
-      const reply = await transport.request({
-        iface: IFACE.VENDOR,
-        data: slotConfig.wipeMessage(slot, field),
-        timeoutMs,
-        match: isSlotAcknowledgement,
+      const responses = [];
+      let off = null;
+      let timer = null;
+      const collected = new Promise((resolve, reject) => {
+        const finish = (settle, value) => {
+          clearTimeout(timer);
+          if (off) off();
+          settle(value);
+        };
+        /* The first wait is the caller's timeout; each answer then re-arms the quiet window. */
+        const arm = (ms) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => (responses.length
+            ? finish(resolve, responses)
+            : finish(reject, new Error(`slot ${slot} wipe was never acknowledged within ${timeoutMs}ms`))), ms);
+        };
+        /* Subscribed BEFORE the write, as transport.request() does. */
+        off = transport.on('report', (event) => {
+          if (event.iface !== IFACE.VENDOR || !isSlotAcknowledgement(event.data)) return;
+          const text = okmsg.text(event.data).trim();
+          if (/^Error/i.test(text)) {
+            finish(reject, okmsg.deviceError(text));
+            return;
+          }
+          responses.push(text);
+          arm(quietMs);
+        });
+        arm(timeoutMs);
       });
-      const text = okmsg.text(reply);
-      if (/^Error/i.test(text)) throw new Error(text);
-      return text;
+      /*
+       * Handled from birth, awaited below: a refusal that lands while the
+       * write is still in flight must not be an unhandled rejection (2152942).
+       */
+      collected.catch(() => {});
+      try {
+        await transport.write(IFACE.VENDOR, slotConfig.wipeMessage(slot, field));
+      } catch (err) {
+        clearTimeout(timer);
+        if (off) off();
+        throw err;
+      }
+      const all = await collected;
+      return { slot, response: all[0], responses: all.slice() };
     },
 
     /** Build the field pair for a second factor, without sending it. */

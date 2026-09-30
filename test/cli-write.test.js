@@ -18,7 +18,7 @@ const { PassThrough } = require('node:stream');
 const { main, COMMANDS, parseSlot } = require('../cli/index');
 const { promptSecret } = require('../cli/prompt');
 const { startDesktop } = require('../cli/desktop');
-const { fakeFirmware } = require('./helpers/fake-firmware');
+const { fakeFirmware, WIPED_FIELDS } = require('./helpers/fake-firmware');
 const { IFACE } = require('../src/transport/contract');
 const { MSG, FIELD } = require('../src/protocol/msg');
 const { fromHex, toLatin1 } = require('../src/bytes');
@@ -205,10 +205,14 @@ test('a refusal prints the key\'s sentence on stdout, as python does, and exits 
   assert.match(r.err[0], /needs config mode/);
 });
 
-test('wipeslot sends a whole-slot wipe (no field byte) and prints the answer', async () => {
+test('wipeslot sends a whole-slot wipe (no field byte) and prints EVERY answer', async () => {
+  /*
+   * python-onlykey e6d261c prints every reply wipe_slot() sends - ten on 3.x,
+   * one per field - where it used to print eight and this printed one.
+   */
   const r = await run(['wipeslot', 'purple3b']);
   assert.equal(r.code, 0, r.err.join('\n'));
-  assert.deepEqual(r.out, ['Successfully wiped slot']);
+  assert.deepEqual(r.out, WIPED_FIELDS.map((f) => `Successfully wiped ${f}`));
   const [frame] = sent(r.firmware, MSG.OKWIPESLOT);
   assert.equal(frame[5], 24);
   assert.equal(frame[6], 0, 'no field: the whole slot');
