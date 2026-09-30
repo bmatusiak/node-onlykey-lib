@@ -165,6 +165,68 @@ that says what to do.
 from any Node script: `[host, transport/usb, session, device, okcrypto]` over
 that pipe, transport opened.
 
+## `--ble`: a phone running ok-rn, over Bluetooth LE
+
+    onlykey-js --ble status
+    onlykey-js --ble --address "Pixel 6a" getlabels      # or --address 24:29:34:86:EA:AF
+    onlykey-js --ble agent me@example.com                # ssh, served from the phone
+    onlykey-js --ble gpg init "Me <me@example.com>"      # the home's agent uses --ble too
+
+ok-rn's soft key publishes the OnlyKey **vendor** interface as a GATT service
+(`0c0ffab0-...`, request `...ffab1` write, response `...ffab2` notify), so
+`--ble` swaps only the pipe: `cli/transport-ble.js` under
+`plugins/transport/ble`, everything above it the code a USB key runs. The
+option is global - every device command takes it, including `agent`,
+`gpg init` (its `run-agent` script says `--ble`, since gpg starts the agent
+later with none of our options) and `gpg-agent` (`--daemon` passes it to the
+background agent). `--address` takes the phone's address or Bluetooth name;
+without it, the one paired phone advertising FIDO (0xFFFD) is used.
+`--path` with `--ble`, or `--address` without it, is refused.
+
+On the wire each 64-byte report is one CTAP-over-BLE message
+(`83 00 40` + report), one write when the MTU allows (the phone negotiates
+517), 20-byte fragments otherwise. **Firmware update is refused** by the pipe.
+
+It needs one more optional peer, per platform, exactly like `node-hid`:
+
+| platform | stack | install |
+| --- | --- | --- |
+| Windows | WinRT, through `@stoprocent/noble` 2.8.0 | `npm install @stoprocent/noble@2.8.0` |
+| Linux | BlueZ's own GATT API over D-Bus, through `dbus-next` | `npm install dbus-next` |
+
+Pair the phone first: in Settings on Windows, with
+`scripts/ble-linux-connect.sh` on Linux (below). Why not noble on Linux: its
+default backend is raw HCI (root, and blind to BlueZ's bonds), and its D-Bus
+backend waits forever on a phone that is already connected - which, with its
+classic keyboard up, it always is. What the Linux path does instead:
+
+- finds the vendor characteristics **by UUID under whatever device path BlueZ
+  put them** (the Pi's phone lived at the path of a private address it was
+  first seen on), and treats them as usable only when that device is
+  `Connected` **and** `ServicesResolved` - BlueZ exports a bonded device's
+  cached GATT table while LE is down, and the classic keyboard keeps
+  `Connected` true with no LE link at all;
+- otherwise sets `PreferredBearer = le` and calls `Connect()` **inside an LE
+  discovery session** - without one the kernel scans for the phone's identity
+  address only, and the phone advertises from rotating private addresses;
+- never calls `Device1.Disconnect()`, which would drop the keyboard too.
+
+Measured 2026-09-29, Pixel 6a with ok-rn, soft key unlocked (v3.1.0-testc):
+
+| | Windows (NITRO16, WinRT) | Raspberry Pi 4 (BlueZ 5.82) |
+| --- | --- | --- |
+| found / connected / subscribed | 64-754 / ~110 / 1.0-2.6 s from start | LE connect 0.7 s, GATT resolved 1.8 s later |
+| `fwversion`, fresh link | 2.9 s | 2.8 s |
+| `status` / `getlabels` / `capabilities` / `agent` key | 2.9 / 3.1 / 1.5 / 3.5 s | 1.0 / 1.4 / 1.0 / 1.2 s (LE link already up) |
+
+**One computer at a time.** ok-rn answers only the central that connected to
+it LAST, and forgets it when any central disconnects. So after another
+computer has used the phone, a Linux host whose LE link stayed up gets no
+answer ("no reply on interface ... within 3000ms"); drop just that LE link
+(`sudo hcitool ledc <handle>`, the handle from `hcitool con`; the classic
+keyboard stays up) and the next command connects afresh. Windows makes a new
+link per command and does not hit this.
+
 ## Bluetooth on Linux: `scripts/ble-linux-connect.sh`
 
 The ok-rn phone app is a soft key that can also be reached over Bluetooth LE.
@@ -197,7 +259,9 @@ paired phone.
 command through `main(argv, io)` over the fake firmware - the writes pinned
 frame by frame, message, slot, field and payload, as well as by what they
 print; `test/cli-transport-hid.test.js` drives the pipe through a fake
-node-hid module; `test/ssh-agent.test.js` serves the agent on a real socket
+node-hid module; `test/cli-transport-ble.test.js` drives the Bluetooth pipe
+through a fake noble and a fake BlueZ (in the states the Pi was found in),
+each with a fake ok-rn phone in front of the fake firmware; `test/ssh-agent.test.js` serves the agent on a real socket
 (a named pipe on Windows) over the fake firmware's K132 derivation and talks
 to it as ssh does; `test/gpg-agent.test.js` does the same for `gpg init` (with a
 stand-in gpg) and `gpg-agent` (speaking Assuan as gpg does). None can reach a real device: `io.prompt` and `io.readFile`
