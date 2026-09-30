@@ -286,6 +286,11 @@ test('linux: classic-only (the keyboard), cached GATT - PreferredBearer le, Conn
   assert.deepEqual(set.slice(1), [rpa, 'org.bluez.Device1', 'PreferredBearer', 'le']);
   const conn = dbus.calls.find((c) => c[0] === 'Connect');
   assert.deepEqual(conn.slice(1), [rpa, 'le'], 'Connect() after the bearer is set');
+  /* Inside an LE discovery session, stopped once the table resolved. */
+  const order = dbus.calls.map((c) => c[0]);
+  assert.deepEqual(dbus.calls.find((c) => c[0] === 'SetDiscoveryFilter').slice(1), ['/org/bluez/hci0', 'le']);
+  assert.ok(order.indexOf('StartDiscovery') < order.indexOf('Connect'));
+  assert.ok(order.indexOf('StopDiscovery') > order.indexOf('Connect'));
   await pipe.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(dbus.phone.received.length, 1, 'the report reached the phone whole');
@@ -310,7 +315,7 @@ test('linux: the RPA split - bonded identity object, GATT under a private-addres
 test('linux: named errors - no PreferredBearer, never resolves, classic socket, phone busy, off, not paired', async () => {
   const cases = [
     [{ preferredBearer: null }, {}, 'EBEARER', /Experimental = true.*ble-linux-connect\.sh.*--fix/s],
-    [{}, { connect: 'never' }, 'ECLASSIC', /never resolved.*ServicesResolved false.*came up CLASSIC/s],
+    [{}, { connect: 'never' }, 'ECLASSIC', /never resolved.*ServicesResolved false.*classic only, or an LE link .* is stale.*hcitool ledc/s],
     [{}, { connect: 'br-socket' }, 'ECLASSIC', /br-connection-create-socket/],
     [{}, { connect: 'abort' }, 'EBUSY', /le-connection-abort-by-local.*one computer at a time/s],
     [{ powered: false }, {}, 'EBLEOFF', /rfkill.*--fix/s],

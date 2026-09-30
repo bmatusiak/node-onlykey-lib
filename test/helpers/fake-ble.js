@@ -219,8 +219,12 @@ const CHAR = 'org.bluez.GattCharacteristic1';
  *   'never'      returns, but ServicesResolved never goes true
  *   'br-socket'  org.bluez.Error.Failed br-connection-create-socket
  *   'abort'      org.bluez.Error.Failed le-connection-abort-by-local
+ * With `needsDiscovery` (the default, as on the Pi) an 'ok' or 'already'
+ * connect with no LE discovery session open never completes: the kernel's
+ * accept-list scan never sees the phone's rotating address.
  */
-function fakeDbus({ tree, firmware = null, connect = 'ok', gattUnder = null, phoneFragment = 67, mtu = 517 }) {
+function fakeDbus({ tree, firmware = null, connect = 'ok', gattUnder = null, phoneFragment = 67, mtu = 517, needsDiscovery = true }) {
+  let discovering = false;
   const phone = fakePhone({ firmware, phoneFragment });
   const signals = new Map();     // path -> EventEmitter for PropertiesChanged
   const calls = [];
@@ -285,10 +289,18 @@ function fakeDbus({ tree, firmware = null, connect = 'ok', gattUnder = null, pho
           if (connect === 'br-socket') throw new DBusError('org.bluez.Error.Failed', 'br-connection-create-socket');
           if (connect === 'abort') throw new DBusError('org.bluez.Error.Failed', 'le-connection-abort-by-local');
           if (connect === 'never') return;
+          if (needsDiscovery && !discovering) return new Promise(() => {});
           setTimeout(() => linkUp(path), 5);
           if (connect === 'already') throw new DBusError('org.bluez.Error.AlreadyConnected', 'Already Connected');
         },
         async Disconnect() { calls.push(['Disconnect', path]); },
+      };
+    }
+    if (name === 'org.bluez.Adapter1') {
+      return {
+        async SetDiscoveryFilter(filter) { calls.push(['SetDiscoveryFilter', path, filter.Transport && filter.Transport.value]); },
+        async StartDiscovery() { calls.push(['StartDiscovery', path]); discovering = true; },
+        async StopDiscovery() { calls.push(['StopDiscovery', path]); discovering = false; },
       };
     }
     if (name === CHAR) {
@@ -326,7 +338,7 @@ function piTree({ preferredBearer = 'le', rpaSplit = false, powered = true, pair
     '/org/bluez/hci0': { 'org.bluez.Adapter1': { Address: 'DC:A6:32:00:00:01', Powered: powered } },
   };
   const phone = {
-    Address: '24:29:34:86:EA:AF', AddressType: 'public', Name: 'Pixel 6a', Alias: 'Pixel 6a',
+    Address: '24:29:34:86:EA:AF', AddressType: 'public', Name: 'Pixel 6a', Alias: 'Pixel 6a', Adapter: '/org/bluez/hci0',
     Paired: paired, Bonded: paired, Trusted: true,
     /* The classic keyboard link: Connected with no LE, so nothing resolved. */
     Connected: true, ServicesResolved: live,

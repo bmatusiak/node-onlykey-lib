@@ -532,8 +532,9 @@ const dbusWhat = (err) => `${(err && err.type) || ''} ${(err && (err.text || err
  * adapter powered; the phone PAIRED (both ends - the script); if its vendor
  * characteristics are not live, PreferredBearer "le" and Device1.Connect(),
  * because without it BlueZ connects a dual-mode phone over CLASSIC and the GATT
- * table never resolves; then wait for ServicesResolved; then StartNotify
- * BEFORE any write, as on Windows.
+ * table never resolves - inside an LE discovery session, or the phone's
+ * rotating address is never seen; then wait for ServicesResolved; then
+ * StartNotify BEFORE any write, as on Windows.
  */
 async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log }) {
   const t0 = Date.now();
@@ -595,55 +596,98 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
       if (device.PreferredBearer !== 'le') {
         await (await iface(device.path, I_PROPS)).Set(I_DEVICE, 'PreferredBearer', new dbus.Variant('s', 'le'));
       }
+      /*
+       * AN LE DISCOVERY SESSION AROUND THE CONNECT. Without one, the kernel
+       * connects by a PASSIVE scan filtered on the accept list, which holds
+       * the phone's IDENTITY address - and the phone advertises only from
+       * rotating private addresses, which this controller did not resolve:
+       * the Pi's btmon showed the filtered scan and not one advertising report,
+       * and Connect() ran into le-connection-abort-by-local after 20 s, phone
+       * advertising the whole time (2026-09-29). With a discovery session
+       * open, the scan is unfiltered, the host resolves the private address
+       * with the bond's IRK, and the same Connect() came up in 0.8 s with the
+       * GATT table resolved 1 s later. The session is this D-Bus client's own:
+       * stopped here, and BlueZ drops it anyway when the client goes.
+       */
+      const adapterPath = device.Adapter || adapters.find(([, i]) => i[I_ADAPTER].Powered)[0];
+      const adapter = await iface(adapterPath, I_ADAPTER);
+      let discovering = false;
+      try {
+        await adapter.SetDiscoveryFilter({ Transport: new dbus.Variant('s', 'le') });
+      } catch (err) {
+        log(`SetDiscoveryFilter: ${dbusWhat(err)} (continuing)`);
+      }
+      try {
+        await adapter.StartDiscovery();
+        discovering = true;
+      } catch (err) {
+        /* InProgress: another client is already scanning, which serves as well. */
+        log(`StartDiscovery: ${dbusWhat(err)} (continuing)`);
+      }
       const tc = Date.now();
       try {
-        await within((await iface(device.path, I_DEVICE)).Connect(), timeouts.connectMs,
-          () => bleError('EBUSY',
-            `${name} did not accept an LE connection in ${timeouts.connectMs / 1000} s. `
-            + 'The phone serves one computer at a time over LE - is another one (a Windows PC) '
-            + 'connected to it? Is ok-rn open with Bluetooth on?'));
-      } catch (err) {
-        if (err.code) throw err;
-        const what = dbusWhat(err);
-        if (/AlreadyConnected|InProgress|Already Connected/i.test(what)) {
-          /* Someone else's connect (or BlueZ's own reconnect) got there first: the wait below decides. */
-        } else if (/br-connection/i.test(what)) {
-          throw bleError('ECLASSIC',
-            `BlueZ tried to reach ${name} over CLASSIC Bluetooth (${what}), not LE. `
-            + `PreferredBearer did not take - run: ${FIX}`, err);
-        } else if (/le-connection-abort-by-local|Page Timeout|Host is down|ConnectionAttemptFailed/i.test(what)) {
-          throw bleError('EBUSY',
-            `${name} did not accept an LE connection (${what}). The phone serves one computer at a `
-            + 'time over LE - is another one connected to it? Is ok-rn open with Bluetooth on?', err);
-        } else {
-          throw bleError('ECONNECT', `could not connect to ${name}: ${what}`, err);
+        try {
+          await within((await iface(device.path, I_DEVICE)).Connect(), timeouts.connectMs,
+            () => bleError('EBUSY',
+              `${name} did not accept an LE connection in ${timeouts.connectMs / 1000} s. `
+              + 'The phone serves one computer at a time over LE - is another one (a Windows PC) '
+              + 'connected to it? Is ok-rn open, with its soft key on?'));
+        } catch (err) {
+          if (err.code) throw err;
+          const what = dbusWhat(err);
+          if (/AlreadyConnected|InProgress|Already Connected/i.test(what)) {
+            /* Someone else's connect (or BlueZ's own reconnect) got there first: the wait below decides. */
+          } else if (/br-connection/i.test(what)) {
+            throw bleError('ECLASSIC',
+              `BlueZ tried to reach ${name} over CLASSIC Bluetooth (${what}), not LE. `
+              + `PreferredBearer did not take - run: ${FIX}`, err);
+          } else if (/le-connection-abort-by-local|Page Timeout|Host is down|ConnectionAttemptFailed/i.test(what)) {
+            throw bleError('EBUSY',
+              `${name} did not accept an LE connection (${what}). The phone serves one computer at a `
+              + 'time over LE - is another one connected to it? Is ok-rn open, with its soft key on?', err);
+          } else {
+            throw bleError('ECONNECT', `could not connect to ${name}: ${what}`, err);
+          }
         }
-      }
-      log(`Connect() returned in ${Date.now() - tc} ms`);
+        log(`Connect() returned in ${Date.now() - tc} ms`);
 
-      /*
-       * Wait for the GATT table. Polled, not signalled: the object that
-       * resolves may be a different device path from the one connected (the
-       * RPA split above), and a poll of the whole tree cannot pick the wrong
-       * one to listen to.
-       */
-      const deadline = Date.now() + timeouts.resolveMs;
-      for (;;) {
-        objects = await managed();
-        vendor = findVendor(objects, device);
-        if (vendor && vendor.live) break;
-        if (Date.now() >= deadline) {
-          const d = objects[device.path] && objects[device.path][I_DEVICE];
-          throw bleError(d && d.Connected ? 'ECLASSIC' : 'EBUSY',
-            d && d.Connected
-              ? `${name} is connected but its services never resolved in ${timeouts.resolveMs / 1000} s `
-                + `(ServicesResolved ${d.ServicesResolved ? 'true' : 'false'}, vendor service `
-                + `${vendor ? 'cached only' : 'not found'}): the link came up CLASSIC, not LE. `
-                + `Run: ${FIX}`
-              : `${name} did not stay connected (no LE link after ${timeouts.resolveMs / 1000} s). `
-                + 'Is another computer connected to the phone?');
+        /*
+         * Wait for the GATT table. Polled, not signalled: the object that
+         * resolves may be a different device path from the one connected (the
+         * RPA split above), and a poll of the whole tree cannot pick the wrong
+         * one to listen to.
+         */
+        const deadline = Date.now() + timeouts.resolveMs;
+        for (;;) {
+          objects = await managed();
+          vendor = findVendor(objects, device);
+          if (vendor && vendor.live) break;
+          if (Date.now() >= deadline) {
+            const d = objects[device.path] && objects[device.path][I_DEVICE];
+            /*
+             * Connected but never resolved is one of two things D-Bus cannot
+             * tell apart in BlueZ 5.82: the link is classic only (the
+             * keyboard's), or an LE link from an earlier connection is up but
+             * stale - the Pi was found with exactly that, and its GATT never
+             * resolved until the LE link was dropped and made again.
+             */
+            throw bleError(d && d.Connected ? 'ECLASSIC' : 'EBUSY',
+              d && d.Connected
+                ? `${name} is connected but its services never resolved in ${timeouts.resolveMs / 1000} s `
+                  + `(ServicesResolved ${d.ServicesResolved ? 'true' : 'false'}, vendor service `
+                  + `${vendor ? 'cached only' : 'not found'}): the link is classic only, or an LE link left `
+                  + 'from an earlier connection is stale. Check PreferredBearer with '
+                  + `${FIX}; a stale LE link goes with: sudo hcitool ledc <LE handle from hcitool con> `
+                  + '(the classic keyboard link stays up).'
+                : `${name} did not stay connected (no LE link after ${timeouts.resolveMs / 1000} s). `
+                  + 'Is another computer connected to the phone?');
+          }
+          await sleep(250);
         }
-        await sleep(250);
+      } finally {
+        if (discovering) {
+          try { await adapter.StopDiscovery(); } catch { /* already stopped */ }
+        }
       }
       log(`services resolved, ${Date.now() - tc} ms after Connect()`);
     }
