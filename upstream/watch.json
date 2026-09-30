@@ -83,6 +83,52 @@
       ],
       "since": "2026-09-07",
       "why": "Web app 4.0.0 - the release copy (0c-coder's release table, 2026-09-28): its built-in library, being moved onto this library (plan Path W). It has its own transit v2. The bm-ok fork this entry used to watch was a stale 2026-08-08 snapshot."
+    },
+    {
+      "name": "release-libraries",
+      "repo": "trustcrypto/libraries",
+      "branch": "release-3.1.0",
+      "head": "16d8863",
+      "paths": [
+        "fido2",
+        "onlykey"
+      ],
+      "since": "2026-09-30",
+      "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #33."
+    },
+    {
+      "name": "release-firmware",
+      "repo": "trustcrypto/OnlyKey-Firmware",
+      "branch": "release-3.1.0",
+      "head": "9fceea1",
+      "paths": [
+        "OnlyKey"
+      ],
+      "since": "2026-09-30",
+      "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #183."
+    },
+    {
+      "name": "release-python",
+      "repo": "trustcrypto/python-onlykey",
+      "branch": "release-1.3.0",
+      "head": "8d77586",
+      "paths": [
+        "onlykey"
+      ],
+      "since": "2026-09-30",
+      "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #91."
+    },
+    {
+      "name": "release-agent",
+      "repo": "onlykey/lib-agent",
+      "branch": "release-onlykey-agent-1.1.16",
+      "head": "d1318f8",
+      "paths": [
+        "libagent",
+        "agents"
+      ],
+      "since": "2026-09-30",
+      "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #19."
     }
   ]
 }

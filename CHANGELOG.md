@@ -17,6 +17,16 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **v3.1.0 pin follows the re-squashed release: libraries eb25290 -> 16d8863.**
+  trustcrypto/libraries PR #33 (`release-3.1.0`) was re-squashed on 2026-09-29;
+  the only change is the stale-staged-reply fix in `fido2/device.cpp` and
+  `fido2/ok_extension.cpp` (a fully delivered FIDO2 reply is no longer served
+  again from the start to a new request, and a duplicate poll no longer re-arms
+  the wipe timer). OnlyKey-Firmware stays 9fceea1. The lib's 5.5 s settle wait
+  stays: v3.0.4 and older still need it.
+- **`scripts/upstream-watch.js` watches the release PR branches by HEAD**, not
+  only by new commits: a re-squash (force-push) is reported as "head moved".
+
 - **`onlykey-js --ble [--address <phone>]`: every device command over Bluetooth
   LE, to a phone running ok-rn.** `cli/transport-ble.js` is a byte pipe for
   `plugins/transport/ble` (CTAP-over-BLE framing of 64-byte vendor reports,

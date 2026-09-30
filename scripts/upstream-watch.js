@@ -61,9 +61,32 @@ function commitsFor(repo, branch, p, since) {
   });
 }
 
+/**
+ * The branch's current head SHA.
+ *
+ * WHY A HEAD CHECK AS WELL AS COMMITS-SINCE. The release PR branches
+ * (trustcrypto release-3.1.0 and friends) are RE-SQUASHED in place: libraries
+ * went eb25290 -> 16d8863 on 2026-09-29 with no commit on top of the old one,
+ * carrying a fix for one of our own findings. A commits-since-date query cannot
+ * see that - a force-push is not a new commit on the path. So a watch may name
+ * the `head` it was aligned to, and any other head is reported as moved.
+ */
+function headOf(repo, branch) {
+  return gh(['api', `repos/${repo}/commits/${encodeURIComponent(branch)}`, '--jq', '.sha']).trim();
+}
+
 function check(watch) {
   const seen = new Map();
   const errors = [];
+  let headMoved = null;
+  if (watch.head) {
+    try {
+      const now = headOf(watch.repo, watch.branch);
+      if (!now.startsWith(watch.head)) headMoved = { was: watch.head, now: now.slice(0, 7) };
+    } catch (err) {
+      errors.push(`head: ${err.message}`);
+    }
+  }
   for (const p of watch.paths) {
     try {
       for (const c of commitsFor(watch.repo, watch.branch, p, watch.since)) {
@@ -75,7 +98,7 @@ function check(watch) {
     }
   }
   const commits = [...seen.values()].sort((a, b) => b.date.localeCompare(a.date));
-  return { name: watch.name, repo: watch.repo, branch: watch.branch, since: watch.since, commits, errors };
+  return { name: watch.name, repo: watch.repo, branch: watch.branch, since: watch.since, head: watch.head || null, headMoved, commits, errors };
 }
 
 function main() {
@@ -96,6 +119,11 @@ function main() {
   } else {
     for (const r of results) {
       console.log(`\n${r.name}  ${r.repo}@${r.branch}  since ${r.since}: ${r.commits.length} commit(s)`);
+      if (r.headMoved) {
+        console.log(`  HEAD MOVED ${r.headMoved.was} -> ${r.headMoved.now} (re-squash or force-push: diff it, realign, then update "head")`);
+      } else if (r.head) {
+        console.log(`  head ${r.head} unchanged`);
+      }
       for (const c of all ? r.commits : r.commits.slice(0, NEWEST)) {
         console.log(`  ${c.sha.slice(0, 7)} ${c.date.slice(0, 10)} ${c.author}: ${c.subject.slice(0, 72)}`);
       }
@@ -103,9 +131,10 @@ function main() {
       for (const e of r.errors) console.log(`  ERROR ${e}`);
     }
     const total = results.reduce((n, r) => n + r.commits.length, 0);
-    console.log(`\nupstream-watch: ${total} commit(s) across ${results.length} watch(es) not yet caught up`);
+    const moved = results.filter((r) => r.headMoved).length;
+    console.log(`\nupstream-watch: ${total} commit(s) across ${results.length} watch(es) not yet caught up; ${moved} head(s) moved`);
   }
-  if (results.some((r) => r.errors.length)) process.exitCode = 1;
+  if (results.some((r) => r.errors.length || r.headMoved)) process.exitCode = 1;
 }
 
 try {
