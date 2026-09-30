@@ -230,7 +230,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *
  * @returns {Promise<object>} the link: {mtu, write(frag), close(), describe}
  */
-async function openNobleLink({ noble, target, onData, onDisconnect, timeouts, log }) {
+async function openNobleLink({ nobleModule, ...rest }) {
+  /*
+   * A NOBLE OF OUR OWN, STOPPED ON CLOSE. The module's default export is a
+   * process-wide instance whose WinRT manager, once started, keeps Node's
+   * event loop alive for good: the first live run printed its answer and then
+   * never exited. withBindings('win') makes a fresh instance on the same
+   * bindings the default picks on Windows, and stop() deletes its manager,
+   * so the process can end - and an agent that reopens the phone after an
+   * idle release gets a working instance instead of a stopped one.
+   */
+  const noble = typeof nobleModule.withBindings === 'function' ? nobleModule.withBindings('win') : nobleModule;
+  const stopNoble = () => { try { if (noble.stop) noble.stop(); } catch { /* already stopped */ } };
+  let link;
+  try {
+    link = await nobleSession({ noble, ...rest });
+  } catch (err) {
+    stopNoble();
+    throw err;
+  }
+  const close = link.close;
+  link.close = async () => {
+    try { await close(); } finally { stopNoble(); }
+  };
+  return link;
+}
+
+async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log }) {
   const t0 = Date.now();
   try {
     await noble.waitForPoweredOnAsync(timeouts.powerMs);
@@ -354,7 +380,12 @@ async function openNobleLink({ noble, target, onData, onDisconnect, timeouts, lo
   log(`subscribed, ${Date.now() - t0} ms from start`);
 
   return {
-    mtu: peripheral.mtu || 23,
+    /*
+     * Read at each write, not now: WinRT reports the MTU only after the
+     * exchange that follows the connect (null at connect, 517 once
+     * subscribed), and a value frozen here fell back to 20-byte fragments.
+     */
+    get mtu() { return peripheral.mtu || 23; },
     describe: `${name} (${peripheral.id})`,
     /* WITH response: the phone acknowledges each fragment, so a lost one is an error, not silence. */
     write: (frag) => req.writeAsync(Buffer.from(frag), false),
@@ -714,6 +745,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
    */
   let writing = false;
   let held = [];
+  let wrote = false;
 
   function emit(event) {
     for (const listener of [...listeners]) listener(event);
@@ -740,7 +772,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
      * One branch per platform, and nothing shared below this line: the
      * Windows path is the spike's and stays so whatever Linux needs.
      */
-    if (platform === 'win32') return openNobleLink({ noble: loadNoble(ln), ...common });
+    if (platform === 'win32') return openNobleLink({ nobleModule: loadNoble(ln), ...common });
     if (platform === 'linux') return openBluezLink({ dbus: loadDbus(ld), ...common });
     throw bleError('EBLEPLATFORM',
       `--ble is built and tested on Windows and Linux; this is ${platform}.`);
@@ -752,6 +784,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       assembler = createAssembler();
       held = [];
       writing = false;
+      wrote = false;
       link = await openLink();
       lastError = null;
       return { started: true, address: link.describe };
@@ -786,9 +819,12 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         }
         /* One write when the MTU carries the whole report (the phone's 517 does); else the 20-byte floor. */
         const size = link.mtu - 3 >= WHOLE_REPORT ? WHOLE_REPORT : SMALL_FRAGMENT;
+        const pieces = fragment(frame, size);
+        if (!wrote) trace(`first write: ${pieces.length} fragment(s) of <= ${size} bytes at mtu ${link.mtu}`);
+        wrote = true;
         writing = true;
         try {
-          for (const piece of fragment(frame, size)) {
+          for (const piece of pieces) {
             if (!link) throw bleError('ENOTOPEN', lastError ? lastError.message : 'the phone is not connected');
             await link.write(piece);
           }

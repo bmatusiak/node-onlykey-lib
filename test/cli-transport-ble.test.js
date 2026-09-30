@@ -150,6 +150,9 @@ test('win32: found by the FIDO advert, one write per report, echo IN then the re
   assert.equal(seen[1].bytes.length, 64);
   await pipe.stop();
   assert.ok(noble.log.some((l) => l[0] === 'disconnect'));
+  /* Its own instance, stopped on close: otherwise the WinRT manager keeps the process alive. */
+  assert.deepEqual(noble.log.find((l) => l[0] === 'withBindings'), ['withBindings', 'win']);
+  assert.equal(noble.log.at(-1)[0], 'stop');
 });
 
 test('win32: a reply that arrives before its write resolves is held until after the echo', async () => {

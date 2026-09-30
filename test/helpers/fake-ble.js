@@ -127,6 +127,9 @@ function fakeNoble({
     }
   };
   noble.stopScanningAsync = async () => { scanning = false; log.push(['stopScan']); };
+  /* The module's fresh-instance factory, and the teardown that lets the process exit. */
+  noble.withBindings = (kind) => { log.push(['withBindings', kind]); return noble; };
+  noble.stop = () => { log.push(['stop']); };
 
   const made = new Map();
   function peripheral(a) {
@@ -159,6 +162,7 @@ function fakeNoble({
     };
     rsp.subscribeAsync = async () => {
       log.push(['subscribe']);
+      p.mtu = mtu;
       phone.subscribe((frag) => rsp.emit('data', frag, true));
     };
     rsp.unsubscribeAsync = async () => { log.push(['unsubscribe']); phone.unsubscribe(); };
@@ -166,7 +170,8 @@ function fakeNoble({
       log.push(['connect', p.id]);
       if (connectHangs) return new Promise(() => {});
       p.state = 'connected';
-      p.mtu = mtu;
+      /* WinRT: no MTU yet at connect; it is known once the exchange after it is done. */
+      p.mtu = null;
       return undefined;
     };
     p.cancelConnect = () => { log.push(['cancelConnect']); };
