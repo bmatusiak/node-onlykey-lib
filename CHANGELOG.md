@@ -17,6 +17,24 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **`onlykey-js gpg init` and `onlykey-js gpg-agent`: the GPG half of lib-agent,
+  dependency-less.** `gpg init "<user id>"` makes the certificate for the
+  keys derived from `gpg://<user id>` (ed25519 + cv25519, or `-e nist256p1`),
+  its two self-signatures made by the device through the vendored openpgp
+  fork's `signer` hook, and writes lib-agent's GnuPG home; `gpg-agent` is
+  the Assuan agent gpg.conf starts (lib-agent's command set; gpg's socket
+  path from gpgconf; Windows' port-and-nonce socket file). Key packets,
+  fingerprints and keygrips equal python's own encoder's for the same device
+  keys, and keygrips equal what gpg prints. Differs from lib-agent toward
+  gpg-agent's answers: unknown commands get ERR (lib-agent's silence hangs
+  gpg), KEYINFO for a key it does not hold is "No secret key", ECDH values
+  carry the 0x40/0x04 prefix, and a key dated 0 gets self-signatures dated 1
+  (GnuPG otherwise shows the owner's own signatures as `[uncertain]`). The
+  armor carries the CRC line (GnuPG 2.4.4 rejects openpgp.js v6's default
+  armor without it). Proven live on the VM (GnuPG 2.4.4, the private kit
+  emulator): init twice gives the same fingerprint; `gpg --clearsign` then
+  `--verify` is "Good signature ... [ultimate]"; `gpg --encrypt` then
+  `--decrypt` through the agent gives the plaintext back - both curves.
 - **`onlykey-js agent`: the SSH half of lib-agent, dependency-less.** Prints
   the derived key line for `[user@]host` (byte for byte python
   `onlykey-agent`'s line, comment included), or serves an ssh-agent over it:

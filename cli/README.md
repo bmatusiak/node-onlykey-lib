@@ -46,6 +46,8 @@ side: the bin is named `onlykey-js` so it can never shadow `onlykey-cli`.
 | `loadkey <file> [auto\|RSA1-4\|ECC1-16] [d\|s\|b]` | `loadkey` | writes | armored PGP private key; python's lines ("Found 2 key(s):", "Loading ECC key to slot 102...", the key's answer). The passphrase is asked only for a locked key. A named slot must match the key's kind (python silently moves RSA to slot 1); an ECC key there needs its use (python crashes on an odd-length type byte) |
 | `wipekey <RSA1-4\|ECC1-16\|HMAC1-2>` | `wipekey` | writes | two lines, as python: the wipe, then the label clear - which the library skips after a refused wipe and for HMAC |
 | `agent <[user@]host \| file> [-e ed25519\|nist256p1] [--skey ECC32\|derived-v2] [-f \| -s \| -c \| -- cmd]` | lib-agent's `onlykey-agent` | reads, signs | SSH keys derived in the key. Prints the key line (the same line python prints, comment `<ssh://user@host\|curve>` included), or serves an ssh-agent: `-f` foreground, `-- cmd` / `-s` / `-c` under a command. POSIX: Unix socket in a private 0700 dir; Windows: a private named pipe (Windows OpenSSH only - Git Bash's ssh cannot use a pipe). v2 is `--skey derived-v2`, refused on firmware without it. Not carried: stored-slot keys (`--skey ECC1-16`), `--daemonize`, `--mosh`, `.pub` import. See below |
+| `gpg init "<user id>" [-e ed25519|nist256p1] [-t <time>] [--homedir <dir>] [--skey|--dkey ECC32|derived-v2] [--force]` | lib-agent's `onlykey-gpg init` | reads, signs, writes files | A GPG key derived in the key from `gpg://<user id>`: signing primary + ECDH subkey, both self-signatures made by the device (two confirmations). Prints the armored key and writes lib-agent's GnuPG home (`run-agent.sh`, `gpg.conf`, `env`, `pubkey.asc`, ownertrust), then gpg imports it. Same key packets, fingerprint and keygrips as python for the same device, user id, curve and time. Refuses an existing home; `--force` replaces only one it made. Not carried: `-s/--subkey`, `-i/--import-pub` (stored keys). See below |
+| `gpg-agent [--homedir <dir>] [--skey|--dkey ECC32|derived-v2] [--daemon]` | lib-agent's `onlykey-gpg-agent` | signs, decrypts | The gpg-agent gpg starts for that home (gpg.conf `agent-program`): lib-agent's Assuan command set on gpg's own socket path; on Windows libassuan's port-and-nonce socket file. See below |
 
 "Reads" means it connects - the OKCONNECT every client sends, which sets the
 key's clock - and reads. A locked key is refused straight from the connect
@@ -86,6 +88,38 @@ On Windows the agent listens on a private named pipe (never
 `\\.\pipe\openssh-ssh-agent`, which is the OpenSSH Authentication Agent
 service's) and prints `$env:SSH_AUTH_SOCK = '...'`; Windows OpenSSH's
 `ssh.exe`/`ssh-add.exe` use it, or `ssh -o IdentityAgent=<pipe>`.
+
+## gpg init, gpg-agent - the GPG half of lib-agent
+
+`onlykey-js gpg init` is `onlykey-gpg init`: the device derives a signing key
+and an ECDH key from `sha256("gpg://" + user id)` (Ed25519 + X25519 by
+default, `-e nist256p1` for P-256 + P-256), and the certificate that carries
+them is signed BY THE DEVICE - two confirmations. The packets are the vendored
+openpgp fork's (`cli/gpg-key.js`); the agent is `cli/gpg-agent.js` and
+`cli/assuan.js`, Node built-ins only.
+
+    onlykey-js gpg init "Alice <alice@example.com>"            # ~/.gnupg/onlykey
+    onlykey-js gpg init "Alice <alice@example.com>" --homedir ~/.gnupg/ok -e nist256p1
+    GNUPGHOME=~/.gnupg/onlykey gpg --clearsign file             # gpg starts the agent
+    GNUPGHOME=~/.gnupg/onlykey gpg --decrypt file.gpg
+    gpgconf --homedir ~/.gnupg/onlykey --kill gpg-agent        # stop it
+
+`-t/--time` is the key's creation time and defaults to 0, lib-agent's default:
+the fingerprint covers it, so the same device, user id, curve and time give
+the same key on any machine. The self-signatures of a key dated 0 are dated 1 -
+GnuPG takes a signature at 0 as undated and then verifies the person's own
+key's signatures as `[uncertain]` (measured; lib-agent's keys have that fault).
+v2 is `--skey derived-v2` / `--dkey derived-v2`, written into `run-agent.sh`
+so the agent uses the same derivation.
+
+The agent reads its keys from the home's `pubkey.asc`, answers `HAVEKEY` and
+`KEYINFO` without the device, verifies every signature against that key
+before gpg gets it, and compares the device's ECDH key once before the first
+decryption. The challenge ("enter 1 2 3") goes to `<home>/gpg-agent.log` and
+to the terminal gpg named (`OPTION ttyname`). `gpg -c` passphrases go through
+pinentry. On Windows it writes the Assuan socket FILE Gpg4win's gpg reads (a
+loopback port and a 16-byte nonce) and `run-agent.cmd`; that path is covered
+by the tests, not yet by a live Gpg4win.
 
 There is no firmware update command - that is not something this program can
 do - and no backup or restore, which need their own safety design first.
@@ -135,5 +169,6 @@ frame by frame, message, slot, field and payload, as well as by what they
 print; `test/cli-transport-hid.test.js` drives the pipe through a fake
 node-hid module; `test/ssh-agent.test.js` serves the agent on a real socket
 (a named pipe on Windows) over the fake firmware's K132 derivation and talks
-to it as ssh does. None can reach a real device: `io.prompt` and `io.readFile`
+to it as ssh does; `test/gpg-agent.test.js` does the same for `gpg init` (with a
+stand-in gpg) and `gpg-agent` (speaking Assuan as gpg does). None can reach a real device: `io.prompt` and `io.readFile`
 are injected too.
