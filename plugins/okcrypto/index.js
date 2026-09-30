@@ -365,6 +365,17 @@ function setup(imports, register, config) {
         resolve(out.slice(0, expectBytes));
       });
     });
+    /*
+     * HANDLED FROM BIRTH. `answer` is awaited only after the request is sent
+     * AND confirm() returns - but the device can refuse in between (its 20 s
+     * confirmation window closing while a caller's confirm() is still pressing
+     * or polling isAnswered()). A rejected promise with no handler for a turn
+     * of the event loop is an unhandled rejection, and Node ends the process on
+     * it: apk-signer's signing helper died mid-signature that way and apksigner
+     * waited on it (0.0.5 release, 2026-09-30). This no-op marks it handled;
+     * the `await answer` below still throws the device's refusal to the caller.
+     */
+    answer.catch(() => {});
 
     await settleStaleTimers();
 

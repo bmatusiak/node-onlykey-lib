@@ -1006,6 +1006,10 @@ const USER_INPUT_ENUM_ROWS = {
         resolve(bytes ? out.slice(0, bytes) : out);
       });
     });
+    /* Handled from birth: the key can refuse before the write below returns
+     * (replies do arrive first, over BLE especially), and a rejection with no
+     * handler for a turn ends the process - see okcrypto's `answer`. */
+    answer.catch(() => {});
 
     await transport.write(IFACE.VENDOR, frame);
     let key;
@@ -1235,6 +1239,10 @@ const USER_INPUT_ENUM_ROWS = {
         resolve(out.slice(0, bytes));
       });
     });
+    /* Handled from birth: the key can refuse before the write below returns
+     * (replies do arrive first, over BLE especially), and a rejection with no
+     * handler for a turn ends the process - see okcrypto's `answer`. */
+    answer.catch(() => {});
 
     if (quietMs > 0) await busQuiet(quietMs, quietTimeoutMs);
 

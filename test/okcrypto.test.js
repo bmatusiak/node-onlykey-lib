@@ -287,6 +287,44 @@ test('an unanswered confirmation is a refusal, not the answer', async () => {
   await app.destroy();
 });
 
+test('a refusal while confirm() is still running is not an unhandled rejection', async () => {
+  /*
+   * `answer` is armed before the request goes out but only awaited after
+   * confirm() returns. A confirm that keeps running after the device refuses -
+   * apk-signer's presses, then polls isAnswered() in 100 ms steps - left the
+   * rejected `answer` with no handler for a turn of the event loop, and Node
+   * ended the process on the unhandled rejection: the signing helper died
+   * mid-signature and apksigner waited on it (0.0.5 release, 2026-09-30, the
+   * key's 20 s confirmation window closing). The call must reject; the process
+   * must not see an unhandled rejection.
+   */
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  const pipe = fakeFirmware();
+  const app = await start(FULL(), pipe);
+  try {
+    await assert.rejects(
+      () => app.services.okcrypto.composite_sign(101, composite.HALF_ECC, Uint8Array.from([9, 9]), {
+        timeoutMs: 2000,
+        confirm: async () => {
+          const bytes = new Uint8Array(64);
+          const text = 'Timeout occured while waiting for confirmation on OnlyKey';
+          for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+          pipe.deliver(bytes);
+          await new Promise((r) => setTimeout(r, 200));
+        },
+      }),
+      /Timeout occured while waiting for confirmation/,
+    );
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(unhandled.map(String), [], 'no unhandled rejection while confirm() ran');
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    await app.destroy();
+  }
+});
+
 test('the signature is returned as raw bytes, not decrypted', async () => {
   /*
    * send_transport_response(sig, 64, true, true) LOOKS like it seals the
