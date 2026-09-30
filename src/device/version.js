@@ -1108,10 +1108,11 @@ const gestures = (() => {
      * answer OPERATION_DENIED for a whole debugging session, because the
      * touch-free setup silently never took (ok-rn@5230231).
      *
-     * `2` is NOT universally available even at 3.0.5 - builds without
-     * OK_ALLOW_NO_PRESS refuse it with "unsupported user input mode", and a
-     * stale 2 in EEPROM fails closed to the challenge code. Field 30 permits
-     * it; a caller offering it on 21 or 22 is offering an error.
+     * `2` is NOT universally available on 21 and 22 even at 3.0.5 - builds
+     * without OK_ALLOW_NO_PRESS (every production build) refuse it there with
+     * "unsupported user input mode", and a stale 2 in EEPROM fails closed to
+     * the challenge code. Field 30 takes it on every build - its setter has
+     * no such test; a caller offering it on 21 or 22 is offering an error.
      */
     userInputModeEnum: atLeast(info.release, [3, 0, 5]),
 

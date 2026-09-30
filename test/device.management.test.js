@@ -363,6 +363,71 @@ test('the user-input fields change SHAPE at 3.0.5, and the table follows', async
   await app.destroy();
 });
 
+test('the user input modes read as the desktop App reads them', async () => {
+  /*
+   * THE WORDING IS THE DESKTOP APP'S (OnlyKey-App app.html:672-877), so a
+   * person moving between GUIs meets the same row names, the same sentences
+   * and the same grouping. Asserted verbatim because a paraphrase is exactly
+   * what drifts: "Three-digit challenge" here and "Challenge Code (enter 3
+   * digits)" there describe one byte two ways.
+   *
+   * THE FIRMWARE IS WHAT THE NOTES ARE CHECKED AGAINST. Two of them said the
+   * opposite of what the key does: field 30's "None" was said to be refused
+   * without OK_ALLOW_NO_PRESS (it has no such test - okcore.cpp:1834-1850 at
+   * 3.1.0; that rule is 21 and 22's), and field 26 had no choices at all, so
+   * nothing said that its 0 is the PRESS - the reverse of its neighbours.
+   */
+  const app = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  const device = app.services.device;
+  await device.connect();
+  const rows = device.preferences();
+  const p = Object.fromEntries(rows.map((x) => [x.name, x]));
+
+  const CHALLENGE = 'Challenge Code (enter 3 digits)';
+  const PRESS = 'Button Press (tap any button)';
+
+  /* One panel, in the desktop's order, and nothing else in it. */
+  assert.deepEqual(
+    rows.filter((r) => r.section === 'User Input Modes').map((r) => r.name),
+    ['derivedChallengeMode', 'storedChallengeMode', 'webAgentDeriveMode'],
+  );
+  assert.equal(p.derivedChallengeMode.label, 'SSH/GPG derived keys');
+  assert.equal(p.storedChallengeMode.label, 'Stored keys (PGP, SSH, RSA and ECC slots)');
+  assert.equal(p.webAgentDeriveMode.label, 'Web and agent derived keys');
+  for (const n of ['derivedChallengeMode', 'storedChallengeMode', 'webAgentDeriveMode']) {
+    assert.equal(p[n].requires, 'configMode', `${n} lost its config-mode gate`);
+    assert.equal(p[n].choices[0], CHALLENGE);
+    assert.equal(p[n].choices[1], PRESS);
+    assert.match(p[n].note, /A new key starts on Button Press/,
+      `${n} does not say the first-use default - the key cannot report it`);
+  }
+  assert.equal(p.webAgentDeriveMode.choices[2],
+    'None (no confirmation) - for unattended agents');
+
+  /* The refusal is 21 and 22's rule, and only theirs. */
+  assert.doesNotMatch(p.webAgentDeriveMode.note, /OK_ALLOW_NO_PRESS|refused/);
+  assert.match(p.derivedChallengeMode.note, /"None" is not offered: production firmware refuses it/);
+  assert.match(p.storedChallengeMode.note, /"None" is not offered: production firmware refuses it/);
+
+  /* Field 26: a panel of its own - one row, so no section - and 0 is the PRESS. */
+  assert.equal(p.hmacChallengeMode.label, 'HMAC User Input Mode');
+  assert.equal(p.hmacChallengeMode.section, undefined);
+  assert.equal(p.hmacChallengeMode.max, 1, '129/130 are per-slot exceptions, not a choice');
+  assert.deepEqual(p.hmacChallengeMode.choices, { 0: PRESS, 1: 'No button press' });
+  assert.match(p.hmacChallengeMode.note, /legacy HMAC challenge-response slots only/);
+
+  /* Field 31: the desktop's name and sentences, still one-way, still apart. */
+  assert.equal(p.webcryptPolicy.label, 'Webcrypt Access');
+  assert.deepEqual(p.webcryptPolicy.bits, {
+    0: 'Allow Webcrypt to use my stored keys (PGP)',
+    1: 'Turn off Webcrypt entirely',
+  });
+  assert.equal(p.webcryptPolicy.oneWay, true);
+  assert.equal(p.webcryptPolicy.section, undefined);
+
+  await app.destroy();
+});
+
 test('an older key keeps the bitmask, because there the bits are correct', async () => {
   /*
    * THE OTHER HALF, and the half that makes it a gate rather than a rewrite.
@@ -380,6 +445,18 @@ test('an older key keeps the bitmask, because there the bits are correct', async
   assert.equal(p.derivedChallengeMode.choices, undefined,
     'an older key was offered the enum, which would write bit 0 while the '
     + 'user believed they had chosen "challenge"');
+
+  /*
+   * BIT 0 IS THE PRESS, not the challenge: set, pre-3.0.5 firmware takes
+   * CRYPTO_AUTH = 3, the press path; clear, it hashes a challenge code
+   * (libraries 20e1623 okcore.cpp:7128). It was labelled the other way round.
+   */
+  assert.match(p.derivedChallengeMode.bits[0], /^Button Press .* instead of the Challenge Code$/);
+
+  /* Grouped the same on every line, so a screen does not regroup by version. */
+  assert.equal(p.derivedChallengeMode.section, 'User Input Modes');
+  assert.equal(p.storedChallengeMode.section, 'User Input Modes');
+  assert.equal(p.hmacChallengeMode.section, undefined);
 
   await app.destroy();
 });
@@ -426,7 +503,7 @@ test('fields 30 and 31 are offered only where they exist', async () => {
   assert.ok(oldNames.includes('derivedChallengeMode'), 'field 21 exists on both');
   await assert.rejects(
     old.services.device.setPreference('webcryptPolicy', 0),
-    /needs firmware 3\.0\.5.*v3\.0\.4/,
+    /needs firmware 3\.1\.0.*v3\.0\.4/,
   );
   await old.destroy();
 

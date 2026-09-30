@@ -122,6 +122,12 @@ const FIELD = {
   SECPROFILEMODE: 23,
   LEDBRIGHTNESS: 24,
   LOCKBUTTON: 25,
+  /*
+   * 0 = button press REQUIRED, 1 = no press - the opposite sense from 21, 22
+   * and 30, where 0 is the challenge code and 1 the press (okcore.cpp:7291 at
+   * 3.1.0). 129/130 mean "no press for that one legacy slot". Read only by the
+   * two legacy challenge-response slots; per-slot HMAC (slots 1-24) ignores it.
+   */
   hmacchallengeMode: 26,
   modkeyMode: 27,
   TOUCHSENSE: 28,
@@ -135,6 +141,10 @@ const FIELD = {
    *
    * It is an ENUM, not a bitfield: 0 = challenge code, 1 = button press, 2 = no
    * press. See USER_INPUT in plugins/device.
+   *
+   * 2 is accepted on EVERY build: set_slot case 30 has no OK_ALLOW_NO_PRESS
+   * test (okcore.cpp:1834-1850 at 3.1.0), unlike 21 and 22. Unwritten (0xFF)
+   * reads as button press, which is also what first use writes.
    */
   webAgentDeriveMode: 30,
   /*

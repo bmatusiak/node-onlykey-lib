@@ -268,7 +268,7 @@ test('webagentderivemode and webcryptpolicy are refused by version below 3.0.5, 
   for (const argv of [['webagentderivemode', '1'], ['webcryptpolicy', '1', '--yes']]) {
     const r = await run(argv, { version: 'v3.0.4-prodc' });
     assert.equal(r.code, 1, argv.join(' '));
-    assert.match(r.err[0], /needs firmware 3\.0\.5 or later/);
+    assert.match(r.err[0], /needs firmware 3\.1\.0 or later/);
     assert.equal(sent(r.firmware, MSG.OKSETSLOT).length, 0);
   }
   const r = await run(['webderivemode', '2'], { version: 'v3.0.5-prodc' });

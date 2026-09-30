@@ -581,7 +581,33 @@ const BACKUP_REFUSALS = [
  * Fields 21, 22 and 30 all answer "how do you approve this". Field 31 answers
  * "is this allowed at all", which is why it reads as a permission and not as a
  * confirmation - and why its own screen, not this table, is where it is set.
+ *
+ * THE WORDS ARE THE DESKTOP APP'S (OnlyKey-App app/app.html), on purpose. A
+ * person who has used the desktop App should meet the same row names and the
+ * same choice sentences on every GUI - "follow the user feel of the original
+ * apps" - and a GUI that renders this table inherits them without having to
+ * copy them. Where the desktop and the firmware disagree the FIRMWARE decides
+ * the value and the desktop only supplies the sentence (field 26 below).
+ *
+ * ## `section` - rows the desktop App shows as ONE panel
+ *
+ * Fields 21, 22 and 30 sit together under "User Input Modes" there, saved by
+ * one button, because they are one decision made three times: how each kind
+ * of key is approved. That grouping is the user's model, so it is data here
+ * and not a list each GUI keeps privately - the same argument as `oneWay`. A
+ * row without `section` is ungrouped; a GUI files it by its own rules.
  */
+/*
+ * The desktop App's three choice sentences (app.html:767-846), named once so
+ * that the rows below cannot drift apart from each other - they already did
+ * once, when the same wrong note about "No confirmation" was written twice.
+ */
+const INPUT_CHOICE = {
+  challenge: 'Challenge Code (enter 3 digits)',
+  press: 'Button Press (tap any button)',
+  none: 'None (no confirmation) - for unattended agents',
+};
+const USER_INPUT_MODES = 'User Input Modes';
 const PREFERENCES = {
   lockout:              { field: FIELD.LOCKOUT, max: 255, unit: 'minutes', label: 'Idle lockout', requires: 'always' },
   typeSpeed:            { field: FIELD.TYPESPEED, max: 10, label: 'Typing speed', requires: 'always' },
@@ -600,8 +626,15 @@ const PREFERENCES = {
    * The two bits mean different things on different paths, which is why this
    * cannot be presented as one on/off:
    *
-   *   bit 0 (1)  raw-HID derives raise a three-button challenge
-   *              (okcore.cpp:7571 sets CRYPTO_AUTH = 3)
+   *   bit 0 (1)  SSH/GPG derived keys (slots above 200) ask for a BUTTON
+   *              PRESS instead of the three-digit challenge code. Set, the
+   *              firmware takes CRYPTO_AUTH = 3, the press path; clear, it
+   *              hashes the request into a challenge code to type
+   *              (libraries 20e1623 okcore.cpp:7128). This was labelled the
+   *              other way round - "three-button challenge" - which offered
+   *              a user the opposite of what the bit does. Same sense as the
+   *              3.0.5 enum's 1 = press, so the meaning did not flip there;
+   *              only the width did.
    *   bit 3 (8)  FIDO2 derives are allowed WITHOUT a touch; clear, they are
    *              refused as CTAP2_ERR_EXTENSION_NOT_SUPPORTED, which names
    *              the wrong cause entirely
@@ -612,12 +645,19 @@ const PREFERENCES = {
     max: 255,
     label: 'SSH/GPG derived keys',
     requires: 'configMode',
+    section: USER_INPUT_MODES,
     bits: {
-      0: 'Three-button challenge on raw-HID derives',
+      0: 'Button Press (tap any button) instead of the Challenge Code',
       3: 'Allow per-site derived keys without a touch',
     },
     note: 'A bitmask. Bit 3 (value 8) is what lets a derived key be produced without pressing a button; without it the device answers "extension not supported", which is not what it means.',
   },
+
+  /*
+   * Here, between 21 and 30, because that is the desktop App's order inside
+   * "User Input Modes" and a GUI draws a section in table order.
+   */
+  storedChallengeMode:  { field: FIELD.storedchallengeMode, max: 1, label: 'Stored keys (PGP, SSH, RSA and ECC slots)', requires: 'configMode', section: USER_INPUT_MODES },
 
   /*
    * FIRMWARE 3.0.5 REINTERPRETS FIELD 21 ABOVE, and this field replaces it for
@@ -635,18 +675,30 @@ const PREFERENCES = {
    * THIS SETTING GOVERNS THE BROWSER. A web app reaches only the FIDO
    * interface, so it can neither read nor write this - the GUI that sets it is
    * one with VENDOR (desktop, react-native, CLI), on the browser's behalf.
+   *
+   * "NONE" IS ACCEPTED ON EVERY BUILD. set_slot case 30 checks only that the
+   * value is 0-2 (libraries 213e670 okcore.cpp:1834-1850); there is no
+   * OK_ALLOW_NO_PRESS test on this field, unlike 21 and 22. This note used to
+   * say production firmware refuses it - that was 21 and 22's rule copied onto
+   * the one field it does not apply to, and it would have hidden from a user a
+   * choice the desktop App offers and the key takes.
+   *
+   * THE ROW EXISTS ONLY ON THE ENUM LINE (ENUM_ONLY_PREFERENCES), so this IS
+   * its 3.0.5 shape and it has no entry in USER_INPUT_ENUM_ROWS below: an
+   * overlay repeating it is how the wrong note came to be written twice.
    */
   webAgentDeriveMode: {
     field: FIELD.webAgentDeriveMode,
     max: 2,
     label: 'Web and agent derived keys',
     requires: 'configMode',
+    section: USER_INPUT_MODES,
     choices: {
-      0: 'Three-digit challenge',
-      1: 'Button press',
-      2: 'No confirmation',
+      0: INPUT_CHOICE.challenge,
+      1: INPUT_CHOICE.press,
+      2: INPUT_CHOICE.none,
     },
-    note: 'How a shared-secret derive, and a derived decapsulation, is authorised. A public-key derive is never gated. "No confirmation" is refused ("unsupported user input mode") on firmware built without OK_ALLOW_NO_PRESS.',
+    note: 'How you approve a key derived on demand from a label, shared by the OnlyKey web app and by local agents over USB (onlykey-agent, python-onlykey, age): a shared-secret derive or a derived decapsulation. A public-key derive is never gated. It never changes WHICH key is derived, only how you authorise it, so anything already encrypted to a label still decrypts. "None" applies over USB AND to the web app: either can then derive and decrypt silently whenever the key is unlocked. A new key starts on Button Press.',
   },
   /*
    * FIELD 31 - what the browser may DO, as against field 30's how it is
@@ -677,12 +729,19 @@ const PREFERENCES = {
   webcryptPolicy: {
     field: FIELD.webcryptPolicy,
     max: 3,
-    label: 'Browser permissions',
+    /*
+     * The desktop App's panel title and checkbox sentences (app.html:849-877).
+     * "Webcrypt" is the OnlyKey web app's own name, so it names the thing the
+     * user knows rather than the transport ("browser", "FIDO2") it rides on.
+     * No `section`: the desktop gives it its own panel and its own Save, and
+     * being oneWay it lives apart on every GUI anyway.
+     */
+    label: 'Webcrypt Access',
     requires: 'configMode',
     oneWay: true,
     bits: {
-      0: 'Let the browser use stored keys (PGP) over FIDO2',
-      1: 'Turn the OnlyKey FIDO2 extension off entirely',
+      0: 'Allow Webcrypt to use my stored keys (PGP)',
+      1: 'Turn off Webcrypt entirely',
     },
     /*
      * WHAT THE KEY DOES BEFORE THIS IS EVER WRITTEN - which is every key
@@ -705,9 +764,56 @@ const PREFERENCES = {
     unwritten: 1,
     note: 'Governs the BROWSER, which cannot set it itself - a web app reaches only the FIDO interface. Until it is first written the key behaves as v3.0.4 did: derived keys yes, stored keys (PGP) YES, and the extension off only if the old SSH/GPG setting turned it off. Writing it once permanently ends that inheritance - leaving bit 0 off turns web PGP off - so set it only when you mean to.',
   },
-  storedChallengeMode:  { field: FIELD.storedchallengeMode, max: 1, label: 'Stored keys (PGP, SSH, RSA and ECC slots)', requires: 'configMode' },
-  hmacChallengeMode:    { field: FIELD.hmacchallengeMode, max: 1, label: 'HMAC challenge', requires: 'configMode' },
+  /* Before field 26, as the desktop App lists them (app.html:649-691). */
   modKeyMode:           { field: FIELD.modkeyMode, max: 1, label: 'Sysadmin mode', requires: 'configMode' },
+
+  /*
+   * FIELD 26 RUNS THE OTHER WAY ROUND from 21, 22 and 30: 0 is the SAFE value.
+   * 0 = a button press is required, 1 = no press (okcore.cpp:7270-7300 at
+   * 3.1.0, "0 = Default physical presence required, 1 = No physical presence
+   * required for HMAC"; python-onlykey's README says the same). A GUI that
+   * assumes "1 = press" like its neighbours turns the press OFF.
+   *
+   * The desktop App asks it as a question - "Require a button press for HMAC
+   * challenge-response operations?" Yes/No - and wires those two buttons
+   * INVERTED (Yes writes 1). That is a held finding against the desktop, not
+   * a rule: the firmware decides the value, so here press-required is 0. The
+   * choices are the desktop's own "Button Press (tap any button)" sentence and
+   * its negation, because a bare Yes/No needs the question beside it to mean
+   * anything and a GUI rendering a list of choices will not carry it; the
+   * question is kept in the note.
+   *
+   * 129 and 130 are also accepted - no press for ONE of the two legacy slots
+   * (the Authlite setup path writes them, okcore.cpp:7133-7155) - and left out:
+   * they are a per-slot exception that slot setup writes, not a preference a
+   * person picks, and offering them would ask the user to know slot numbers.
+   * `max` stays 1 for that reason; a key found at 129/130 is not readable
+   * from here anyway.
+   *
+   * ONLY the legacy HMAC slots (0x30/0x38, the two challenge-response slots)
+   * read this. Per-slot HMAC on slots 1-24 carries its own setting and
+   * ignores it, which is why the note says so.
+   *
+   * NO `section`, and not "User Input Modes": the desktop App gives it a
+   * panel of its own ("HMAC User Input Mode", app.html:672-691), in a
+   * different place in the list, with its own button. Grouping it with
+   * 21/22/30 would tell the user it is the same kind of decision; it is a
+   * different device interface (the YubiKey-style challenge-response) with the
+   * opposite sense. And a one-row panel IS a row: its title is this label, so
+   * a `section` of the same name would only draw that heading twice. `section`
+   * is for rows the desktop gathers under one heading, which this is not.
+   */
+  hmacChallengeMode: {
+    field: FIELD.hmacchallengeMode,
+    max: 1,
+    label: 'HMAC User Input Mode',
+    requires: 'configMode',
+    choices: {
+      0: INPUT_CHOICE.press,
+      1: 'No button press',
+    },
+    note: 'Require a button press for HMAC challenge-response operations? Applies to the two legacy HMAC challenge-response slots only; an HMAC key stored in slots 1-24 has its own setting. A new key requires the press.',
+  },
 
   /*
    * How hard a finger has to press, and the ONE preference with a floor.
@@ -778,11 +884,21 @@ const PREFERENCES = {
  * because a spread leaves an untouched key in place and a stale `bits` would
  * have the screen draw toggles beside the choices.
  *
- * "NO CONFIRMATION" IS ON FIELD 30 ONLY. Production firmware refuses 2 on 21
- * and 22 ("unsupported user input mode") and fails a stale one closed to the
+ * "NONE" IS ON FIELD 30 ONLY. Production firmware refuses 2 on 21 and 22
+ * ("Error unsupported user input mode" unless built with OK_ALLOW_NO_PRESS,
+ * okcore.cpp:1789-1833 at 3.1.0) and fails a stale one closed to the
  * challenge code, so offering it there could only produce an error the user
- * cannot act on. Even on 30 it depends on OK_ALLOW_NO_PRESS, which is why the
- * note says so rather than the option being silently absent.
+ * cannot act on - the notes say why it is missing rather than leaving it
+ * silently absent. Field 30 takes 2 on every build (see its row), and its row
+ * is already this shape, so it has no entry here.
+ *
+ * WHAT A NEW KEY STARTS ON is in each note because the key cannot report any
+ * of these back: a GUI has nothing to show as "current", and the first-use
+ * default (OnlyKey.ino:425-437 at 3.1.0: 21, 22 and 30 all Button Press - "no
+ * challenge code required for OnlyKey Agent") is the one thing a user can be
+ * told for certain. v3.0.4 does the same for 21 and 22 (OnlyKey.ino:430-433
+ * at v3.0.4-prod writes 1 - bit 0, the press), so a GUI's section heading may
+ * say it for every line.
  */
 /**
  * Fields that DO NOT EXIST before 3.0.5, as against 21 and 22, which exist
@@ -792,7 +908,8 @@ const PREFERENCES = {
  * fall to `default: return;` (okcore.cpp:2125) and the key sends NOTHING - no
  * error, no success. sendField() then retries into silence and the caller
  * ends with "unknown", on a write that was never going to land. Offering the
- * row at all is the bug: a v3.0.4 user saw "Browser permissions" and a derive
+ * row at all is the bug: a v3.0.4 user saw "Browser permissions" (now
+ * "Webcrypt Access") and a derive
  * mode, set them, and nothing happened.
  *
  * Gated on userInputModeEnum because that capability IS the 3.0.5 line - both
@@ -808,22 +925,13 @@ const USER_INPUT_ENUM_ROWS = {
   derivedChallengeMode: {
     max: 1,
     bits: undefined,
-    choices: { 0: 'Three-digit challenge', 1: 'Button press' },
-    note: 'How you approve a key derived for SSH or GPG. From firmware 3.0.5 this is one of two values, not a bitmask - the old "bit 3 for no touch" is gone, and writing 8 is refused.',
+    choices: { 0: INPUT_CHOICE.challenge, 1: INPUT_CHOICE.press },
+    note: 'How you approve a key derived for SSH or GPG (onlykey-agent). "None" is not offered: production firmware refuses it for these keys. From firmware 3.1.0 this is one of these values, not a bitmask - the old "bit 3 for no touch" is gone, and writing 8 is refused. A new key starts on Button Press.',
   },
   storedChallengeMode: {
     max: 1,
-    choices: { 0: 'Three-digit challenge', 1: 'Button press' },
-    note: 'How you approve a key the device already holds - PGP, SSH, and the RSA and ECC slots.',
-  },
-  webAgentDeriveMode: {
-    max: 2,
-    choices: {
-      0: 'Three-digit challenge',
-      1: 'Button press',
-      2: 'No confirmation',
-    },
-    note: 'How you approve a key derived on demand from a label, shared by the OnlyKey web app and by local agents over USB (onlykey-agent, python-onlykey, age). It never changes WHICH key is derived, only how you authorise it, so anything already encrypted to a label still decrypts. "No confirmation" is refused on firmware built without OK_ALLOW_NO_PRESS.',
+    choices: { 0: INPUT_CHOICE.challenge, 1: INPUT_CHOICE.press },
+    note: 'How you approve a key the device already holds - PGP, SSH, and the RSA and ECC slots. "None" is not offered: production firmware refuses it for these keys. A new key starts on Button Press.',
   },
 };
 
@@ -2060,7 +2168,7 @@ const USER_INPUT_ENUM_ROWS = {
           && session.identity && session.identity.version
           && !(session.capabilities && session.capabilities.userInputModeEnum)) {
         throw new Error(
-          `${name} needs firmware 3.0.5 or later; ${session.identity.version} ` +
+          `${name} needs firmware 3.1.0 or later; ${session.identity.version} ` +
           'has no such field and would not answer the write',
         );
       }
