@@ -165,6 +165,32 @@ that says what to do.
 from any Node script: `[host, transport/usb, session, device, okcrypto]` over
 that pipe, transport opened.
 
+## Bluetooth on Linux: `scripts/ble-linux-connect.sh`
+
+The ok-rn phone app is a soft key that can also be reached over Bluetooth LE.
+It is a classic Bluetooth keyboard AND an LE vendor pipe to the same computer
+at once, as it is on Windows. On Windows, pairing once in Settings is all the
+preparation it needs. On Linux (BlueZ) the host needs a few things first, and
+the script does them, explaining each:
+
+    scripts/ble-linux-connect.sh "Pixel 6a"           check, pair if needed, prefer LE
+    scripts/ble-linux-connect.sh "Pixel 6a" --fix     also the one-time host fixes (sudo)
+    scripts/ble-linux-connect.sh "Pixel 6a" --repair  pair again (forget this computer on the phone first)
+
+The steps:
+- **Adapter.** Not rfkill-blocked, and powered.
+- **bluetoothd config.** It stays **dual-mode** (`ControllerMode = le` would stop the
+  keyboard) and runs with **`Experimental = true`**. That flag is what gives BlueZ
+  `Device1.PreferredBearer`, the only way to make a connect go LE instead of classic,
+  as WinRT does.
+- **The bond.** Paired by **numeric comparison**: accept the same number on the
+  phone. A Just Works pair ended up bonded on one side only.
+- **The device.** Trusted, with `PreferredBearer = le`.
+
+Proven on a Raspberry Pi 4 (Debian 13, BlueZ 5.82) against a Pixel 6a:
+2026-09-29. The pairing path was run by hand, and the script's check path on the
+paired phone.
+
 ## Tests
 
 `test/cli.test.js` (reads) and `test/cli-write.test.js` (writes) run every
