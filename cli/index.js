@@ -24,6 +24,10 @@
  * one exception is setkey's hex, which python's form puts there and which
  * is prompted for when left off.
  *
+ * AND lib-agent's SSH HALF. `agent` is onlykey-agent: the derived key line,
+ * or an ssh-agent serving it (cli/ssh-agent.js, cli/ssh-wire.js), with Node
+ * built-ins only - one library then answers ssh as well as the GUIs.
+ *
  * WHAT IT DOES NOT DO. There is no firmware update path - that is
  * deliberately not something this program can do - and no backup or
  * restore, which need their own safety design before they get a command.
@@ -1340,6 +1344,11 @@ function runWithAgent(argv, env) {
  * @param {(question: string) => Promise<string>} [io.prompt]  read one secret;
  *   defaults to cli/prompt.js (hidden on a terminal, one stdin line otherwise)
  * @param {(file: string) => Promise<string>} [io.readFile]  read a key file
+ * @param {(server: object) => Promise<void>} [io.untilStopped]  agent -f:
+ *   resolves when the agent should stop; defaults to Ctrl-C / SIGTERM
+ * @param {(argv: string[], env: object) => Promise<number>} [io.runCommand]
+ *   agent -- cmd / -s / -c: run the command under the agent; defaults to a
+ *   child process on the terminal
  * @returns {Promise<number>} the exit code: 0 done, 1 failed, 2 usage
  */
 async function main(argv, io = {}) {

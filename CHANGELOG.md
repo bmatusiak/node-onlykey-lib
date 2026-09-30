@@ -17,6 +17,19 @@ the commit that release ended at.
 
 ## 0.3.0 - in progress
 
+- **`onlykey-js agent`: the SSH half of lib-agent, dependency-less.** Prints
+  the derived key line for `[user@]host` (byte for byte python
+  `onlykey-agent`'s line, comment included), or serves an ssh-agent over it:
+  `-f`, `-- command`, `-s`, `-c`; ed25519 by default, `-e nist256p1`;
+  derivation v1 by default, `--skey derived-v2` (refused on firmware without
+  it). POSIX serves a 0600 socket in a private 0700 directory; Windows a
+  private named pipe for Windows OpenSSH. Every signature is verified against
+  the listed key before ssh gets it; ECDSA signatures carry canonical mpints
+  (lib-agent always prefixes 0x00 - OpenSSH tolerates it, RFC 4251 does not).
+  Node built-ins only (`cli/ssh-wire.js`, `cli/ssh-agent.js`). Proven live on
+  the VM against the real firmware (a private kit emulator): `ssh-add -L`,
+  and an `ssh localhost` login with each key type. `main()` now takes
+  per-command options and refuses one given to a command that does not take it.
 - **versions: v3.0.5 dropped from the table.** It was never released or signed,
   and 3.1.0 supersedes it. v3.1.0 - the proposed release, pinned to its PR heads
   (libraries eb25290, OnlyKey-Firmware 9fceea1) - is treated like the signed

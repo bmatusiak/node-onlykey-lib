@@ -45,6 +45,7 @@ side: the bin is named `onlykey-js` so it can never shadow `onlykey-cli`.
 | `setkey <slot> <type> [d\|s\|b] [hex]`, `setkey <slot> label <text>` | `setkey` | writes | RSA1-4 (type 1-4), ECC1-16 (`x n s c`), HMAC1-2 (`h`). The hex is length-checked before anything is sent; left off, it is prompted for; given, a stderr note says it is in the shell history. No `HMAC` label (python writes one to index 57/58). No `PQC`/`p` composite load |
 | `loadkey <file> [auto\|RSA1-4\|ECC1-16] [d\|s\|b]` | `loadkey` | writes | armored PGP private key; python's lines ("Found 2 key(s):", "Loading ECC key to slot 102...", the key's answer). The passphrase is asked only for a locked key. A named slot must match the key's kind (python silently moves RSA to slot 1); an ECC key there needs its use (python crashes on an odd-length type byte) |
 | `wipekey <RSA1-4\|ECC1-16\|HMAC1-2>` | `wipekey` | writes | two lines, as python: the wipe, then the label clear - which the library skips after a refused wipe and for HMAC |
+| `agent <[user@]host \| file> [-e ed25519\|nist256p1] [--skey ECC32\|derived-v2] [-f \| -s \| -c \| -- cmd]` | lib-agent's `onlykey-agent` | reads, signs | SSH keys derived in the key. Prints the key line (the same line python prints, comment `<ssh://user@host\|curve>` included), or serves an ssh-agent: `-f` foreground, `-- cmd` / `-s` / `-c` under a command. POSIX: Unix socket in a private 0700 dir; Windows: a private named pipe (Windows OpenSSH only - Git Bash's ssh cannot use a pipe). v2 is `--skey derived-v2`, refused on firmware without it. Not carried: stored-slot keys (`--skey ECC1-16`), `--daemonize`, `--mosh`, `.pub` import. See below |
 
 "Reads" means it connects - the OKCONNECT every client sends, which sets the
 key's clock - and reads. A locked key is refused straight from the connect
@@ -58,6 +59,33 @@ the key in config mode. A key write the key never answers is reported as
 that - outside config mode the firmware drops OKSETPRIV without a word - where
 python prints an empty line. A command line that is wrong is refused, exit 2,
 before any key is opened.
+
+
+## agent - the SSH half of lib-agent
+
+`onlykey-js agent` is `onlykey-agent` over this library: the key is derived
+inside the OnlyKey from the identity (`sha256("user@host")`, lib-agent's
+hash - port, path and proto are not part of it), v1 by default, v2 with
+`--skey derived-v2`. The two are DIFFERENT keys; keep whichever a server
+already trusts.
+
+    onlykey-js agent okt@example.com                    # print the key line
+    onlykey-js agent -e nist256p1 okt@example.com       # the ecdsa-sha2-nistp256 one
+    onlykey-js agent -f okt@example.com                 # serve; eval the SSH_AUTH_SOCK line
+    onlykey-js agent okt@example.com -- ssh okt@example.com
+    onlykey-js agent -c okt@example.com                 # ssh to it, offering only its key
+    onlykey-js agent -f /path/to/ids                    # every <identity|curve> in the file
+
+Signing prints the challenge on stderr ("enter 1 1 6"). Every signature is
+verified against the listed key before ssh gets it - a wrong identity hash
+signs perfectly well with a different key, and ssh would only say
+"Permission denied". The key is opened when a request needs it and released
+after 10 s idle, so the agent does not keep it from other programs.
+
+On Windows the agent listens on a private named pipe (never
+`\\.\pipe\openssh-ssh-agent`, which is the OpenSSH Authentication Agent
+service's) and prints `$env:SSH_AUTH_SOCK = '...'`; Windows OpenSSH's
+`ssh.exe`/`ssh-add.exe` use it, or `ssh -o IdentityAgent=<pipe>`.
 
 There is no firmware update command - that is not something this program can
 do - and no backup or restore, which need their own safety design first.
@@ -105,5 +133,7 @@ that pipe, transport opened.
 command through `main(argv, io)` over the fake firmware - the writes pinned
 frame by frame, message, slot, field and payload, as well as by what they
 print; `test/cli-transport-hid.test.js` drives the pipe through a fake
-node-hid module. None can reach a real device: `io.prompt` and `io.readFile`
+node-hid module; `test/ssh-agent.test.js` serves the agent on a real socket
+(a named pipe on Windows) over the fake firmware's K132 derivation and talks
+to it as ssh does. None can reach a real device: `io.prompt` and `io.readFile`
 are injected too.
