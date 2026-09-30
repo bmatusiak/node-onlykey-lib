@@ -22,7 +22,8 @@ the commit that release ended at.
   keys derived from `gpg://<user id>` (ed25519 + cv25519, or `-e nist256p1`),
   its two self-signatures made by the device through the vendored openpgp
   fork's `signer` hook, and writes lib-agent's GnuPG home; `gpg-agent` is
-  the Assuan agent gpg.conf starts (lib-agent's command set; gpg's socket
+  the Assuan agent gpg.conf starts (`--daemon` backgrounds it and exits, as gpg
+  waits for; lib-agent's command set; gpg's socket
   path from gpgconf; Windows' port-and-nonce socket file). Key packets,
   fingerprints and keygrips equal python's own encoder's for the same device
   keys, and keygrips equal what gpg prints. Differs from lib-agent toward

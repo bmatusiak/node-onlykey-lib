@@ -112,6 +112,10 @@ key's signatures as `[uncertain]` (measured; lib-agent's keys have that fault).
 v2 is `--skey derived-v2` / `--dkey derived-v2`, written into `run-agent.sh`
 so the agent uses the same derivation.
 
+gpg starts the agent itself: `run-agent.sh` runs `gpg-agent --daemon`, which - like
+gpg-agent's own `--daemon` - leaves the agent serving in the background and
+exits, because gpg waits for that process to exit before it connects.
+
 The agent reads its keys from the home's `pubkey.asc`, answers `HAVEKEY` and
 `KEYINFO` without the device, verifies every signature against that key
 before gpg gets it, and compares the device's ECDH key once before the first
