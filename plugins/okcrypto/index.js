@@ -324,7 +324,20 @@ function setup(imports, register, config) {
           const state = okmsg.parseState(event.data);
           if (state.state === 'unlocked' || state.state === 'locked'
               || state.state === 'uninitialized') return;
-          if (state.state === 'error') {
+          /*
+           * A REFUSAL IS NOT ONLY "Error ...". The firmware answers an
+           * unanswered confirmation with "Timeout occured while waiting for
+           * confirmation on OnlyKey" (fadeoffafter20sec, okcore.cpp:5607 - the
+           * same words since 2017, so every signed release says it) and a key
+           * with no PIN with "No PIN set ...". okmsg.errorKind already knows
+           * both; parseState() only tests /^Error/, so this used to take the
+           * timeout sentence as the ANSWER - its first 32 bytes became a
+           * "shared secret" and an age decrypt failed with "invalid tag",
+           * blaming the file for a button nobody pressed (found 2026-09-30:
+           * field 30 = press, the firmware default, on the vendor-HID derived
+           * decap, which waits for a press silently).
+           */
+          if (state.state === 'error' || okmsg.errorKind(state.raw)) {
             clearTimeout(timer);
             answered = true;
             if (off) off();
@@ -1776,6 +1789,19 @@ function setup(imports, register, config) {
            * handing out a seed that yields it.
            */
           if (custody) {
+            /*
+             * CONFIRMATION HERE IS opts.confirm, NOT onKeepAlive. On the
+             * vendor interface (ok-rn, the CLI) this chunked OKDECRYPT is
+             * confirmed by okcore_prime_user_confirmation with field 30:
+             * press mode waits SILENTLY for any button (CRYPTO_AUTH=3) - no
+             * keepalive exists on this path, so an onKeepAlive presser never
+             * fires, and after 20 s the firmware answers "Timeout occured
+             * while waiting for confirmation" (a refusal - deviceOperation).
+             * A caller that presses must pass `confirm`; it runs once the
+             * upload is written and gets the digits (used only in challenge
+             * mode) and isAnswered() to stop early. Over a FIDO2 tunnel the
+             * derive paths do raise keepalives. Measured 2026-09-30.
+             */
             const payload = new Uint8Array(32 + ciphertext.length);
             payload.set(okconnect.derivationHash(label), 0);
             payload.set(ciphertext, 32);

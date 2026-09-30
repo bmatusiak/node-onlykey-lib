@@ -256,6 +256,37 @@ test('a wrong challenge comes back as the sentence the device said', async () =>
   await app.destroy();
 });
 
+test('an unanswered confirmation is a refusal, not the answer', async () => {
+  /*
+   * The firmware's 20 s timeout says "Timeout occured while waiting for
+   * confirmation on OnlyKey" - no "Error" in front (fadeoffafter20sec,
+   * okcore.cpp:5607). deviceOperation took it as the result: its first 32
+   * bytes became a derived X-Wing "shared secret", and age failed with
+   * "invalid tag" (ok-rn e2e derive, field 30 = press, 2026-09-30). It must
+   * reject with the device's words and the 'challenge' kind instead.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(FULL(), pipe);
+
+  await assert.rejects(
+    () => app.services.okcrypto.composite_sign(101, composite.HALF_ECC, Uint8Array.from([9, 9]), {
+      timeoutMs: 2000,
+      confirm: () => {
+        const bytes = new Uint8Array(64);
+        const text = 'Timeout occured while waiting for confirmation on OnlyKey';
+        for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+        pipe.deliver(bytes);
+      },
+    }),
+    (err) => {
+      assert.match(err.message, /Timeout occured while waiting for confirmation/);
+      assert.equal(err.kind, 'challenge');
+      return true;
+    },
+  );
+  await app.destroy();
+});
+
 test('the signature is returned as raw bytes, not decrypted', async () => {
   /*
    * send_transport_response(sig, 64, true, true) LOOKS like it seals the
