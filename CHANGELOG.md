@@ -17,6 +17,19 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **Key Chain L4: encrypted private copies, both formats.** `keychain.export`:
+  `encryptedPgp(privateKey, passphrase, { confirm, openpgp })` - an armored
+  OpenPGP private key under OpenPGP's own passphrase protection (gpg and the
+  OnlyKey apps' "load a key" read it back) - and `encryptedPem(key, passphrase,
+  { confirm })` from the new `src/crypto/pkcs8.js`: EncryptedPrivateKeyInfo,
+  PBES2 with PBKDF2-HMAC-SHA256 (600000 rounds by default, 16-byte salt) and
+  AES-256-CBC, around PKCS#8 for RSA (from p and q alone, the CRT values
+  computed), Ed25519 / X25519 (RFC 8410) and P-256 / secp256k1 (RFC 5915).
+  Hermes-clean (a small DER encoder, @noble, BigInt). Both use the backup
+  passphrase's rule (25+ characters, asked twice). Post-quantum keys leave as
+  PGP only. OpenSSL (Node's crypto) opens every PEM in the tests; the RSA one
+  signs. `openpgp.d.ts` now declares `encryptKey`.
+
 - **Key Chain L1: naming and probing key slots.** New `./keychain` export with
   `tag` - the record of what a slot is, kept in the key's own 16-byte label as
   `<kind>:<name>` (`pgp`, `ssh`, `age`, `xwg`, `mlk`, `pqc`, `sig`, `enc`);

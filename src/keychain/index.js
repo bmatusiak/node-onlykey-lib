@@ -9,4 +9,5 @@
  */
 module.exports = {
   tag: require('./tag'),
+  export: require('./export'),
 };

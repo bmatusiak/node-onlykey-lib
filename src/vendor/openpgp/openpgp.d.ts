@@ -88,6 +88,11 @@ declare namespace openpgp {
     privateKey: PrivateKey;
     passphrase: string | string[];
   }): Promise<PrivateKey>;
+  function encryptKey(options: {
+    privateKey: PrivateKey;
+    passphrase: string | string[];
+    config?: Record<string, unknown>;
+  }): Promise<PrivateKey>;
   function generateKey(options: Record<string, unknown>): Promise<{
     privateKey: string | PrivateKey;
     publicKey: string | PublicKey;
