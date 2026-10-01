@@ -24,12 +24,22 @@
  * IS absent, the one command that needed it says so by name instead of dying
  * with a MODULE_NOT_FOUND stack trace.
  *
- * WHAT THIS PIPE OPENS: the VENDOR interface only. That is the one that
- * carries the OnlyKey protocol (PIN bracket, labels, slots, keys - see
- * src/transport/usbDescriptors.js). FIDO is a different protocol with its own
- * transport; the keyboard is device-to-host only; SEREMU is compiled out of a
- * production key. A write to any other interface is refused by name rather
- * than sent somewhere it will be ignored.
+ * WHAT THIS PIPE OPENS: the VENDOR interface, which carries the OnlyKey
+ * protocol (PIN bracket, labels, slots, keys - see
+ * src/transport/usbDescriptors.js), and - on first use only - the FIDO
+ * interface, for what the firmware serves over CTAPHID alone: a label's
+ * derived key (`keychain derive label`) is the one the CLI has. The keyboard
+ * is device-to-host only and SEREMU is compiled out of a production key, so a
+ * write to either is refused by name rather than sent somewhere it is ignored.
+ *
+ * WHY FIDO OPENS LAZILY, AND ONLY WHEN THE MATCH IS CERTAIN (owner,
+ * 2026-10-01: "add FIDO support to the pipe"). Every vendor-only command keeps
+ * working where FIDO cannot be reached: Windows does not show a security key's
+ * FIDO interface to a program that is not elevated (it keeps it for its own
+ * WebAuthn service). And hidapi lists interfaces, not devices - nothing ties a
+ * FIDO interface to the vendor interface of the same key except there being
+ * one of each. With two OnlyKeys plugged in, a FIDO write could reach the
+ * OTHER key; that is refused, not guessed.
  */
 'use strict';
 
@@ -120,7 +130,34 @@ function findOnlyKeys(HID) {
   const onlykeys = all.filter((d) => USB_IDS.some(([v, p]) => d.vendorId === v && d.productId === p));
   const vendor = onlykeys.filter(
     (d) => identify({ usagePage: d.usagePage, usage: d.usage }) === IFACE.VENDOR);
-  return { vendor, onlykeys };
+  const fido = onlykeys.filter(
+    (d) => identify({ usagePage: d.usagePage, usage: d.usage }) === IFACE.FIDO);
+  return { vendor, fido, onlykeys };
+}
+
+/**
+ * The FIDO interface of the key the pipe opened - only when that is certain:
+ * one OnlyKey's vendor interface and one FIDO interface on the bus. Otherwise
+ * null, and `why` says what to do.
+ */
+function pairFido({ vendor, fido }) {
+  if (vendor.length === 1 && fido.length === 1) return { fido: fido[0], why: null };
+  if (vendor.length > 1) {
+    return {
+      fido: null,
+      why: `${vendor.length} OnlyKeys are plugged in, and a FIDO interface cannot be matched to the one `
+        + 'chosen with --path (hidapi lists interfaces, not devices). Unplug the others for this command.',
+    };
+  }
+  if (!fido.length && process.platform === 'win32') {
+    return {
+      fido: null,
+      why: 'Windows shows a security key\'s FIDO interface only to an elevated program (it keeps it for '
+        + 'its WebAuthn service). Run onlykey-js from an elevated shell for this command - or, for a '
+        + 'derived key, use the ssh or gpg scheme, which run over the vendor interface.',
+    };
+  }
+  return { fido: null, why: 'this OnlyKey\'s FIDO interface (usage page 0xf1d0) is not listed by hidapi.' };
 }
 
 /**
@@ -190,12 +227,18 @@ function createHidPipe({ loadHid, path } = {}) {
   let hid = null;
   let opened = null;
   let lastError = null;
+  let HIDmodule = null;
+  let fidoPair = null;     // {fido, why} from the enumeration at start()
+  let fidoHid = null;      // opened on the first FIDO write
 
   function emit(event) {
     for (const listener of [...listeners]) listener(event);
   }
 
-  function onData(data) {
+  const onData = (data) => deliver(IFACE.VENDOR, data);
+  const onFidoData = (data) => deliver(IFACE.FIDO, data);
+
+  function deliver(iface, data) {
     let bytes = Uint8Array.from(data);
     /*
      * hidapi strips a report ID of 0 on the way IN on every platform, so a
@@ -206,7 +249,24 @@ function createHidPipe({ loadHid, path } = {}) {
      * removed here, by length, or every field would be read one byte late.
      */
     if (bytes.length === REPORT_SIZE + 1 && bytes[0] === 0x00) bytes = bytes.subarray(1);
-    emit({ iface: IFACE.VENDOR, dir: DIR.OUT, bytes });
+    emit({ iface, dir: DIR.OUT, bytes });
+  }
+
+  function openFido() {
+    if (fidoHid) return fidoHid;
+    if (!fidoPair || !fidoPair.fido) {
+      throw hidError('ENOFIDO', `this command needs the OnlyKey's FIDO interface: ${fidoPair ? fidoPair.why : 'the pipe is not open.'}`);
+    }
+    try {
+      fidoHid = new HIDmodule.HID(fidoPair.fido.path);
+    } catch (err) {
+      throw hidError('EOPEN',
+        `Could not open the OnlyKey's FIDO interface (${err && err.message}). A browser or another `
+        + 'program may be holding it; on Linux, check the OnlyKey udev rule.', err);
+    }
+    fidoHid.on('data', onFidoData);
+    fidoHid.on('error', onError);
+    return fidoHid;
   }
 
   function onError(err) {
@@ -220,19 +280,24 @@ function createHidPipe({ loadHid, path } = {}) {
   }
 
   function close() {
-    const device = hid;
+    for (const [device, listener] of [[hid, onData], [fidoHid, onFidoData]]) {
+      if (!device) continue;
+      device.removeListener('data', listener);
+      device.removeListener('error', onError);
+      try { device.close(); } catch (_) { /* already gone: nothing to release */ }
+    }
     hid = null;
-    if (!device) return;
-    device.removeListener('data', onData);
-    device.removeListener('error', onError);
-    try { device.close(); } catch (_) { /* already gone: nothing to release */ }
+    fidoHid = null;
   }
 
   return {
     async start() {
       if (hid) return { started: true, path: opened.path };
       const HID = loadNodeHid(loadHid);
-      const chosen = selectDevice(findOnlyKeys(HID), path);
+      const found = findOnlyKeys(HID);
+      const chosen = selectDevice(found, path);
+      HIDmodule = HID;
+      fidoPair = pairFido(found);
       try {
         hid = new HID.HID(chosen.path);
       } catch (err) {
@@ -262,15 +327,16 @@ function createHidPipe({ loadHid, path } = {}) {
     },
 
     async write(iface, bytes) {
-      if (iface !== IFACE.VENDOR) {
+      if (iface !== IFACE.VENDOR && iface !== IFACE.FIDO) {
         throw new Error(
-          `the desktop HID pipe opens only the vendor interface (${IFACE.VENDOR}); `
+          `the desktop HID pipe opens the vendor (${IFACE.VENDOR}) and FIDO (${IFACE.FIDO}) interfaces only; `
           + `interface ${iface} is not open`);
       }
       if (!hid) {
         throw hidError('ENOTOPEN',
           lastError ? `the OnlyKey went away: ${lastError.message}` : 'the OnlyKey is not open');
       }
+      const device = iface === IFACE.FIDO ? openFido() : hid;
       const frame = Uint8Array.from(bytes);
       /*
        * THE REPORT ID. hidapi takes the first byte of every write as the report
@@ -283,7 +349,7 @@ function createHidPipe({ loadHid, path } = {}) {
        * report IDs everywhere above the pipe (src/transport/contract.js), so
        * THIS is the one place it is added.
        */
-      const written = hid.write(Array.from(withReportId(frame)));
+      const written = device.write(Array.from(withReportId(frame)));
       /*
        * Echo our own write, dir IN. A USB pipe physically sees inbound reports
        * only; the transport filters on direction, and the emulator's pipe

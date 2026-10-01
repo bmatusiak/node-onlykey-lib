@@ -158,12 +158,58 @@ test('writes carry a 0x00 report ID for hidapi; the echo does not', async () => 
   await pipe.stop();
 });
 
-test('only the vendor interface is writable, and a closed pipe says so', async () => {
+test('the keyboard and SEREMU are not writable, and a closed pipe says so', async () => {
   const pipe = createHidPipe({ loadHid: () => fakeNodeHid() });
   await assert.rejects(() => pipe.write(IFACE.VENDOR, new Uint8Array(64)), { code: 'ENOTOPEN' });
   await pipe.start();
-  await assert.rejects(() => pipe.write(IFACE.FIDO, new Uint8Array(64)), /only the vendor interface/);
-  await assert.rejects(() => pipe.write(IFACE.SEREMU, new Uint8Array(8)), /only the vendor interface/);
+  await assert.rejects(() => pipe.write(IFACE.SEREMU, new Uint8Array(8)), /vendor \(2\) and FIDO \(1\) interfaces only/);
+  await assert.rejects(() => pipe.write(IFACE.KEYBOARD, new Uint8Array(8)), /interfaces only/);
+  await pipe.stop();
+});
+
+test('FIDO opens on first use: its writes carry the report ID, its reads come back as FIDO', async () => {
+  const HID = fakeNodeHid();
+  const pipe = createHidPipe({ loadHid: () => HID });
+  await pipe.start();
+  assert.deepEqual(HID.opened.map((d) => d.path), ['key1-if2'], 'only the vendor interface opens at start');
+
+  const events = [];
+  pipe.on('stream', (e) => events.push(e));
+  const frame = new Uint8Array(64).fill(0x5a);
+  frame[0] = 0xff;
+  await pipe.write(IFACE.FIDO, frame);
+  assert.deepEqual(HID.opened.map((d) => d.path), ['key1-if2', 'key1-if1'], 'the FIDO interface opened on the first FIDO write');
+  const fido = HID.opened[1];
+  assert.equal(fido.writes[0][0], 0x00, 'the report ID');
+  assert.deepEqual(fido.writes[0].slice(1), Array.from(frame));
+  assert.equal(HID.opened[0].writes.length, 0, 'nothing reached the vendor interface');
+  assert.deepEqual(events.map((e) => [e.iface, e.dir]), [[IFACE.FIDO, DIR.IN]], 'the echo is tagged FIDO');
+
+  fido.emit('data', Buffer.alloc(64, 0x33));
+  assert.deepEqual(events.slice(1).map((e) => [e.iface, e.dir, e.bytes[0]]), [[IFACE.FIDO, DIR.OUT, 0x33]]);
+
+  await pipe.write(IFACE.FIDO, frame);
+  assert.equal(HID.opened.length, 2, 'the FIDO interface is opened once');
+  await pipe.stop();
+  assert.ok(HID.opened.every((d) => d.closed), 'stop() closes both interfaces');
+});
+
+test('with two OnlyKeys a FIDO write is refused - it could reach the other key', async () => {
+  const HID = fakeNodeHid({ devices: [...onlykeyInterfaces('keyA'), ...onlykeyInterfaces('keyB')] });
+  const pipe = createHidPipe({ loadHid: () => HID, path: 'keyB-if2' });
+  await pipe.start();
+  await assert.rejects(() => pipe.write(IFACE.FIDO, new Uint8Array(64)),
+    (err) => err.code === 'ENOFIDO' && /2 OnlyKeys/.test(err.message));
+  assert.equal(HID.opened.length, 1, 'no FIDO interface was opened');
+  await pipe.stop();
+});
+
+test('a key with no FIDO interface listed: a FIDO write is refused by name; vendor still works', async () => {
+  const devices = onlykeyInterfaces('key1').filter((d) => d.usagePage !== 0xf1d0);
+  const pipe = createHidPipe({ loadHid: () => fakeNodeHid({ devices }) });
+  await pipe.start();
+  await assert.rejects(() => pipe.write(IFACE.FIDO, new Uint8Array(64)), { code: 'ENOFIDO' });
+  await pipe.write(IFACE.VENDOR, new Uint8Array(64));
   await pipe.stop();
 });
 
