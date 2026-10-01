@@ -11,4 +11,7 @@ module.exports = {
   tag: require('./tag'),
   export: require('./export'),
   generate: require('./generate'),
+  artifacts: require('./artifacts'),
+  derive: require('./derive'),
+  list: require('./list'),
 };

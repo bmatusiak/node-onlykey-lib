@@ -107,12 +107,13 @@ function fakeFirmware(opts = {}) {
   const pipe = fakePipe({ autoStart: true });
   /*
    * resp_buffer: send_transport_response copies each 64-byte piece over it
-   * WITHOUT clearing it first (okcore.cpp:2568-2573), so a short last piece
-   * leaves the previous reply's bytes behind it. Modelled because probeKeySlot
-   * leans on exactly that to tell ML-KEM from X-Wing, and must not lean on
-   * zeros that the real key never sends.
+   * WITHOUT clearing it first (okcore.cpp:2568-2573), so WITHIN one reply a
+   * short last piece carries the previous piece's tail; after the reply,
+   * changeoutputmode zeroes it (okcore.cpp:2640-2646, verified on the
+   * emulator). Modelled because probeKeySlot tells ML-KEM from X-Wing by that
+   * tail.
    */
-  const respBuffer = new Uint8Array(64).fill(0xa5);
+  const respBuffer = new Uint8Array(64);
   let generations = 0;
   /* Agent derivation: the slot stream being assembled, and every completed payload. */
   let agentStream = null;
@@ -363,6 +364,7 @@ function fakeFirmware(opts = {}) {
         respBuffer.set(key.subarray(at, Math.min(at + 64, key.length)));
         pipe.deliver(Uint8Array.from(respBuffer));
       }
+      respBuffer.fill(0);
       return undefined;
     }
 

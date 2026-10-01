@@ -17,6 +17,19 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **Key Chain L5 + L6: derived public keys and the public-only list.**
+  `keychain.derive.derivePublic(okcrypto, { scheme, label, type })` - a public
+  key the device derives from a label (`label`: P-256, secp256k1, X25519 and
+  the X-Wing age identity; `ssh` / `gpg`: the agent identities, Ed25519 or
+  P-256, v1 or v2), returned as a Key Chain entry; nothing private is kept, the
+  device re-derives it. `keychain.artifacts.forKey` gives every shareable form
+  in one place (hex, base64, SSH line for Ed25519 / P-256 / RSA, age recipient
+  for X25519 / X-Wing). `keychain.list`: entries for slots, derived keys and
+  external public keys with stable ids, a JSON file format
+  (`onlykey-keychain` v1) with `serialize` / `parse` / `merge`, and a refusal of
+  anything private - private-key field names, PEM, armored private blocks, age
+  secret keys - on create and on every parse.
+
 - **Key Chain L3: keys made on the host.** `keychain.generate.hostKey(type,
   { bits })` makes Ed25519, X25519, P-256, secp256k1 (noble) or RSA 2048 /
   3072 / 4096 (WebCrypto) in memory and returns the public key plus the
@@ -54,8 +67,9 @@ the commit that release ended at.
   label)` names or blanks a slot without touching the key; `generateEccKey` and
   `generateKey` take `{ label }` and write it after the key. One label writer
   for loadKey, the generators and setKeyLabel. The fake firmware models the
-  uncleared reply buffer, the conversion, the composite refusal and the
-  config-mode drop.
+  reply buffer (a short last piece keeps the previous piece's tail within one
+  reply; cleared after every reply, okcore.cpp:2640-2646, checked on the
+  emulator), the conversion, the composite refusal and the config-mode drop.
 
 - **Key Chain L2: public artifacts in `src/`, Hermes-clean** (no Node crypto,
   no Buffer). `crypto.pgpCert.buildCertificate(openpgp, opts)` is the GPG

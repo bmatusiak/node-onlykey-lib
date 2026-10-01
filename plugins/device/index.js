@@ -732,13 +732,14 @@ const BACKUP_REFUSALS = [
    *              Curve25519 conversion, okcrypto_geteccpubkey) - only an
    *              X25519 slot answers the same key twice
    *   mlkem768 / xwing   19 reports. X-Wing's last 32 bytes are its X25519
-   *              key; ML-KEM's are LEFTOVER: send_transport_response copies
-   *              a short final piece over resp_buffer without clearing it
-   *              (okcore.cpp:2568-2573), so they repeat the previous report's
-   *              second half. `hint` (a Key Chain label tag) wins when given.
-   *
-   * The leftover is also why a 32-byte key cannot be told from a 64-byte one
-   * by trailing zeros - there are none to count on.
+   *              key; ML-KEM's are LEFTOVER: within one reply,
+   *              send_transport_response copies the short final piece over
+   *              resp_buffer without clearing it first (okcore.cpp:2568-2573),
+   *              so they repeat the previous report's second half - bytes of
+   *              the same key. (The buffer IS cleared after every reply,
+   *              changeoutputmode, okcore.cpp:2640-2646 - verified on the
+   *              emulator - so nothing crosses from one reply to the next.)
+   *              `hint` (a Key Chain label tag) wins when given.
    *
    * @param {number|string} slotId
    * @param {{hint?: string|null, timeoutMs?: number, quietMs?: number}} [opts]

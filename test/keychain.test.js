@@ -91,7 +91,7 @@ test('probeKeySlot tells P-256 from secp256k1 by the curve, and both from a 32-b
   });
   const app = await start(pipe);
   const { device } = app.services;
-  /* P-256 first, so the reply buffer holds 64 real bytes when a 32-byte key follows. */
+  /* P-256 first: the device clears its reply buffer between replies, so a 32-byte key after it still reads clean. */
   const r1 = await device.probeKeySlot(101);
   assert.equal(r1.kind, 'p256');
   assert.deepEqual([...r1.publicKey], [...p]);
