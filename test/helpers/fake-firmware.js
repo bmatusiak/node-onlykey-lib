@@ -49,6 +49,14 @@ const PIN_WIRE_REPLIES = [
  *   labelSlots  - how many slots the device reports (12 classic, 24 duo)
  *   dropTerminal- never send the last label, to exercise the deadline
  */
+/* What a wiped RSA slot answers: the product of two random halves, length bytes long. */
+function wipedModulus(length) {
+  const { randomBytes } = require('node:crypto');
+  const half = () => BigInt('0x' + randomBytes(length / 2).toString('hex'));
+  const hex = (half() * half()).toString(16).padStart(length * 2, '0').slice(-length * 2);
+  return Uint8Array.from(Buffer.from(hex, 'hex'));
+}
+
 /* wipe_slot()'s replies, one per field (okcore.cpp at 8d28305). */
 const WIPED_FIELDS = [
   'Label', 'URL', 'Additional Characters', 'Delay 1', 'Username',
@@ -264,6 +272,12 @@ function fakeFirmware(opts = {}) {
       if (slotSilent) return undefined;
       if (slotError) return pipe.deliver(reportText(slotError));
       const slot = frame[5];
+      /*
+       * As the device does: an RSA wipe zeroes the key but keeps its type, so
+       * the slot goes on answering - with the product of two keystream
+       * halves, not a modulus (see probeKeySlot's smallFactorOf).
+       */
+      if (slot >= 1 && slot <= 4 && pubKeys[slot]) pubKeys[slot] = wipedModulus(pubKeys[slot].length);
       return pipe.deliver(reportText(
         slot >= 1 && slot <= 4
           ? 'Successfully wiped RSA Private Key'

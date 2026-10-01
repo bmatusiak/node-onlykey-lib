@@ -1122,7 +1122,7 @@ COMMANDS.keychain = {
           const label = labels.get(slot) || '';
           const tag = keychain.tag.parseTag(label);
           const p = await device.probeKeySlot(slot, { hint: tag && tag.hint });
-          const what = p.kind === 'rsa' ? `rsa ${p.bits}` : p.kind;
+          const what = p.kind === 'rsa' ? `rsa ${p.bits}` : p.wiped ? 'wiped' : p.kind;
           const fp = p.publicKey ? keychain.list.fingerprint(p.publicKey) : '';
           io.out(`${slotName(slot).padEnd(6)} ${what.padEnd(10)} ${label.padEnd(16)} ${fp}`.trimEnd());
         }

@@ -37,7 +37,7 @@ const sent = (fw, msg) => fw.writes.filter((w) => w.data[4] === msg).map((w) => 
 test('keychain list: every key slot, what it holds, its label and fingerprint', async () => {
   const ed = ed25519.getPublicKey(crypto.randomBytes(32));
   const r = await run(['keychain', 'list'], {
-    pubKeys: { 101: ed, 2: crypto.randomBytes(256) },
+    pubKeys: { 101: ed, 2: Buffer.from(crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ format: 'jwk' }).n, 'base64url') },
     keyLabels: { 29: 'ssh:laptop', 26: 'Work key' },
     keyKinds: { 101: 'ed25519' },
     converted: { 101: crypto.randomBytes(32) },

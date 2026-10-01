@@ -64,8 +64,15 @@ test('a label that is not a tag is someone\'s own name, left alone', () => {
 
 /* ------------------------------------------------------------ probe */
 
+/* A real RSA modulus (two primes) - a random one would read as a wiped slot. */
+function realModulus() {
+  const { generateKeyPairSync } = require('node:crypto');
+  const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  return Uint8Array.from(Buffer.from(publicKey.export({ format: 'jwk' }).n, 'base64url'));
+}
+
 test('probeKeySlot: empty, composite and RSA slots, from the device\'s own answers', async () => {
-  const pipe = fakeFirmware({ pubKeys: { 2: random(256) }, keyKinds: { 3: 'composite' } });
+  const pipe = fakeFirmware({ pubKeys: { 2: realModulus() }, keyKinds: { 3: 'composite' } });
   const app = await start(pipe);
   const { device } = app.services;
   assert.deepEqual(await device.probeKeySlot(1), { slot: 1, kind: 'empty' });
@@ -74,6 +81,17 @@ test('probeKeySlot: empty, composite and RSA slots, from the device\'s own answe
   const rsa = await device.probeKeySlot(2);
   assert.equal(rsa.kind, 'rsa');
   assert.equal(rsa.bits, 2048);
+  await app.destroy();
+});
+
+test('probeKeySlot reads a WIPED RSA slot as empty, though the device still answers', async () => {
+  const pipe = fakeFirmware({ pubKeys: { 2: realModulus() } });
+  const app = await start(pipe);
+  const { device } = app.services;
+  assert.equal((await device.probeKeySlot(2)).kind, 'rsa');
+  await device.wipeKey(2);
+  assert.deepEqual(await device.probeKeySlot(2), { slot: 2, kind: 'empty', wiped: true, bits: 2048 });
+  /* the moduli read off the soft key: the wiped RSA3 and the real RSA1 */
   await app.destroy();
 });
 

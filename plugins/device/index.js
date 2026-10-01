@@ -720,6 +720,34 @@ const BACKUP_REFUSALS = [
 
   const sameBytes = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
+  /*
+   * A WIPED RSA SLOT STILL ANSWERS WITH A "KEY". OKWIPEPRIV zeroes the slot's
+   * flash (rsa_priv_flash wipe -> flash_modify) but leaves its key type in
+   * EEPROM, so okcore_flashget_RSA still finds a type, AES-GCM-"decrypts" the
+   * zeros into keystream, takes that as p and q, and rsa_getpub answers their
+   * product (libraries 9bdba26; seen on the soft key 2026-10-01: RSA3 wiped,
+   * then answering a different 3072-bit modulus).
+   *
+   * A real modulus is the product of two large primes: no small prime divides
+   * it. A product of two random numbers almost always has one (each half
+   * avoids every prime below 2000 with odds of about 7%, so both about 0.5%).
+   * The wiped RSA3 divided by 3, 7, 11 and 43; the real RSA1 by none. So the
+   * test is a remainder by each small prime, byte by byte - no BigInt.
+   */
+  const SMALL_PRIMES = (() => {
+    const out = [];
+    for (let n = 2; n < 2000; n++) if (out.every((p) => n % p)) out.push(n);
+    return out;
+  })();
+  function smallFactorOf(modulus) {
+    for (const p of SMALL_PRIMES) {
+      let r = 0;
+      for (const b of modulus) r = (r * 256 + b) % p;
+      if (r === 0) return p;
+    }
+    return null;
+  }
+
   /**
    * What a key slot holds, worked out from its public key - the device never
    * says (no command returns the stored type byte). Out of config mode only.
@@ -727,6 +755,8 @@ const BACKUP_REFUSALS = [
    *   empty      "Error no RSA/ECC Private Key set in this slot"
    *   composite  "Error use OKGETPUBKEY PQC for composite keys" (RSA slots)
    *   rsa        the modulus; bits = its length
+   *   empty + wiped   an RSA slot that was wiped: the device still answers,
+   *              with a modulus no real key has (see smallFactorOf)
    *   p256 / secp256k1   64 bytes that are a point on that curve
    *   ed25519 / x25519   otherwise 32 bytes; asked again with field 4 (the
    *              Curve25519 conversion, okcrypto_geteccpubkey) - only an
@@ -743,7 +773,7 @@ const BACKUP_REFUSALS = [
    *
    * @param {number|string} slotId
    * @param {{hint?: string|null, timeoutMs?: number, quietMs?: number}} [opts]
-   * @returns {Promise<{slot: number, kind: string, bits?: number, publicKey?: Uint8Array}>}
+   * @returns {Promise<{slot: number, kind: string, bits?: number, wiped?: boolean, publicKey?: Uint8Array}>}
    */
   async function probeKeySlot(slotId, { hint = null, timeoutMs = 4000, quietMs = 300 } = {}) {
     const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
@@ -768,6 +798,7 @@ const BACKUP_REFUSALS = [
     }
     const data = first.data;
     if (rsaSlot) {
+      if (smallFactorOf(data) !== null) return { slot, kind: 'empty', wiped: true, bits: data.length * 8 };
       return { slot, kind: 'rsa', bits: data.length * 8, publicKey: data };
     }
     if (first.reports === 1) {
