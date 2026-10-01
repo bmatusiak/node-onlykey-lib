@@ -17,6 +17,22 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **Key Chain L1: naming and probing key slots.** New `./keychain` export with
+  `tag` - the record of what a slot is, kept in the key's own 16-byte label as
+  `<kind>:<name>` (`pgp`, `ssh`, `age`, `xwg`, `mlk`, `pqc`, `sig`, `enc`);
+  a label that is not a tag is left alone. `device.probeKeySlot(slot, { hint })`
+  works out what a slot holds from its public key, since no command returns the
+  stored type: empty, composite, RSA (bits), P-256 / secp256k1 (which curve the
+  point is on), Ed25519 / X25519 (asked again with the Curve25519 conversion),
+  ML-KEM-768 / X-Wing (19 reports; told apart by the bytes the firmware leaves
+  in its reply buffer, okcore.cpp:2568-2573, or by the tag's hint). Silence is
+  reported as locked or config mode, never as empty. `device.setKeyLabel(slot,
+  label)` names or blanks a slot without touching the key; `generateEccKey` and
+  `generateKey` take `{ label }` and write it after the key. One label writer
+  for loadKey, the generators and setKeyLabel. The fake firmware models the
+  uncleared reply buffer, the conversion, the composite refusal and the
+  config-mode drop.
+
 - **`onlykey-js setbackuppassphrase [--latin-passphrase]`** (N-1 escape hatch,
   owner's decision 2026-10-01). Sets the backup key from a passphrase asked for
   twice (never argv), UTF-8 by default. `--latin-passphrase` hashes the bytes

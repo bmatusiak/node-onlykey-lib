@@ -44,6 +44,8 @@ const CONSOLE_PROBE_ECHO = new RegExp(
   `I received from DEBUG: *${CONSOLE_PROBE_BYTE.charCodeAt(0)}`);
 const { IFACE } = require('../../src/transport/contract');
 const version = require('../../src/device/version');
+const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
+const { secp256k1 } = require('../../src/vendor/exports/@noble/curves/secp256k1.js');
 /*
  * The Preferences and Advanced surface - PREFERENCES and the per-firmware
  * row shapes - is data in src/device/preferences.js, exported from the
@@ -653,6 +655,147 @@ const BACKUP_REFUSALS = [
     });
   }
 
+  /**
+   * Write - or blank, with '' - the label of a key slot (RSA1-4, ECC1-16;
+   * label indexes 25..44). ONE helper for loadKey, the generators,
+   * setKeyLabel and wipeKey, so all four use the same TEXT encoding and
+   * sixteen-character cap (planSlotWrites; EElen_label, okeeprom.h:95) and
+   * the same wait for the device's answer. OKSETSLOT is allowed in config
+   * mode, so a label can follow a key written there.
+   */
+  async function writeKeyLabel(slot, label, { timeoutMs = 8000 } = {}) {
+    const labelIndex = slots.labelIndexForKeySlot(slot);
+    if (labelIndex === null) {
+      throw new Error(`slot ${slot} has no key label - only RSA1-4 and ECC1-16 (101-116) do`);
+    }
+    const frame = label === ''
+      ? okmsg.build({ msg: MSG.OKSETSLOT, slot: labelIndex, field: FIELD.LABEL, payload: [] })
+      : slotConfig.planSlotWrites({ label: String(label) }, labelIndex)[0].frame;
+    const reply = await transport.request({
+      iface: IFACE.VENDOR, data: frame, timeoutMs, match: isSlotAcknowledgement,
+    });
+    const said = okmsg.text(reply).trim();
+    if (/^Error/i.test(said)) throw okmsg.deviceError(said, `the label of slot ${slot}`);
+    return said;
+  }
+
+  /*
+   * One OKGETPUBKEY, every report it produces: the reply has no length and no
+   * terminator (okcrypto_getpubkey), so it ends when the bus goes quiet. A
+   * refusal is a sentence; silence is config mode, which drops OKGETPUBKEY
+   * without a word (okcore.cpp:335-340).
+   */
+  async function collectPublicKeyReply(slot, field, { timeoutMs, quietMs }) {
+    const frame = okmsg.build({ msg: MSG.OKGETPUBKEY, slot, field });
+    const reports = [];
+    let error = null;
+    const done = new Promise((resolve) => {
+      let quiet = null;
+      const giveUp = setTimeout(finish, timeoutMs);
+      const off = transport.on('report', (event) => {
+        if (event.iface !== IFACE.VENDOR) return;
+        if (!reports.length && !error) {
+          const state = okmsg.parseState(event.data);
+          if (state.state === 'unlocked' || state.state === 'locked'
+              || state.state === 'uninitialized' || state.state === 'bootloader') return;
+          if (state.state === 'error') { error = state.raw; finish(); return; }
+        }
+        reports.push(Uint8Array.from(event.data));
+        clearTimeout(quiet);
+        quiet = setTimeout(finish, quietMs);
+      });
+      function finish() {
+        clearTimeout(quiet);
+        clearTimeout(giveUp);
+        off();
+        resolve();
+      }
+    });
+    await transport.write(IFACE.VENDOR, frame);
+    await done;
+    const data = new Uint8Array(reports.length * 64);
+    reports.forEach((r, i) => data.set(r.subarray(0, 64), i * 64));
+    return { error, reports: reports.length, data };
+  }
+
+  const sameBytes = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+  /**
+   * What a key slot holds, worked out from its public key - the device never
+   * says (no command returns the stored type byte). Out of config mode only.
+   *
+   *   empty      "Error no RSA/ECC Private Key set in this slot"
+   *   composite  "Error use OKGETPUBKEY PQC for composite keys" (RSA slots)
+   *   rsa        the modulus; bits = its length
+   *   p256 / secp256k1   64 bytes that are a point on that curve
+   *   ed25519 / x25519   otherwise 32 bytes; asked again with field 4 (the
+   *              Curve25519 conversion, okcrypto_geteccpubkey) - only an
+   *              X25519 slot answers the same key twice
+   *   mlkem768 / xwing   19 reports. X-Wing's last 32 bytes are its X25519
+   *              key; ML-KEM's are LEFTOVER: send_transport_response copies
+   *              a short final piece over resp_buffer without clearing it
+   *              (okcore.cpp:2568-2573), so they repeat the previous report's
+   *              second half. `hint` (a Key Chain label tag) wins when given.
+   *
+   * The leftover is also why a 32-byte key cannot be told from a 64-byte one
+   * by trailing zeros - there are none to count on.
+   *
+   * @param {number|string} slotId
+   * @param {{hint?: string|null, timeoutMs?: number, quietMs?: number}} [opts]
+   * @returns {Promise<{slot: number, kind: string, bits?: number, publicKey?: Uint8Array}>}
+   */
+  async function probeKeySlot(slotId, { hint = null, timeoutMs = 4000, quietMs = 300 } = {}) {
+    const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
+    const rsaSlot = slot >= 1 && slot <= 4;
+    if (!rsaSlot && !(slot >= 101 && slot <= 116)) {
+      throw new Error(`only RSA1-4 and ECC1-16 (101-116) hold keys a host can probe; ${slot} is not one`);
+    }
+    const settle = () => new Promise((r) => setTimeout(r, 60));
+    const first = await collectPublicKeyReply(slot, 0, { timeoutMs, quietMs });
+    await settle();
+    if (first.error) {
+      if (/no (RSA|ECC) Private Key set/i.test(first.error)) return { slot, kind: 'empty' };
+      if (/composite/i.test(first.error)) return { slot, kind: 'composite' };
+      throw okmsg.deviceError(first.error, `probe slot ${slot}`);
+    }
+    if (!first.reports) {
+      throw new Error(
+        `slot ${slot} did not answer OKGETPUBKEY within ${timeoutMs}ms. A LOCKED key answers nothing (it `
+        + 'only broadcasts INITIALIZED, OnlyKey.ino:478), and in config mode the key drops OKGETPUBKEY '
+        + 'without a word - unlock it, or restart it to leave config mode, then probe again.',
+      );
+    }
+    const data = first.data;
+    if (rsaSlot) {
+      return { slot, kind: 'rsa', bits: data.length * 8, publicKey: data };
+    }
+    if (first.reports === 1) {
+      const point = new Uint8Array(65);
+      point[0] = 0x04;
+      point.set(data.subarray(0, 64), 1);
+      for (const [kind, curve] of [['p256', p256], ['secp256k1', secp256k1]]) {
+        try {
+          curve.Point.fromBytes(point);
+          return { slot, kind, publicKey: data.slice(0, 64) };
+        } catch (_) { /* not on this curve */ }
+      }
+      const key = data.slice(0, 32);
+      const again = await collectPublicKeyReply(slot, deviceKeys.KEY_TYPE.CURVE25519, { timeoutMs, quietMs });
+      await settle();
+      const same = again.reports === 1 && sameBytes(again.data.subarray(0, 32), key);
+      return { slot, kind: same ? 'x25519' : 'ed25519', publicKey: key };
+    }
+    if (first.reports === 19) {
+      if (hint === 'mlkem768') return { slot, kind: 'mlkem768', publicKey: data.slice(0, 1184) };
+      if (hint === 'xwing') return { slot, kind: 'xwing', publicKey: data.slice(0, 1216) };
+      const leftover = sameBytes(data.subarray(1184, 1216), data.subarray(1120, 1152));
+      return leftover
+        ? { slot, kind: 'mlkem768', publicKey: data.slice(0, 1184) }
+        : { slot, kind: 'xwing', publicKey: data.slice(0, 1216) };
+    }
+    return { slot, kind: 'unknown', publicKey: data };
+  }
+
   const GENERATE_TRIGGER = Uint8Array.from([
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   ]);
@@ -746,6 +889,7 @@ const BACKUP_REFUSALS = [
      */
     quietMs = 250,
     quietTimeoutMs = 5000,
+    label = null,
   } = {}) {
     const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
 
@@ -859,6 +1003,20 @@ const BACKUP_REFUSALS = [
     }
     if (settleMs > 0) await new Promise((r) => setTimeout(r, settleMs));
     progress('publicKey', { slot, bytes: key.length });
+    /*
+     * The name AFTER the key, as loadKey does: a label on a slot whose key
+     * failed would be a lie. If only the label fails, the key exists - say so
+     * and hand its public half back on the error.
+     */
+    if (label !== null) {
+      try {
+        await writeKeyLabel(slot, label);
+      } catch (err) {
+        err.publicKey = key;
+        err.message = `the key was generated in slot ${slot} but its label was not written: ${err.message}`;
+        throw err;
+      }
+    }
     return key;
   }
 
@@ -1985,26 +2143,13 @@ const BACKUP_REFUSALS = [
        * failed would be the same lie wipeKey used to leave behind.
        */
       let labelResponse = null;
-      const labelIndex = slots.labelIndexForKeySlot(slot);
-      if (label !== null && labelIndex !== null) {
-        /*
-         * Through planSlotWrites, not by hand: a key label is an ordinary
-         * slot label at a different index, so it gets the same TEXT
-         * encoding and the same sixteen-character cap (EElen_label,
-         * okeeprom.h:95) rather than a second implementation of both.
-         */
-        const [write] = slotConfig.planSlotWrites({ label: String(label) }, labelIndex);
-        const reply = await transport.request({
-          iface: IFACE.VENDOR,
-          data: write.frame,
-          timeoutMs: ackTimeoutMs,
-          match: isSlotAcknowledgement,
-        });
-        labelResponse = okmsg.text(reply).trim();
-        if (/^Error/i.test(labelResponse)) {
-          throw okmsg.deviceError(
-            labelResponse, `the key went into slot ${slot} but its name did not`,
-          );
+      if (label !== null && slots.labelIndexForKeySlot(slot) !== null) {
+        /* writeKeyLabel: the same encoding and cap as any slot label. */
+        try {
+          labelResponse = await writeKeyLabel(slot, label, { timeoutMs: ackTimeoutMs });
+        } catch (err) {
+          if (!err.deviceText) throw err;
+          throw okmsg.deviceError(err.deviceText, `the key went into slot ${slot} but its name did not`);
         }
       }
 
@@ -2327,6 +2472,7 @@ const BACKUP_REFUSALS = [
      */
     async generateEccKey(slotId, keyType, {
       signature = false, decryption = false, backup = false, ackTimeoutMs = 8000, timeoutMs,
+      label = null,
     } = {}) {
       const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
       if (!(slot >= 101 && slot <= 116)) {
@@ -2363,7 +2509,7 @@ const BACKUP_REFUSALS = [
 
       let result;
       try {
-        result = await device.loadKey(slot, { type, key: ECC_GENERATE_TRIGGER }, { ackTimeoutMs, ackRetries: 0 });
+        result = await device.loadKey(slot, { type, key: ECC_GENERATE_TRIGGER }, { ackTimeoutMs, ackRetries: 0, label });
       } catch (err) {
         if (err.deviceText) throw err;
         throw new Error(
@@ -2374,8 +2520,22 @@ const BACKUP_REFUSALS = [
         );
       }
       progress('generateEccKey', { slot, type });
-      return { slot, type, response: result.response };
+      return { slot, type, response: result.response, ...(label !== null ? { label: result.label } : {}) };
     },
+
+    /**
+     * Name a key slot, or blank its name with ''. Does not touch the key.
+     * Key Chain keeps its record of what a slot is here (a short tag), so a
+     * rename must not be a reload.
+     */
+    async setKeyLabel(slotId, label, { timeoutMs = 8000 } = {}) {
+      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
+      const response = await writeKeyLabel(slot, label, { timeoutMs });
+      progress('keyLabel', { slot, label });
+      return { slot, label, response };
+    },
+
+    probeKeySlot,
 
     async getPublicKey(slotId, opts = {}) {
       const { retries = 1, ...rest } = opts;

@@ -79,6 +79,16 @@ function fakeFirmware(opts = {}) {
     version = 'v3.0.4-prodc',
     /* slot -> public key bytes, for OKGETPUBKEY. Absent means an empty slot. */
     pubKeys = {},
+    /*
+     * slot -> what probeKeySlot has to tell apart: 'ed25519' (answers its
+     * X25519 conversion, `converted[slot]`, when asked with field 4),
+     * 'composite' (an RSA slot that refuses OKGETPUBKEY with its own
+     * sentence). Anything else answers `pubKeys[slot]` whatever the field.
+     */
+    keyKinds = {},
+    converted = {},
+    /* Config mode: OKGETPUBKEY is dropped without a word (okcore.cpp:335-340). */
+    inConfigMode = false,
     /* label index (25..44) -> text, for the KEY label list. */
     keyLabels = {},
     /*
@@ -95,6 +105,14 @@ function fakeFirmware(opts = {}) {
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
+  /*
+   * resp_buffer: send_transport_response copies each 64-byte piece over it
+   * WITHOUT clearing it first (okcore.cpp:2568-2573), so a short last piece
+   * leaves the previous reply's bytes behind it. Modelled because probeKeySlot
+   * leans on exactly that to tell ML-KEM from X-Wing, and must not lean on
+   * zeros that the real key never sends.
+   */
+  const respBuffer = new Uint8Array(64).fill(0xa5);
   let generations = 0;
   /* Agent derivation: the slot stream being assembled, and every completed payload. */
   let agentStream = null;
@@ -326,8 +344,14 @@ function fakeFirmware(opts = {}) {
        * (okcore.cpp:5245). `pubKeys` maps slot -> bytes; a slot not in it is
        * empty, which is how a caller asks whether a slot is free.
        */
+      if (inConfigMode) return undefined;
       const slot = frame[5];
-      const key = pubKeys[slot];
+      if (keyKinds[slot] === 'composite') {
+        return pipe.deliver(reportText('Error use OKGETPUBKEY PQC for composite keys'));
+      }
+      const key = keyKinds[slot] === 'ed25519' && frame[6] === 4 && converted[slot]
+        ? converted[slot]
+        : pubKeys[slot];
       if (!key) {
         return pipe.deliver(reportText(
           slot >= 1 && slot <= 4
@@ -336,9 +360,8 @@ function fakeFirmware(opts = {}) {
         ));
       }
       for (let at = 0; at < key.length; at += 64) {
-        const report = new Uint8Array(64);
-        report.set(key.subarray(at, Math.min(at + 64, key.length)));
-        pipe.deliver(report);
+        respBuffer.set(key.subarray(at, Math.min(at + 64, key.length)));
+        pipe.deliver(Uint8Array.from(respBuffer));
       }
       return undefined;
     }
