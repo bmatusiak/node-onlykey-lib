@@ -6,3 +6,5 @@ export let messages: typeof import("./pgp_messages");
 export let vault: typeof import("./vault");
 export let okconnect: typeof import("./okconnect");
 export let x25519guard: typeof import("./x25519guard");
+export let pgpCert: typeof import("./pgp-cert");
+export let ssh: typeof import("./ssh-pub");

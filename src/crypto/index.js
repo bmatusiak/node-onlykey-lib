@@ -24,4 +24,11 @@ module.exports = {
   okconnect: require('./okconnect'),
   /* The host-side low-order X25519 guard, for a GUI doing its own ECDH (G-12). */
   x25519guard: require('./x25519guard'),
+  /*
+   * Key Chain's public artifacts. pgpCert takes the openpgp instance as an
+   * argument like composite does; ssh is plain bytes. The classic age1...
+   * recipient is pqc.encodeX25519Recipient, beside the bech32 it uses.
+   */
+  pgpCert: require('./pgp-cert'),
+  ssh: require('./ssh-pub'),
 };

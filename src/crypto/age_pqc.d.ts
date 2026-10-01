@@ -13,6 +13,9 @@ export function xwingEncapsHost(pk: any): {
 export function deriveLabelTag(label: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export function encodeRecipient(pubkey: any): string;
 export function decodeRecipient(recipient: any): Uint8Array<ArrayBuffer>;
+export function encodeX25519Recipient(pubkey: any): string;
+export function decodeX25519Recipient(recipient: any): Uint8Array<ArrayBuffer>;
+export const X25519_RECIPIENT_HRP: "age";
 export function encodeIdentity(label: any): string;
 /**
  * @param {number} slot        101..116

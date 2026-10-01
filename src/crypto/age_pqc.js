@@ -262,6 +262,34 @@ function decodeRecipient(recipient) {
     return data;
 }
 
+// ---- classic age X25519 recipient: age1... --------------------------------
+// The age spec's native recipient (C2SP age, "The X25519 recipient type"):
+// Bech32 - BIP-173's checksum, NOT Bech32m - with HRP "age" over the 32-byte
+// X25519 public key, lowercase. What `age-keygen` prints as "public key:"
+// and `age -r` takes, so a device's X25519 key (Key Chain) can be handed to
+// any age implementation with no plugin. The same bech32 as above; the
+// "1" separator is the LAST "1" in the string and bech32's alphabet has none,
+// so "age1..." and "age1onlykey1..." can never be read as each other.
+// Checked against age-keygen's own published pair (test/ssh-pub.test.js).
+const X25519_RECIPIENT_HRP = 'age';
+
+function encodeX25519Recipient(pubkey) {
+    const key = Uint8Array.from(pubkey || []);
+    if (key.length !== 32) throw new Error(`an age X25519 recipient is a 32-byte public key, not ${key.length} bytes`);
+    return bech32Encode(X25519_RECIPIENT_HRP, key);
+}
+
+function decodeX25519Recipient(recipient) {
+    // No toLowerCase: age refuses an uppercase or mixed-case recipient, and
+    // bech32Decode would quietly accept one.
+    const text = String(recipient).trim();
+    const { hrp, data } = text === text.toLowerCase() ? bech32Decode(text) : { hrp: null, data: null };
+    if (hrp !== X25519_RECIPIENT_HRP || data === null || data.length !== 32) {
+        throw new Error(`not a valid age X25519 recipient (age1...): ${recipient}`);
+    }
+    return data;
+}
+
 // ---- derived age identity encoding (label-based, no slot) ----------------
 // Mirrors derived_xwing.py's encode_identity/decode_identity exactly: real
 // bech32, HRP == the SAME "age-plugin-onlykey-" slot-identity HRP (age
@@ -397,6 +425,9 @@ module.exports = {
     deriveLabelTag,
     encodeRecipient,
     decodeRecipient,
+    encodeX25519Recipient,
+    decodeX25519Recipient,
+    X25519_RECIPIENT_HRP,
     encodeIdentity,
     encodeSlotIdentity,
     decodeIdentity,

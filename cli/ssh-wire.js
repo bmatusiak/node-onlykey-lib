@@ -14,15 +14,16 @@
  * RFC 8709 (Ed25519). Where lib-agent differs from them, the spec wins and the
  * difference is named at the spot it happens.
  *
- * WHY NOT src/. The encoding needs no Node built-in and could live there, but
- * an ssh-agent is a desktop process by nature - a phone or a page has no ssh
- * to serve - and cli/ is where the one consumer is. Buffer is used freely for
- * that reason. If a GUI ever wants these blobs (to SHOW an authorized_keys
- * line, say), the byte helpers move to src/ with Uint8Array and this file
- * re-exports them.
+ * WHAT IS IN src/. The key blobs and their primitives: Key Chain shows an
+ * authorized_keys line in a GUI, so those moved to src/crypto/ssh-pub.js with
+ * Uint8Array (Hermes has no Buffer) and this file re-exports them as Buffer.
+ * The agent protocol itself - framing, the reader, signature blobs, the
+ * identity grammar - stays here: an ssh-agent is a desktop process by
+ * nature, and a phone or a page has no ssh to serve.
  *
- * DEPENDENCY-LESS on purpose: an agent holds the path by which a server
- * decides who you are, so everything in it is here to be read.
+ * DEPENDENCY-LESS on purpose (beyond that one sibling): an agent holds the
+ * path by which a server decides who you are, so everything in it is here to
+ * be read.
  */
 'use strict';
 
@@ -51,60 +52,30 @@ const MSG = {
 const MAX_MESSAGE = 256 * 1024;
 
 /*
- * The two key types, by the names each side uses for them.
- *
- *   curve    lib-agent's name (`-e ed25519`, `-e nist256p1`), which is also
- *            what it prints in the key comment `<ssh://u@h|ed25519>`
- *   sshName  the SSH key-type string that opens every blob
- *   keyType  the OnlyKey's derivation key type (src/protocol/agent.js)
- *
- * secp256k1 and X25519 are derivable too, but ssh has no key type for either.
+ * The key types and the RFC 4251 primitives are src/crypto/ssh-pub.js's - the
+ * SAME encoder Key Chain uses to show an authorized_keys line in a GUI, moved
+ * there with Uint8Array as this header once said they would be. Re-exported
+ * here with Buffer back on them, because the agent and its tests use Buffer
+ * methods on what comes out. The rules (mpint's sign byte and canonical form,
+ * the blob layouts) are documented at their one home there.
  */
-const CURVES = {
-  ed25519: { curve: 'ed25519', sshName: 'ssh-ed25519', keyType: 1 },
-  nist256p1: { curve: 'nist256p1', sshName: 'ecdsa-sha2-nistp256', keyType: 2, sshCurve: 'nistp256' },
-};
+const sshPub = require('../src/crypto/ssh-pub.js');
+
+const { CURVES, curveInfo } = sshPub;
 
 /* ------------------------------------------------------------ primitives */
 
 const toBuf = (v) => (typeof v === 'string' ? Buffer.from(v, 'utf8') : Buffer.from(v));
+const buf = (u8) => Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength);
 
 /** RFC 4251 uint32: four bytes, big-endian. */
-function uint32(n) {
-  const b = Buffer.alloc(4);
-  b.writeUInt32BE(n >>> 0, 0);
-  return b;
-}
+const uint32 = (n) => buf(sshPub.uint32(n));
 
 /** RFC 4251 string: a uint32 length, then the bytes. */
-function string(v) {
-  const bytes = toBuf(v);
-  return Buffer.concat([uint32(bytes.length), bytes]);
-}
+const string = (v) => buf(sshPub.string(v));
 
-/**
- * RFC 4251 mpint, from an UNSIGNED big-endian magnitude.
- *
- * The rules that make this more than `string()`: two's complement, so a
- * positive number whose top bit is set gets a 0x00 in front, or it would read
- * as negative; and no UNNECESSARY leading bytes - "0x00 or 0xff are not
- * allowed" beyond that one - with zero as the empty string.
- *
- * lib-agent does not follow the second rule. formats.py ecdsa_verifier()
- * frames `b'\x00' + r` and `b'\x00' + s` unconditionally, so half its
- * signatures carry a redundant zero and any r below 2^248 keeps its own
- * leading zero bytes too. OpenSSH's sshbuf_get_bignum2_bytes_direct() strips
- * leading zeros and so accepts both; a stricter verifier (RFC 4251 says the
- * encoding is canonical) need not. This one emits the canonical form.
- */
-function mpint(magnitude) {
-  let b = toBuf(magnitude);
-  let i = 0;
-  while (i < b.length && b[i] === 0) i += 1;
-  b = b.subarray(i);
-  if (b.length && (b[0] & 0x80)) b = Buffer.concat([Buffer.of(0), b]);
-  return string(b);
-}
+/** RFC 4251 mpint, from an UNSIGNED big-endian magnitude (src/crypto/ssh-pub.js). */
+const mpint = (magnitude) => buf(sshPub.mpint(magnitude));
 
 /** One whole agent message on the wire: a uint32 length, then the message. */
 function frame(...parts) {
@@ -183,32 +154,8 @@ function createDeframer(onMessage, { max = MAX_MESSAGE } = {}) {
 
 /* ------------------------------------------------------------ blobs */
 
-function curveInfo(curve) {
-  const info = CURVES[curve];
-  if (!info) throw new Error(`the SSH agent offers ${Object.keys(CURVES).join(' and ')}, not ${curve}`);
-  return info;
-}
-
-/**
- * The SSH public-key blob for a key the OnlyKey returned.
- *
- *   ssh-ed25519          string "ssh-ed25519", string key(32)      RFC 8709
- *   ecdsa-sha2-nistp256  string name, string "nistp256",
- *                        string 0x04 || X || Y                     RFC 5656 3.1
- *
- * The device's P-256 reply is X||Y with no prefix (src/protocol/agent.js), so
- * the uncompressed-point 0x04 is added here.
- */
-function publicKeyBlob(curve, raw) {
-  const info = curveInfo(curve);
-  const key = toBuf(raw);
-  if (info.keyType === 1) {
-    if (key.length !== 32) throw new Error(`an Ed25519 public key is 32 bytes, not ${key.length}`);
-    return Buffer.concat([string(info.sshName), string(key)]);
-  }
-  if (key.length !== 64) throw new Error(`a P-256 public key from the device is X||Y, 64 bytes, not ${key.length}`);
-  return Buffer.concat([string(info.sshName), string(info.sshCurve), string(Buffer.concat([Buffer.of(4), key]))]);
-}
+/** The SSH public-key blob for a key the OnlyKey returned (src/crypto/ssh-pub.js). */
+const publicKeyBlob = (curve, raw) => buf(sshPub.publicKeyBlob(curve, raw));
 
 /**
  * The signature blob ssh sends the server, from the device's 64 bytes.
@@ -228,9 +175,7 @@ function signatureBlob(curve, sig) {
 }
 
 /** An authorized_keys line: type, base64 blob, comment - lib-agent's layout. */
-function publicKeyLine(curve, raw, comment) {
-  return `${curveInfo(curve).sshName} ${publicKeyBlob(curve, raw).toString('base64')} ${comment}`;
-}
+const { publicKeyLine } = sshPub;
 
 /* ------------------------------------------------------------ identities */
 

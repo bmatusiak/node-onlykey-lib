@@ -57,6 +57,19 @@ the commit that release ended at.
   uncleared reply buffer, the conversion, the composite refusal and the
   config-mode drop.
 
+- **Key Chain L2: public artifacts in `src/`, Hermes-clean** (no Node crypto,
+  no Buffer). `crypto.pgpCert.buildCertificate(openpgp, opts)` is the GPG
+  certificate builder moved out of `cli/gpg-key.js` - byte-identical output
+  (vectors frozen from the CLI before the move), the device still signs through
+  the openpgp `signer` hook, and new optional `expires` (Key Expiration Time
+  subpacket, absent by default), `userIds` (several; the first is marked
+  primary) and a `created` that defaults to 0 and takes a Date. `crypto.ssh`
+  is the authorized_keys line builder from `cli/ssh-wire.js` (Ed25519, P-256,
+  unchanged lines) plus `rsaPublicKeyLine(modulus)` (`ssh-rsa`, e = 65537,
+  checked against ssh-keygen). `crypto.pqc.encodeX25519Recipient` gives the
+  classic age `age1...` recipient (checked against age-keygen's published
+  pair). `cli/gpg-key.js` and `cli/ssh-wire.js` now import these: one copy.
+
 - **`onlykey-js setbackuppassphrase [--latin-passphrase]`** (N-1 escape hatch,
   owner's decision 2026-10-01). Sets the backup key from a passphrase asked for
   twice (never argv), UTF-8 by default. `--latin-passphrase` hashes the bytes
