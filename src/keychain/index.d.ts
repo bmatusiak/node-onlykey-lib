@@ -7,3 +7,4 @@ declare let _export: {
     encryptedPem: typeof import("../crypto/pkcs8").encryptedPem;
 };
 export { _export as export };
+export declare let generate: typeof import("./generate");

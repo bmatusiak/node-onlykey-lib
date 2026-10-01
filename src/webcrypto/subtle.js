@@ -46,6 +46,17 @@
  *
  * So: "no RSA here" means "no RSA key generation", and nothing else.
  *
+ * ## ...unless the host lends a generator (Key Chain, 2026-10-01)
+ *
+ * `install({ rsaGenerate })` / `createSubtle({ rsaGenerate })`: the host
+ * supplies `async (bits, e) => ({ p, q })` - on Android, the platform's own
+ * vetted RSA generator through a native module (owner's choice over a
+ * JavaScript prime search). This shim completes the key from the primes
+ * (src/crypto/rsa.js), checks the modulus is the size asked for, and serves
+ * it as the JWK openpgp's generate$b reads - so PGP RSA keys, and Key Chain's
+ * RSA keys, are made through one path on every platform. Without the hook,
+ * RSA generation is still refused exactly as before.
+ *
  * ## Fidelity
  *
  * Checked against Node's own `crypto.subtle` rather than against this file's
@@ -64,6 +75,7 @@ const { ed25519, x25519 } = require('../vendor/exports/@noble/curves/ed25519.js'
 const { p256, p384, p521 } = require('../vendor/exports/@noble/curves/nist.js');
 
 const { toBase64Url, fromBase64Url } = require('../bytes');
+const rsa = require('../crypto/rsa');
 
 /* ------------------------------------------------------------------ errors */
 
@@ -157,7 +169,7 @@ function requireUsage(key, usage) {
 
 /* ------------------------------------------------------------------- subtle */
 
-function createSubtle() {
+function createSubtle({ rsaGenerate = null } = {}) {
   const subtle = {
     async digest(algorithm, data) {
       return bufferOf(hashFor(algorithm)(bytes(data)));
@@ -226,6 +238,17 @@ function createSubtle() {
 
       if (format !== 'jwk') throw notSupported(`exportKey format ${format}`);
 
+      /* Only a key this shim generated through the host's hook carries RSA material. */
+      if (name.startsWith('RSA') && key._material && key._material.rsa) {
+        const k = key._material.rsa;
+        const b64 = (v) => toBase64Url(rsa.bigTo(v));
+        const jwk = { kty: 'RSA', n: b64(k.n), e: b64(k.e), ext: true };
+        if (key.type === 'private') {
+          Object.assign(jwk, { d: b64(k.d), p: b64(k.p), q: b64(k.q), dp: b64(k.dp), dq: b64(k.dq), qi: b64(k.qi) });
+        }
+        return jwk;
+      }
+
       if (key.type === 'secret') {
         return { kty: 'oct', k: toBase64Url(key._material), ext: true };
       }
@@ -291,7 +314,21 @@ function createSubtle() {
         return makeKey('secret', algorithm, extractable, usages, randomBytes(length));
       }
 
-      if (name.startsWith('RSA')) throw notSupported('RSA');
+      if (name.startsWith('RSA')) {
+        if (typeof rsaGenerate !== 'function') throw notSupported('RSA');
+        const bits = algorithm.modulusLength;
+        const e = algorithm.publicExponent ? Number(rsa.bigFrom(bytes(algorithm.publicExponent))) : 65537;
+        const { p, q } = await rsaGenerate(bits, e);
+        const key = rsa.fromPrimes({ p, q, e });
+        if (rsa.bitLength(key.n) !== bits) {
+          throw cryptoError('OperationError',
+            `the host's RSA generator returned a ${rsa.bitLength(key.n)}-bit modulus for ${bits} bits`);
+        }
+        return {
+          privateKey: makeKey('private', algorithm, extractable, usages, { rsa: key }),
+          publicKey: makeKey('public', algorithm, true, usages, { rsa: { n: key.n, e: key.e } }),
+        };
+      }
       throw notSupported(`generateKey(${name})`);
     },
 
@@ -495,9 +532,11 @@ function randomBytes(n) {
  *   always wrong: a platform's own implementation is more complete and better
  *   tested than this one. Provided for tests that want to exercise the shim
  *   where a real one exists.
+ * @param {((bits: number, e: number) => Promise<{p: Uint8Array, q: Uint8Array}>)|null} [opts.rsaGenerate]
+ *   the host's RSA prime generator; without it RSA key generation is refused
  * @returns {{installed: boolean, reason: string}}
  */
-function install({ force = false } = {}) {
+function install({ force = false, rsaGenerate = null } = {}) {
   const g = globalThis;
   if (!g.crypto) {
     // Not writable on every runtime, so this can legitimately fail.
@@ -512,7 +551,7 @@ function install({ force = false } = {}) {
   }
   try {
     Object.defineProperty(g.crypto, 'subtle', {
-      value: createSubtle(), configurable: true, writable: true,
+      value: createSubtle({ rsaGenerate }), configurable: true, writable: true,
     });
   } catch {
     return { installed: false, reason: 'crypto.subtle is not writable on this runtime' };

@@ -1,4 +1,6 @@
-export function createSubtle(): {
+export function createSubtle({ rsaGenerate }?: {
+    rsaGenerate?: null | undefined;
+}): {
     digest(algorithm: any, data: any): Promise<any>;
     importKey(format: any, keyData: any, algorithm: any, extractable: any, usages: any): Promise<{
         type: any;
@@ -52,10 +54,16 @@ export function createSubtle(): {
  *   always wrong: a platform's own implementation is more complete and better
  *   tested than this one. Provided for tests that want to exercise the shim
  *   where a real one exists.
+ * @param {((bits: number, e: number) => Promise<{p: Uint8Array, q: Uint8Array}>)|null} [opts.rsaGenerate]
+ *   the host's RSA prime generator; without it RSA key generation is refused
  * @returns {{installed: boolean, reason: string}}
  */
-export function install({ force }?: {
+export function install({ force, rsaGenerate }?: {
     force?: boolean | undefined;
+    rsaGenerate?: ((bits: number, e: number) => Promise<{
+        p: Uint8Array;
+        q: Uint8Array;
+    }>) | null | undefined;
 }): {
     installed: boolean;
     reason: string;

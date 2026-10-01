@@ -17,6 +17,17 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **Key Chain L3: keys made on the host.** `keychain.generate.hostKey(type,
+  { bits })` makes Ed25519, X25519, P-256, secp256k1 (noble) or RSA 2048 /
+  3072 / 4096 (WebCrypto) in memory and returns the public key plus the
+  `material` `device.loadKey` takes; `wipe()` zeroes it after. The WebCrypto
+  shim takes a host RSA generator - `install({ rsaGenerate })`, `async (bits,
+  e) => ({ p, q })` - completes the key from the primes (new
+  `src/crypto/rsa.js`, shared with the PKCS#8 writer), refuses a modulus of the
+  wrong size, and serves the JWK openpgp's RSA generation reads: so under
+  Hermes (ok-rn: Android's generator) PGP RSA keys can be made at all. Without
+  the hook RSA generation is refused as before.
+
 - **Key Chain L4: encrypted private copies, both formats.** `keychain.export`:
   `encryptedPgp(privateKey, passphrase, { confirm, openpgp })` - an armored
   OpenPGP private key under OpenPGP's own passphrase protection (gpg and the

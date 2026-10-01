@@ -43,6 +43,7 @@ const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
 const { secp256k1 } = require('../vendor/exports/@noble/curves/secp256k1.js');
 const { concat, toBase64, utf8ToBytes } = require('../bytes');
 const { validateBackupPassphrase } = require('../device/keys');
+const rsa = require('./rsa');
 
 /* PBKDF2 rounds: OWASP's 2023 figure for PBKDF2-HMAC-SHA256. */
 const DEFAULT_ITERATIONS = 600000;
@@ -106,44 +107,17 @@ const OID = {
 
 /* ------------------------------------------------------------ PrivateKeyInfo */
 
-const bigFrom = (bytes) => {
-  let v = 0n;
-  for (const b of bytes) v = (v << 8n) | BigInt(b);
-  return v;
-};
-
-function modInverse(a, m) {
-  let [r0, r1] = [((a % m) + m) % m, m];
-  let [s0, s1] = [1n, 0n];
-  while (r1 !== 0n) {
-    const q = r0 / r1;
-    [r0, r1] = [r1, r0 - q * r1];
-    [s0, s1] = [s1, s0 - q * s1];
-  }
-  if (r0 !== 1n) throw new Error('RSA: e has no inverse - p and q do not make a usable key');
-  return ((s0 % m) + m) % m;
-}
-
 /**
- * RSAPrivateKey from the primes alone - which is all an OnlyKey keeps (p || q)
- * and all a generator must hand over. Everything else follows.
+ * RSAPrivateKey (RFC 8017 A.1.2) from the primes alone - which is all an
+ * OnlyKey keeps (p || q) and all a generator must hand over; rsa.fromPrimes
+ * works out the rest.
  */
 function rsaPrivateKey({ p, q, e = 65537 }) {
-  const P = bigFrom(p);
-  const Q = bigFrom(q);
-  const E = BigInt(e);
-  const n = P * Q;
-  const lambda = ((P - 1n) * (Q - 1n)) / gcd(P - 1n, Q - 1n);
-  const d = modInverse(E, lambda);
+  const k = rsa.fromPrimes({ p, q, e });
   return sequence(
-    integer(0), integer(n), integer(E), integer(d), integer(P), integer(Q),
-    integer(d % (P - 1n)), integer(d % (Q - 1n)), integer(modInverse(Q, P)),
+    integer(0), integer(k.n), integer(k.e), integer(k.d), integer(k.p), integer(k.q),
+    integer(k.dp), integer(k.dq), integer(k.qi),
   );
-}
-
-function gcd(a, b) {
-  while (b) [a, b] = [b, a % b];
-  return a;
 }
 
 /**
