@@ -15,7 +15,11 @@ flags. Nothing had failed - two copies of "the library" simply disagreed.
 The version in package.json names the release being worked on; the tag names
 the commit that release ended at.
 
-## 0.3.0 - in progress
+## 0.4.0 - in progress
+
+(nothing yet)
+
+## 0.3.0 - `eeaea46eeff55454bc1370034d7790253f560f8d` (tag `v0.3.0`)
 
 - **`device.generateEccKey(slot, keyType, { signature, decryption, backup })`**
   (G-1). On-device ECC keygen, types 1-4 in ECC1-16, was CLI-only: `genkey`
