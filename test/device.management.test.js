@@ -20,7 +20,7 @@ const hostPlugin = require('../plugins/host');
 const embedded = require('../plugins/transport/embedded');
 const sessionPlugin = require('../plugins/session');
 const devicePlugin = require('../plugins/device');
-const { fakeFirmware } = require('./helpers/fake-firmware');
+const { fakeFirmware, sealBackup, openBackup } = require('./helpers/fake-firmware');
 const { fakePipe } = require('./helpers/fake-pipe');
 const { IFACE } = require('../src/transport/contract');
 const { MSG, FIELD } = require('../src/protocol/msg');
@@ -910,6 +910,170 @@ test('a tampered backup sends NOTHING', async () => {
   );
   assert.equal(vendor(pipe).length, 0, 'a packet went out before verification');
 
+  await app.destroy();
+});
+
+/* ------------------------------------------- restore with a passphrase (N-1) */
+
+const LATIN_PHRASE = 'pässword pässword pässword';
+
+/** sha256 of the passphrase in one encoding - node:crypto, not keys.js. */
+function phraseKey(phrase, encoding) {
+  const crypto = require('crypto');
+  const enc = encoding === 'utf-8' ? 'utf8' : 'latin1';
+  return crypto.createHash('sha256').update(Buffer.from(phrase, enc)).digest();
+}
+
+/**
+ * A passphrase backup file, sealed as the firmware seals one (fake-firmware's
+ * sealBackup, independent of src/device/backupkey.js).
+ *
+ * The IV is searched rather than random so each test is deterministic: `opens`
+ * lists the keys that must pass the device's one-byte test and `fails` the
+ * ones that must not. A wrong key passes it about 3 times in 256, and a test
+ * that relied on luck for that would fail now and then.
+ */
+function passphraseBackup(key, { opens = [], fails = [] } = {}) {
+  const plain = Uint8Array.from([0xff, 2, 1, ...Buffer.from('bkuptest'), 0xfe, 0, 7, 7, 7]);
+  for (let n = 0; n < 1 << 16; n++) {
+    const iv = Uint8Array.from([n & 0xff, n >> 8, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    const blob = sealBackup(plain, key, iv);
+    if (!opens.every((k) => openBackup(blob, k)) || fails.some((k) => openBackup(blob, k))) continue;
+    const chunks = [];
+    for (let at = 0; at < blob.length; at += 48) chunks.push(Array.from(blob.slice(at, at + 48)));
+    return makeBackup(chunks);
+  }
+  throw new Error('no IV gave the requested outcome');
+}
+
+/** The slot-131 keys the device was sent, as hex. */
+const backupKeysSent = (pipe) => vendor(pipe)
+  .filter((w) => w.data[4] === MSG.OKSETPRIV && w.data[5] === 131)
+  .map((w) => Buffer.from(w.data.slice(7, 39)).toString('hex'));
+
+test('an OLD (Latin-1) backup restores through the fallback, with one key set', async () => {
+  /*
+   * The owner's decision: try UTF-8, fall back to Latin-1. The device cannot
+   * be asked twice - a refused restore restarts it (okcore.cpp:6630-6636) and
+   * a second try needs the PIN and config mode entered on the key - so the
+   * fallback is decided on the host and the device sees ONE key and ONE
+   * restore, the one that opens the file.
+   */
+  const utf8 = phraseKey(LATIN_PHRASE, 'utf-8');
+  const latin = phraseKey(LATIN_PHRASE, 'latin-1-legacy');
+  const text = passphraseBackup(latin, { fails: [utf8] });
+
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const result = await app.services.device.restore(text, { passphrase: LATIN_PHRASE });
+
+  assert.equal(result.passphraseEncoding, 'latin-1-legacy');
+  assert.deepEqual(result.tried, ['utf-8', 'latin-1-legacy']);
+  assert.equal(result.response, 'Successfully loaded backup', 'the DEVICE accepted it');
+  assert.deepEqual(backupKeysSent(pipe), [latin.toString('hex')], 'only the key that opens it was set');
+  assert.equal(pipe.restores.length, 1, 'one restore, not a refused one and a retry');
+
+  await app.destroy();
+});
+
+test('a NEW (UTF-8) backup restores with the UTF-8 key', async () => {
+  const utf8 = phraseKey(LATIN_PHRASE, 'utf-8');
+  const latin = phraseKey(LATIN_PHRASE, 'latin-1-legacy');
+  const text = passphraseBackup(utf8, { fails: [latin] });
+
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const result = await app.services.device.restore(text, { passphrase: LATIN_PHRASE });
+
+  assert.equal(result.passphraseEncoding, 'utf-8');
+  assert.deepEqual(backupKeysSent(pipe), [utf8.toString('hex')]);
+  assert.deepEqual(pipe.restores.map((r) => r.words), ['Successfully loaded backup']);
+
+  await app.destroy();
+});
+
+test('a pure-ASCII passphrase is ONE attempt - there is no second form', async () => {
+  const phrase = 'correct horse battery staple xyz';
+  const text = passphraseBackup(phraseKey(phrase, 'utf-8'));
+
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const result = await app.services.device.restore(text, { passphrase: phrase });
+
+  assert.deepEqual(result.tried, ['utf-8']);
+  assert.equal(backupKeysSent(pipe).length, 1);
+
+  await app.destroy();
+});
+
+test('a wrong passphrase fails after both forms, and sends NOTHING', async () => {
+  const utf8 = phraseKey(LATIN_PHRASE, 'utf-8');
+  const latin = phraseKey(LATIN_PHRASE, 'latin-1-legacy');
+  const other = phraseKey('pässwört pässwört pässwört', 'utf-8');
+  const text = passphraseBackup(other, { fails: [utf8, latin] });
+
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  await assert.rejects(
+    () => app.services.device.restore(text, { passphrase: LATIN_PHRASE }),
+    /does not open this backup \(tried utf-8 and latin-1-legacy\).*Error incorrect backup key set/,
+  );
+  assert.equal(vendor(pipe).length, 0, 'no key and no packet reached the device');
+
+  await app.destroy();
+});
+
+test('when the DEVICE refuses, its words are what the caller gets', async () => {
+  /* The host's choice is a prediction; the device has the last word. */
+  const text = passphraseBackup(phraseKey(LATIN_PHRASE, 'utf-8'));
+  const pipe = fakeFirmware({ restoreRefusal: 'Error incorrect backup key set' });
+  const app = await start(pipe);
+
+  await assert.rejects(
+    () => app.services.device.restore(text, { passphrase: LATIN_PHRASE }),
+    (err) => err.deviceText === 'Error incorrect backup key set'
+      && /restore \(utf-8 key\)/.test(err.message),
+  );
+
+  await app.destroy();
+});
+
+test('a backup both forms would open is refused, not guessed, until named', async () => {
+  /*
+   * The device's only test is one byte, so for about 1 in 85 Latin-range
+   * passphrases the wrong form passes it too - and the device would write the
+   * garbage it decrypts into the slots. Refused; the caller names the form.
+   */
+  const utf8 = phraseKey(LATIN_PHRASE, 'utf-8');
+  const latin = phraseKey(LATIN_PHRASE, 'latin-1-legacy');
+  const text = passphraseBackup(latin, { opens: [utf8] });
+
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  await assert.rejects(
+    () => app.services.device.restore(text, { passphrase: LATIN_PHRASE }),
+    /cannot be told apart.*Nothing was sent/,
+  );
+  assert.equal(vendor(pipe).length, 0);
+
+  const named = await app.services.device.restore(text,
+    { passphrase: LATIN_PHRASE, passphraseEncoding: 'latin-1-legacy' });
+  assert.equal(named.passphraseEncoding, 'latin-1-legacy');
+  assert.deepEqual(backupKeysSent(pipe), [latin.toString('hex')]);
+
+  await app.destroy();
+});
+
+test('a backup made with an RSA or PGP key is not restored with a passphrase', async () => {
+  /* The trailer names the backup key's type; a passphrase key is Ed25519 (101). */
+  const text = makeBackup([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 2]]);
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  await assert.rejects(
+    () => app.services.device.restore(text, { passphrase: LATIN_PHRASE }),
+    /RSA or PGP backup key/,
+  );
+  assert.equal(vendor(pipe).length, 0);
   await app.destroy();
 });
 

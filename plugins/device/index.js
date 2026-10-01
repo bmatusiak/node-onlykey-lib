@@ -19,6 +19,8 @@ const slotConfig = require('../../src/device/slotConfig');
 const chunker = require('../../src/device/chunker');
 const parsers = require('../../src/device/parsers');
 const deviceKeys = require('../../src/device/keys');
+const backupKey = require('../../src/device/backupkey');
+const { fromHex } = require('../../src/bytes');
 const openssh = require('../../src/device/openssh');
 const firmware = require('../../src/device/firmware');
 const keystrokes = require('../../src/device/keystrokes');
@@ -2695,11 +2697,44 @@ const BACKUP_REFUSALS = [
      *
      * @param {string} text the armoured backup file
      * @param {object} [opts]
+     * ## With a passphrase: the key is chosen here, then set, then one restore
+     *
+     * `passphrase` makes restore set the backup key itself, and pick WHICH
+     * key: the UTF-8 form (0.4.0+, python-onlykey, the rewrite) or the
+     * Latin-1 form the classic App made (keys.passphraseBytes says why there
+     * are two). The owner's decision is "UTF-8, falling back to Latin-1 when
+     * the device refuses" - but the device cannot be asked twice: a refused
+     * restore restarts the key, and a second try needs the PIN and config
+     * mode entered on the device again, or is impossible with backup-key mode
+     * locked (backupkey.js has the firmware lines). So the fallback runs on
+     * the host BEFORE anything is sent: backupkey.chooseBackupKey() runs the
+     * device's own acceptance test against each candidate, and only the key
+     * that passes is set. A wrong passphrase therefore sends nothing at all.
+     *
+     * Then the device's verdict is awaited - "Successfully loaded backup" or
+     * its "Error ..." - rather than returning when the last packet is out, so
+     * the encoding reported is one the DEVICE accepted, not one predicted.
+     * The key restarts after either answer; config mode ends with it.
+     *
+     * Without `passphrase` restore behaves as before: the caller has set the
+     * backup key, the file is streamed, and nothing is awaited.
+     *
      * @param {boolean} [opts.unverifiable=false] allow a backup that carries no
      *   digest line - pre-v2.1.2 firmware only. Has no effect on a file whose
      *   digest is present and wrong.
+     * @param {string} [opts.passphrase] set the backup key from this passphrase,
+     *   in whichever encoding opens the file
+     * @param {'utf-8'|'latin-1-legacy'} [opts.passphraseEncoding] skip the choice
+     *   (needed only when both forms pass the device's test - the error says so)
+     * @param {number} [opts.verdictTimeoutMs=30000] how long to wait for the
+     *   device's answer after the last packet (passphrase restores only)
+     * @returns {Promise<{bytes: number, digest: string|undefined,
+     *   passphraseEncoding?: 'utf-8'|'latin-1-legacy', tried?: string[], response?: string}>}
      */
-    async restore(text, { onProgress = null, unverifiable = false } = {}) {
+    async restore(text, {
+      onProgress = null, unverifiable = false,
+      passphrase = null, passphraseEncoding = null, verdictTimeoutMs = 30000,
+    } = {}) {
       const check = parsers.verifyBackup(text);
       if (!check.ok) {
         const noDigest = check.reason === 'no digest line found';
@@ -2720,14 +2755,52 @@ const BACKUP_REFUSALS = [
         progress('restore', { unverifiable: true });
       }
       const hex = parsers.parseBackup(text);
-      await chunker.sendHexStream({
+      const stream = () => chunker.sendHexStream({
         msg: MSG.OKRESTORE,
         hex,
         send: (frame) => transport.write(IFACE.VENDOR, frame),
         onProgress,
       });
-      progress('restore', { bytes: hex.length / 2 });
-      return { bytes: hex.length / 2, digest: check.digest };
+
+      if (passphrase === null || passphrase === undefined) {
+        await stream();
+        progress('restore', { bytes: hex.length / 2 });
+        return { bytes: hex.length / 2, digest: check.digest };
+      }
+
+      /* Chosen before anything is sent - a wrong passphrase throws here. */
+      const chosen = backupKey.chooseBackupKey(fromHex(hex), passphrase,
+        { encoding: passphraseEncoding });
+      progress('restoreKey', { encoding: chosen.encoding, tried: chosen.tried });
+      await device.setBackupPassphrase(passphrase, { encoding: chosen.encoding });
+
+      /* Subscribed before the first packet: the answer follows the last one
+       * inside the same receive, and a listener attached afterwards can miss it. */
+      const verdict = waitForHid(/Successfully loaded backup/,
+        { reject: [/^Error/i], timeoutMs: verdictTimeoutMs });
+      verdict.catch(() => {});
+      await stream();
+
+      let response;
+      try {
+        response = (await verdict).trim();
+      } catch (err) {
+        /* A refusal restarts the key just as success does. */
+        session.configMode = false;
+        if (/did not answer/.test(err.message)) {
+          throw new Error(`restore: ${err.message} - the backup was sent; check the key before restoring again`);
+        }
+        throw okmsg.deviceError(err.message, `restore (${chosen.encoding} key)`);
+      }
+      session.configMode = false;
+      progress('restore', { bytes: hex.length / 2, encoding: chosen.encoding, response });
+      return {
+        bytes: hex.length / 2,
+        digest: check.digest,
+        passphraseEncoding: chosen.encoding,
+        tried: chosen.tried,
+        response,
+      };
     },
 
     /**

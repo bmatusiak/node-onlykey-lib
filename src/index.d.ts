@@ -112,6 +112,7 @@ export let device: {
     pin: typeof import("./device/pin");
     press: typeof import("./device/press");
     keys: typeof import("./device/keys");
+    backupkey: typeof import("./device/backupkey");
     openssh: typeof import("./device/openssh");
     firmware: typeof import("./device/firmware");
     fido: typeof import("./device/fido");

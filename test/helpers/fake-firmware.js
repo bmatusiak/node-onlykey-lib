@@ -90,6 +90,8 @@ function fakeFirmware(opts = {}) {
     generates = {},
     /* { k132, v2 } - see the agent derivation model in handleVendor. */
     agent = null,
+    /* Answer every restore with this refusal, whatever the key. */
+    restoreRefusal = null,
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
@@ -98,6 +100,10 @@ function fakeFirmware(opts = {}) {
   let agentStream = null;
   const agentPayloads = [];
   let pinStep = 0;
+  /* RESTORE: the slot-131 key last set, the packets so far, and every verdict. */
+  let backupKey = null;
+  let restoreBuf = [];
+  const restores = [];
 
   /*
    * The lock state, modelled because it gates almost everything. A locked
@@ -109,6 +115,30 @@ function fakeFirmware(opts = {}) {
 
   function handleVendor(frame) {
     const msg = frame[4];
+
+    if (msg === MSG.OKRESTORE) {
+      /*
+       * RESTORE (okcore.cpp:6477 at release 3.1.0): [5] = 0xFF is "57 more",
+       * anything else is the last packet's length. Then the key is checked
+       * the only way the firmware checks it - the first decrypted byte must
+       * be >= 0xFD - and either answer is followed by a restart (not modelled:
+       * a fake pipe has nothing to re-enumerate).
+       */
+      const more = frame[5] === 0xff;
+      restoreBuf.push(...frame.slice(6, 6 + (more ? 57 : frame[5])));
+      if (more) return undefined;
+      const blob = Uint8Array.from(restoreBuf);
+      restoreBuf = [];
+      /* An empty restore is the App's restart: `if (offset == 0) CPU_RESTART();`
+       * comes before the key is looked at, so it says nothing (:6535). */
+      if (!blob.length) return undefined;
+      const words = restoreRefusal
+        || (!backupKey ? 'Error no backup key set'
+          : openBackup(blob, backupKey) ? 'Successfully loaded backup'
+            : 'Error incorrect backup key set');
+      restores.push({ key: backupKey, words });
+      return pipe.deliver(reportText(words));
+    }
 
     /*
      * AGENT DERIVATION, modelled from the 3.1.0 source (src/protocol/agent.js
@@ -276,6 +306,7 @@ function fakeFirmware(opts = {}) {
        */
       if (setPrivSilent) return undefined;
       const slot = frame[5];
+      if (slot === 131) backupKey = Uint8Array.from(frame.slice(7, 39));
       /*
        * An RSA slot's sentence is rsa_priv_flash's (okcore.cpp:5138 at
        * eb25290). The real key says it once, after the last chunk; this says
@@ -457,6 +488,9 @@ function fakeFirmware(opts = {}) {
     /** How many OKPIN messages have been received. */
     get pinStep() { return pinStep; },
     get unlocked() { return unlocked; },
+
+    /** Every restore the device finished: the slot-131 key it used and its answer. */
+    get restores() { return restores; },
   };
 
   return wrapped;
@@ -512,4 +546,42 @@ function agentEcdhReport(keyType, sk, peer) {
   return report64(ecdsa(keyType).getSharedSecret(sk, concatBytes(Uint8Array.of(4), p), false).slice(1));
 }
 
-module.exports = { fakeFirmware, PIN_REPLIES, WIPED_FIELDS };
+/* ---- backup encryption (okcore.cpp backup() / RESTORE at 3.1.0) ---------
+ *
+ * Written with node:crypto and the vendored tweetnacl, NOT with
+ * src/device/backupkey.js: the fake has to be an independent statement of what
+ * the firmware does, or a test of the predictor would be the predictor
+ * agreeing with itself. A passphrase key is an Ed25519 scalar (type 1 =
+ * KEYTYPE_NACL), so:
+ *   pub = Ed25519 public key of the scalar, s = crypto_box_beforenm(pub, scalar),
+ *   aes = sha256(s || pub || iv), body = AES-256-GCM without its tag = CTR from
+ *   iv||00000002, file = body || iv || (1 + 100).
+ */
+function backupAesKey(key, iv) {
+  const nacl = require('../../src/vendor/exports/tweetnacl.js');
+  const crypto = require('crypto');
+  const pub = nacl.sign.keyPair.fromSeed(Uint8Array.from(key)).publicKey;
+  const s = nacl.box.before(pub, Uint8Array.from(key));
+  return crypto.createHash('sha256').update(s).update(pub).update(iv).digest();
+}
+
+function backupCtr(key, iv, data) {
+  const crypto = require('crypto');
+  const counter = Buffer.concat([Buffer.from(iv), Buffer.from([0, 0, 0, 2])]);
+  const c = crypto.createCipheriv('aes-256-ctr', backupAesKey(key, iv), counter);
+  return Uint8Array.from(Buffer.concat([c.update(Buffer.from(data)), c.final()]));
+}
+
+/** Encrypt a backup body as the firmware does for a passphrase key. */
+function sealBackup(plain, key, iv) {
+  return Uint8Array.from([...backupCtr(key, iv, plain), ...iv, 101]);
+}
+
+/** The firmware's acceptance test: would this key restore this file? */
+function openBackup(blob, key) {
+  if (blob.length < 14 || blob[blob.length - 1] !== 101) return false;
+  const iv = blob.slice(blob.length - 13, blob.length - 1);
+  return backupCtr(key, iv, blob.slice(0, blob.length - 13))[0] >= 0xfd;
+}
+
+module.exports = { fakeFirmware, PIN_REPLIES, WIPED_FIELDS, sealBackup, openBackup };

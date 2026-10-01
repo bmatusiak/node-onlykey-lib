@@ -3,6 +3,7 @@ export let slots: typeof import("./slots");
 export let pin: typeof import("./pin");
 export let press: typeof import("./press");
 export let keys: typeof import("./keys");
+export let backupkey: typeof import("./backupkey");
 export let openssh: typeof import("./openssh");
 export let firmware: typeof import("./firmware");
 export let fido: typeof import("./fido");

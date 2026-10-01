@@ -38,6 +38,29 @@ the commit that release ended at.
   silently. A Latin-1 form is now produced only for a string entirely within
   U+0000..U+00FF and refused otherwise.
 
+- **`device.restore(text, { passphrase })` sets the backup key itself and falls
+  back to the classic App's Latin-1 key automatically** (N-1). Returns
+  `passphraseEncoding: 'utf-8' | 'latin-1-legacy'`, `tried`, and the device's
+  `response`. **The fallback is decided on the host, not by a second restore**,
+  because the firmware does not allow a second restore: RESTORE answers a wrong
+  key with "Error incorrect backup key set" and `CPU_RESTART()`s (okcore.cpp
+  :6630-6636 at 3.1.0); a retry then needs the PIN and config mode entered on
+  the device again (the first-use window closes at that reboot), and with
+  backup-key mode locked slot 131 cannot be replaced at all. Everything the
+  device decrypts with derives from the 32-byte key the host computed (Ed25519
+  pub, `crypto_box_beforenm`, `sha256(s || pub || iv)`, AES-GCM with no tag
+  check) and its only test is the first plaintext byte `>= 0xFD`, so
+  `device/backupkey.js` (`predictRestore`, `chooseBackupKey`) runs that test for
+  UTF-8 and - only when the forms differ - Latin-1, sets the one key that
+  passes, restores once, and awaits "Successfully loaded backup" or the
+  device's "Error ..." (thrown with `deviceText`). A wrong passphrase sends
+  NOTHING. Where both forms pass the one-byte test (~3/256 for a Latin-range
+  passphrase) it refuses to guess - the device would write the wrong one's
+  garbage into the slots - and the caller names it: `{ passphraseEncoding }`.
+  A file whose trailer is not Ed25519 (101) was made with an RSA/PGP backup key
+  and is refused for a passphrase. `restore(text)` without a passphrase is
+  unchanged.
+
 ## 0.3.0 - `eeaea46eeff55454bc1370034d7790253f560f8d` (tag `v0.3.0`)
 
 - **`device.generateEccKey(slot, keyType, { signature, decryption, backup })`**

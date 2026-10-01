@@ -12,6 +12,8 @@ module.exports = {
   pin: require('./pin'),
   press: require('./press'),
   keys: require('./keys'),
+  /* Which backup key opens a backup file, decided before anything is sent (N-1). */
+  backupkey: require('./backupkey'),
   /* OpenSSH private keys, parsed here so keys.fromSshpk is reachable without sshpk. */
   openssh: require('./openssh'),
   /* Signed firmware files and the OKFWUPDATE frames; not yet run on hardware. */
