@@ -754,6 +754,32 @@ test('a backup passphrase is derived here and never sent', async () => {
   await app.destroy();
 });
 
+test('a new backup key is the UTF-8 hash; the Latin-1 one only on request', async () => {
+  /*
+   * 0.4.0: what reaches slot 131 for a passphrase with characters in
+   * U+0080..U+00FF changed - UTF-8, as python-onlykey and the rewrite hash
+   * it. Checked against node:crypto, not against keys.js.
+   */
+  const crypto = require('crypto');
+  const phrase = 'pässword pässword pässword';
+  const hash = (enc) => crypto.createHash('sha256').update(Buffer.from(phrase, enc)).digest('hex');
+  const keyIn = (frame) => Buffer.from(frame.slice(7, 39)).toString('hex');
+
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  const { device } = app.services;
+
+  const fresh = await device.setBackupPassphrase(phrase);
+  assert.equal(fresh.encoding, 'utf-8');
+  assert.equal(keyIn(vendor(pipe)[0].data), hash('utf8'));
+
+  const legacy = await device.setBackupPassphrase(phrase, { encoding: 'latin-1-legacy' });
+  assert.equal(legacy.encoding, 'latin-1-legacy');
+  assert.equal(keyIn(vendor(pipe)[1].data), hash('latin1'));
+
+  await app.destroy();
+});
+
 test('a silently dropped passphrase write is reported, not called success', async () => {
   /*
    * OKSETPRIV is accepted only in config mode or on first use, and the refusal

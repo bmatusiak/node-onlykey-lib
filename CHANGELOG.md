@@ -17,7 +17,26 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
-(nothing yet)
+- **The backup passphrase is hashed as UTF-8; the Latin-1 form is legacy and
+  never truncated** (N-1, owner's decision 2026-09-30). **Changed output:**
+  `keys.backupKeyFromPassphrase(passphrase)` and `device.setBackupPassphrase()`
+  now hash the UTF-8 bytes. Up to 0.3.0 they hashed Latin-1 like the classic
+  desktop App (OpenPGP.js `str_to_Uint8Array`), while python-onlykey (f4ecaf2+)
+  and trustcrypto's rewrite hash UTF-8 - and the device, which only ever
+  receives the 32-byte hash in slot 131, cannot tell them apart. So a backup
+  made by one could not be restored by the other whenever the passphrase had a
+  character in U+0080..U+00FF ("pässword": Latin-1 sha256 `fe699eee...`, UTF-8
+  `3478267b...`). UTF-8 is what the rest of the ecosystem settled on and what
+  every typeable character has. **A pure-ASCII passphrase gives the same key as
+  before.** The legacy bytes stay available explicitly:
+  `backupKeyFromPassphrase(p, { encoding: 'latin-1-legacy' })`,
+  `setBackupPassphrase(p, { encoding: 'latin-1-legacy' })`,
+  `keys.passphraseBytes(p, encoding)`; `keys.backupPassphraseCandidates(p)`
+  lists the keys a passphrase could have made (two only when the forms differ).
+  **Fixed:** the old Latin-1 path kept `& 0xff` of each UTF-16 unit, so
+  "pašsword" (U+0161) hashed as "paasword" - different passphrases, one key,
+  silently. A Latin-1 form is now produced only for a string entirely within
+  U+0000..U+00FF and refused otherwise.
 
 ## 0.3.0 - `eeaea46eeff55454bc1370034d7790253f560f8d` (tag `v0.3.0`)
 

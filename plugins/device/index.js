@@ -2457,8 +2457,19 @@ const BACKUP_REFUSALS = [
      * restored and says nothing at the time. validateBackupPassphrase() is
      * therefore not advisory: a passphrase it rejects is one the desktop app
      * would have derived a different key from.
+     *
+     * UTF-8 SINCE 0.4.0 (keys.passphraseBytes says why). A backup made after
+     * this call is protected by sha256(UTF-8 bytes), the same key
+     * python-onlykey and trustcrypto's rewrite set. `encoding:
+     * 'latin-1-legacy'` sets the key the classic App would have set - for a
+     * caller reproducing an old key on purpose; restore({ passphrase }) finds
+     * the legacy form by itself.
+     *
+     * @param {string} passphrase
+     * @param {object} [opts]
+     * @param {'utf-8'|'latin-1-legacy'} [opts.encoding='utf-8']
      */
-    async setBackupPassphrase(passphrase, { timeoutMs = 5000, retries = 1 } = {}) {
+    async setBackupPassphrase(passphrase, { encoding = 'utf-8', timeoutMs = 5000, retries = 1 } = {}) {
       /*
        * backupKeyFromPassphrase() returns { slot, type, key } and validates on
        * the way - passing the whole object through as the payload builds a
@@ -2467,7 +2478,7 @@ const BACKUP_REFUSALS = [
        * catch it: it asserted the passphrase was absent from the frame, which
        * is trivially true of a frame with no body at all.
        */
-      const derived = deviceKeys.backupKeyFromPassphrase(passphrase);
+      const derived = deviceKeys.backupKeyFromPassphrase(passphrase, { encoding });
       const frame = okmsg.build({
         msg: MSG.OKSETPRIV,
         slot: derived.slot,
@@ -2492,8 +2503,8 @@ const BACKUP_REFUSALS = [
       );
       if (/^Error/i.test(text)) throw new Error(`backup passphrase: ${text}`);
 
-      progress('backupKey', { slot: derived.slot, response: text, attempts });
-      return { slot: derived.slot, type: derived.type, response: text, attempts };
+      progress('backupKey', { slot: derived.slot, response: text, attempts, encoding });
+      return { slot: derived.slot, type: derived.type, response: text, attempts, encoding };
     },
 
     /**

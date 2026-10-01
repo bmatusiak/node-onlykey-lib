@@ -198,14 +198,71 @@ test('a passphrase mismatch is reported', () => {
 
 test('the backup key is SHA256 of the passphrase, at slot 131 type 161', () => {
   const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
-  const { fromLatin1 } = require('../src/bytes');
+  const { utf8ToBytes } = require('../src/bytes');
   const phrase = 'correct horse battery staple xyz';
 
   const out = keys.backupKeyFromPassphrase(phrase);
   assert.equal(out.slot, 131);
   assert.equal(out.type, 161, '0x80 backup | 0x20 decryption | 1');
-  assert.equal(toHex(out.key), toHex(sha256(fromLatin1(phrase))));
+  assert.equal(toHex(out.key), toHex(sha256(utf8ToBytes(phrase))));
   assert.equal(out.key.length, 32, 'one unchunked packet');
+  assert.equal(out.encoding, 'utf-8');
+});
+
+/*
+ * THE ENCODING (owner's decision, 2026-09-30). The device only ever receives
+ * the 32-byte hash, so these vectors are the whole contract between the
+ * program that set a backup key and the program that restores with it.
+ * Computed independently with node:crypto, not with the code under test.
+ */
+const PASSWORD_LATIN1 = 'fe699eee1c6a654b6699f92e2d5e06a00e220b91495190eceac3eff8140f2986';
+const PASSWORD_UTF8 = '3478267b5612791b40988906b3a7897eb6ab501e04b95ed32f99d0afdf669d9c';
+
+test('"pässword" hashes as UTF-8 by default and as Latin-1 only when asked', () => {
+  const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
+  assert.equal(toHex(sha256(keys.passphraseBytes('pässword'))), PASSWORD_UTF8);
+  assert.equal(toHex(sha256(keys.passphraseBytes('pässword', 'latin-1-legacy'))), PASSWORD_LATIN1);
+
+  /* The same through the 25-character gate, against node:crypto. */
+  const crypto = require('crypto');
+  const phrase = 'pässword pässword pässword';
+  const expect = (enc) => crypto.createHash('sha256').update(Buffer.from(phrase, enc)).digest('hex');
+  assert.equal(toHex(keys.backupKeyFromPassphrase(phrase).key), expect('utf8'));
+  assert.equal(
+    toHex(keys.backupKeyFromPassphrase(phrase, { encoding: 'latin-1-legacy' }).key),
+    expect('latin1'),
+  );
+});
+
+test('a pure-ASCII passphrase has ONE candidate key; a Latin-range one has two', () => {
+  const ascii = keys.backupPassphraseCandidates('correct horse battery staple xyz');
+  assert.deepEqual(ascii.map((c) => c.encoding), ['utf-8'], 'ASCII is the same bytes either way');
+
+  const latin = keys.backupPassphraseCandidates('pässword pässword pässword');
+  assert.deepEqual(latin.map((c) => c.encoding), ['utf-8', 'latin-1-legacy']);
+  assert.notEqual(toHex(latin[0].key), toHex(latin[1].key));
+
+  /* Above U+00FF there is no Latin-1 form, so nothing legacy to try. */
+  const wide = keys.backupPassphraseCandidates('pašsword pašsword pašsword');
+  assert.deepEqual(wide.map((c) => c.encoding), ['utf-8']);
+});
+
+test('"pašsword" no longer collides with "paasword" (no silent truncation)', () => {
+  /*
+   * Up to 0.3.0 the bytes were fromLatin1(), which keeps `& 0xff` of each
+   * UTF-16 unit: š is U+0161, 0x61 is "a", and two different passphrases made
+   * the same backup key without a word.
+   */
+  const a = keys.backupKeyFromPassphrase('pašsword pašsword pašsword');
+  const b = keys.backupKeyFromPassphrase('paasword paasword paasword');
+  assert.notEqual(toHex(a.key), toHex(b.key));
+
+  /* And a Latin-1 form is refused rather than truncated. */
+  assert.throws(
+    () => keys.passphraseBytes('pašsword', 'latin-1-legacy'),
+    /no Latin-1 form.*U\+0161/,
+  );
+  assert.throws(() => keys.passphraseBytes('x', 'latin1'), /unknown passphrase encoding/);
 });
 
 test('a short passphrase cannot be turned into a backup key at all', () => {

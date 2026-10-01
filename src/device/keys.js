@@ -14,7 +14,7 @@
 'use strict';
 
 const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
-const { fromLatin1 } = require('../bytes');
+const { fromLatin1, utf8ToBytes } = require('../bytes');
 
 /**
  * The curve identifiers the device uses. Not OIDs - the device's own numbering.
@@ -538,16 +538,134 @@ function validateBackupPassphrase(passphrase, confirm = null) {
 }
 
 /**
+ * How a backup passphrase becomes bytes before it is hashed.
+ *
+ * ## Why there are two, and why UTF-8 is the default (owner, 2026-09-30)
+ *
+ * The device never sees the passphrase. It receives the 32-byte SHA-256 of
+ * SOME byte string in slot 131 and is indifferent to how that string was
+ * made - so the encoding is a contract between the program that set the key
+ * and the program that restores, and the two have disagreed:
+ *
+ *   - the classic desktop App hashes Latin-1 (OpenPGP.js
+ *     util.str_to_Uint8Array, which THROWS above U+00FF), and this library
+ *     copied it up to 0.3.0;
+ *   - python-onlykey (f4ecaf2+) and trustcrypto's rewrite hash UTF-8.
+ *
+ * The two only produce different bytes for characters U+0080..U+00FF: pure
+ * ASCII is the same byte string either way, and Latin-1 cannot represent
+ * anything above U+00FF at all. "pässword" is the whole problem in one word:
+ * Latin-1 sha256 fe699eee..., UTF-8 sha256 3478267b...
+ *
+ * UTF-8 is what the rest of the ecosystem settled on and what every
+ * character a person can type has, so it is what a NEW key is made from.
+ * Latin-1 stays, named as legacy, because backups protected by the classic
+ * App (and by this library up to 0.3.0) exist and must still restore - see
+ * backupPassphraseCandidates() and device.restore({ passphrase }).
+ */
+const PASSPHRASE_ENCODING = Object.freeze({
+  UTF8: 'utf-8',
+  LATIN1_LEGACY: 'latin-1-legacy',
+});
+
+/**
+ * Does the passphrase hash differently in Latin-1 than in UTF-8?
+ *
+ * True only when every character fits in Latin-1 (<= U+00FF) AND at least one
+ * is outside ASCII (>= U+0080). Otherwise there is no second key to try: ASCII
+ * is identical, and a string with anything above U+00FF has no Latin-1 form
+ * (the classic App threw on it, so no legacy backup can exist for it).
+ */
+function passphraseHasLegacyForm(passphrase) {
+  const text = String(passphrase);
+  let wide = false;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code > 0xff) return false;
+    if (code >= 0x80) wide = true;
+  }
+  return wide;
+}
+
+/**
+ * The bytes a passphrase is hashed from.
+ *
+ * NEVER TRUNCATES. Up to 0.3.0 this was fromLatin1(), which keeps `& 0xff` of
+ * each UTF-16 unit - so "pašsword" (š = U+0161) hashed as "paasword" and two
+ * different passphrases produced the same backup key, silently. A Latin-1
+ * form is now produced only for a string that HAS one, and anything else is
+ * refused with a message rather than mangled.
+ *
+ * UTF-8 is written out by bytes.utf8ToBytes rather than TextEncoder: Hermes
+ * has no TextEncoder, and src/ has to run there.
+ *
+ * @param {string} passphrase
+ * @param {'utf-8'|'latin-1-legacy'} [encoding='utf-8']
+ * @returns {Uint8Array}
+ */
+function passphraseBytes(passphrase, encoding = PASSPHRASE_ENCODING.UTF8) {
+  const text = String(passphrase);
+  if (encoding === PASSPHRASE_ENCODING.UTF8) return utf8ToBytes(text);
+  if (encoding === PASSPHRASE_ENCODING.LATIN1_LEGACY) {
+    for (let i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) > 0xff) {
+        throw new Error(
+          `this passphrase has no Latin-1 form: "${text[i]}" (U+${text.charCodeAt(i)
+            .toString(16).toUpperCase().padStart(4, '0')}) is above U+00FF. ` +
+          'The classic App refused such passphrases, so no legacy backup was ' +
+          'made from one; use the UTF-8 form.',
+        );
+      }
+    }
+    return fromLatin1(text);
+  }
+  throw new Error(
+    `unknown passphrase encoding "${encoding}" - use "${PASSPHRASE_ENCODING.UTF8}" ` +
+    `or "${PASSPHRASE_ENCODING.LATIN1_LEGACY}"`,
+  );
+}
+
+/**
  * Derive the backup key from a passphrase.
  *
- * SHA-256 of the passphrase bytes, 32 bytes, one unchunked packet. latin1
- * rather than UTF-8, matching what the original's forge path produces for
- * bytes above 0x7f.
+ * SHA-256 of the passphrase bytes, 32 bytes, one unchunked packet.
+ *
+ * CHANGED IN 0.4.0: the bytes are UTF-8 unless `encoding: 'latin-1-legacy'`
+ * is asked for. Up to 0.3.0 they were Latin-1 (truncating above U+00FF). For
+ * an ASCII passphrase the key is unchanged; for one with characters in
+ * U+0080..U+00FF it is a different key - which is why restore() tries both.
+ *
+ * @param {string} passphrase
+ * @param {{encoding?: 'utf-8'|'latin-1-legacy'}} [opts]
+ * @returns {{slot: number, type: number, key: Uint8Array, encoding: string}}
  */
-function backupKeyFromPassphrase(passphrase) {
+function backupKeyFromPassphrase(passphrase, { encoding = PASSPHRASE_ENCODING.UTF8 } = {}) {
   const problems = validateBackupPassphrase(passphrase);
   if (problems.length) throw new Error(problems.join(' '));
-  return { slot: BACKUP_SLOT, type: BACKUP_TYPE, key: sha256(fromLatin1(String(passphrase))) };
+  return {
+    slot: BACKUP_SLOT,
+    type: BACKUP_TYPE,
+    key: sha256(passphraseBytes(passphrase, encoding)),
+    encoding,
+  };
+}
+
+/**
+ * Every backup key this passphrase could have been made into, newest first.
+ *
+ * One entry (UTF-8) for a passphrase whose two forms are the same bytes or
+ * whose Latin-1 form does not exist; two (UTF-8, then Latin-1 legacy) only
+ * when they differ. That is what keeps a pure-ASCII restore to one attempt.
+ *
+ * @param {string} passphrase
+ * @returns {Array<{slot: number, type: number, key: Uint8Array, encoding: string}>}
+ */
+function backupPassphraseCandidates(passphrase) {
+  const out = [backupKeyFromPassphrase(passphrase)];
+  if (passphraseHasLegacyForm(passphrase)) {
+    out.push(backupKeyFromPassphrase(passphrase, { encoding: PASSPHRASE_ENCODING.LATIN1_LEGACY }));
+  }
+  return out;
 }
 
 /**
@@ -610,6 +728,7 @@ module.exports = {
   BACKUP_SLOT,
   BACKUP_TYPE,
   BACKUP_PASSPHRASE_MIN,
+  PASSPHRASE_ENCODING,
   oidEquals,
   curveFromOid,
   stripSignPad,
@@ -620,6 +739,9 @@ module.exports = {
   prepareKey,
   assignPgpSlots,
   validateBackupPassphrase,
+  passphraseHasLegacyForm,
+  passphraseBytes,
   backupKeyFromPassphrase,
+  backupPassphraseCandidates,
   backupKeyFromPgp,
 };
