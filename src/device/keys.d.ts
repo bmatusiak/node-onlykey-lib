@@ -130,6 +130,7 @@ export const BACKUP_PASSPHRASE_MIN: 25;
 export const PASSPHRASE_ENCODING: Readonly<{
     UTF8: "utf-8";
     LATIN1_LEGACY: "latin-1-legacy";
+    TRUNCATED_LEGACY: "truncated-legacy";
 }>;
 /**
  * Compare two OIDs.
@@ -297,10 +298,10 @@ export function passphraseHasLegacyForm(passphrase: any): boolean;
  * has no TextEncoder, and src/ has to run there.
  *
  * @param {string} passphrase
- * @param {'utf-8'|'latin-1-legacy'} [encoding='utf-8']
+ * @param {'utf-8'|'latin-1-legacy'|'truncated-legacy'} [encoding='utf-8']
  * @returns {Uint8Array}
  */
-export function passphraseBytes(passphrase: string, encoding?: "utf-8" | "latin-1-legacy"): Uint8Array;
+export function passphraseBytes(passphrase: string, encoding?: "utf-8" | "latin-1-legacy" | "truncated-legacy"): Uint8Array;
 /**
  * Derive the backup key from a passphrase.
  *
@@ -312,11 +313,11 @@ export function passphraseBytes(passphrase: string, encoding?: "utf-8" | "latin-
  * U+0080..U+00FF it is a different key - which is why restore() tries both.
  *
  * @param {string} passphrase
- * @param {{encoding?: 'utf-8'|'latin-1-legacy'}} [opts]
+ * @param {{encoding?: 'utf-8'|'latin-1-legacy'|'truncated-legacy'}} [opts]
  * @returns {{slot: number, type: number, key: Uint8Array, encoding: string}}
  */
 export function backupKeyFromPassphrase(passphrase: string, { encoding }?: {
-    encoding?: "utf-8" | "latin-1-legacy";
+    encoding?: "utf-8" | "latin-1-legacy" | "truncated-legacy";
 }): {
     slot: number;
     type: number;

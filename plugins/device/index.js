@@ -2469,7 +2469,7 @@ const BACKUP_REFUSALS = [
      *
      * @param {string} passphrase
      * @param {object} [opts]
-     * @param {'utf-8'|'latin-1-legacy'} [opts.encoding='utf-8']
+     * @param {'utf-8'|'latin-1-legacy'|'truncated-legacy'} [opts.encoding='utf-8']
      */
     async setBackupPassphrase(passphrase, { encoding = 'utf-8', timeoutMs = 5000, retries = 1 } = {}) {
       /*
@@ -2724,7 +2724,7 @@ const BACKUP_REFUSALS = [
      *   digest is present and wrong.
      * @param {string} [opts.passphrase] set the backup key from this passphrase,
      *   in whichever encoding opens the file
-     * @param {'utf-8'|'latin-1-legacy'} [opts.passphraseEncoding] skip the choice
+     * @param {'utf-8'|'latin-1-legacy'|'truncated-legacy'} [opts.passphraseEncoding] skip the choice
      *   (needed only when both forms pass the device's test - the error says so)
      * @param {number} [opts.verdictTimeoutMs=30000] how long to wait for the
      *   device's answer after the last packet (passphrase restores only)

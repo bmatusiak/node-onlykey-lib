@@ -190,6 +190,51 @@ test('setslot password, gkey and totpkey are prompted for, never read from argv'
   assert.equal(sent(r.firmware, MSG.OKSETSLOT).length, 0);
 });
 
+test('setbackuppassphrase: UTF-8 by default, --latin-passphrase sends the pre-0.4.0 bytes', async () => {
+  const crypto = require('node:crypto');
+  const phrase = 'a passphrase with a euro sign: €';
+  const sha = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+  /* [slot, type, the 32-byte key] of the OKSETPRIV frame. */
+  const keyOf = (frame) => ({ slot: frame[5], type: frame[6], key: Buffer.from(frame.slice(7, 39)).toString('hex') });
+
+  let r = await run(['setbackuppassphrase'], {}, { answers: [phrase, phrase] });
+  assert.equal(r.code, 0, r.err.join('\n'));
+  assert.deepEqual(r.asked, ['Backup passphrase: ', 'Again: ']);
+  let [frame] = sent(r.firmware, MSG.OKSETPRIV);
+  assert.deepEqual(keyOf(frame), { slot: 131, type: 161, key: sha(Buffer.from(phrase, 'utf8')) });
+  assert.match(r.out.join('\n'), /Successfully set Backup Passphrase/);
+
+  /* The one-off: each UTF-16 unit's low byte, as 0.3.0 hashed it (U+20AC -> 0xAC). */
+  r = await run(['setbackuppassphrase', '--latin-passphrase'], {}, { answers: [phrase, phrase] });
+  assert.equal(r.code, 0, r.err.join('\n'));
+  [frame] = sent(r.firmware, MSG.OKSETPRIV);
+  const truncated = Buffer.from([...phrase].map((ch) => ch.charCodeAt(0) & 0xff));
+  assert.equal(keyOf(frame).key, sha(truncated));
+  assert.match(r.out[0], /pre-0.4.0 passphrase bytes/);
+});
+
+test('setbackuppassphrase refuses a mismatch or a short one before a key is opened', async () => {
+  const phrase = 'twenty-five characters or more';
+  let r = await run(['setbackuppassphrase'], {}, { answers: [phrase, phrase + '!'], start: NO_DEVICE.start });
+  assert.equal(r.code, 2);
+  assert.match(r.err[0], /do not match.*Nothing was written/);
+
+  r = await run(['setbackuppassphrase'], {}, { answers: ['short', 'short'], start: NO_DEVICE.start });
+  assert.equal(r.code, 2);
+  assert.match(r.err[0], /at least 25/);
+
+  /* The flag is this command's alone. */
+  r = await run(['getlabels', '--latin-passphrase'], {}, { start: NO_DEVICE.start });
+  assert.equal(r.code, 2);
+});
+
+test('setbackuppassphrase outside config mode: the dropped write is named, not called success', async () => {
+  const phrase = 'twenty-five characters or more';
+  const r = await run(['setbackuppassphrase'], { setPrivSilent: true }, { answers: [phrase, phrase] });
+  assert.notEqual(r.code, 0);
+  assert.match(r.err.join('\n'), /config mode/i);
+});
+
 test('setslot ecckeylabel and rsakeylabel land on the key label indexes, as python\'s +28 and +24', async () => {
   let r = await run(['setslot', '3', 'ecckeylabel', 'ssh']);
   assert.equal(r.code, 0, r.err.join('\n'));

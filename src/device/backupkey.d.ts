@@ -25,13 +25,13 @@ export function predictRestore(blob: Uint8Array, key: Uint8Array): {
  * @param {Uint8Array} blob
  * @param {string} passphrase
  * @param {object} [opts]
- * @param {'utf-8'|'latin-1-legacy'|null} [opts.encoding] skip the choice and
+ * @param {'utf-8'|'latin-1-legacy'|'truncated-legacy'|null} [opts.encoding] skip the choice and
  *   use this form (still checked: a key the device would refuse is refused here)
  * @returns {{slot: number, type: number, key: Uint8Array, encoding: string, tried: string[]}}
  * @throws when no candidate opens the backup, or two do and none was named
  */
 export function chooseBackupKey(blob: Uint8Array, passphrase: string, { encoding }?: {
-    encoding?: "utf-8" | "latin-1-legacy" | null | undefined;
+    encoding?: "utf-8" | "latin-1-legacy" | "truncated-legacy" | null | undefined;
 }): {
     slot: number;
     type: number;

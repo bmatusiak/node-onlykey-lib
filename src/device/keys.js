@@ -566,6 +566,18 @@ function validateBackupPassphrase(passphrase, confirm = null) {
 const PASSPHRASE_ENCODING = Object.freeze({
   UTF8: 'utf-8',
   LATIN1_LEGACY: 'latin-1-legacy',
+  /*
+   * The ONE-OFF BUG, reproduced on purpose: this library up to 0.3.0 hashed
+   * every UTF-16 code unit with its top byte dropped (bytes.fromLatin1,
+   * charCodeAt & 0xff). For a passphrase within U+00FF that is exactly
+   * Latin-1; above it, "€" (U+20AC) became 0xAC and an emoji became two
+   * surrogate halves' low bytes. A backup made that way opens with these bytes
+   * and nothing else. Never tried automatically (backupPassphraseCandidates
+   * does not list it) and offered by no GUI: the CLI's --latin-passphrase is
+   * the only door to it (owner's decision), because it is a special case for a
+   * few people, not a choice anyone should be shown.
+   */
+  TRUNCATED_LEGACY: 'truncated-legacy',
 });
 
 /**
@@ -600,7 +612,7 @@ function passphraseHasLegacyForm(passphrase) {
  * has no TextEncoder, and src/ has to run there.
  *
  * @param {string} passphrase
- * @param {'utf-8'|'latin-1-legacy'} [encoding='utf-8']
+ * @param {'utf-8'|'latin-1-legacy'|'truncated-legacy'} [encoding='utf-8']
  * @returns {Uint8Array}
  */
 function passphraseBytes(passphrase, encoding = PASSPHRASE_ENCODING.UTF8) {
@@ -619,9 +631,11 @@ function passphraseBytes(passphrase, encoding = PASSPHRASE_ENCODING.UTF8) {
     }
     return fromLatin1(text);
   }
+  /* 0.3.0's bytes exactly, truncation and all - see PASSPHRASE_ENCODING. */
+  if (encoding === PASSPHRASE_ENCODING.TRUNCATED_LEGACY) return fromLatin1(text);
   throw new Error(
-    `unknown passphrase encoding "${encoding}" - use "${PASSPHRASE_ENCODING.UTF8}" ` +
-    `or "${PASSPHRASE_ENCODING.LATIN1_LEGACY}"`,
+    `unknown passphrase encoding "${encoding}" - use "${PASSPHRASE_ENCODING.UTF8}", ` +
+    `"${PASSPHRASE_ENCODING.LATIN1_LEGACY}" or "${PASSPHRASE_ENCODING.TRUNCATED_LEGACY}"`,
   );
 }
 
@@ -636,7 +650,7 @@ function passphraseBytes(passphrase, encoding = PASSPHRASE_ENCODING.UTF8) {
  * U+0080..U+00FF it is a different key - which is why restore() tries both.
  *
  * @param {string} passphrase
- * @param {{encoding?: 'utf-8'|'latin-1-legacy'}} [opts]
+ * @param {{encoding?: 'utf-8'|'latin-1-legacy'|'truncated-legacy'}} [opts]
  * @returns {{slot: number, type: number, key: Uint8Array, encoding: string}}
  */
 function backupKeyFromPassphrase(passphrase, { encoding = PASSPHRASE_ENCODING.UTF8 } = {}) {

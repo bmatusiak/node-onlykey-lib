@@ -265,6 +265,30 @@ test('"pašsword" no longer collides with "paasword" (no silent truncation)', ()
   assert.throws(() => keys.passphraseBytes('x', 'latin1'), /unknown passphrase encoding/);
 });
 
+test("truncated-legacy reproduces 0.3.0's bytes exactly, and is never tried on its own", () => {
+  /*
+   * 0.3.0 dropped each UTF-16 code unit's top byte: "š" (U+0161) became "a",
+   * so these two passphrases made the SAME backup key - the bug. The CLI's
+   * --latin-passphrase needs exactly those bytes to open such a backup.
+   */
+  assert.equal(
+    toHex(keys.passphraseBytes('pašsword', 'truncated-legacy')),
+    toHex(keys.passphraseBytes('paasword')),
+  );
+  /* An emoji is two surrogates; each kept only its low byte. */
+  assert.equal(toHex(keys.passphraseBytes('😀', 'truncated-legacy')), '3d00');
+  /* Within Latin-1 it is Latin-1, so a classic App backup opens with it too. */
+  assert.equal(
+    toHex(keys.passphraseBytes('pässword', 'truncated-legacy')),
+    toHex(keys.passphraseBytes('pässword', 'latin-1-legacy')),
+  );
+  /* Never offered automatically: restore's chooser does not list it. */
+  const tried = keys.backupPassphraseCandidates('pässword pässword pässword').map((c) => c.encoding);
+  assert.deepEqual(tried, ['utf-8', 'latin-1-legacy']);
+  assert.equal(keys.backupKeyFromPassphrase('pašsword pašsword pašsword',
+    { encoding: 'truncated-legacy' }).encoding, 'truncated-legacy');
+});
+
 test('a short passphrase cannot be turned into a backup key at all', () => {
   assert.throws(() => keys.backupKeyFromPassphrase('too short'), /at least 25/);
 });

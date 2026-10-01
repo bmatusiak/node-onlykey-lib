@@ -17,6 +17,17 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **`onlykey-js setbackuppassphrase [--latin-passphrase]`** (N-1 escape hatch,
+  owner's decision 2026-10-01). Sets the backup key from a passphrase asked for
+  twice (never argv), UTF-8 by default. `--latin-passphrase` hashes the bytes
+  0.3.0 hashed - each UTF-16 code unit's low byte, the new encoding
+  `'truncated-legacy'` - so a backup made with lib <= 0.3.0 and a character
+  above U+00FF ("€" became 0xAC; "pašsword" collided with "paasword") can still
+  be restored: set the key with the CLI in config mode, then restore with the
+  passphrase left blank. Within Latin-1 it equals `'latin-1-legacy'`, so classic
+  App backups open with it too. CLI-only on purpose: no GUI offers it and
+  restore's automatic choice never tries it.
+
 - **The backup passphrase is hashed as UTF-8; the Latin-1 form is legacy and
   never truncated** (N-1, owner's decision 2026-09-30). **Changed output:**
   `keys.backupKeyFromPassphrase(passphrase)` and `device.setBackupPassphrase()`

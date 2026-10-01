@@ -1000,6 +1000,52 @@ COMMANDS.loadkey = {
   },
 };
 
+/*
+ * THE BACKUP PASSPHRASE - the desktop App's "Set Backup Passphrase" (python
+ * has no command for it). The key never sees the passphrase, only its SHA-256,
+ * so the bytes hashed ARE the key: UTF-8 by default, as every new backup is
+ * made since 0.4.0.
+ *
+ * --latin-passphrase is the one-off: the bytes this library hashed up to 0.3.0
+ * (and the classic App within Latin-1), truncation above U+00FF included, so a
+ * backup made that way can be restored - set the key here, then restore with
+ * the passphrase left blank so the key's own backup key is used. It lives
+ * ONLY here, never in a GUI and never tried automatically (owner's decision):
+ * a special case for a few people, not a choice to show everyone.
+ *
+ * Asked for twice and never read from argv (cli/prompt.js: argv lands in the
+ * shell history). OKSETPRIV needs config mode on a set-up key; outside it the
+ * firmware drops the frame without a word, which deviceWrite names.
+ */
+COMMANDS.setbackuppassphrase = {
+  mirrors: '(new)',
+  usage: '[--latin-passphrase]',
+  writes: true,
+  summary: 'set the backup passphrase (config mode; asked for twice); --latin-passphrase: the pre-0.4.0 bytes',
+  options: { 'latin-passphrase': { type: 'boolean' } },
+  async run(io, opts, args) {
+    if (args.length) throw usage('setbackuppassphrase takes no arguments - the passphrase is asked for');
+    const legacy = Boolean(opts['latin-passphrase']);
+    const encoding = legacy
+      ? deviceKeys.PASSPHRASE_ENCODING.TRUNCATED_LEGACY
+      : deviceKeys.PASSPHRASE_ENCODING.UTF8;
+    const passphrase = await promptSecret(io, 'Backup passphrase: ', 'passphrase');
+    const again = await promptSecret(io, 'Again: ', 'passphrase');
+    /* Checked before a key is opened: a mismatch or a short one writes nothing. */
+    const problems = deviceKeys.validateBackupPassphrase(passphrase, again);
+    if (problems.length) throw usage(`${problems.join(' ')} Nothing was written.`);
+    if (legacy) {
+      io.out('Using the pre-0.4.0 passphrase bytes, only to restore a backup made with them.');
+    }
+    return withDevice(io, opts, async ({ device, identity }) => {
+      requireUnlocked(identity, 'setbackuppassphrase');
+      const result = await deviceWrite(() => device.setBackupPassphrase(passphrase, { encoding }));
+      if (result.response) io.out(result.response);
+      return 0;
+    });
+  },
+};
+
 COMMANDS.wipekey = {
   mirrors: 'wipekey',
   usage: '<RSA1-4|ECC1-16|HMAC1-2>',
