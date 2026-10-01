@@ -17,6 +17,18 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **Key Chain L7: `onlykey-js keychain`.** `list` (every key slot: what it
+  holds, its label, a fingerprint), `pub <slot>` (SSH line / age recipient /
+  hex), `derive <label|ssh|gpg> <type> <label> [--v2]`, `gen <type> --slot`
+  (made ON the OnlyKey: ed25519, p256, secp256k1, x25519, mlkem768, xwing) and
+  `gen <type> --host` (made here: the ECC types, rsa `--bits`, or `pgp
+  --user-id`; stored with `--slot` and/or exported encrypted with
+  `--export-pem` / `--export-pgp`, passphrase asked twice, written 0600 and
+  never over an existing file; one of the two required). A slot that already
+  has a label needs `--yes`. `withDevice` now hands commands `okcrypto` too.
+  Fixed on the way: `derivePublic`'s SSH identity is `{ ssh: { user, host } }`
+  (the agent's shape), not the bare string.
+
 - **Key Chain L5 + L6: derived public keys and the public-only list.**
   `keychain.derive.derivePublic(okcrypto, { scheme, label, type })` - a public
   key the device derives from a label (`label`: P-256, secp256k1, X25519 and

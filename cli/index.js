@@ -140,9 +140,9 @@ function deviceArgs(opts) {
 async function withDevice(io, opts, fn) {
   const app = await io.start(deviceOpts(opts));
   try {
-    const { device } = app.services;
+    const { device, okcrypto } = app.services;
     const connected = await device.connect();
-    return await fn({ device, connected, identity: connected.identity });
+    return await fn({ device, okcrypto, connected, identity: connected.identity });
   } finally {
     await app.destroy();
   }
@@ -1046,6 +1046,247 @@ COMMANDS.setbackuppassphrase = {
   },
 };
 
+/*
+ * KEY CHAIN - generate, list, derive and export keys (owner, 2026-10-01).
+ * The same lib calls ok-rn's Key Chain tab makes, so the kit can drive them
+ * on the emulator. The rules are Key Chain's:
+ *
+ *   - made ON the OnlyKey where the firmware can (gen <type> --slot): the
+ *     private key never exists anywhere else. Config mode, then a restart
+ *     before its public key can be read (the key drops OKGETPUBKEY there).
+ *   - made on THIS machine (gen <type> --host) only for what the device
+ *     cannot make (RSA, a PGP key) or a key meant to be used elsewhere: in
+ *     memory, stored (--slot) and/or exported encrypted (--export-pem /
+ *     --export-pgp, passphrase asked twice, the backup passphrase's rule),
+ *     then wiped. One of the two is required - a key made and dropped is
+ *     nothing.
+ *   - a slot that already has a label is refused without --yes: it holds
+ *     something, and generating over it destroys it. (In config mode an
+ *     UNLABELLED key cannot be seen - the device answers no public-key read
+ *     there - so list the slots first.)
+ */
+const KEYCHAIN_DEVICE_TYPES = {
+  ed25519: { ecc: 1, use: 'signature' },
+  p256: { ecc: 2, use: 'signature' },
+  secp256k1: { ecc: 3, use: 'signature' },
+  x25519: { ecc: 4, use: 'decryption' },
+  mlkem768: { pq: 5 },
+  xwing: { pq: 6 },
+};
+const KEYCHAIN_SLOTS = [1, 2, 3, 4, ...Array.from({ length: 16 }, (_, i) => 101 + i)];
+
+function keychainSlot(text) {
+  const m = /^(?:(rsa|ecc)\s*)?(\d+)$/i.exec(String(text || '').trim());
+  if (!m) throw usage(`"${text}" is not a key slot - RSA1-4 or ECC1-16 (or 1-4, 101-116)`);
+  let n = Number(m[2]);
+  if (m[1] && m[1].toLowerCase() === 'ecc') n += 100;
+  if (!KEYCHAIN_SLOTS.includes(n)) throw usage(`"${text}" is not a key slot - RSA1-4 or ECC1-16`);
+  return n;
+}
+const slotName = (n) => (n <= 4 ? `RSA${n}` : `ECC${n - 100}`);
+
+function printArtifacts(io, a) {
+  if (a.ssh) io.out(`ssh     ${a.ssh}`);
+  if (a.age) io.out(`age     ${a.age}`);
+  io.out(`hex     ${a.hex}`);
+}
+
+COMMANDS.keychain = {
+  mirrors: '(new)',
+  usage: 'list | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
+  writes: true,
+  summary: 'Key Chain: list key slots, show/derive public keys, generate keys on the OnlyKey or this machine',
+  options: {
+    host: { type: 'boolean' },
+    slot: { type: 'string' },
+    label: { type: 'string' },
+    bits: { type: 'string' },
+    'export-pem': { type: 'string' },
+    'export-pgp': { type: 'string' },
+    'user-id': { type: 'string' },
+    v2: { type: 'boolean' },
+  },
+  async run(io, opts, args) {
+    const keychain = require('../src/keychain');
+    const [sub, ...rest] = args;
+
+    if (sub === 'list') {
+      return withDevice(io, opts, async ({ device, identity }) => {
+        requireUnlocked(identity, 'keychain list');
+        const labels = new Map();
+        try {
+          const { keys } = await device.readKeyLabels();
+          for (const k of keys) labels.set(k.slot, k.label || '');
+        } catch (_) { /* names are a nicety; the probe is the answer */ }
+        for (const slot of KEYCHAIN_SLOTS) {
+          const label = labels.get(slot) || '';
+          const tag = keychain.tag.parseTag(label);
+          const p = await device.probeKeySlot(slot, { hint: tag && tag.hint });
+          const what = p.kind === 'rsa' ? `rsa ${p.bits}` : p.kind;
+          const fp = p.publicKey ? keychain.list.fingerprint(p.publicKey) : '';
+          io.out(`${slotName(slot).padEnd(6)} ${what.padEnd(10)} ${label.padEnd(16)} ${fp}`.trimEnd());
+        }
+        return 0;
+      });
+    }
+
+    if (sub === 'pub') {
+      if (rest.length !== 1) throw usage('keychain pub takes one slot');
+      const slot = keychainSlot(rest[0]);
+      return withDevice(io, opts, async ({ device, identity }) => {
+        requireUnlocked(identity, 'keychain pub');
+        const p = await device.probeKeySlot(slot);
+        if (!p.publicKey) throw new CliError(`${slotName(slot)} is ${p.kind}; there is no public key to show`);
+        io.out(`${slotName(slot)} ${p.kind === 'rsa' ? `rsa ${p.bits}` : p.kind}`);
+        printArtifacts(io, keychain.artifacts.forKey({ type: p.kind, publicKey: p.publicKey }));
+        return 0;
+      });
+    }
+
+    if (sub === 'derive') {
+      const [scheme, type, label, ...extra] = rest;
+      if (!scheme || !type || !label || extra.length) throw usage('keychain derive takes a scheme (label, ssh or gpg), a type and a label');
+      return withDevice(io, opts, async ({ okcrypto, identity }) => {
+        requireUnlocked(identity, 'keychain derive');
+        let entry;
+        try {
+          entry = await keychain.derive.derivePublic(okcrypto, { scheme, type, label, version: opts.v2 ? 2 : 1 });
+        } catch (err) {
+          if (/derives|scheme|needs a label/.test(err.message)) throw usage(err.message);
+          throw err;
+        }
+        io.out(`derived ${scheme} ${type} "${label}"`);
+        printArtifacts(io, entry.artifacts);
+        return 0;
+      });
+    }
+
+    if (sub === 'gen') {
+      const [type, ...extra] = rest;
+      if (!type || extra.length) throw usage('keychain gen takes one key type');
+      return opts.host ? keychainGenHost(io, opts, type, keychain) : keychainGenDevice(io, opts, type);
+    }
+
+    throw usage('keychain takes list, pub, derive or gen');
+  },
+};
+
+async function keychainGenDevice(io, opts, type) {
+  const spec = KEYCHAIN_DEVICE_TYPES[type];
+  if (!spec) {
+    throw usage(`the OnlyKey generates ${Object.keys(KEYCHAIN_DEVICE_TYPES).join(', ')}; for "${type}" use --host`);
+  }
+  if (!opts.slot) throw usage('keychain gen on the OnlyKey needs --slot (ECC1-16)');
+  const slot = keychainSlot(opts.slot);
+  if (slot < 101) throw usage('the OnlyKey generates into ECC1-16 only; RSA is made with --host');
+  const label = opts.label === undefined ? null : opts.label;
+  return withDevice(io, opts, async ({ device, identity }) => {
+    requireUnlocked(identity, 'keychain gen');
+    const { keys } = await device.readKeyLabels();
+    const existing = (keys.find((k) => k.slot === slot) || {}).label;
+    if (existing && !opts.yes) {
+      throw new CliError(`${slotName(slot)} is named "${existing}" - it holds a key, and generating destroys it. Run again with --yes to replace it.`);
+    }
+    if (spec.ecc) {
+      const r = await deviceWrite(() => device.generateEccKey(slot, spec.ecc, { [spec.use]: true, label }));
+      io.out(r.response || `Generated ${type} in ${slotName(slot)}`);
+      io.out(`Restart the key (leaving config mode), then: onlykey-js keychain pub ${slotName(slot)}`);
+    } else {
+      const key = await deviceWrite(() => device.generateKey(slot, spec.pq, { label }));
+      const a = require('../src/keychain').artifacts.forKey({ type, publicKey: key });
+      io.out(`Generated ${type} in ${slotName(slot)}`);
+      printArtifacts(io, a);
+    }
+    return 0;
+  });
+}
+
+async function keychainGenHost(io, opts, type, keychain) {
+  const store = opts.slot !== undefined;
+  const pem = opts['export-pem'];
+  const pgpFile = opts['export-pgp'];
+  if (!store && !pem && !pgpFile) {
+    throw usage('a key made here must be stored (--slot) or exported (--export-pem / --export-pgp) - otherwise it is made and lost');
+  }
+
+  if (type === 'pgp') {
+    if (pem) throw usage('a PGP key exports with --export-pgp; --export-pem is for a single key');
+    if (store && opts.slot !== 'auto') throw usage('a PGP key is stored with --slot auto (decryption in 1, signing in 2, as loadkey does)');
+    const userId = opts['user-id'];
+    if (!userId) throw usage('a PGP key needs --user-id "Name <email>"');
+    const m = /^(.*?)\s*<([^>]+)>\s*$/.exec(userId);
+    const uid = m ? { name: m[1], email: m[2] } : { name: userId };
+    const bits = opts.bits === undefined ? null : Number(opts.bits);
+    if (bits !== null && !keychain.generate.RSA_BITS.includes(bits)) {
+      throw usage(`RSA is ${keychain.generate.RSA_BITS.join(', ')} bits`);
+    }
+    const openpgp = require('../src/crypto/pgp');
+    const { privateKey } = await openpgp.generateKey({
+      ...(bits ? { type: 'rsa', rsaBits: bits } : { type: 'ecc', curve: 'curve25519' }),
+      userIDs: [uid], format: 'object',
+    });
+    if (pgpFile) {
+      const passphrase = await promptSecret(io, 'Passphrase for the copy: ', 'passphrase');
+      const again = await promptSecret(io, 'Again: ', 'passphrase');
+      const armored = await keychain.export.encryptedPgp(privateKey, passphrase, { confirm: again, openpgp })
+        .catch((err) => { throw usage(`${err.message} Nothing was written.`); });
+      await io.writeFile(pgpFile, armored);
+      io.out(`Encrypted copy written to ${pgpFile}`);
+    }
+    if (store) {
+      await withDevice(io, opts, async ({ device, identity }) => {
+        requireUnlocked(identity, 'keychain gen');
+        const loaded = await deviceWrite(() => device.loadPgpKey(privateKey, {}));
+        io.out(`Loaded: ${loaded.map((l) => `${l.role} in slot ${l.slot}`).join(', ')}`);
+      });
+    }
+    io.out(privateKey.toPublic().armor().trimEnd());
+    return 0;
+  }
+
+  let key;
+  try {
+    key = await keychain.generate.hostKey(type, { bits: opts.bits === undefined ? 2048 : Number(opts.bits) });
+  } catch (err) {
+    throw usage(err.message);
+  }
+  try {
+    if (pgpFile) throw usage('--export-pgp is for a PGP key (keychain gen pgp --host); a single key exports with --export-pem');
+    if (pem) {
+      const passphrase = await promptSecret(io, 'Passphrase for the copy: ', 'passphrase');
+      const again = await promptSecret(io, 'Again: ', 'passphrase');
+      const pemKey = type === 'rsa' ? { type, p: key.p, q: key.q, e: key.e } : { type, secret: key.secret };
+      const text = await keychain.export.encryptedPem(pemKey, passphrase, { confirm: again })
+        .catch((err) => { throw usage(`${err.message} Nothing was written.`); });
+      await io.writeFile(pem, text);
+      io.out(`Encrypted copy written to ${pem}`);
+    }
+    if (store) {
+      const slot = keychainSlot(opts.slot);
+      if ((slot <= 4) !== (type === 'rsa')) throw usage(type === 'rsa' ? 'an RSA key goes in RSA1-4' : 'an ECC key goes in ECC1-16');
+      const use = type === 'x25519' ? { decryption: true } : { signature: true };
+      const prepared = deviceKeys.prepareKey(key.material, { slot, ...use });
+      await withDevice(io, opts, async ({ device, identity }) => {
+        requireUnlocked(identity, 'keychain gen');
+        const { keys } = await device.readKeyLabels();
+        const existing = (keys.find((k) => k.slot === slot) || {}).label;
+        if (existing && !opts.yes) {
+          throw new CliError(`${slotName(slot)} is named "${existing}" - it holds a key, and loading over it destroys it. Run again with --yes to replace it.`);
+        }
+        const r = await deviceWrite(() => device.loadKey(slot, { type: prepared.type, key: prepared.key },
+          { label: opts.label === undefined ? null : opts.label }));
+        prepared.key.fill(0);
+        if (r.response) io.out(r.response);
+      });
+    }
+    io.out(`${type}${type === 'rsa' ? ` ${key.bits}` : ''} public key:`);
+    printArtifacts(io, keychain.artifacts.forKey({ type, publicKey: key.publicKey }));
+    return 0;
+  } finally {
+    keychain.generate.wipe(key);
+  }
+}
+
 COMMANDS.wipekey = {
   mirrors: 'wipekey',
   usage: '<RSA1-4|ECC1-16|HMAC1-2>',
@@ -1845,6 +2086,13 @@ async function main(argv, io = {}) {
     start: io.start || ((opts) => require('./desktop').startDesktop(opts)),
     prompt: io.prompt || ((question) => require('./prompt').promptSecret(question)),
     readFile: io.readFile || ((file) => require('fs').promises.readFile(file, 'utf8')),
+    /*
+     * keychain only: an exported key. 'wx' never overwrites (a lost copy is
+     * worse than an error), and 0600 keeps an encrypted private copy the
+     * owner's alone.
+     */
+    writeFile: io.writeFile
+      || ((file, text) => require('fs').promises.writeFile(file, text, { flag: 'wx', mode: 0o600 })),
     /* agent only: how long a foreground agent serves, and how a command runs under it. */
     untilStopped: io.untilStopped,
     runCommand: io.runCommand,

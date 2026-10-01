@@ -43,7 +43,7 @@ test('derivePublic: label, X-Wing, SSH and GPG identities - each through the dev
   const xw = random(1216);
   const ok = stubOkcrypto({
     'l:example.com:1': p, 'l:inbox:3': x, 'x:backups': xw,
-    'a:"me@host":1': ed, 'a:{"gpg":"Me <me@x>"}:1': ed,
+    'a:{"ssh":{"user":"me","host":"host"}}:1': ed, 'a:{"gpg":"Me <me@x>"}:1': ed,
   });
   const e1 = await derive.derivePublic(ok, { scheme: 'label', label: 'example.com', type: 'p256', now: fixed });
   assert.equal(e1.publicKey.length, 64, '0x04 prefix dropped, X||Y like the slots');

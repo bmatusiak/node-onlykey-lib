@@ -55,7 +55,11 @@ async function derivePublic(okcrypto, spec) {
     if (AGENT_TYPES[type] === undefined) {
       throw new Error(`an ${scheme} identity derives ${Object.keys(AGENT_TYPES).join(' or ')}; not "${type}"`);
     }
-    const identity = scheme === 'gpg' ? { gpg: label } : label;
+    /* The agent's identity shapes (protocol/agent.js identityHash): user@host, or a host alone. */
+    const at = label.lastIndexOf('@');
+    const identity = scheme === 'gpg'
+      ? { gpg: label }
+      : { ssh: at > 0 ? { user: label.slice(0, at), host: label.slice(at + 1) } : { host: label } };
     publicKey = Uint8Array.from(await okcrypto.agent.publicKey(identity, { keyType: AGENT_TYPES[type], version }));
   } else {
     throw new Error(`unknown derivation scheme "${scheme}" - label, ssh or gpg`);
