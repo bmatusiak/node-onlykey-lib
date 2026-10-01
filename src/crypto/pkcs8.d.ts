@@ -23,13 +23,16 @@ export function privateKeyInfo(key: {
  *
  * @param {Parameters<typeof privateKeyInfo>[0]} key
  * @param {string} passphrase at least 25 characters (the backup passphrase's rule)
- * @param {{confirm?: string, iterations?: number, salt?: Uint8Array, iv?: Uint8Array}} [opts]
- *   salt/iv are for frozen test vectors only
+ * @param {{confirm?: string, iterations?: number, salt?: Uint8Array, iv?: Uint8Array,
+ *   onProgress?: ((fraction: number) => void) | null}} [opts]
+ *   salt/iv are for frozen test vectors only; onProgress follows the passphrase
+ *   stretching (0..1) - the slow part where no native PBKDF2 is lent
  * @returns {Promise<string>}
  */
-export function encryptedPem(key: Parameters<typeof privateKeyInfo>[0], passphrase: string, { confirm, iterations, salt, iv }?: {
+export function encryptedPem(key: Parameters<typeof privateKeyInfo>[0], passphrase: string, { confirm, iterations, salt, iv, onProgress }?: {
     confirm?: string;
     iterations?: number;
     salt?: Uint8Array;
     iv?: Uint8Array;
+    onProgress?: ((fraction: number) => void) | null;
 }): Promise<string>;

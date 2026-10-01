@@ -57,6 +57,13 @@
  * RSA keys, are made through one path on every platform. Without the hook,
  * RSA generation is still refused exactly as before.
  *
+ * PBKDF2 the same way: `install({ pbkdf2 })` lends a native
+ * `async (password, salt, iterations, dkLen) => Uint8Array` (ok-rn: Android's
+ * HMAC-SHA256, natively). Without it PBKDF2 still works, in JavaScript
+ * (crypto/pbkdf2.js) - correct but slow under Hermes, which is why
+ * crypto/pbkdf2.js runs its own loop with progress instead when no native
+ * one was lent (`okShim.nativePbkdf2` tells it).
+ *
  * ## Fidelity
  *
  * Checked against Node's own `crypto.subtle` rather than against this file's
@@ -76,6 +83,7 @@ const { p256, p384, p521 } = require('../vendor/exports/@noble/curves/nist.js');
 
 const { toBase64Url, fromBase64Url } = require('../bytes');
 const rsa = require('../crypto/rsa');
+const { pbkdf2Loop } = require('../crypto/pbkdf2');
 
 /* ------------------------------------------------------------------ errors */
 
@@ -169,8 +177,10 @@ function requireUsage(key, usage) {
 
 /* ------------------------------------------------------------------- subtle */
 
-function createSubtle({ rsaGenerate = null } = {}) {
+function createSubtle({ rsaGenerate = null, pbkdf2 = null } = {}) {
   const subtle = {
+    /* Not WebCrypto: how crypto/pbkdf2.js tells this shim from a platform's. */
+    okShim: { nativePbkdf2: typeof pbkdf2 === 'function' },
     async digest(algorithm, data) {
       return bufferOf(hashFor(algorithm)(bytes(data)));
     },
@@ -182,7 +192,7 @@ function createSubtle({ rsaGenerate = null } = {}) {
         const material = bytes(keyData);
         switch (name) {
           case 'AES-CBC': case 'AES-CTR': case 'AES-GCM': case 'AES-KW':
-          case 'HMAC': case 'HKDF':
+          case 'HMAC': case 'HKDF': case 'PBKDF2':
             return makeKey('secret', algorithm, extractable, usages, material);
           case 'ECDH': case 'ECDSA':
             // A raw EC key is always the PUBLIC point.
@@ -446,6 +456,17 @@ function createSubtle({ rsaGenerate = null } = {}) {
         return bufferOf(shared.subarray(0, want));
       }
 
+      if (name === 'PBKDF2') {
+        if (algName(algorithm.hash) !== 'SHA-256') throw notSupported(`PBKDF2 with ${algName(algorithm.hash)}`);
+        const salt = bytes(algorithm.salt);
+        const dkLen = length / 8;
+        const out = typeof pbkdf2 === 'function'
+          ? bytes(await pbkdf2(key._material, salt, algorithm.iterations, dkLen))
+          : await pbkdf2Loop(key._material, salt, algorithm.iterations, dkLen);
+        if (out.length !== dkLen) throw operationFailed(`the host's PBKDF2 returned ${out.length} bytes, not ${dkLen}`);
+        return bufferOf(out);
+      }
+
       throw notSupported(`deriveBits(${name})`);
     },
 
@@ -534,9 +555,11 @@ function randomBytes(n) {
  *   where a real one exists.
  * @param {((bits: number, e: number) => Promise<{p: Uint8Array, q: Uint8Array}>)|null} [opts.rsaGenerate]
  *   the host's RSA prime generator; without it RSA key generation is refused
+ * @param {((password: Uint8Array, salt: Uint8Array, iterations: number, dkLen: number) => Promise<Uint8Array>)|null} [opts.pbkdf2]
+ *   the host's native PBKDF2-HMAC-SHA256; without it PBKDF2 runs in JavaScript
  * @returns {{installed: boolean, reason: string}}
  */
-function install({ force = false, rsaGenerate = null } = {}) {
+function install({ force = false, rsaGenerate = null, pbkdf2 = null } = {}) {
   const g = globalThis;
   if (!g.crypto) {
     // Not writable on every runtime, so this can legitimately fail.
@@ -551,7 +574,7 @@ function install({ force = false, rsaGenerate = null } = {}) {
   }
   try {
     Object.defineProperty(g.crypto, 'subtle', {
-      value: createSubtle({ rsaGenerate }), configurable: true, writable: true,
+      value: createSubtle({ rsaGenerate, pbkdf2 }), configurable: true, writable: true,
     });
   } catch {
     return { installed: false, reason: 'crypto.subtle is not writable on this runtime' };

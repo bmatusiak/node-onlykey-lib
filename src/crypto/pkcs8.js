@@ -35,8 +35,7 @@
  * values, bytes.js for base64 - no Node built-ins, so this runs under Hermes.
  */
 
-const { pbkdf2Async } = require('../vendor/exports/@noble/hashes/pbkdf2.js');
-const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { pbkdf2Sha256 } = require('./pbkdf2');
 const { cbc } = require('../vendor/exports/@noble/ciphers/aes.js');
 const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
 const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
@@ -171,17 +170,19 @@ function pem(label, der) {
  *
  * @param {Parameters<typeof privateKeyInfo>[0]} key
  * @param {string} passphrase at least 25 characters (the backup passphrase's rule)
- * @param {{confirm?: string, iterations?: number, salt?: Uint8Array, iv?: Uint8Array}} [opts]
- *   salt/iv are for frozen test vectors only
+ * @param {{confirm?: string, iterations?: number, salt?: Uint8Array, iv?: Uint8Array,
+ *   onProgress?: ((fraction: number) => void) | null}} [opts]
+ *   salt/iv are for frozen test vectors only; onProgress follows the passphrase
+ *   stretching (0..1) - the slow part where no native PBKDF2 is lent
  * @returns {Promise<string>}
  */
-async function encryptedPem(key, passphrase, { confirm = null, iterations = DEFAULT_ITERATIONS, salt, iv } = {}) {
+async function encryptedPem(key, passphrase, { confirm = null, iterations = DEFAULT_ITERATIONS, salt, iv, onProgress = null } = {}) {
   const problems = validateBackupPassphrase(passphrase, confirm);
   if (problems.length) throw new Error(problems.join(' '));
   const info = privateKeyInfo(key);
   const s = salt || randomBytes(16);
   const v = iv || randomBytes(16);
-  const kek = await pbkdf2Async(sha256, utf8ToBytes(String(passphrase)), s, { c: iterations, dkLen: 32 });
+  const kek = await pbkdf2Sha256(utf8ToBytes(String(passphrase)), s, iterations, 32, { onProgress });
   const encrypted = cbc(kek, v).encrypt(info);
   kek.fill(0);
   info.fill(0);

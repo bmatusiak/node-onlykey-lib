@@ -1,6 +1,10 @@
-export function createSubtle({ rsaGenerate }?: {
+export function createSubtle({ rsaGenerate, pbkdf2 }?: {
     rsaGenerate?: null | undefined;
+    pbkdf2?: null | undefined;
 }): {
+    okShim: {
+        nativePbkdf2: boolean;
+    };
     digest(algorithm: any, data: any): Promise<any>;
     importKey(format: any, keyData: any, algorithm: any, extractable: any, usages: any): Promise<{
         type: any;
@@ -56,14 +60,17 @@ export function createSubtle({ rsaGenerate }?: {
  *   where a real one exists.
  * @param {((bits: number, e: number) => Promise<{p: Uint8Array, q: Uint8Array}>)|null} [opts.rsaGenerate]
  *   the host's RSA prime generator; without it RSA key generation is refused
+ * @param {((password: Uint8Array, salt: Uint8Array, iterations: number, dkLen: number) => Promise<Uint8Array>)|null} [opts.pbkdf2]
+ *   the host's native PBKDF2-HMAC-SHA256; without it PBKDF2 runs in JavaScript
  * @returns {{installed: boolean, reason: string}}
  */
-export function install({ force, rsaGenerate }?: {
+export function install({ force, rsaGenerate, pbkdf2 }?: {
     force?: boolean | undefined;
     rsaGenerate?: ((bits: number, e: number) => Promise<{
         p: Uint8Array;
         q: Uint8Array;
     }>) | null | undefined;
+    pbkdf2?: ((password: Uint8Array, salt: Uint8Array, iterations: number, dkLen: number) => Promise<Uint8Array>) | null | undefined;
 }): {
     installed: boolean;
     reason: string;

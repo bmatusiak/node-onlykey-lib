@@ -17,6 +17,16 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **PBKDF2 natively where the platform can, with progress where it cannot.**
+  New `src/crypto/pbkdf2.js`: `pbkdf2Sha256(password, salt, iterations, dkLen,
+  { onProgress })` uses WebCrypto's PBKDF2 (Node, browsers, or the shim when
+  the host lent a native one) and otherwise runs the RFC 8018 loop itself,
+  reporting 0..1 and yielding between steps so a UI can draw a bar. The
+  WebCrypto shim implements PBKDF2 and takes a host hook, `install({ pbkdf2 })`
+  (ok-rn lends Android's); `okShim.nativePbkdf2` says which. Key Chain's
+  `encryptedPem` uses it and takes `onProgress` - 600000 rounds were a long,
+  silent wait under Hermes. Every path is held to Node's `pbkdf2Sync`.
+
 - **Key Chain L7: `onlykey-js keychain`.** `list` (every key slot: what it
   holds, its label, a fingerprint), `pub <slot>` (SSH line / age recipient /
   hex), `derive <label|ssh|gpg> <type> <label> [--v2]`, `gen <type> --slot`
