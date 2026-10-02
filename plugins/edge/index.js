@@ -34,11 +34,14 @@ const SUB = Object.freeze({
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
  * bytes, so GRANT_CREATE (50 bytes already) carries only the first 8 bytes of
- * the verified head, and REPLAY only the link's first 46 (bytes 46-63 are
- * reserved and zero in every link a key writes; the key fills them back).
+ * the verified head, and REPLAY the link's first 46 bytes (bytes 46-63 are
+ * reserved and zero in every link a key writes; the key fills them back) plus
+ * the first 8 bytes of the head the copy stored after it - the key's only way
+ * to tell that the link welds where the copy says it does.
  */
 const GRANT_HEAD_BYTES = 8;
 const REPLAY_BYTES = 46;
+const REPLAY_HEAD_BYTES = 8;
 const SEQ_NONE = 0xffffffff;
 const HELD = 8;
 
@@ -285,17 +288,19 @@ function setup(imports, register) {
 
     /**
      * R26: hand the key, while it is restoring, the next link of the newest copy
-     * the host has. The key takes it only if it is its next seq and welds onto
-     * its head ('replay-mismatch' otherwise: where the copy forks or is from
-     * another key - stop there and show it). It moves the head and applies the
-     * debt rules; no press.
+     * the host has, with the head the copy stored after it. The key takes it
+     * only if it is its next seq and welding it onto the key's head gives that
+     * head ('replay-mismatch' otherwise: where the copy forks or is from another
+     * key - stop there and show it). It moves the head and applies the debt
+     * rules; no press.
      */
-    async replay(link, opts) {
+    async replay(link, storedHead, opts) {
       if (!(link instanceof Uint8Array) || link.length !== chain.LINK_BYTES) throw new TypeError(`Edge: a link is ${chain.LINK_BYTES} bytes`);
+      if (!(storedHead instanceof Uint8Array) || storedHead.length !== 32) throw new TypeError('Edge: replay needs the head the copy stored after the link');
       if (!chain.decodeLink(link).reservedZero) {
         throw Object.assign(new Error('Edge: this link has non-zero reserved bytes - no key wrote it'), { code: 'EDGE_NOT_A_KEY_LINK' });
       }
-      await call(SUB.REPLAY, link.subarray(0, REPLAY_BYTES), { ...opts, text: true });
+      await call(SUB.REPLAY, concat([link.subarray(0, REPLAY_BYTES), storedHead.subarray(0, REPLAY_HEAD_BYTES)]), { ...opts, text: true });
       return true;
     },
 

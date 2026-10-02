@@ -129,6 +129,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         link.set(arg.slice(0, 46));
         const f = chain.decodeLink(link);
         if (f.seq !== held.length) return emit(status(0x0f));
+        if (!same(chain.weld(head, link).slice(0, 8), arg.slice(46, 54))) return emit(status(0x0f));
         head = chain.weld(head, link);
         held.push({ link, head });
         emit(status(0x00));
@@ -280,10 +281,14 @@ test('edge: a restoring key fails the copy check; REPLAY sends 46 bytes, REPLAY_
   assert.equal((await edge.head()).restoring, true);
   assert.equal((await edge.grants.check(await copyOf(edge))).reason, 'restoring');
   const next = chain.encodeLink({ seq: 1, op: codes.OP.SIGN, decision: codes.DECISION.DENY, subject: new Uint8Array(32).fill(4) });
-  assert.equal(await edge.replay(next), true);
+  const h0 = await edge.head();
+  /* a copy whose head after the link is not the key's weld: forked */
+  await assert.rejects(edge.replay(next, new Uint8Array(32).fill(6)), (e) => e.status === 'replay-mismatch');
+  assert.equal(await edge.replay(next, chain.weld(h0.head, next)), true);
   assert.equal((await edge.head()).seq, 1);
-  await assert.rejects(edge.replay(chain.encodeLink({ seq: 5, op: 1, decision: 2, subject: new Uint8Array(32) })), (e) => e.status === 'replay-mismatch');
-  await assert.rejects(edge.replay(chain.encodeLink({ seq: 2, op: 1, decision: 2, subject: new Uint8Array(32), reserved: new Uint8Array(18).fill(1) })),
+  const far = chain.encodeLink({ seq: 5, op: 1, decision: 2, subject: new Uint8Array(32) });
+  await assert.rejects(edge.replay(far, chain.weld(h0.head, far)), (e) => e.status === 'replay-mismatch');
+  await assert.rejects(edge.replay(chain.encodeLink({ seq: 2, op: 1, decision: 2, subject: new Uint8Array(32), reserved: new Uint8Array(18).fill(1) }), new Uint8Array(32)),
     (e) => e.code === 'EDGE_NOT_A_KEY_LINK');
   let asked = false;
   const done = await edge.replayDone({ newestSeq: 1, onPress: () => { asked = true; } });

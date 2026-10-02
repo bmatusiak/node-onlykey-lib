@@ -104,7 +104,8 @@ the commit that release ended at.
       adds `restoring`. Statuses 0E restoring, 0F replay-mismatch, 10
       replay-closed.
     - CHOSEN, pending the spec: GRANT_CREATE carries the first 8 bytes of the
-      verified head and REPLAY the link's first 46 bytes (a vendor report has
+      verified head and REPLAY the link's first 46 bytes plus the first 8 of the
+      head the copy stored after it, so the key can check the weld (a vendor report has
       58 argument bytes; bytes 46-63 of a link are reserved zeros).
     - Fixed: `pairTickets` counted "the newest 4 unpaid" as waiting. The key's
       list does not refill once a use falls off, so after a 5th use and one
