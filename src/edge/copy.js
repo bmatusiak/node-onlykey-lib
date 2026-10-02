@@ -43,7 +43,7 @@ const { hmacSha256, same } = require('./hash');
  * copy: {
  *   links:    [{link, head?, reveal?}] from seq 0, oldest first (reveal = the
  *             self-press's v_i, as PICKUP gave it),
- *   openings: {[grantId]: {scopes, reasonHash, genesis, uses, signature}} -
+ *   openings: {[grantId]: {scopes, reasonHash, genesis, uses, lifetime, signature}} -
  *             what the host asked for and the checkpoint signature its press
  *             answered with (edge.grant's reply),
  * }
@@ -91,7 +91,7 @@ function verifyCopy(copy, key) {
       if (!o) return fail('budget-opening-missing', { seq: f.seq, detail: { grantId: f.grantId } });
       const r = grants.verifyBudgetOpening({
         deviceId, publicKey: key.publicKey, link: raw[f.seq], prevHead: headAt(f.seq - 1), head: headAt(f.seq),
-        signature: o.signature, scopes: o.scopes, reasonHash: o.reasonHash, genesis: o.genesis, uses: o.uses,
+        signature: o.signature, scopes: o.scopes, reasonHash: o.reasonHash, genesis: o.genesis, uses: o.uses, lifetime: o.lifetime || 0,
       });
       if (!r.ok || r.grantId !== f.grantId) return fail('budget-opening', { seq: f.seq, detail: { grantId: f.grantId, reason: r.reason || 'grant-id' } });
       spends.set(f.grantId, []);

@@ -206,7 +206,18 @@ test('device id and checkpoint digest match the Python reading', () => {
   assert.equal(toHex(chain.deviceIdOf(fromHex(V.deviceFromPub.pub))), V.deviceFromPub.deviceId);
   const c = V.checkpoint;
   assert.equal(toHex(chain.checkpointDigest({ deviceId, seq: c.seq, head: fromHex(c.head) })), c.digest);
-  assert.equal(toHex(grants.grantSubject({ scopes: V.grant.scopes, reasonHash: fromHex(V.grant.reasonHash), genesis: fromHex(V.grant.genesis) })), V.grant.subject);
+  assert.equal(toHex(grants.grantSubject({ scopes: V.grant.scopes, reasonHash: fromHex(V.grant.reasonHash), genesis: fromHex(V.grant.genesis), lifetime: V.grant.lifetime })), V.grant.subject);
+  /* the lifetime is in the subject: another lifetime is another budget */
+  assert.notEqual(toHex(grants.grantSubject({ scopes: V.grant.scopes, reasonHash: fromHex(V.grant.reasonHash), genesis: fromHex(V.grant.genesis), lifetime: 0 })), V.grant.subject);
+});
+
+test('ARM token (R13a) matches the Python reading, and binds both the head and the request', () => {
+  const a = V.arm;
+  assert.equal(toHex(grants.armToken({ head: fromHex(a.head), subject: fromHex(a.subject) })), a.token);
+  assert.notEqual(toHex(grants.armToken({ head: fromHex(a.head), subject: new Uint8Array(32) })), a.token);
+  assert.notEqual(toHex(grants.armToken({ head: new Uint8Array(32), subject: fromHex(a.subject) })), a.token);
+  /* the vector's subject is the request subject of its bytes */
+  assert.equal(toHex(grants.requestSubject(new TextEncoder().encode('the bytes the agent submits'))), a.subject);
 });
 
 test('checkpoint: Node\'s own ECDSA and the lib agree in both directions', () => {

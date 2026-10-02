@@ -24,6 +24,14 @@ const { TAG, OP } = require('./codes');
 const chain = require('./chain');
 const { H, hmacSha256, bytes32, same, u8 } = require('./hash');
 
+/* R15b: a lifetime of 0 means the key's default, 12 hours (Brad, 2026-10-02) */
+const DEFAULT_LIFETIME_MINUTES = 12 * 60;
+
+function u16le(n) {
+  if (!Number.isInteger(n) || n < 0 || n > 0xffff) throw new RangeError(`edge: lifetime not a u16 of minutes: ${n}`);
+  return Uint8Array.of(n & 0xff, n >>> 8);
+}
+
 /* owner, 2026-10-02: "1 budget max chain is 255" (the spec said 1024) */
 const MAX_USES = 255;
 
@@ -128,8 +136,38 @@ function encodeScopes(scopes) {
 }
 
 
-function grantSubject({ scopes, reasonHash, genesis }) {
-  return H(TAG.GRANT, encodeScopes(scopes), bytes32(reasonHash, 'reasonHash'), bytes32(genesis, 'genesis'));
+/*
+ * R12 + R15b (2026-10-02): the subject ends with the lifetime the person
+ * approved (u16 LE minutes, 0 = the key's default), so the checkpoint over the
+ * grant-create link signs the genesis AND how long the budget may live.
+ */
+function grantSubject({ scopes, reasonHash, genesis, lifetime = 0 }) {
+  return H(TAG.GRANT, encodeScopes(scopes), bytes32(reasonHash, 'reasonHash'), bytes32(genesis, 'genesis'), u16le(lifetime));
+}
+
+/*
+ * R13a (2026-10-02): ARM {token} arms ONE self-press for ONE request:
+ *   token = SHA256("OKEDGE-ARM-v1" || head || subject)
+ * subject = SHA-256 of exactly the bytes the agent will submit - the subject
+ * the link records. The key recomputes it from ITS head and the request it
+ * gets; anything else (a stale head, another program's request) uses the arm
+ * up and needs a press.
+ */
+/*
+ * The subject of a sign/decrypt: SHA-256 of EXACTLY the bytes the firmware
+ * primes - the reassembled payload it hands okcore_prime_user_confirmation,
+ * which the Edge plugin hashes into the link (pend.subject). For a chunked
+ * request that is every chunk joined, without the framing. What a host signs
+ * or decrypts must be these bytes and no others, or the ARM token will not
+ * match and the key asks for a press.
+ */
+function requestSubject(bytes) {
+  if (!(bytes instanceof Uint8Array) || !bytes.length) throw new TypeError('edge: requestSubject needs the request bytes');
+  return sha256(bytes);
+}
+
+function armToken({ head, subject }) {
+  return H(TAG.ARM, bytes32(head, 'head'), bytes32(subject, 'subject'));
 }
 
 /**
@@ -145,11 +183,11 @@ function grantSubject({ scopes, reasonHash, genesis }) {
  *   bad-signature      the checkpoint is not the Edge key's over (seq, head)
  * prevHead is not trusted: a wrong one cannot weld to the signed head.
  */
-function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses }) {
+function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses, lifetime = 0 }) {
   if (scopes.reduce((n, s) => n + s.cap, 0) !== uses) return { ok: false, reason: 'uses-mismatch' };
   const f = chain.decodeLink(link);
   if (f.op !== OP.GRANT_CREATE) return { ok: false, reason: 'not-a-grant-create' };
-  if (!same(f.subject, grantSubject({ scopes, reasonHash, genesis }))) return { ok: false, reason: 'subject-mismatch' };
+  if (!same(f.subject, grantSubject({ scopes, reasonHash, genesis, lifetime }))) return { ok: false, reason: 'subject-mismatch' };
   if (!same(chain.weld(prevHead, link), head)) return { ok: false, reason: 'weld-mismatch' };
   if (!chain.verifyCheckpoint({ deviceId, seq: f.seq, head }, signature, publicKey)) return { ok: false, reason: 'bad-signature' };
   return { ok: true, grantId: f.grantId, seq: f.seq };
@@ -157,5 +195,5 @@ function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signat
 
 module.exports = {
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
-  encodeScopes, grantSubject, verifyBudgetOpening,
+  encodeScopes, grantSubject, requestSubject, armToken, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
 };

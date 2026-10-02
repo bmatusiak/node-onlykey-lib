@@ -33,13 +33,14 @@ const SUB = Object.freeze({
 });
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
- * bytes, so GRANT_CREATE (50 bytes already) carries only the first 8 bytes of
- * the verified head, and REPLAY the link's first 46 bytes (bytes 46-63 are
+ * bytes. GRANT_CREATE (spec layout, 2026-10-02): [49] flags, [50..51] the
+ * lifetime (u16 LE minutes, R15b), [52..57] the first 6 bytes of the verified
+ * head (R27). CHOSEN, pending the spec: REPLAY the link's first 46 bytes (bytes 46-63 are
  * reserved and zero in every link a key writes; the key fills them back) plus
  * the first 8 bytes of the head the copy stored after it - the key's only way
  * to tell that the link welds where the copy says it does.
  */
-const GRANT_HEAD_BYTES = 8;
+const GRANT_HEAD_BYTES = 6;
 const REPLAY_BYTES = 46;
 const REPLAY_HEAD_BYTES = 8;
 const SEQ_NONE = 0xffffffff;
@@ -201,15 +202,21 @@ function setup(imports, register) {
      * verifiedHead: the head the host verified its copy up to (R27); the key
      *   refuses with 'stale-head' when it is not its current head. This is the
      *   raw call: grants.create() runs the copy check first and fails closed.
-     * -> {grantId, uses, genesis, seq, checkpoint: {seq, head, signature}}
+     * ttlMinutes: the budget's lifetime (R15b), 1..65535; 0 = the key's default
+     *   (12 hours). It is in the grant-create subject, so the chain records it.
+     * -> {grantId, uses, genesis, lifetime, seq, checkpoint: {seq, head, signature}}
      */
-    async grant({ scopes, reasonHash, verifiedHead, onPress, timeoutMs = 30000 }) {
+    async grant({ scopes, reasonHash, verifiedHead, ttlMinutes = 0, onPress, timeoutMs = 30000 }) {
       if (!(verifiedHead instanceof Uint8Array) || verifiedHead.length !== 32) throw new TypeError('Edge: grant needs the 32-byte head the host verified (R27)');
+      if (!Number.isInteger(ttlMinutes) || ttlMinutes < 0 || ttlMinutes > 0xffff) throw new RangeError(`Edge: ttlMinutes is 0..65535, not ${ttlMinutes}`);
       const enc = require('../../src/edge').grants.encodeScopes(scopes);
-      const args = new Uint8Array(49 + GRANT_HEAD_BYTES);
+      const args = new Uint8Array(52 + GRANT_HEAD_BYTES);
       args.set(enc, 0); /* count + up to 4 x (op, slot, cap u16) */
       args.set(reasonHash, 17);
-      args.set(verifiedHead.subarray(0, GRANT_HEAD_BYTES), 49);
+      args[49] = 0; /* flags */
+      args[50] = ttlMinutes & 0xff;
+      args[51] = ttlMinutes >>> 8;
+      args.set(verifiedHead.subarray(0, GRANT_HEAD_BYTES), 52);
       await busQuiet();
       const pending = callNow(SUB.GRANT_CREATE, args, { reports: 3, timeoutMs }); /* written synchronously */
       if (onPress) onPress(); /* the request is on the key: now ask for the press */
@@ -218,6 +225,7 @@ function setup(imports, register) {
         grantId: get32(g, 0),
         uses: get16(g, 4),
         genesis: g.slice(6, 38),
+        lifetime: ttlMinutes,
         seq: get32(g, 38),
         checkpoint: { seq: get32(c, 0), head: c.slice(4, 36), signature: s.slice(0, 64) },
       };
@@ -241,15 +249,20 @@ function setup(imports, register) {
     },
 
     /**
-     * R13a: arm ONE self-press. `head` is the head the key returned after the
-     * previous step (the grant's checkpoint for a budget's first use, the
-     * ticket's reply after that). Refused - EdgeError 'stale-head',
-     * 'ticket-owed', 'nothing-to-arm' - when the chain moved, a ticket is owed,
-     * or no live budget that is not on hold exists. The next sign/decrypt uses
-     * it; any other link clears it.
+     * R13a: arm ONE self-press for ONE request. `head` is the head the key
+     * returned after the previous step (the grant's checkpoint for a budget's
+     * first use, the ticket's reply after that); `subject` is SHA-256 of
+     * exactly the bytes the next sign/decrypt will submit. The key gets only
+     * the token SHA256("OKEDGE-ARM-v1" || head || subject) and pays for the next
+     * request only if it recomputes the same token from its own head and that
+     * request; anything else uses the arm up and needs a press. Refused -
+     * EdgeError 'ticket-owed', 'nothing-to-arm', 'restoring' - when a ticket is
+     * owed, no live budget off hold and unexpired could pay, or a restore is
+     * unfinished. A stale head shows at the sign (as a press), not here.
      */
-    async arm(head, opts) {
-      await call(SUB.ARM, head, { ...opts, text: true });
+    async arm(head, subject, opts) {
+      const { grants } = require('../../src/edge');
+      await call(SUB.ARM, grants.armToken({ head, subject }), { ...opts, text: true });
       return true;
     },
 
@@ -327,9 +340,9 @@ function setup(imports, register) {
      * copy: {links: [{link, head, reveal}], openings: {[grantId]: {...}}}
      */
     grants: {
-      async create({ copy, scopes, reasonHash, onPress, timeoutMs }) {
+      async create({ copy, scopes, reasonHash, ttlMinutes, onPress, timeoutMs }) {
         const h = await verifiedHeadOf(copy);
-        return edge.grant({ scopes, reasonHash, verifiedHead: h, onPress, timeoutMs });
+        return edge.grant({ scopes, reasonHash, verifiedHead: h, ttlMinutes, onPress, timeoutMs });
       },
       async resume(grantId, { copy, onPress, timeoutMs } = {}) {
         const h = await verifiedHeadOf(copy);

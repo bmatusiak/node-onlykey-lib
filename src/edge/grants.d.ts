@@ -51,10 +51,16 @@ export function checkSpends(genesis: any, uses: any, spends: any): {
     failure?: undefined;
 };
 export function encodeScopes(scopes: any): Uint8Array<ArrayBuffer>;
-export function grantSubject({ scopes, reasonHash, genesis }: {
+export function grantSubject({ scopes, reasonHash, genesis, lifetime }: {
     scopes: any;
     reasonHash: any;
     genesis: any;
+    lifetime?: number | undefined;
+}): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export function requestSubject(bytes: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export function armToken({ head, subject }: {
+    head: any;
+    subject: any;
 }): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /**
  * Check a budget's opening as one standalone proof:
@@ -69,7 +75,7 @@ export function grantSubject({ scopes, reasonHash, genesis }: {
  *   bad-signature      the checkpoint is not the Edge key's over (seq, head)
  * prevHead is not trusted: a wrong one cannot weld to the signed head.
  */
-export function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses }: {
+export function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses, lifetime }: {
     deviceId: any;
     publicKey: any;
     link: any;
@@ -80,6 +86,7 @@ export function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head,
     reasonHash: any;
     genesis: any;
     uses: any;
+    lifetime?: number | undefined;
 }): {
     ok: boolean;
     reason: string;
@@ -91,3 +98,4 @@ export function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head,
     seq: number;
     reason?: undefined;
 };
+export const DEFAULT_LIFETIME_MINUTES: number;

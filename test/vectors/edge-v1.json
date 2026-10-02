@@ -65,7 +65,13 @@
       }
     ],
     "reasonHash": "8fcfccf675b1f0bfd39dcbb13015052fe82bc51c003c165a410945c913dbb2be",
-    "subject": "63b1ec96b12260db7d8f76c1fcb7770a9801c24b0011b8100b5a9794da6c1034"
+    "lifetime": 120,
+    "subject": "580420a91ed11840e26e97cdde1c2be90b4a7d6bcbe789a29f5d3bb7c548eba4"
+  },
+  "arm": {
+    "head": "6c4a3f79940120fda81db4df5eec9df67298d61e4074be70ecb8953d2e5a3e82",
+    "subject": "3257a16d5ef46df8d622bd4279687426200b26d66058c8d80fd0c968303ba0ca",
+    "token": "c1d8a50647b8911a4affc4f13aa35a93ef4281627e388777f7888e34aa823888"
   },
   "checkpoint": {
     "seq": 5,

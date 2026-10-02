@@ -61,6 +61,8 @@ const TAG = Object.freeze({
   RECEIPT: 'OKEDGE-RCPT-v1',
   /* firmware.md R18: a human's press clears every owed ticket at once */
   WAIVE: 'OKEDGE-WAIVE-v1',
+  /* firmware.md R13a (2026-10-02): an ARM is bound to the head AND the exact request */
+  ARM: 'OKEDGE-ARM-v1',
 });
 
 /*

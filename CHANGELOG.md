@@ -88,6 +88,22 @@ the commit that release ended at.
     - Codes: sub-ops GRANT_HOLD 0x13, GRANT_RESUME 0x14, WAIVE 0x21, ARM 0x22;
       link ops grant-hold 13 / grant-resume 14 (appended last in `OP`); status
       0B stale-head, 0C ticket-owed, 0D nothing-to-arm.
+  - **ARM bound to the request (R13a), budget expiry (R15b), the GRANT_CREATE
+    layout** - onlykey-edge `892ece8`, `badfd16`.
+    - `grants.armToken({ head, subject })` = SHA256("OKEDGE-ARM-v1" || head ||
+      subject); `grants.requestSubject(bytes)` = SHA-256 of exactly the bytes
+      the firmware primes. `edge.arm(head, subject)` sends the token, not the
+      head. Proven against the firmware's own `pend.subject` on the emulator
+      (kit 38: RSA sign, ECC sign, RSA decrypt, a multi-packet sign).
+    - `grantSubject` / `verifyBudgetOpening` take `lifetime` (u16 minutes, 0 =
+      the key's 12 h): the subject ends `|| G || lifetime`. The copy check reads
+      it from each opening.
+    - `edge.grant({ ttlMinutes })`: GRANT_CREATE is `[49]` flags, `[50..51]`
+      lifetime, `[52..57]` the first 6 bytes of the verified head (the spec's
+      layout; it was 8 bytes, CHOSEN).
+    - Vectors: the grant subject with a lifetime, and an ARM token
+      (onlykey-edge `35d99f9`).
+
   - **Restore, then replay (R26) and no budget from a copy that doesn't verify
     (R27)** - onlykey-edge `0dda6ac`.
     - `copy.verifyCopy(copy, key)` (new `src/edge/copy.js`): a host's copy must

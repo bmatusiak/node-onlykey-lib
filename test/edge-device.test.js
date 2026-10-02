@@ -85,10 +85,10 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         owed = owed.filter((q) => q !== ref);
         emit(seqHead());
       } else if (sub === 0x22) {
-        if (Buffer.compare(Buffer.from(arg.slice(0, 32)), Buffer.from(head)) !== 0) return emit(status(0x0b));
+        /* R13a: a token over head + the request's subject; the fake keeps it (a real key checks it at the sign) */
         if (owed.length) return emit(status(0x0c));
         if (!live.some((id) => !onHold.has(id))) return emit(status(0x0d));
-        armed = true;
+        armed = arg.slice(0, 32);
         emit(status(0x00));
       } else if (sub === 0x13 || sub === 0x14) {
         const id = arg[0] | (arg[1] << 8);
@@ -107,12 +107,13 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         const uses = scopes.reduce((a, s) => a + s.cap, 0);
         if (uses > 255) return emit(status(0x04));
         if (owed.length) return emit(status(0x0c));
-        if (!same(arg.slice(49, 57), head.slice(0, 8))) return emit(status(0x0b)); /* R27: the verified head */
+        if (!same(arg.slice(52, 58), head.slice(0, 6))) return emit(status(0x0b)); /* R27: the verified head */
+        const lifetime = arg[50] | (arg[51] << 8);
         const genesis = grants.grantGenesis(new Uint8Array(32).fill(3), uses);
         const seq = held.length;
         const id = seq + 1;
         append({ op: codes.OP.GRANT_CREATE, decision: 1, flags: 1, grantId: id,
-          subject: grants.grantSubject({ scopes, reasonHash: arg.slice(17, 49), genesis }) });
+          subject: grants.grantSubject({ scopes, reasonHash: arg.slice(17, 49), genesis, lifetime }) });
         live.push(id);
         emit(report([...u32(id), uses & 0xff, uses >> 8, ...genesis, ...u32(seq)]));
         checkpoint();
@@ -142,6 +143,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
     },
   };
   transport.writes = writes;
+  transport.armed = () => armed;
   return transport;
 }
 
@@ -208,11 +210,14 @@ test('edge: EDGE:xx refusals become named errors', async () => {
 });
 
 test('edge: ARM, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', async () => {
-  const edge = edgeOver(fakeKey());
+  const transport = fakeKey();
+  const edge = edgeOver(transport);
+  const armedToken = () => transport.armed();
   let h = await edge.head();
   assert.equal(h.owed, 1, 'the approved use owes its ticket');
   /* nothing arms, and no budget opens, while a ticket is owed */
-  await assert.rejects(edge.arm(h.head), (e) => e.status === 'ticket-owed');
+  const S = new Uint8Array(32).fill(4); /* the subject of the request an arm is for */
+  await assert.rejects(edge.arm(h.head, S), (e) => e.status === 'ticket-owed');
   await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head }), (e) => e.status === 'ticket-owed');
   /* WAIVE clears it */
   const w = await edge.waive();
@@ -220,16 +225,16 @@ test('edge: ARM, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', asy
   h = await edge.head();
   assert.equal(h.owed, 0);
   /* no live budget: nothing to arm; a stale head: refused */
-  await assert.rejects(edge.arm(h.head), (e) => e.status === 'nothing-to-arm');
+  await assert.rejects(edge.arm(h.head, S), (e) => e.status === 'nothing-to-arm');
   const g = await edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head });
-  await assert.rejects(edge.arm(new Uint8Array(32).fill(1)), (e) => e.status === 'stale-head');
   h = await edge.head();
-  assert.equal(await edge.arm(h.head), true);
+  assert.equal(await edge.arm(h.head, S), true);
+  assert.equal(Buffer.from(armedToken()).toString('hex'), Buffer.from(grants.armToken({ head: h.head, subject: S })).toString('hex'), 'ARM sends the token, not the head');
   /* hold: listed, nothing arms; resume: back */
   assert.equal(await edge.hold(g.grantId), true);
   h = await edge.head();
   assert.deepEqual(h.held, [g.grantId]);
-  await assert.rejects(edge.arm(h.head), (e) => e.status === 'nothing-to-arm');
+  await assert.rejects(edge.arm(h.head, S), (e) => e.status === 'nothing-to-arm');
   let asked = false;
   await assert.rejects(edge.resume(g.grantId, { verifiedHead: new Uint8Array(32).fill(1) }), (e) => e.status === 'stale-head');
   assert.equal(await edge.resume(g.grantId, { verifiedHead: h.head, onPress: () => { asked = true; } }), true);

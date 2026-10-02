@@ -2,7 +2,7 @@
  * copy: {
  *   links:    [{link, head?, reveal?}] from seq 0, oldest first (reveal = the
  *             self-press's v_i, as PICKUP gave it),
- *   openings: {[grantId]: {scopes, reasonHash, genesis, uses, signature}} -
+ *   openings: {[grantId]: {scopes, reasonHash, genesis, uses, lifetime, signature}} -
  *             what the host asked for and the checkpoint signature its press
  *             answered with (edge.grant's reply),
  * }
