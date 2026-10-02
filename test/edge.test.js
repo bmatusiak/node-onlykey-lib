@@ -188,6 +188,59 @@ test('budget: a value past the last step cannot be made from a revealed one', ()
   assert.equal(grants.checkSelfPress({ genesis: G(), uses: V.grant.uses, step: 2, value: require('../src/vendor/exports/@noble/hashes/sha2.js').sha256(v1), mac: new Uint8Array(32), subject: new Uint8Array(32) }).reason, 'wrong-budget');
 });
 
+/* ---- a budget's genesis, signed at the press ---- */
+
+const genesisFields = () => ({
+  deviceId,
+  grantId: V.grant.grantId,
+  genesis: fromHex(V.grant.genesis),
+  uses: V.grant.uses,
+  scopes: V.grant.scopes,
+  reasonHash: fromHex(V.grant.reasonHash),
+  chainSeq: V.grant.chainSeq,
+  chainHead: fromHex(V.grant.chainHead),
+});
+
+test('budget genesis: the signed digest matches the Python reading', () => {
+  assert.equal(toHex(grants.budgetGenesisDigest(genesisFields())), V.grant.genesisDigest);
+});
+
+test('budget genesis: Node\'s own ECDSA and the lib agree in both directions', () => {
+  const nodeCrypto = require('node:crypto');
+  const { privateKey, publicKey } = nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const jwk = publicKey.export({ format: 'jwk' });
+  const raw = Uint8Array.from([...Buffer.from(jwk.x, 'base64url'), ...Buffer.from(jwk.y, 'base64url')]); // X||Y, as the key gives it
+  /* Node signs the message (ECDSA-SHA256 hashes it itself): that is a signature over our digest */
+  const nodeSig = nodeCrypto.sign('sha256', grants.budgetGenesisMessage(genesisFields()), { key: privateKey, dsaEncoding: 'ieee-p1363' });
+  assert.deepEqual(grants.verifyBudgetGenesis(genesisFields(), new Uint8Array(nodeSig), raw), { ok: true });
+  /* and Node accepts what the lib signs */
+  const secret = Buffer.from(privateKey.export({ format: 'jwk' }).d, 'base64url');
+  const libSig = grants.signBudgetGenesis(genesisFields(), new Uint8Array(secret));
+  assert.ok(nodeCrypto.verify('sha256', grants.budgetGenesisMessage(genesisFields()), { key: publicKey, dsaEncoding: 'ieee-p1363' }, libSig));
+});
+
+test('budget genesis: changing any signed field, or another key, breaks the signature', () => {
+  const secret = new Uint8Array(32).fill(7);
+  const pub = require('../src/vendor/exports/@noble/curves/nist.js').p256.getPublicKey(secret, false);
+  const sig = grants.signBudgetGenesis(genesisFields(), secret);
+  assert.deepEqual(grants.verifyBudgetGenesis(genesisFields(), sig, pub), { ok: true });
+  const edits = {
+    genesis: (f) => { f.genesis = new Uint8Array(32).fill(1); },
+    reason: (f) => { f.reasonHash = new Uint8Array(32); },
+    'chain head (a budget moved to another place in the chain)': (f) => { f.chainHead = new Uint8Array(32).fill(2); },
+    'another device': (f) => { f.deviceId = fromHex(V.otherDeviceId); },
+    'a bigger cap': (f) => { f.scopes = [{ ...f.scopes[0], cap: f.uses + 1 }]; f.uses += 1; },
+  };
+  for (const [what, edit] of Object.entries(edits)) {
+    const f = genesisFields();
+    edit(f);
+    assert.equal(grants.verifyBudgetGenesis(f, sig, pub).reason, 'bad-signature', what);
+  }
+  const otherPub = require('../src/vendor/exports/@noble/curves/nist.js').p256.getPublicKey(new Uint8Array(32).fill(8), false);
+  assert.equal(grants.verifyBudgetGenesis(genesisFields(), sig, otherPub).reason, 'bad-signature');
+  assert.equal(grants.verifyBudgetGenesis({ ...genesisFields(), uses: V.grant.uses + 1 }, sig, pub).reason, 'uses-mismatch');
+});
+
 /* ---- tickets ---- */
 
 const T = V.ticket;

@@ -50,3 +50,32 @@ export function checkSpends(genesis: any, uses: any, spends: any): {
     spent: any;
     failure?: undefined;
 };
+export function encodeScopes(scopes: any): Uint8Array<ArrayBuffer>;
+/** The bytes the digest is taken over (what an ECDSA-SHA256 signer that hashes for itself would sign). */
+export function budgetGenesisMessage({ deviceId, grantId, genesis, uses, scopes, reasonHash, chainSeq, chainHead }: {
+    deviceId: any;
+    grantId: any;
+    genesis: any;
+    uses: any;
+    scopes: any;
+    reasonHash: any;
+    chainSeq: any;
+    chainHead: any;
+}): Uint8Array<ArrayBuffer>;
+export function budgetGenesisDigest(fields: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+/**
+ * Check a budget's signed genesis: {deviceId, grantId, genesis, uses, scopes,
+ * reasonHash, chainSeq, chainHead}, the key's 64-byte signature, and the Edge
+ * public key. -> {ok: true} or {ok: false, reason}:
+ *   uses-mismatch  the scopes' caps do not add up to the budget's uses
+ *   bad-signature  not signed by this key over exactly these fields
+ */
+export function verifyBudgetGenesis(fields: any, signature: any, publicKey: any): {
+    ok: boolean;
+    reason: string;
+} | {
+    ok: boolean;
+    reason?: undefined;
+};
+/** What the key does at the press - for the fake key and tests; a host never holds the Edge signing key. */
+export function signBudgetGenesis(fields: any, secretKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;

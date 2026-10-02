@@ -52,6 +52,8 @@ const TAG = Object.freeze({
   LINK: 'OKEDGE-LINK-v1',
   CHECKPOINT: 'OKEDGE-CKPT-v1',
   GRANT: 'OKEDGE-GRANT-v1',
+  /* CHOSEN (owner, 2026-10-02): a budget's genesis is signed by the key at the press */
+  BUDGET: 'OKEDGE-BUDGET-v1',
   TICKET: 'OKEDGE-TICKET-v1',
   RECEIPT: 'OKEDGE-RCPT-v1',
 });
