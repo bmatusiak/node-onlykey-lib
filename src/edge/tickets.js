@@ -58,7 +58,18 @@ function pairTickets(entries, messages = {}) {
     const f = decodeLink(r.link);
     bySeq.set(f.seq, { f, head: r.head });
     if (f.op === OP.SIGN || f.op === OP.DECRYPT) {
-      uses.push({ seq: f.seq, op: f.op, status: NO_TICKET_OWED.has(f.decision) ? 'no-ticket-owed' : 'missing' });
+      /* every field from the start, so the generated .d.ts knows them all */
+      uses.push({
+        seq: f.seq,
+        op: f.op,
+        status: NO_TICKET_OWED.has(f.decision) ? 'no-ticket-owed' : 'missing',
+        /** @type {{seq: number, code: number, name: string | null, alarm: boolean} | null} */
+        ticket: null,
+        /** @type {string | null} */
+        message: null,
+        /** @type {'none' | 'match' | 'mismatch' | 'unchecked' | null} */
+        messageStatus: null,
+      });
     }
   }
   const useAt = new Map(uses.map((u) => [u.seq, u]));
@@ -71,7 +82,6 @@ function pairTickets(entries, messages = {}) {
     const c = ticketCode(f.code);
     use.ticket = { seq: f.seq, code: c.code, name: c.name, alarm: c.alarm };
     use.status = c.alarm ? 'alarm' : 'ticketed';
-    use.message = null;
     const text = Object.prototype.hasOwnProperty.call(messages, f.refSeq) ? messages[f.refSeq] : undefined;
     const refHead = bySeq.get(f.refSeq).head;
     if (text === undefined) use.messageStatus = 'none';

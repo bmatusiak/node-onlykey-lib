@@ -24,6 +24,17 @@ export function pairTickets(entries: any, messages?: {}): {
         seq: number;
         op: 1 | 2;
         status: string;
+        /** @type {{seq: number, code: number, name: string | null, alarm: boolean} | null} */
+        ticket: {
+            seq: number;
+            code: number;
+            name: string | null;
+            alarm: boolean;
+        } | null;
+        /** @type {string | null} */
+        message: string | null;
+        /** @type {'none' | 'match' | 'mismatch' | 'unchecked' | null} */
+        messageStatus: "none" | "match" | "mismatch" | "unchecked" | null;
     }[];
     orphans: {
         seq: number;
