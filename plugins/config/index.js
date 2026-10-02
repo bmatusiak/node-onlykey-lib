@@ -83,13 +83,11 @@ function setup(imports, register) {
           resolve(s);
         }
       });
-      try {
-        transport.write(IFACE.VENDOR, okmsg.build({ msg: OKGETCONFIG, payload: [] }));
-      } catch (e) {
+      Promise.resolve().then(() => transport.write(IFACE.VENDOR, okmsg.build({ msg: OKGETCONFIG, payload: [] }))).catch((e) => {
         clearTimeout(timer);
         off();
         reject(e);
-      }
+      });
     });
   }
 
@@ -127,7 +125,8 @@ function setup(imports, register) {
         for (let i = 0; i < bytes.length; i += OKSETCONFIG_CHUNK) {
           const chunk = bytes.slice(i, i + OKSETCONFIG_CHUNK);
           const last = i + OKSETCONFIG_CHUNK >= bytes.length;
-          transport.write(IFACE.VENDOR, okmsg.build({ msg: OKSETCONFIG, slot: last ? chunk.length : 0xff, payload: chunk }));
+          /* awaited: a write the link refuses is THIS call's error, not an unhandled rejection */
+          await transport.write(IFACE.VENDOR, okmsg.build({ msg: OKSETCONFIG, slot: last ? chunk.length : 0xff, payload: chunk }));
           if (!last) await new Promise((r) => setTimeout(r, chunkGapMs));
         }
       })().catch((e) => {
