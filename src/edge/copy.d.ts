@@ -70,6 +70,7 @@ export function assess(copy: any, key: any, opts?: {}): {
         seq: number;
         from: number;
         to: number;
+        next: Uint8Array<ArrayBuffer> | null;
     }[];
     open: {
         from: any;
@@ -81,13 +82,14 @@ export function lossesIn(entries: any): {
     seq: number;
     from: number;
     to: number;
+    next: Uint8Array<ArrayBuffer> | null;
 }[];
-/** The really missing ranges no verified, later LOSS link covers. held: the key's own links, this session. */
+/** The really missing ranges no verified, later LOSS links cover. held: the key's own links, this session. */
 export function uncoveredGaps(entries: any, gaps: any, held: any): {
     from: any;
     to: number;
 }[];
-/** gaps (from chain.verify) minus the links the key itself holds - what is really missing */
+/** gaps (from chain.verify) minus the links the key itself vouches for - what is really missing */
 export function missingGaps(entries: any, gaps: any, held: any): {
     from: any;
     to: number;

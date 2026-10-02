@@ -53,7 +53,7 @@ const { OP, DECISION } = require('./codes');
 const chain = require('./chain');
 const grants = require('./grants');
 const { keyDebts } = require('./tickets');
-const { hmacSha256, same } = require('./hash');
+const { H, hmacSha256, same } = require('./hash');
 
 const SEQ_NONE = 0xffffffff;
 
@@ -64,7 +64,9 @@ function lossesIn(entries) {
     const f = chain.decodeLink(e instanceof Uint8Array ? e : e.link);
     if (f.op !== OP.LOSS) continue;
     const to = (f.subject[0] | (f.subject[1] << 8) | (f.subject[2] << 16) | (f.subject[3] << 24)) >>> 0;
-    out.push({ seq: f.seq, from: f.grantId, to: to === SEQ_NONE ? f.seq - 1 : to });
+    /* R24: the first 28 bytes of SHA-256(link to+1), when the key held it at the LOSS; zeros otherwise */
+    const next = f.subject.slice(4, 32);
+    out.push({ seq: f.seq, from: f.grantId, to: to === SEQ_NONE ? f.seq - 1 : to, next: next.some((x) => x) ? next : null });
   }
   return out;
 }
@@ -89,9 +91,26 @@ function heldSeqs(entries, held) {
   return out;
 }
 
-/** gaps (from chain.verify) minus the links the key itself holds - what is really missing */
-function missingGaps(entries, gaps, held) {
+/*
+ * THE LINK AFTER A LOSS (firmware.md R24, Brad 2026-10-02): its predecessor is
+ * gone, so its own bytes cannot be welded. A LOSS {A..B} the key wrote while it
+ * held #B+1 names it - the first 28 bytes of SHA-256(link B+1), from the key's
+ * memory - and a verified LOSS's word is the key's: the copy's #B+1 is kept
+ * when it hashes to that. Nothing else vouches for it: a copy cannot.
+ */
+function keptSeqs(entries, gaps, held) {
   const keep = heldSeqs(entries, held);
+  const bySeq = new Map(entries.map((e) => { const l = e instanceof Uint8Array ? e : e.link; return [chain.decodeLink(l).seq, l]; }));
+  for (const l of verifiedLosses(entries, gaps, held)) {
+    const link = l.next && l.to !== SEQ_NONE ? bySeq.get(l.to + 1) : null;
+    if (link && same(H(link).slice(0, 28), l.next)) keep.add(l.to + 1);
+  }
+  return keep;
+}
+
+/** gaps (from chain.verify) minus the links the key itself vouches for - what is really missing */
+function missingGaps(entries, gaps, held) {
+  const keep = keptSeqs(entries, gaps, held);
   const out = [];
   for (const g of gaps) {
     let start = null;
@@ -114,10 +133,25 @@ function verifiedLosses(entries, gaps, held) {
   return lossesIn(entries).filter((l) => keep.has(l.seq) || !inGap(l.seq));
 }
 
-/** The really missing ranges no verified, later LOSS link covers. held: the key's own links, this session. */
+/*
+ * Whether the verified LOSS links later than a gap cover it - together: an
+ * overlapping or adjoining pair counts as one range (the Pixel: #37-#47
+ * accepted, then #37-#48 once #48 could not be proven).
+ */
+function covers(g, losses) {
+  const spans = losses.filter((l) => l.seq > g.to).map((l) => [l.from, l.to]).sort((x, y) => x[0] - y[0]);
+  let reach = g.from - 1;
+  for (const [a, b] of spans) {
+    if (a > reach + 1) break;
+    if (b > reach) reach = b;
+  }
+  return reach >= g.to;
+}
+
+/** The really missing ranges no verified, later LOSS links cover. held: the key's own links, this session. */
 function uncoveredGaps(entries, gaps, held) {
   const losses = verifiedLosses(entries, gaps, held);
-  return missingGaps(entries, gaps, held).filter((g) => !losses.some((l) => l.seq > g.to && l.from <= g.from && l.to >= g.to));
+  return missingGaps(entries, gaps, held).filter((g) => !covers(g, losses));
 }
 
 /*

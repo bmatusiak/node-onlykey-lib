@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const setup = require('../plugins/edge');
 const { chain, codes, grants, tickets } = require('../src/edge');
+const { H } = require('../src/edge/hash');
 const { p256 } = require('../src/vendor/exports/@noble/curves/nist.js');
 const { IFACE } = require('../src/protocol/msg');
 
@@ -133,6 +134,9 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         if (from > to || to > held.length - 1) return emit(status(0x12));
         const subject = new Uint8Array(32);
         subject.set(u32(to), 0);
+        /* R24: the link after the range, when the key still holds it (its latest, or the ring of 8) */
+        const next = to + 1;
+        if (next <= held.length - 1 && next >= held.length - 8) subject.set(H(held[next].link).slice(0, 28), 4);
         append({ op: codes.OP.LOSS, decision: 1, flags: 1, grantId: from, subject });
         emit(seqHead());
       } else if (sub === 0x05) {
@@ -369,6 +373,13 @@ test('edge: LOSS {from, to} - a pressed loss link with the spec layout; a range 
   const [l] = await edge.pickup(r.seq, 1);
   const f = chain.decodeLink(l.link);
   assert.equal(JSON.stringify([f.op, f.decision, f.flags, f.grantId, f.subject[0]]), JSON.stringify([codes.OP.LOSS, 1, 1, 0, 0]));
+  /* R24: there was no #1 when it was written (the LOSS is #1), so nothing is named: zeros */
+  assert.equal(f.subject.slice(4).some((x) => x), false);
+  /* the same LOSS again: now the key holds #1, and the subject names it - the first 28 bytes of SHA-256(link 1) */
+  const again = await edge.loss({ from: 0, to: 0 });
+  const [l2] = await edge.pickup(again.seq, 1);
+  const [next] = await edge.pickup(1, 1);
+  assert.equal(Buffer.from(chain.decodeLink(l2.link).subject.slice(4)).toString('hex'), Buffer.from(H(next.link).slice(0, 28)).toString('hex'));
   await assert.rejects(edge.loss({ from: 0, to: 99 }), (e) => e.status === 'bad-range');
   await assert.rejects(edge.loss({ from: 3, to: 1 }), (e) => e instanceof RangeError);
 });

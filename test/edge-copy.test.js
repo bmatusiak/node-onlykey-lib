@@ -208,3 +208,63 @@ test('copy: a key with no public key anchors on its genesis and HEAD only', () =
   const a = copy.assess({ links, openings: s.openings }, { deviceId: DEVICE, head: s.key.head, held: [s.links[6]], checkpoint: s.key.checkpoint });
   assert.deepEqual([a.anchors, a.missing], [[], [{ from: 0, to: 5 }]]);
 });
+
+/*
+ * THE LINK AFTER A LOSS (firmware.md R24, Brad 2026-10-02): a LOSS {A..B}
+ * written while the key held #B+1 carries the first 28 bytes of SHA-256(#B+1)
+ * after `to`, from the key's own memory; the library counts #B+1 verified when
+ * the copy's link hashes to it. Not held: zeros, and #B+1 stays in the range
+ * (#A..#B+1). Never the copy's word alone.
+ */
+const nodeSha = (b) => new Uint8Array(require('node:crypto').createHash('sha256').update(b).digest());
+
+/* the story, then LOSS links appended by the key: [{from, to, next?: link bytes to hash}] */
+function withLosses(list) {
+  const s = story();
+  for (const { from, to, next } of list) {
+    const subject = new Uint8Array(32);
+    new DataView(subject.buffer).setUint32(0, to, true);
+    if (next) subject.set(nodeSha(next).slice(0, 28), 4);
+    const seq = s.key.head.seq + 1;
+    const link = chain.encodeLink({ seq, op: OP.LOSS, decision: DECISION.APPROVE, flags: FLAG.PRESS_OBSERVED, subject, grantId: from });
+    const head = chain.weld(s.key.head.head, link);
+    s.links.push({ link, head, reveal: null });
+    s.key = { ...s.key, head: { ...s.key.head, seq, head }, checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) } };
+  }
+  return s;
+}
+/* the copy lost #3-#4; the key holds none of its links any more (a later session) */
+const lostThreeFour = (s) => [...s.links.slice(0, 3), ...s.links.slice(5)];
+
+test('copy: the next link held at the LOSS is kept and verified by the hash the key put in it', () => {
+  const s0 = story();
+  const s = withLosses([{ from: 3, to: 4, next: s0.links[5].link }]);
+  const a = copy.assess({ links: lostThreeFour(s), openings: s.openings }, s.key);
+  assert.deepEqual([a.missing, a.open], [[{ from: 3, to: 4 }], []]);
+  assert.deepEqual(copy.lossesIn(s.links).map((l) => [l.from, l.to, !!l.next]), [[3, 4, true]]);
+});
+
+test('copy: a next link the key did not hold stays in the range - #A..#B+1 is what is offered', () => {
+  const s = withLosses([{ from: 3, to: 4 }]);
+  const a = copy.assess({ links: lostThreeFour(s), openings: s.openings }, s.key);
+  assert.deepEqual([a.missing, a.open], [[{ from: 3, to: 5 }], [{ from: 3, to: 5 }]]);
+});
+
+test('copy: a copy that swaps the next link\'s bytes gets nothing from the LOSS hash', () => {
+  const s0 = story();
+  const s = withLosses([{ from: 3, to: 4, next: s0.links[5].link }]);
+  const links = lostThreeFour(s).map((e) => (chain.decodeLink(e.link).seq === 5 ? { ...e, link: Uint8Array.from(e.link, (x, i) => (i === 40 ? x ^ 1 : x)) } : e));
+  const a = copy.assess({ links, openings: s.openings }, s.key);
+  assert.deepEqual(a.open, [{ from: 3, to: 5 }]);
+  assert.equal(copy.verifyCopy({ links, openings: s.openings }, s.key).reason, 'gap');
+});
+
+test('copy: overlapping or adjoining LOSS links cover a range together, cleanly', () => {
+  /* #3-#4 accepted first; then #3-#5 once #5 could not be proven (the Pixel: #37-#47, then #37-#48) */
+  const over = withLosses([{ from: 3, to: 4 }, { from: 3, to: 5 }]);
+  const a = copy.assess({ links: lostThreeFour(over), openings: over.openings }, over.key);
+  assert.deepEqual([a.missing, a.open, a.losses.length], [[{ from: 3, to: 5 }], [], 2]);
+  /* #3-#4 and then #5 alone */
+  const adj = withLosses([{ from: 3, to: 4 }, { from: 5, to: 5 }]);
+  assert.deepEqual(copy.assess({ links: lostThreeFour(adj), openings: adj.openings }, adj.key).open, []);
+});
