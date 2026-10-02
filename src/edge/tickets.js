@@ -43,7 +43,8 @@ const NO_TICKET_OWED = new Set([DECISION.DENY, DECISION.TIMEOUT]);
  * messages: {[refSeq]: text} - ticket messages from sync, untrusted
  *
  * -> {uses: [{seq, op, status, ticket?, message?}], orphans: [{seq, refSeq, reason}]}
- *    status: ticketed | alarm | missing | no-ticket-owed
+ *    status: ticketed | alarm | waiting | missing | no-ticket-owed
+ *            (waiting = the latest use, still able to get its ticket)
  *    ticket: {seq, code, name, alarm}; message: the text, only when it matches,
  *            else null with messageStatus 'none' | 'mismatch' | 'unchecked'
  *    orphans: tickets for a seq that is not a use (or not one that came
@@ -92,6 +93,16 @@ function pairTickets(entries, messages = {}) {
       else use.messageStatus = 'mismatch';
     }
   }
+  /*
+   * WAITING vs MISSING (firmware.md R16-R17). The key accepts a ticket only for
+   * its LATEST sign/decrypt, so an unticketed use is still "waiting" until
+   * another use is linked after it; from then on no ticket can ever be filed
+   * for it (the next link carries prev_no_ticket) and it is "missing".
+   */
+  let latest = null;
+  for (const u of uses) if (u.status !== 'no-ticket-owed' && (!latest || u.seq > latest.seq)) latest = u;
+  const lastUse = uses.reduce((m, u) => (u.seq > m ? u.seq : m), -1);
+  if (latest && latest.status === 'missing' && latest.seq === lastUse) latest.status = 'waiting';
   return { uses, orphans };
 }
 

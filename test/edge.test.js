@@ -192,7 +192,7 @@ test('budget: a value past the last step cannot be made from a revealed one', ()
 
 const T = V.ticket;
 
-test('tickets: each use is ticketed, missing, alarm or owes none; the message is shown only when it matches', () => {
+test('tickets: each use is ticketed, waiting, missing, alarm or owes none; the message is shown only when it matches', () => {
   const r = tickets.pairTickets(entries(), { [T.refSeq]: T.message });
   const by = Object.fromEntries(r.uses.map((u) => [u.seq, u]));
   assert.equal(by[1].status, 'missing');
@@ -200,8 +200,20 @@ test('tickets: each use is ticketed, missing, alarm or owes none; the message is
   assert.equal(by[2].ticket.name, 'OK');
   assert.equal(by[2].message, T.message);
   assert.equal(by[4].status, 'no-ticket-owed'); // denied decrypt
-  assert.equal(by[5].status, 'missing');
+  assert.equal(by[5].status, 'waiting'); // the latest use: the key still takes its ticket
   assert.deepEqual(r.orphans, []);
+});
+
+test('tickets: a newer use - even a denied one - turns a waiting use into missing (R16: only the latest takes a ticket)', () => {
+  const es = entries();
+  const add = (fields) => { const l = chain.encodeLink({ seq: es.length, ...fields }); es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) }); };
+  add({ op: codes.OP.DECRYPT, decision: codes.DECISION.DENY, slot: 1, subject: new Uint8Array(32) });
+  const by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
+  assert.equal(by[5], 'missing');
+  assert.equal(by[6], 'no-ticket-owed');
+  add({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, subject: new Uint8Array(32) });
+  const after = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
+  assert.equal(after[7], 'waiting');
 });
 
 test('tickets: a message that does not match its hash is never shown as text', () => {
@@ -230,10 +242,10 @@ test('tickets: bit 7 and an unknown code are both alarms (fails closed)', () => 
   assert.equal(codes.ticketCode(0x42).known, false);
 });
 
-test('tickets: a ticket for the wrong seq is an orphan, and its use stays missing', () => {
+test('tickets: a ticket for the wrong seq is an orphan, and the use it skipped is still waiting', () => {
   const r = tickets.pairTickets(withTicket(0x00, 0)); // seq 0 is the grant-create, not a use
   assert.deepEqual(r.orphans, [{ seq: 3, refSeq: 0, reason: 'not-a-use' }]);
-  assert.equal(r.uses.find((x) => x.seq === 2).status, 'missing');
+  assert.equal(r.uses.find((x) => x.seq === 2).status, 'waiting');
 });
 
 /* ---- Hermes ---- */

@@ -13,7 +13,8 @@ export function ticketSubject({ refSeq, refHead, code, msgHash }: {
  * messages: {[refSeq]: text} - ticket messages from sync, untrusted
  *
  * -> {uses: [{seq, op, status, ticket?, message?}], orphans: [{seq, refSeq, reason}]}
- *    status: ticketed | alarm | missing | no-ticket-owed
+ *    status: ticketed | alarm | waiting | missing | no-ticket-owed
+ *            (waiting = the latest use, still able to get its ticket)
  *    ticket: {seq, code, name, alarm}; message: the text, only when it matches,
  *            else null with messageStatus 'none' | 'mismatch' | 'unchecked'
  *    orphans: tickets for a seq that is not a use (or not one that came
