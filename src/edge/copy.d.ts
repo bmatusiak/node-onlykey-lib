@@ -19,3 +19,11 @@ export function verifyCopy(copy: any, key: any): {
     verifiedThrough: any;
     head: any;
 };
+/** The LOSS links in a run of entries: [{seq, from, to}] (to = 0xFFFFFFFF: not said - covers to the LOSS itself). */
+export function lossesIn(entries: any): {
+    seq: number;
+    from: number;
+    to: number;
+}[];
+/** The gaps (from chain.verify) that no LOSS link in the copy covers. */
+export function uncoveredGaps(entries: any, gaps: any): any;

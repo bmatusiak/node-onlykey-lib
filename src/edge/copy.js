@@ -28,16 +28,39 @@
  *   debts            the key's debt list replayed over this copy
  *                    (tickets.keyDebts) matches what HEAD reports
  *
- * CHOSEN: a copy starts at genesis. The debt list cannot be replayed from the
- * middle (the list it started with is unknown), so a copy rebuilt from a
- * checkpoint fails closed with `gap` until the earlier links are found or a
- * LOSS link covers them.
+ * GAPS (R24, R27; the spec's red banner, 2026-10-02): a range the copy cannot
+ * verify blocks a budget, unless a LOSS link in the copy covers it - the
+ * person's pressed acceptance that #from..#to is gone (grant_id = from,
+ * subject = to, u32 LE). Then the debts are replayed from after the last
+ * covered gap: what the lost range owed is unknown, so if the key still owes
+ * for it the counts disagree and the copy fails `debts` - a waive settles it.
+ * Never "verify from a checkpoint" alone as a way out.
  */
 const { OP, DECISION } = require('./codes');
 const chain = require('./chain');
 const grants = require('./grants');
 const { keyDebts } = require('./tickets');
 const { hmacSha256, same } = require('./hash');
+
+const SEQ_NONE = 0xffffffff;
+
+/** The LOSS links in a run of entries: [{seq, from, to}] (to = 0xFFFFFFFF: not said - covers to the LOSS itself). */
+function lossesIn(entries) {
+  const out = [];
+  for (const e of entries) {
+    const f = chain.decodeLink(e instanceof Uint8Array ? e : e.link);
+    if (f.op !== OP.LOSS) continue;
+    const to = (f.subject[0] | (f.subject[1] << 8) | (f.subject[2] << 16) | (f.subject[3] << 24)) >>> 0;
+    out.push({ seq: f.seq, from: f.grantId, to: to === SEQ_NONE ? f.seq - 1 : to });
+  }
+  return out;
+}
+
+/** The gaps (from chain.verify) that no LOSS link in the copy covers. */
+function uncoveredGaps(entries, gaps) {
+  const losses = lossesIn(entries);
+  return gaps.filter((g) => !losses.some((l) => l.from <= g.from && l.to >= g.to));
+}
 
 /**
  * copy: {
@@ -69,11 +92,27 @@ function verifyCopy(copy, key) {
 
   const v = chain.verify(entries, { deviceId, expectHead: { seq: h.seq, head: h.head } });
   if (!v.ok) return fail('chain', { seq: v.failure.seq, detail: v.failure });
-  if (v.gaps.length || v.verifiedThrough !== h.seq) return fail('gap', { seq: v.gaps.length ? v.gaps[0].from : v.verifiedThrough + 1, detail: { gaps: v.gaps } });
+  const open = uncoveredGaps(entries, v.gaps);
+  if (open.length) return fail('gap', { seq: open[0].from, detail: { gaps: open } });
+  const lastGapEnd = v.gaps.reduce((m, g) => Math.max(m, g.to), -1);
 
-  /* every link is now verified from genesis: their heads, by seq */
-  const heads = chain.heads(raw, chain.genesis(deviceId));
-  const headAt = (seq) => (seq < 0 ? chain.genesis(deviceId) : heads[seq]);
+  /*
+   * Every link outside a covered gap is now verified, and so is the head the
+   * copy stored with each (forward from genesis, or backward from the key's
+   * live head). Heads by seq: the stored one, or welded forward.
+   */
+  const bySeq = new Map(entries.map((e) => [chain.decodeLink(e.link).seq, e]));
+  const memo = new Map([[-1, chain.genesis(deviceId)]]);
+  const headAt = (seq) => {
+    if (memo.has(seq)) return memo.get(seq);
+    const e = bySeq.get(seq);
+    let hd;
+    if (e && e.head) hd = e.head;
+    else if (e && memo.has(seq - 1)) hd = chain.weld(memo.get(seq - 1), e.link);
+    else if (e) { const prev = headAt(seq - 1); hd = prev ? chain.weld(prev, e.link) : undefined; }
+    memo.set(seq, hd);
+    return hd;
+  };
 
   const cp = key.checkpoint;
   if (!cp || !same(headAt(cp.seq) || new Uint8Array(0), cp.head) ||
@@ -82,7 +121,7 @@ function verifyCopy(copy, key) {
   }
 
   /* budgets: each opening, then its self-presses in step order */
-  const fields = raw.map((l) => chain.decodeLink(l));
+  const fields = raw.map((l) => chain.decodeLink(l)).filter((f) => f.seq > lastGapEnd);
   const openings = copy.openings || {};
   const spends = new Map();
   for (const f of fields) {
@@ -90,7 +129,7 @@ function verifyCopy(copy, key) {
       const o = openings[f.grantId];
       if (!o) return fail('budget-opening-missing', { seq: f.seq, detail: { grantId: f.grantId } });
       const r = grants.verifyBudgetOpening({
-        deviceId, publicKey: key.publicKey, link: raw[f.seq], prevHead: headAt(f.seq - 1), head: headAt(f.seq),
+        deviceId, publicKey: key.publicKey, link: bySeq.get(f.seq).link, prevHead: headAt(f.seq - 1), head: headAt(f.seq),
         signature: o.signature, scopes: o.scopes, reasonHash: o.reasonHash, genesis: o.genesis, uses: o.uses, lifetime: o.lifetime || 0,
       });
       if (!r.ok || r.grantId !== f.grantId) return fail('budget-opening', { seq: f.seq, detail: { grantId: f.grantId, reason: r.reason || 'grant-id' } });
@@ -98,7 +137,7 @@ function verifyCopy(copy, key) {
     } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS) {
       const list = spends.get(f.grantId);
       if (!list) return fail('budget-opening-missing', { seq: f.seq, detail: { grantId: f.grantId } });
-      const value = entries[f.seq].reveal;
+      const value = bySeq.get(f.seq).reveal;
       if (!value || !value.some((x) => x)) return fail('reveal-missing', { seq: f.seq });
       list.push({ seq: f.seq, step: f.grantStep, value, subject: f.subject, mac: hmacSha256(value, f.subject) });
     }
@@ -109,12 +148,12 @@ function verifyCopy(copy, key) {
     if (!r.ok) return fail('reveal', { seq: list[r.failure.index].seq, detail: { grantId, ...r.failure } });
   }
 
-  /* the debts the copy implies, against the debts the key reports */
-  const d = keyDebts(raw);
+  /* the debts the copy implies (from after the last covered gap), against the debts the key reports */
+  const d = keyDebts(raw.filter((l) => chain.decodeLink(l).seq > lastGapEnd));
   if (d.owed.length !== h.owed || d.overflow !== Boolean(h.overflow)) {
     return fail('debts', { detail: { copy: { owed: d.owed, overflow: d.overflow }, key: { owed: h.owed, overflow: Boolean(h.overflow) } } });
   }
   return { ok: true, verifiedThrough: h.seq, head: h.head };
 }
 
-module.exports = { verifyCopy };
+module.exports = { verifyCopy, lossesIn, uncoveredGaps };

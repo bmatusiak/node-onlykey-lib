@@ -29,7 +29,7 @@ const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, VOUCH: 0x05,
   GRANT_CREATE: 0x10, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
-  TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24,
+  TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, LOSS: 0x34,
 });
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
@@ -378,6 +378,22 @@ function setup(imports, register) {
         const checkpoint = head.seq === null ? null : await edge.checkpoint();
         return copyCheck.verifyCopy(copy, { publicKey, head, checkpoint });
       },
+    },
+
+    /**
+     * R24: the person accepts #from..#to as unrecoverable - a PHYSICAL press
+     * (the person's Yes in the app first). The key links op = loss, grant_id =
+     * from, subject = to; it pays no debt. A copy then passes R27 with that gap
+     * (copy.uncoveredGaps). Refused while restoring ('restoring') and for a
+     * range past the key's head ('bad-range'). -> {seq, head, tag}
+     */
+    async loss({ from, to, onPress, timeoutMs = 30000 } = {}) {
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) throw new RangeError(`Edge: a loss is #from..#to, not ${from}..${to}`);
+      await busQuiet();
+      const pending = callNow(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs });
+      if (onPress) onPress();
+      const [r] = await pending;
+      return seqHeadTag(r);
     },
 
     /**

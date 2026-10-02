@@ -114,6 +114,7 @@ const STATUS = Object.freeze({
   0x10: { name: 'replay-closed', text: 'Replay is closed: the key is not restoring, or already wrote a link of its own' },
   /* R26 (2026-10-02): replay commits only on the key's own vouch tag */
   0x11: { name: 'not-vouched', text: 'That replay is not vouched by the key - thrown away; everything since the backup is recorded as lost' },
+  0x12: { name: 'bad-range', text: 'A loss is #from..#to, at or before the key\'s head' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

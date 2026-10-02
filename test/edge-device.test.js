@@ -126,6 +126,15 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         if (i < 0) return emit(status(0x07));
         live.splice(i, 1);
         emit(status(0x00));
+      } else if (sub === 0x34) {
+        /* R24: {from, to}, pressed; refused while restoring or past the head */
+        if (restoring) return emit(status(0x0e));
+        const from = arg[0] | (arg[1] << 8), to = arg[4] | (arg[5] << 8);
+        if (from > to || to > held.length - 1) return emit(status(0x12));
+        const subject = new Uint8Array(32);
+        subject.set(u32(to), 0);
+        append({ op: codes.OP.LOSS, decision: 1, flags: 1, grantId: from, subject });
+        emit(seqHead());
       } else if (sub === 0x05) {
         if (restoring) return emit(status(0x0e));
         emit(seqHead());
@@ -350,4 +359,16 @@ test('edge: status codes - every code the firmware sends has words on the host',
   for (let c = 0; c <= 0x0a; c++) assert.ok(codes.STATUS[c], `code 0x${c.toString(16)}`);
   assert.deepEqual(codes.parseStatus('EDGE:07'), { code: 7, name: 'no-such-budget', text: codes.STATUS[7].text });
   assert.equal(codes.parseStatus('Error something'), null);
+});
+
+test('edge: LOSS {from, to} - a pressed loss link with the spec layout; a range past the head is refused (R24)', async () => {
+  const edge = edgeOver(fakeKey());
+  let asked = false;
+  const r = await edge.loss({ from: 0, to: 0, onPress: () => { asked = true; } });
+  assert.ok(asked, 'a loss asks for the press');
+  const [l] = await edge.pickup(r.seq, 1);
+  const f = chain.decodeLink(l.link);
+  assert.equal(JSON.stringify([f.op, f.decision, f.flags, f.grantId, f.subject[0]]), JSON.stringify([codes.OP.LOSS, 1, 1, 0, 0]));
+  await assert.rejects(edge.loss({ from: 0, to: 99 }), (e) => e.status === 'bad-range');
+  await assert.rejects(edge.loss({ from: 3, to: 1 }), (e) => e instanceof RangeError);
 });

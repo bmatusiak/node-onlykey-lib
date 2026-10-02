@@ -101,3 +101,35 @@ test('copy: an empty key verifies only an empty copy', () => {
   assert.equal(copy.verifyCopy({ links: [] }, key).ok, true);
   assert.equal(copy.verifyCopy({ links: story().links.slice(0, 1) }, key).reason, 'chain');
 });
+
+/* the story, then a pressed LOSS {from, to} the person accepted (R24) - the key's head moves on with it */
+function withLoss(from, to) {
+  const s = story();
+  const subject = new Uint8Array(32);
+  new DataView(subject.buffer).setUint32(0, to, true);
+  const seq = s.key.head.seq + 1;
+  const link = chain.encodeLink({ seq, op: OP.LOSS, decision: DECISION.APPROVE, flags: FLAG.PRESS_OBSERVED, subject, grantId: from });
+  const head = chain.weld(s.key.head.head, link);
+  s.links.push({ link, head, reveal: null });
+  s.key = {
+    ...s.key,
+    head: { ...s.key.head, seq, head },
+    checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) },
+  };
+  return s;
+}
+
+test('copy: a gap verifies only when a LOSS link covers it (R24, R27) - never by a checkpoint alone', () => {
+  /* the copy lost #0: it keeps #1 with its head, so everything after it still welds back from the key's head */
+  const s = withLoss(0, 1);
+  const missing = s.links.slice(1);
+  assert.equal(copy.verifyCopy({ links: missing, openings: s.openings }, s.key).ok, true, 'a LOSS over #0-#1 covers the gap');
+  /* a LOSS that falls short of the gap does not */
+  const short = withLoss(0, 0);
+  const r = copy.verifyCopy({ links: short.links.slice(1), openings: short.openings }, short.key);
+  assert.equal(JSON.stringify([r.reason, r.seq]), JSON.stringify(['gap', 0]));
+  /* and without any LOSS, a missing range is a gap, however good the checkpoint */
+  const plain = story();
+  assert.equal(copy.verifyCopy({ links: plain.links.slice(1), openings: plain.openings }, plain.key).reason, 'gap');
+  assert.deepEqual(copy.lossesIn(s.links).map((l) => [l.from, l.to]), [[0, 1]]);
+});
