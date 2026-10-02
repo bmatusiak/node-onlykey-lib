@@ -49,7 +49,10 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
   /* one approved use, so there is something to pick up and ticket */
   append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: 1, subject: new Uint8Array(32).fill(9) });
   owed = [0];
-  const seqHead = () => report([...u32(held.length - 1), ...head]);
+  /* the fake's vouch tag: any MAC the fake can recompute (a real key keys it with K_vouch) */
+  const tagOf = (seq, h) => require('node:crypto').createHmac('sha256', 'fake K_vouch').update(Buffer.concat([Buffer.from(u32(seq)), Buffer.from(h)])).digest().subarray(0, 16);
+  const seqHead = () => report([...u32(held.length - 1), ...head, ...tagOf(held.length - 1, head)]);
+  let tent = null; /* R26: the tentative replay */
 
   const transport = {
     open() {}, close() {}, isOpen: () => true, request() { throw new Error('not used'); },
@@ -123,19 +126,29 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         if (i < 0) return emit(status(0x07));
         live.splice(i, 1);
         emit(status(0x00));
+      } else if (sub === 0x05) {
+        if (restoring) return emit(status(0x0e));
+        emit(seqHead());
       } else if (sub === 0x23) {
-        /* R26: 46 bytes, zero-filled to a link; the next seq, welding onto the head */
+        /* R26: 46 bytes, zero-filled to a link; the next seq, welding onto the TENTATIVE head */
         if (!restoring) return emit(status(0x10));
+        tent ??= { head, links: [] };
         const link = new Uint8Array(64);
         link.set(arg.slice(0, 46));
         const f = chain.decodeLink(link);
-        if (f.seq !== held.length) return emit(status(0x0f));
-        if (!same(chain.weld(head, link).slice(0, 8), arg.slice(46, 54))) return emit(status(0x0f));
-        head = chain.weld(head, link);
-        held.push({ link, head });
+        if (f.seq !== held.length + tent.links.length) return emit(status(0x0f));
+        const h2 = chain.weld(tent.head, link);
+        if (!same(h2.slice(0, 8), arg.slice(46, 54))) return emit(status(0x0f));
+        tent.head = h2;
+        tent.links.push({ link, head: h2 });
         emit(status(0x00));
       } else if (sub === 0x24) {
+        const seq = arg[0] | (arg[1] << 8) | (arg[2] << 16) | (arg[3] << 24);
+        const ok = tent && seq === held.length + tent.links.length - 1 && same(arg.slice(4, 20), tagOf(seq, tent.head));
+        if (ok) { held.push(...tent.links); head = tent.head; }
+        tent = null;
         restoring = false;
+        if (!ok) return emit(status(0x11));
         emit(seqHead());
       } else {
         emit(status(0x0a));
@@ -281,7 +294,7 @@ test('edge: grants.create / resume verify the copy first, send the verified head
   assert.equal(requests(), sent + 1);
 });
 
-test('edge: a restoring key fails the copy check; REPLAY sends 46 bytes, REPLAY_DONE answers seq + head (R26)', async () => {
+test('edge: a restoring key fails the copy check; REPLAY is tentative and REPLAY_DONE commits only on the vouch tag the key issued (R26)', async () => {
   const edge = edgeOver(fakeKey({ restoring: true }));
   assert.equal((await edge.head()).restoring, true);
   assert.equal((await edge.grants.check(await copyOf(edge))).reason, 'restoring');
@@ -290,16 +303,26 @@ test('edge: a restoring key fails the copy check; REPLAY sends 46 bytes, REPLAY_
   /* a copy whose head after the link is not the key's weld: forked */
   await assert.rejects(edge.replay(next, new Uint8Array(32).fill(6)), (e) => e.status === 'replay-mismatch');
   assert.equal(await edge.replay(next, chain.weld(h0.head, next)), true);
-  assert.equal((await edge.head()).seq, 1);
   const far = chain.encodeLink({ seq: 5, op: 1, decision: 2, subject: new Uint8Array(32) });
   await assert.rejects(edge.replay(far, chain.weld(h0.head, far)), (e) => e.status === 'replay-mismatch');
   await assert.rejects(edge.replay(chain.encodeLink({ seq: 2, op: 1, decision: 2, subject: new Uint8Array(32), reserved: new Uint8Array(18).fill(1) }), new Uint8Array(32)),
     (e) => e.code === 'EDGE_NOT_A_KEY_LINK');
+  /* the replay is tentative: HEAD still shows the restored head */
+  assert.equal((await edge.head()).seq, 0, 'a replay moved the real head before it was vouched');
   let asked = false;
-  const done = await edge.replayDone({ newestSeq: 1, onPress: () => { asked = true; } });
+  /* a tag the key did not issue: thrown away (a real key also links the LOSS) */
+  await assert.rejects(edge.replayDone({ seq: 1, tag: new Uint8Array(16).fill(1), onPress: () => { asked = true; } }), (e) => e.status === 'not-vouched');
   assert.ok(asked);
-  assert.equal(done.seq, 1);
   assert.equal((await edge.head()).restoring, false);
+});
+
+test('edge: VOUCH gives seq, head and tag; a replay with a tag the key issued commits (R26)', async () => {
+  const transport = fakeKey();
+  const edge = edgeOver(transport);
+  const v = await edge.vouch();
+  assert.equal(JSON.stringify([v.seq, v.head.length, v.tag.length]), JSON.stringify([0, 32, 16]));
+  const t = await edge.ticket(0, 0, new Uint8Array(32));
+  assert.equal(t.tag.length, 16, 'a ticket reply carries the vouch tag');
 });
 
 test('edge: a stray report on the bus is not taken as the answer (measured on the Pixel soft key)', async () => {

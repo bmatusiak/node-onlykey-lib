@@ -27,7 +27,7 @@ const { codes, chain, copy: copyCheck } = require('../../src/edge');
 
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
-  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04,
+  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, VOUCH: 0x05,
   GRANT_CREATE: 0x10, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
   TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24,
 });
@@ -41,6 +41,10 @@ const SUB = Object.freeze({
  * to tell that the link welds where the copy says it does.
  */
 const GRANT_HEAD_BYTES = 6;
+/* R26: the vouch tag - HMAC-SHA256(K_vouch, "OKEDGE-VOUCH-v1" || seq || head), first 16 bytes */
+const VOUCH_BYTES = 16;
+/* seq . head . tag: TICKET's, WAIVE's, VOUCH's and REPLAY_DONE's answer */
+const seqHeadTag = (r) => ({ seq: (r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24)) >>> 0, head: r.slice(4, 36), tag: r.slice(36, 36 + VOUCH_BYTES) });
 const REPLAY_BYTES = 46;
 const REPLAY_HEAD_BYTES = 8;
 const SEQ_NONE = 0xffffffff;
@@ -241,11 +245,23 @@ function setup(imports, register) {
      * File the ticket for an owed use (any of the key's up to 4, R16; the key
      * refuses another - EdgeError 'no-ticket-waiting'). msgHash =
      * tickets.messageHash(message); the message never goes to the key.
-     * -> {seq, head} after the ticket link: what the next arm() passes (R13a).
+     * -> {seq, head, tag} after the ticket link: the head the next arm() passes
+     * (R13a), and the key's vouch tag for it - keep it with the copy: a restore
+     * commits a replay only up to a vouched head (R26).
      */
     async ticket(refSeq, code, msgHash, opts) {
       const [r] = await call(SUB.TICKET, concat([u32(refSeq), Uint8Array.of(code), msgHash]), opts);
-      return { seq: get32(r, 0), head: r.slice(4, 36) };
+      return seqHeadTag(r);
+    },
+
+    /**
+     * R26: the key's vouch tag for its CURRENT head - HMAC with a key only it
+     * holds, over (seq, head). No press; refused while restoring ('restoring').
+     * A host keeps the newest tag with its copy. -> {seq, head, tag}
+     */
+    async vouch(opts) {
+      const [r] = await call(SUB.VOUCH, null, opts);
+      return seqHeadTag(r);
     },
 
     /**
@@ -289,14 +305,14 @@ function setup(imports, register) {
     /**
      * R18: clear every owed ticket at once - a PHYSICAL press (the person's Yes
      * in the app first). Linked as a ticket 0x8F with the press flag
-     * (tickets.waiveSubject). -> {seq, head} after the waive link.
+     * (tickets.waiveSubject). -> {seq, head, tag} after the waive link.
      */
     async waive({ onPress, timeoutMs = 30000 } = {}) {
       await busQuiet();
       const pending = callNow(SUB.WAIVE, null, { timeoutMs });
       if (onPress) onPress();
       const [r] = await pending;
-      return { seq: get32(r, 0), head: r.slice(4, 36) };
+      return seqHeadTag(r);
     },
 
     /**
@@ -319,17 +335,24 @@ function setup(imports, register) {
 
     /**
      * R26: finish a restore - a PHYSICAL press over "restored to #N, the newest
-     * your copies hold". newestSeq = the newest seq any copy holds; past the
-     * replayed head, the key links a LOSS over the rest (grant_id = the first
-     * lost seq, the subject's first 4 bytes = the last). -> {seq, head}
+     * your copies hold". The replay is tentative until now: the key commits it
+     * only if {seq, tag} is ITS vouch tag for exactly the replayed head - so
+     * replay up to the newest vouched head you hold, and pass that tag. Anything
+     * else is thrown away (EdgeError 'not-vouched'), and the LOSS covers
+     * everything since the backup. newestSeq (optional) = the newest seq any copy
+     * holds: past what is committed, the key links a LOSS over the rest
+     * (grant_id = the first lost seq, the subject's first 4 bytes = newestSeq).
+     * -> {seq, head, tag}
      */
-    async replayDone({ newestSeq, onPress, timeoutMs = 30000 } = {}) {
-      if (!Number.isInteger(newestSeq) || newestSeq < 0) throw new TypeError('Edge: replayDone needs the newest seq the copies hold');
+    async replayDone({ seq, tag, newestSeq, onPress, timeoutMs = 30000 } = {}) {
+      if (!Number.isInteger(seq) || seq < 0) throw new TypeError('Edge: replayDone needs the seq the vouch tag is for');
+      if (!(tag instanceof Uint8Array) || tag.length !== VOUCH_BYTES) throw new TypeError(`Edge: replayDone needs the key's ${VOUCH_BYTES}-byte vouch tag`);
+      const newest = Number.isInteger(newestSeq) && newestSeq >= 0 ? newestSeq : SEQ_NONE;
       await busQuiet();
-      const pending = callNow(SUB.REPLAY_DONE, u32(newestSeq), { timeoutMs });
+      const pending = callNow(SUB.REPLAY_DONE, concat([u32(seq), tag, u32(newest)]), { timeoutMs });
       if (onPress) onPress();
       const [r] = await pending;
-      return { seq: get32(r, 0), head: r.slice(4, 36) };
+      return seqHeadTag(r);
     },
 
     /**

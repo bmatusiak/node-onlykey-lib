@@ -88,6 +88,7 @@ the commit that release ended at.
     - Codes: sub-ops GRANT_HOLD 0x13, GRANT_RESUME 0x14, WAIVE 0x21, ARM 0x22;
       link ops grant-hold 13 / grant-resume 14 (appended last in `OP`); status
       0B stale-head, 0C ticket-owed, 0D nothing-to-arm.
+  - **R26 fix: replay commits only vouched history** (onlykey-edge firmware.md R26, 2026-10-02). Replay is tentative on the key until `edge.replayDone({ seq, tag, newestSeq })` presents the key's own vouch tag for exactly the replayed head; otherwise `EdgeError` `not-vouched` (0x11) and the LOSS covers everything since the backup. `edge.vouch()` (05) gives `{seq, head, tag}` for the current head (refused while restoring, like CHECKPOINT); `ticket()` and `waive()` now return the tag too. A host keeps the newest tag with its copy.
   - **ARM bound to the request (R13a), budget expiry (R15b), the GRANT_CREATE
     layout** - onlykey-edge `892ece8`, `badfd16`.
     - `grants.armToken({ head, subject })` = SHA256("OKEDGE-ARM-v1" || head ||
