@@ -51,31 +51,43 @@ export function checkSpends(genesis: any, uses: any, spends: any): {
     failure?: undefined;
 };
 export function encodeScopes(scopes: any): Uint8Array<ArrayBuffer>;
-/** The bytes the digest is taken over (what an ECDSA-SHA256 signer that hashes for itself would sign). */
-export function budgetGenesisMessage({ deviceId, grantId, genesis, uses, scopes, reasonHash, chainSeq, chainHead }: {
-    deviceId: any;
-    grantId: any;
-    genesis: any;
-    uses: any;
+export function grantSubject({ scopes, reasonHash, genesis }: {
     scopes: any;
     reasonHash: any;
-    chainSeq: any;
-    chainHead: any;
-}): Uint8Array<ArrayBuffer>;
-export function budgetGenesisDigest(fields: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+    genesis: any;
+}): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /**
- * Check a budget's signed genesis: {deviceId, grantId, genesis, uses, scopes,
- * reasonHash, chainSeq, chainHead}, the key's 64-byte signature, and the Edge
- * public key. -> {ok: true} or {ok: false, reason}:
- *   uses-mismatch  the scopes' caps do not add up to the budget's uses
- *   bad-signature  not signed by this key over exactly these fields
+ * Check a budget's opening as one standalone proof:
+ *   {deviceId, publicKey, link (its grant-create link), prevHead (the head
+ *    before it), head + signature (the checkpoint the press answered with),
+ *    scopes, reasonHash, genesis, uses}
+ * -> {ok: true, grantId, seq} or {ok: false, reason}:
+ *   uses-mismatch      the scopes' caps do not add up to uses
+ *   not-a-grant-create the link is not a grant-create
+ *   subject-mismatch   the link does not commit to these scopes, reason and G
+ *   weld-mismatch      the signed head is not this link welded onto prevHead
+ *   bad-signature      the checkpoint is not the Edge key's over (seq, head)
+ * prevHead is not trusted: a wrong one cannot weld to the signed head.
  */
-export function verifyBudgetGenesis(fields: any, signature: any, publicKey: any): {
+export function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses }: {
+    deviceId: any;
+    publicKey: any;
+    link: any;
+    prevHead: any;
+    head: any;
+    signature: any;
+    scopes: any;
+    reasonHash: any;
+    genesis: any;
+    uses: any;
+}): {
     ok: boolean;
     reason: string;
+    grantId?: undefined;
+    seq?: undefined;
 } | {
     ok: boolean;
+    grantId: number;
+    seq: number;
     reason?: undefined;
 };
-/** What the key does at the press - for the fake key and tests; a host never holds the Edge signing key. */
-export function signBudgetGenesis(fields: any, secretKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;

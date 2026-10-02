@@ -52,8 +52,8 @@ const TAG = Object.freeze({
   LINK: 'OKEDGE-LINK-v1',
   CHECKPOINT: 'OKEDGE-CKPT-v1',
   GRANT: 'OKEDGE-GRANT-v1',
-  /* CHOSEN (owner, 2026-10-02): a budget's genesis is signed by the key at the press */
-  BUDGET: 'OKEDGE-BUDGET-v1',
+  /* CHOSEN: device_id = SHA256(DEVICE || the Edge public key X||Y)[0..16] - the key and edge JS both derive it */
+  DEVICE: 'OKEDGE-DEVICE-v1',
   TICKET: 'OKEDGE-TICKET-v1',
   RECEIPT: 'OKEDGE-RCPT-v1',
 });

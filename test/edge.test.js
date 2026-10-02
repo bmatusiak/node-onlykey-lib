@@ -198,57 +198,69 @@ test('budget: a value past the last step cannot be made from a revealed one', ()
   assert.equal(grants.checkSelfPress({ genesis: G(), uses: V.grant.uses, step: 2, value: require('../src/vendor/exports/@noble/hashes/sha2.js').sha256(v1), mac: new Uint8Array(32), subject: new Uint8Array(32) }).reason, 'wrong-budget');
 });
 
-/* ---- a budget's genesis, signed at the press ---- */
+/* ---- the key's one signature: checkpoints, and a budget's opening through one ---- */
 
-const genesisFields = () => ({
-  deviceId,
-  grantId: V.grant.grantId,
-  genesis: fromHex(V.grant.genesis),
-  uses: V.grant.uses,
-  scopes: V.grant.scopes,
-  reasonHash: fromHex(V.grant.reasonHash),
-  chainSeq: V.grant.chainSeq,
-  chainHead: fromHex(V.grant.chainHead),
+const { p256 } = require('../src/vendor/exports/@noble/curves/nist.js');
+
+test('device id and checkpoint digest match the Python reading', () => {
+  assert.equal(toHex(chain.deviceIdOf(fromHex(V.deviceFromPub.pub))), V.deviceFromPub.deviceId);
+  const c = V.checkpoint;
+  assert.equal(toHex(chain.checkpointDigest({ deviceId, seq: c.seq, head: fromHex(c.head) })), c.digest);
+  assert.equal(toHex(grants.grantSubject({ scopes: V.grant.scopes, reasonHash: fromHex(V.grant.reasonHash), genesis: fromHex(V.grant.genesis) })), V.grant.subject);
 });
 
-test('budget genesis: the signed digest matches the Python reading', () => {
-  assert.equal(toHex(grants.budgetGenesisDigest(genesisFields())), V.grant.genesisDigest);
-});
-
-test('budget genesis: Node\'s own ECDSA and the lib agree in both directions', () => {
+test('checkpoint: Node\'s own ECDSA and the lib agree in both directions', () => {
   const nodeCrypto = require('node:crypto');
   const { privateKey, publicKey } = nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const jwk = publicKey.export({ format: 'jwk' });
   const raw = Uint8Array.from([...Buffer.from(jwk.x, 'base64url'), ...Buffer.from(jwk.y, 'base64url')]); // X||Y, as the key gives it
-  /* Node signs the message (ECDSA-SHA256 hashes it itself): that is a signature over our digest */
-  const nodeSig = nodeCrypto.sign('sha256', grants.budgetGenesisMessage(genesisFields()), { key: privateKey, dsaEncoding: 'ieee-p1363' });
-  assert.deepEqual(grants.verifyBudgetGenesis(genesisFields(), new Uint8Array(nodeSig), raw), { ok: true });
-  /* and Node accepts what the lib signs */
-  const secret = Buffer.from(privateKey.export({ format: 'jwk' }).d, 'base64url');
-  const libSig = grants.signBudgetGenesis(genesisFields(), new Uint8Array(secret));
-  assert.ok(nodeCrypto.verify('sha256', grants.budgetGenesisMessage(genesisFields()), { key: publicKey, dsaEncoding: 'ieee-p1363' }, libSig));
+  const fields = { deviceId, seq: V.checkpoint.seq, head: fromHex(V.checkpoint.head) };
+  /* Node signs the message (ECDSA-SHA256 hashes it itself): a signature over our digest */
+  const nodeSig = nodeCrypto.sign('sha256', chain.checkpointMessage(fields), { key: privateKey, dsaEncoding: 'ieee-p1363' });
+  assert.ok(chain.verifyCheckpoint(fields, new Uint8Array(nodeSig), raw));
+  const libSig = chain.signCheckpoint(fields, new Uint8Array(Buffer.from(privateKey.export({ format: 'jwk' }).d, 'base64url')));
+  assert.ok(nodeCrypto.verify('sha256', chain.checkpointMessage(fields), { key: publicKey, dsaEncoding: 'ieee-p1363' }, libSig));
+  /* over THIS head only */
+  assert.equal(chain.verifyCheckpoint({ ...fields, head: new Uint8Array(32).fill(1) }, new Uint8Array(nodeSig), raw), false);
 });
 
-test('budget genesis: changing any signed field, or another key, breaks the signature', () => {
+/* what the key does at a press: link grant-create (subject commits to G), checkpoint over it */
+function openBudget(secret, { prevSeq = 4, prevHead = fromHex(V.chain[4].head) } = {}) {
+  const g = V.grant;
+  const scopes = g.scopes;
+  const reasonHash = fromHex(g.reasonHash);
+  const genesis = fromHex(g.genesis);
+  const seq = prevSeq + 1;
+  const link = chain.encodeLink({
+    seq, op: codes.OP.GRANT_CREATE, decision: codes.DECISION.APPROVE, flags: codes.FLAG.PRESS_OBSERVED,
+    subject: grants.grantSubject({ scopes, reasonHash, genesis }), grantId: seq + 1,
+  });
+  const head = chain.weld(prevHead, link);
+  const signature = chain.signCheckpoint({ deviceId, seq, head }, secret);
+  return { deviceId, publicKey: p256.getPublicKey(secret, false).slice(1), link, prevHead, head, signature, scopes, reasonHash, genesis, uses: g.uses };
+}
+
+test('budget opening: a press-answered checkpoint over the grant-create link proves G on its own', () => {
+  const proof = openBudget(new Uint8Array(32).fill(7));
+  const r = grants.verifyBudgetOpening(proof);
+  assert.deepEqual(r, { ok: true, grantId: 6, seq: 5 });
+});
+
+test('budget opening: every forged part fails with its own reason', () => {
   const secret = new Uint8Array(32).fill(7);
-  const pub = require('../src/vendor/exports/@noble/curves/nist.js').p256.getPublicKey(secret, false);
-  const sig = grants.signBudgetGenesis(genesisFields(), secret);
-  assert.deepEqual(grants.verifyBudgetGenesis(genesisFields(), sig, pub), { ok: true });
-  const edits = {
-    genesis: (f) => { f.genesis = new Uint8Array(32).fill(1); },
-    reason: (f) => { f.reasonHash = new Uint8Array(32); },
-    'chain head (a budget moved to another place in the chain)': (f) => { f.chainHead = new Uint8Array(32).fill(2); },
-    'another device': (f) => { f.deviceId = fromHex(V.otherDeviceId); },
-    'a bigger cap': (f) => { f.scopes = [{ ...f.scopes[0], cap: f.uses + 1 }]; f.uses += 1; },
+  const good = openBudget(secret);
+  const cases = {
+    'uses-mismatch': { ...good, uses: good.uses + 1 },
+    'not-a-grant-create': { ...good, link: (() => { const l = Uint8Array.from(good.link); l[4] = codes.OP.SIGN; return l; })() },
+    'subject-mismatch': { ...good, genesis: new Uint8Array(32).fill(3) },
+    'weld-mismatch': { ...good, prevHead: new Uint8Array(32).fill(4) },
+    'bad-signature': { ...good, publicKey: p256.getPublicKey(new Uint8Array(32).fill(8), false).slice(1) },
   };
-  for (const [what, edit] of Object.entries(edits)) {
-    const f = genesisFields();
-    edit(f);
-    assert.equal(grants.verifyBudgetGenesis(f, sig, pub).reason, 'bad-signature', what);
+  for (const [reason, proof] of Object.entries(cases)) {
+    assert.equal(grants.verifyBudgetOpening(proof).reason, reason, reason);
   }
-  const otherPub = require('../src/vendor/exports/@noble/curves/nist.js').p256.getPublicKey(new Uint8Array(32).fill(8), false);
-  assert.equal(grants.verifyBudgetGenesis(genesisFields(), sig, otherPub).reason, 'bad-signature');
-  assert.equal(grants.verifyBudgetGenesis({ ...genesisFields(), uses: V.grant.uses + 1 }, sig, pub).reason, 'uses-mismatch');
+  /* another device's checkpoint over the same bytes */
+  assert.equal(grants.verifyBudgetOpening({ ...good, deviceId: fromHex(V.otherDeviceId) }).reason, 'bad-signature');
 });
 
 /* ---- tickets ---- */

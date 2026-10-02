@@ -64,3 +64,15 @@ export function verify(entries: any, opts?: {}): {
     }[];
     failure?: undefined;
 };
+/** device_id = SHA256("OKEDGE-DEVICE-v1" || public key X||Y)[0..16] - the key derives it the same way. */
+export function deviceIdOf(publicKey: any): Uint8Array<ArrayBuffer>;
+export function checkpointMessage({ deviceId, seq, head }: {
+    deviceId: any;
+    seq: any;
+    head: any;
+}): Uint8Array<ArrayBuffer>;
+export function checkpointDigest(fields: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+/** {deviceId, seq, head}, the key's 64-byte signature, the Edge public key -> boolean */
+export function verifyCheckpoint(fields: any, signature: any, publicKey: any): boolean;
+/** What the key does - for the fake key and tests; a host never holds the Edge key. */
+export function signCheckpoint(fields: any, secretKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;

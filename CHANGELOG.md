@@ -34,14 +34,21 @@ the commit that release ended at.
   - `tickets`: pairs each sign/decrypt with its ticket (ticketed, alarm,
     missing, or no ticket owed). A message from sync is shown only when it
     hashes to the ticket link. Bit 7 or an unknown code means alarm.
-  - **Each budget is its own provable chain, started by a signed press** (owner,
-    2026-10-02; the `bmatusiak/provable` construction). At the press the key
-    signs the budget's genesis `G` with the Edge key (P-256). The signature also
-    covers the device, the budget id, its uses and scopes, the reason hash, and
-    the device chain's head before the budget, so budgets are ordered like
-    blocks. `grants.verifyBudgetGenesis` checks a budget on its own
-    (`bad-signature`, `uses-mismatch`); every reveal then hashes back to `G`.
-    Node's own ECDSA agrees in both directions.
+  - **Each budget is its own provable chain, opened by a signed press** (owner,
+    2026-10-02; the `bmatusiak/provable` construction). The firmware keeps ONE
+    signature, the checkpoint over `(seq, head)` (`chain.checkpointDigest`,
+    `verifyCheckpoint`, P-256 with the Edge key).
+    - A budget's grant-create link commits to `G` in its subject
+      (`grants.grantSubject`), and the press is answered with a checkpoint over
+      that link, so `G` is signed through the chain.
+    - `grants.verifyBudgetOpening` checks that proof on its own. Failure
+      reasons: `uses-mismatch`, `not-a-grant-create`, `subject-mismatch`,
+      `weld-mismatch`, `bad-signature`.
+    - Every reveal then hashes back to `G`.
+    - `chain.deviceIdOf` derives the device id from the Edge public key, as the
+      key does.
+    - Node's own ECDSA agrees in both directions.
+    - Budgets have at most 255 uses (owner).
   - Tickets add `waiting`: the latest use can still get its ticket (R16); after
     any newer use it is `missing`.
   - `codes`: every number the spec left open, marked CHOSEN in one place.

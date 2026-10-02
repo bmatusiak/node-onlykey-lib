@@ -37,7 +37,10 @@
  * could be made failed.
  */
 const { OP, TAG } = require('./codes');
-const { H, u32le, bytes32, same } = require('./hash');
+const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { concat } = require('../bytes');
+const { H, ascii, u32le, bytes32, same } = require('./hash');
 
 const LINK_BYTES = 64;
 
@@ -215,4 +218,54 @@ function verify(entries, opts = {}) {
   return failure ? { ok: false, verifiedThrough: through, gaps, failure } : { ok: true, verifiedThrough: through, gaps };
 }
 
-module.exports = { LINK_BYTES, REASONS, encodeLink, decodeLink, genesis, weld, heads, verify };
+/*
+ * THE KEY'S ONE SIGNATURE: a checkpoint over (seq, head) (firmware R7), made
+ * with the Edge key - P-256, derived from the key's own secret and never
+ * reachable by a generic sign request. A budget's opening is answered with a
+ * checkpoint over its grant-create link (grants.verifyBudgetOpening).
+ *
+ *   digest = SHA256("OKEDGE-CKPT-v1" || device_id || seq (u32 LE) || head)
+ *
+ * CHOSEN: raw P-256 over the 32-byte digest, signature r||s, S not normalised
+ * (the key does not normalise S - see crypto/pgp-cert.js verifyDigest).
+ */
+
+/* the key gives P-256 public keys as X||Y (64 bytes); SEC1 04||X||Y is accepted too */
+function sec1(publicKey) {
+  if (!(publicKey instanceof Uint8Array)) throw new TypeError('edge: a public key is bytes');
+  return publicKey.length === 64 ? Uint8Array.from([4, ...publicKey]) : publicKey;
+}
+
+/** device_id = SHA256("OKEDGE-DEVICE-v1" || public key X||Y)[0..16] - the key derives it the same way. */
+function deviceIdOf(publicKey) {
+  const xy = publicKey.length === 65 ? publicKey.subarray(1) : publicKey;
+  if (xy.length !== 64) throw new TypeError('edge: the Edge public key is 64 bytes X||Y');
+  return H(TAG.DEVICE, xy).slice(0, 16);
+}
+
+function checkpointMessage({ deviceId, seq, head }) {
+  return concat([ascii(TAG.CHECKPOINT), deviceId, u32le(seq), bytes32(head, 'head')]);
+}
+
+function checkpointDigest(fields) {
+  return sha256(checkpointMessage(fields));
+}
+
+/** {deviceId, seq, head}, the key's 64-byte signature, the Edge public key -> boolean */
+function verifyCheckpoint(fields, signature, publicKey) {
+  try {
+    return p256.verify(Uint8Array.from(signature), checkpointDigest(fields), sec1(publicKey), { prehash: false, lowS: false });
+  } catch {
+    return false;
+  }
+}
+
+/** What the key does - for the fake key and tests; a host never holds the Edge key. */
+function signCheckpoint(fields, secretKey) {
+  return p256.sign(checkpointDigest(fields), secretKey, { prehash: false, lowS: false });
+}
+
+module.exports = {
+  LINK_BYTES, REASONS, encodeLink, decodeLink, genesis, weld, heads, verify,
+  deviceIdOf, checkpointMessage, checkpointDigest, verifyCheckpoint, signCheckpoint,
+};

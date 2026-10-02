@@ -65,8 +65,15 @@
       }
     ],
     "reasonHash": "8fcfccf675b1f0bfd39dcbb13015052fe82bc51c003c165a410945c913dbb2be",
-    "chainSeq": 0,
-    "chainHead": "064eecd56473dc9ade949528fd699e0c1809aa7559f17091291772d8e31ffc5a",
-    "genesisDigest": "09e71d7a55cb93c3cc649b6e6e58ed40d07fefe173ae707dd0380815ae3b62a3"
+    "subject": "63b1ec96b12260db7d8f76c1fcb7770a9801c24b0011b8100b5a9794da6c1034"
+  },
+  "checkpoint": {
+    "seq": 5,
+    "head": "6c4a3f79940120fda81db4df5eec9df67298d61e4074be70ecb8953d2e5a3e82",
+    "digest": "87929068ebec5141fc6c28a637fa18dae3a8c41ba3fc13a3ecf237d7f8d89ee2"
+  },
+  "deviceFromPub": {
+    "pub": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "deviceId": "67aae89f560737b50a711aa0bf651d3e"
   }
 }

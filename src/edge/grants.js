@@ -20,10 +20,9 @@
  * CHOSEN: i counts from 1, so use 1 reveals H^(n-1)(seed) and use n the seed.
  */
 const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
-const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
-const { TAG } = require('./codes');
-const { hmacSha256, bytes32, same, u32le, u8, ascii } = require('./hash');
-const { concat } = require('../bytes');
+const { TAG, OP } = require('./codes');
+const chain = require('./chain');
+const { H, hmacSha256, bytes32, same, u8 } = require('./hash');
 
 /* owner, 2026-10-02: "1 budget max chain is 255" (the spec said 1024) */
 const MAX_USES = 255;
@@ -96,30 +95,23 @@ function checkSpends(genesis, uses, spends) {
 }
 
 /*
- * EACH BUDGET IS ITS OWN PROVABLE CHAIN, STARTED BY A SIGNED PRESS (owner,
+ * EACH BUDGET IS ITS OWN PROVABLE CHAIN, OPENED BY A SIGNED PRESS (owner,
  * 2026-10-02: "like a provable blockchain - each budget has its own genesis,
  * each genesis gets started with the firmware button press by getting signed").
  *
- * When the person presses to approve a budget, the key signs its genesis G with
- * the Edge signing key (firmware.md R7: derived under `okedge-log`, never the
- * attestation key). Anyone with that public key can then check a budget on its
- * own - the signature proves a human press on THIS key opened it, and every
- * reveal hashes back to G (checkSelfPress) - without the rest of the history.
- * The signed digest also commits to the device chain's head at the press, so
- * budgets are ordered like blocks and none can be dropped or moved.
+ * The firmware is minimal (one signature, owner's "safe cuts"): the key's
+ * grant-create link commits to G in its subject,
  *
- * CHOSEN: P-256 ECDSA (the receipts' curve, R21) over the 32-byte digest as-is,
- * signature r||s (64 bytes), S not normalised (the key does not normalise S -
- * see crypto/pgp-cert.js verifyDigest). Scopes are encoded as a count byte, then
- * per scope op (u8), slot (u8), cap (u16 LE).
+ *   subject = SHA256("OKEDGE-GRANT-v1" || scopes || reason_hash || G)
  *
- *   digest = SHA256("OKEDGE-BUDGET-v1" || device_id || grant_id (u32 LE)
- *                   || G || uses (u16 LE) || scopes || reason_hash
- *                   || chain_seq (u32 LE) || chain_head)
+ * and the press is answered with a CHECKPOINT over that link (chain.js). So
+ * the genesis is signed through the chain: the signature covers the head, the
+ * head is the link welded onto the head before it, the link's subject covers
+ * G. Anyone with the Edge public key can check a budget's opening on its own,
+ * and every reveal then hashes back to G (checkSelfPress).
  *
- * chain_seq = the seq of the budget's own grant-create link; chain_head = the
- * device chain's head just BEFORE it (head[chain_seq - 1], the device genesis
- * for seq 0) - the block this budget is built on.
+ * Scopes are encoded as a count byte, then per scope op (u8), slot (u8), cap
+ * (u16 LE).
  */
 function encodeScopes(scopes) {
   if (!Array.isArray(scopes) || scopes.length < 1 || scopes.length > 4) throw new RangeError('edge: a budget has 1 to 4 scopes');
@@ -135,48 +127,35 @@ function encodeScopes(scopes) {
   return out;
 }
 
-/** The bytes the digest is taken over (what an ECDSA-SHA256 signer that hashes for itself would sign). */
-function budgetGenesisMessage({ deviceId, grantId, genesis, uses, scopes, reasonHash, chainSeq, chainHead }) {
-  checkCount(uses);
-  return concat([ascii(TAG.BUDGET), deviceId, u32le(grantId), bytes32(genesis, 'genesis'), new Uint8Array([uses & 0xff, uses >>> 8]),
-    encodeScopes(scopes), bytes32(reasonHash, 'reasonHash'), u32le(chainSeq), bytes32(chainHead, 'chainHead')]);
-}
 
-function budgetGenesisDigest(fields) {
-  return sha256(budgetGenesisMessage(fields));
-}
-
-/* the key returns P-256 public keys as X||Y (64 bytes); accept the SEC1 04||X||Y form too */
-function sec1(publicKey) {
-  if (publicKey.length === 64) return Uint8Array.from([4, ...publicKey]);
-  return publicKey;
+function grantSubject({ scopes, reasonHash, genesis }) {
+  return H(TAG.GRANT, encodeScopes(scopes), bytes32(reasonHash, 'reasonHash'), bytes32(genesis, 'genesis'));
 }
 
 /**
- * Check a budget's signed genesis: {deviceId, grantId, genesis, uses, scopes,
- * reasonHash, chainSeq, chainHead}, the key's 64-byte signature, and the Edge
- * public key. -> {ok: true} or {ok: false, reason}:
- *   uses-mismatch  the scopes' caps do not add up to the budget's uses
- *   bad-signature  not signed by this key over exactly these fields
+ * Check a budget's opening as one standalone proof:
+ *   {deviceId, publicKey, link (its grant-create link), prevHead (the head
+ *    before it), head + signature (the checkpoint the press answered with),
+ *    scopes, reasonHash, genesis, uses}
+ * -> {ok: true, grantId, seq} or {ok: false, reason}:
+ *   uses-mismatch      the scopes' caps do not add up to uses
+ *   not-a-grant-create the link is not a grant-create
+ *   subject-mismatch   the link does not commit to these scopes, reason and G
+ *   weld-mismatch      the signed head is not this link welded onto prevHead
+ *   bad-signature      the checkpoint is not the Edge key's over (seq, head)
+ * prevHead is not trusted: a wrong one cannot weld to the signed head.
  */
-function verifyBudgetGenesis(fields, signature, publicKey) {
-  const total = fields.scopes.reduce((n, s) => n + s.cap, 0);
-  if (total !== fields.uses) return { ok: false, reason: 'uses-mismatch' };
-  let ok = false;
-  try {
-    ok = p256.verify(Uint8Array.from(signature), budgetGenesisDigest(fields), sec1(publicKey), { prehash: false, lowS: false });
-  } catch {
-    ok = false;
-  }
-  return ok ? { ok: true } : { ok: false, reason: 'bad-signature' };
-}
-
-/** What the key does at the press - for the fake key and tests; a host never holds the Edge signing key. */
-function signBudgetGenesis(fields, secretKey) {
-  return p256.sign(budgetGenesisDigest(fields), secretKey, { prehash: false, lowS: false });
+function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses }) {
+  if (scopes.reduce((n, s) => n + s.cap, 0) !== uses) return { ok: false, reason: 'uses-mismatch' };
+  const f = chain.decodeLink(link);
+  if (f.op !== OP.GRANT_CREATE) return { ok: false, reason: 'not-a-grant-create' };
+  if (!same(f.subject, grantSubject({ scopes, reasonHash, genesis }))) return { ok: false, reason: 'subject-mismatch' };
+  if (!same(chain.weld(prevHead, link), head)) return { ok: false, reason: 'weld-mismatch' };
+  if (!chain.verifyCheckpoint({ deviceId, seq: f.seq, head }, signature, publicKey)) return { ok: false, reason: 'bad-signature' };
+  return { ok: true, grantId: f.grantId, seq: f.seq };
 }
 
 module.exports = {
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
-  encodeScopes, budgetGenesisMessage, budgetGenesisDigest, verifyBudgetGenesis, signBudgetGenesis,
+  encodeScopes, grantSubject, verifyBudgetOpening,
 };
