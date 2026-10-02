@@ -4,7 +4,7 @@
  * Edge budgets ("grants", spec L2): checking a self-press.
  *
  * THE CONSTRUCTION (firmware.md R11-R13; bmatusiak/provable). When a person
- * clasps a budget of n uses (n = the sum of its scopes' caps, <= 1024), the key
+ * clasps a budget of n uses (n = the sum of its scopes' caps, <= 255), the key
  * draws a secret seed and publishes only
  *
  *   G = H^n(seed)            the grant genesis, H = SHA-256
@@ -25,7 +25,8 @@ const { TAG } = require('./codes');
 const { hmacSha256, bytes32, same, u32le, u8, ascii } = require('./hash');
 const { concat } = require('../bytes');
 
-const MAX_USES = 1024;
+/* owner, 2026-10-02: "1 budget max chain is 255" (the spec said 1024) */
+const MAX_USES = 255;
 
 function hashTimes(v, times) {
   let x = v;
@@ -64,7 +65,7 @@ function checkSelfPress({ genesis, uses, step, value, mac, subject }) {
     return { ok: false, reason: 'past-cap' };
   }
   if (!same(hashTimes(value, step), genesis)) {
-    /* bounded (<= 1024 hashes): tell a mislabelled step from a foreign value */
+    /* bounded (<= 255 hashes): tell a mislabelled step from a foreign value */
     let x = value;
     for (let k = 1; k <= uses; k++) {
       x = sha256(x);

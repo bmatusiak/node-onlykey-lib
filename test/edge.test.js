@@ -176,6 +176,16 @@ test('budget: wrong budget, wrong step, wrong subject and past the cap each fail
   assert.equal(grants.checkSelfPress({ ...g, ...spend(0), step: V.grant.uses + 1 }).reason, 'past-cap');
 });
 
+test('budget: one budget\'s chain is at most 255 uses (owner, 2026-10-02)', () => {
+  assert.equal(grants.MAX_USES, 255);
+  const seed = new Uint8Array(32).fill(1);
+  assert.doesNotThrow(() => grants.grantGenesis(seed, 255));
+  assert.throws(() => grants.grantGenesis(seed, 256), RangeError);
+  assert.throws(() => grants.encodeScopes([{ op: 1, slot: 101, cap: 256 }]), RangeError);
+  const g = grants.grantGenesis(seed, 255);
+  assert.equal(grants.checkSelfPress({ genesis: g, uses: 256, step: 1, value: seed, mac: seed, subject: seed }).reason, 'past-cap');
+});
+
 test('budget: spends must run 1, 2, 3... - a replayed reveal and a skipped step are caught', () => {
   assert.deepEqual(grants.checkSpends(G(), V.grant.uses, [spend(0), spend(1)]), { ok: true, spent: 2 });
   assert.equal(grants.checkSpends(G(), V.grant.uses, [spend(0), spend(0)]).failure.reason, 'step-reused');
