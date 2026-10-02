@@ -202,7 +202,7 @@ function setup(imports, register) {
      * budget), so the wait is long: `timeoutMs` defaults to 30 s, past the
      * key's own 25 s. `onPress` is called once the request is on the key, for
      * the UI to say "press the key".
-     * scopes: [{op, slot, cap}] (1-4, caps summing to <= 255)
+     * scopes: [{op, slot, cap}] (1-4, caps summing to <= 1024)
      * verifiedHead: the head the host verified its copy up to (R27); the key
      *   refuses with 'stale-head' when it is not its current head. This is the
      *   raw call: grants.create() runs the copy check first and fails closed.
@@ -376,7 +376,9 @@ function setup(imports, register) {
         const { publicKey } = await edge.publicKey();
         const head = await edge.head();
         const checkpoint = head.seq === null ? null : await edge.checkpoint();
-        return copyCheck.verifyCopy(copy, { publicKey, head, checkpoint });
+        /* the key's own ring, this session: its links are trusted as they are (copy.missingGaps) */
+        const held = head.seq === null || head.oldest === null ? [] : await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
+        return copyCheck.verifyCopy(copy, { publicKey, head, checkpoint, held });
       },
     },
 

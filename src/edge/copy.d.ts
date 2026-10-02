@@ -7,6 +7,7 @@
  *             answered with (edge.grant's reply),
  * }
  * key: what the host read from the key THIS session: {publicKey, head (edge.head()),
+ *      held (optional: the links PICKUP gave from the key's ring - trusted as they are),
  *      checkpoint (edge.checkpoint())}
  *
  * -> {ok: true, verifiedThrough, head} or {ok: false, reason, seq?, detail?}
@@ -25,5 +26,13 @@ export function lossesIn(entries: any): {
     from: number;
     to: number;
 }[];
-/** The gaps (from chain.verify) that no LOSS link in the copy covers. */
-export function uncoveredGaps(entries: any, gaps: any): any;
+/** The really missing ranges that no LOSS link in the copy covers. held: the key's own links, this session. */
+export function uncoveredGaps(entries: any, gaps: any, held: any): {
+    from: any;
+    to: number;
+}[];
+/** gaps (from chain.verify) minus the links the key itself holds - what is really missing */
+export function missingGaps(entries: any, gaps: any, held: any): {
+    from: any;
+    to: number;
+}[];

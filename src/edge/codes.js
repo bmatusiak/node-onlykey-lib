@@ -98,7 +98,7 @@ const STATUS = Object.freeze({
   0x01: { name: 'need-pin', text: 'This key has no PIN set yet, so it has no Edge key' },
   0x02: { name: 'bad-scopes', text: 'A budget has 1 to 4 scopes' },
   0x03: { name: 'scope-not-allowed', text: 'A budget cannot pay for that operation or slot' },
-  0x04: { name: 'too-many-uses', text: 'A budget has at most 255 uses' },
+  0x04: { name: 'too-many-uses', text: 'A budget has at most 1024 uses' },
   0x05: { name: 'live-full', text: 'Four budgets are already live' },
   0x06: { name: 'sign-failed', text: 'The key could not sign' },
   0x07: { name: 'no-such-budget', text: 'No live budget has that id' },

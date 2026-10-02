@@ -108,7 +108,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         const n = arg[0];
         const scopes = Array.from({ length: n }, (_, j) => ({ op: arg[1 + 4 * j], slot: arg[2 + 4 * j], cap: arg[3 + 4 * j] | (arg[4 + 4 * j] << 8) }));
         const uses = scopes.reduce((a, s) => a + s.cap, 0);
-        if (uses > 255) return emit(status(0x04));
+        if (uses > 1024) return emit(status(0x04));
         if (owed.length) return emit(status(0x0c));
         if (!same(arg.slice(52, 58), head.slice(0, 6))) return emit(status(0x0b)); /* R27: the verified head */
         const lifetime = arg[50] | (arg[51] << 8);
@@ -224,8 +224,8 @@ test('edge: EDGE:xx refusals become named errors', async () => {
   await assert.rejects(edge.revoke(99), (e) => e instanceof edge.EdgeError && e.status === 'no-such-budget' && e.code === 7);
   await assert.rejects(edge.ticket(5, 0, new Uint8Array(32)), (e) => e.status === 'no-ticket-waiting');
   await assert.rejects(edge.pickup(3, 1), (e) => e.status === 'not-held');
-  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 200 }, { op: 1, slot: 3, cap: 100 }], reasonHash: new Uint8Array(32), verifiedHead: new Uint8Array(32) }),
-    (e) => e.status === 'too-many-uses' || /255/.test(e.message));
+  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 1000 }, { op: 1, slot: 3, cap: 25 }], reasonHash: new Uint8Array(32), verifiedHead: new Uint8Array(32) }),
+    (e) => e.status === 'too-many-uses');
   const t = await edge.ticket(0, 0, new Uint8Array(32));
   assert.equal(t.seq, 1, 'the ticket comes back with the seq and head the next arm() passes');
   assert.equal(t.head.length, 32);

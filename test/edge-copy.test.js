@@ -133,3 +133,18 @@ test('copy: a gap verifies only when a LOSS link covers it (R24, R27) - never by
   assert.equal(copy.verifyCopy({ links: plain.links.slice(1), openings: plain.openings }, plain.key).reason, 'gap');
   assert.deepEqual(copy.lossesIn(s.links).map((l) => [l.from, l.to]), [[0, 1]]);
 });
+
+test('copy: a link the key still holds is not part of a loss - only what is really missing is (spec 4.3)', () => {
+  /* the copy lost #0-#1 and can't weld #2 (its #1 is gone), but the key handed #2 over this session */
+  const s = withLoss(0, 1);
+  const copyLinks = s.links.slice(2);
+  const plain = copy.verifyCopy({ links: copyLinks, openings: s.openings }, s.key);
+  assert.equal(plain.reason, 'gap', 'without the key\'s own links, #2 is unverifiable too');
+  const v = chain.verify(copyLinks, { deviceId: DEVICE, expectHead: { seq: s.key.head.seq, head: s.key.head.head } });
+  const held = [s.links[2]];
+  assert.deepEqual(copy.missingGaps(copyLinks, v.gaps, held), [{ from: 0, to: 1 }], 'the missing range stops before the link the key holds');
+  assert.equal(copy.verifyCopy({ links: copyLinks, openings: s.openings }, { ...s.key, held }).ok, true, 'LOSS #0-#1 + the key\'s own #2 verify');
+  /* a copy whose #2 differs from the key's is not helped */
+  const forged = { ...s.links[2], link: Uint8Array.from(s.links[2].link, (x, i) => (i === 9 ? x ^ 1 : x)) };
+  assert.equal(copy.missingGaps([forged, ...copyLinks.slice(1)], v.gaps, held).some((g) => g.from <= 2 && g.to >= 2), true);
+});

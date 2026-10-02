@@ -176,14 +176,17 @@ test('budget: wrong budget, wrong step, wrong subject and past the cap each fail
   assert.equal(grants.checkSelfPress({ ...g, ...spend(0), step: V.grant.uses + 1 }).reason, 'past-cap');
 });
 
-test('budget: one budget\'s chain is at most 255 uses (owner, 2026-10-02)', () => {
-  assert.equal(grants.MAX_USES, 255);
+test('budget: one budget\'s chain is at most 1024 uses - 1024 accepted, 1025 refused (R11, Brad 2026-10-02)', () => {
+  assert.equal(grants.MAX_USES, 1024);
   const seed = new Uint8Array(32).fill(1);
-  assert.doesNotThrow(() => grants.grantGenesis(seed, 255));
-  assert.throws(() => grants.grantGenesis(seed, 256), RangeError);
-  assert.throws(() => grants.encodeScopes([{ op: 1, slot: 101, cap: 256 }]), RangeError);
-  const g = grants.grantGenesis(seed, 255);
-  assert.equal(grants.checkSelfPress({ genesis: g, uses: 256, step: 1, value: seed, mac: seed, subject: seed }).reason, 'past-cap');
+  assert.doesNotThrow(() => grants.grantGenesis(seed, 1024));
+  assert.throws(() => grants.grantGenesis(seed, 1025), RangeError);
+  assert.doesNotThrow(() => grants.encodeScopes([{ op: 1, slot: 101, cap: 1024 }]));
+  assert.throws(() => grants.encodeScopes([{ op: 1, slot: 101, cap: 1025 }]), RangeError);
+  const g = grants.grantGenesis(seed, 1024);
+  /* the first reveal of a 1024-use budget hashes back to G in 1 step; the last in 1024 */
+  assert.equal(grants.checkSelfPress({ genesis: g, uses: 1024, step: 1024, value: grants.reveal(seed, 1024, 1024), mac: grants.reveal(seed, 1024, 1024), subject: seed }).reason, 'mac-mismatch', 'step 1024 is a real step');
+  assert.equal(grants.checkSelfPress({ genesis: g, uses: 1025, step: 1, value: seed, mac: seed, subject: seed }).reason, 'past-cap');
 });
 
 test('budget: spends must run 1, 2, 3... - a replayed reveal and a skipped step are caught', () => {
