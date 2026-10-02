@@ -23,12 +23,12 @@ const report = (bytes) => { const r = new Uint8Array(64); r.set(bytes.slice(0, 6
 const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUpperCase().padStart(2, '0')}`)]);
 
 /* a fake key: a tiny chain, one held link, answers by sub-op */
-function fakeKey({ silent = false, noPin = false } = {}) {
+function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
   const listeners = new Set();
   let head = chain.genesis(DEVICE);
   const held = [];
   const live = [];
-  const emit = (r) => setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: r })), 1);
+  const emit = (r) => setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: r })), delay);
   const append = (fields) => {
     const seq = held.length;
     const link = chain.encodeLink({ seq, ...fields });
@@ -157,6 +157,19 @@ test('edge: EDGE:xx refusals become named errors', async () => {
   await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 200 }, { op: 1, slot: 3, cap: 100 }], reasonHash: new Uint8Array(32) }),
     (e) => e.status === 'too-many-uses' || /255/.test(e.message));
   assert.equal(await edge.ticket(0, 0, new Uint8Array(32)), true, 'the use just made takes its ticket');
+});
+
+test('edge: a stray report on the bus is not taken as the answer (measured on the Pixel soft key)', async () => {
+  /* the key leaves a report behind after an agent sign; the next Edge request must not read it */
+  const transport = fakeKey({ delay: 60 }); /* a key slower than the stray: it lands between request and answer */
+  const edge = edgeOver(transport);
+  const listeners = [];
+  const realOn = transport.on;
+  transport.on = (ev, fn) => { const off = realOn.call(transport, ev, fn); listeners.push(fn); return off; };
+  const stray = report([0x02, 0x0c, 0x79, 0xb1, ...new Uint8Array(60).fill(0xab)]); /* would read as seq 0xB1790C02 */
+  setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: stray })), 20);
+  const h = await edge.head();
+  assert.equal(h.seq, 0, 'the stray report was taken as HEAD\'s answer');
 });
 
 test('edge: probe - edge, no-pin, or silence (never a hang)', async () => {

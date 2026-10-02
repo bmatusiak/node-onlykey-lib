@@ -58,7 +58,37 @@ function setup(imports, register) {
    * Nothing but our answer is expected right after the write; a report that
    * is not ours (a locked key's INITIALIZED broadcast) is skipped.
    */
-  function call(sub, args, { reports = 1, timeoutMs = 6000, text = false } = {}) {
+  /*
+   * Resolve once no vendor report has arrived for `quietMs` (capped).
+   *
+   * WHY, MEASURED ON THE PIXEL SOFT KEY: the key answers an agent sign with a
+   * report AFTER the signature that okcrypto's reader does not take, and the
+   * next Edge request took it as its own answer - a HEAD came back naming link
+   * 0xB1790C02, and the PICKUP that followed was refused. Every OKEDGE reply is
+   * binary with no marker to match on, so the only safe order is: let the bus
+   * go quiet, subscribe, write. (The device plugin's busQuiet, for the same
+   * reason: this bus carries traffic nobody asked for.)
+   */
+  function busQuiet(quietMs = 150, capMs = 1500) {
+    return new Promise((resolve) => {
+      let timer = null;
+      const finish = () => { clearTimeout(timer); clearTimeout(giveUp); off(); resolve(); };
+      const giveUp = setTimeout(finish, capMs);
+      const off = transport.on('report', (event) => {
+        if (event.iface !== IFACE.VENDOR) return;
+        clearTimeout(timer);
+        timer = setTimeout(finish, quietMs);
+      });
+      timer = setTimeout(finish, quietMs);
+    });
+  }
+
+  async function call(sub, args, opts = {}) {
+    await busQuiet();
+    return callNow(sub, args, opts);
+  }
+
+  function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false } = {}) {
     return new Promise((resolve, reject) => {
       const got = [];
       let off = null;
@@ -149,8 +179,9 @@ function setup(imports, register) {
       args.set(enc, 0); /* count + up to 4 x (op, slot, cap u16) */
       args.set(reasonHash, 17);
       args[49] = ticketRequired ? 0x01 : 0;
-      const pending = call(SUB.GRANT_CREATE, args, { reports: 3, timeoutMs });
-      if (onPress) onPress();
+      await busQuiet();
+      const pending = callNow(SUB.GRANT_CREATE, args, { reports: 3, timeoutMs }); /* written synchronously */
+      if (onPress) onPress(); /* the request is on the key: now ask for the press */
       const [g, c, s] = await pending;
       return {
         grantId: get32(g, 0),
