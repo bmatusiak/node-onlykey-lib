@@ -140,9 +140,9 @@ function deviceArgs(opts) {
 async function withDevice(io, opts, fn) {
   const app = await io.start(deviceOpts(opts));
   try {
-    const { device, okcrypto } = app.services;
+    const { device, okcrypto, config } = app.services;
     const connected = await device.connect();
-    return await fn({ device, okcrypto, connected, identity: connected.identity });
+    return await fn({ device, okcrypto, config, connected, identity: connected.identity });
   } finally {
     await app.destroy();
   }
@@ -324,6 +324,76 @@ COMMANDS.capabilities = {
     });
   },
 };
+
+COMMANDS.config = {
+  mirrors: '(new)',
+  summary: 'the key\'s settings as INI (OKGETCONFIG: an ok-rn soft key with the config plugin only)',
+  usage: '[export [file] | import <file> [--one-way]]',
+  device: true,
+  options: { 'one-way': { type: 'boolean' } },
+  /*
+   * OKGETCONFIG (owner, 2026-10-02): the soft key prints its settings as INI
+   * with this library's preference names, so a file exports and imports with
+   * no table in between. A hard key never answers it (not emulated: the app is
+   * not in the middle), so this says so instead of guessing values.
+   *
+   * import writes each value with setPreference - the same write every other
+   * settings command makes - so the firmware's own checks still decide: a value
+   * that needs config mode is refused out of it, and that is reported, row by
+   * row. [input] is never written (the key works it out); [advanced] (one-way)
+   * only with --one-way.
+   */
+  async run(io, opts, args) {
+    const [sub = 'export', file] = args;
+    if (!['export', 'import'].includes(sub)) throw usage('config takes export [file] or import <file>');
+    if (sub === 'import' && !file) throw usage('config import needs the INI file to read');
+    if (opts['one-way'] && sub !== 'import') throw usage('--one-way is for config import');
+    const fsm = require('fs');
+    const parsedFile = sub === 'import' ? iniModule().parse(await io.readFile(file)) : null;
+    return withDevice(io, opts, async ({ device, config, identity }) => {
+      requireUnlocked(identity, `config ${sub}`);
+      if (sub === 'export') {
+        const text = await readConfigText(config);
+        if (file) {
+          fsm.writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
+          io.err(`wrote ${file}`);
+        } else {
+          io.out(text.replace(/\n$/, ''));
+        }
+        return 0;
+      }
+      const { writes, skipped, unknown } = iniModule().plan(parsedFile, { oneWay: !!opts['one-way'] });
+      for (const s of skipped) io.out(`skip  ${s.name}: ${s.why}`);
+      for (const n of unknown) io.out(`skip  ${n}: not a setting this library knows`);
+      let refused = 0;
+      for (const w of writes) {
+        try {
+          await device.setPreference(w.name, w.value);
+          io.out(`set   ${w.name}=${w.value}`);
+        } catch (err) {
+          refused++;
+          const why = String(err.message || err);
+          io.out(`no    ${w.name}=${w.value}: ${why}${/config mode/i.test(why) ? ' (put the key in config mode and import again)' : ''}`);
+        }
+      }
+      return refused ? 1 : 0;
+    });
+  },
+};
+
+/* the INI module and the plugin's reader, loaded only when `config` runs */
+function iniModule() { return require('../src/config/ini'); }
+async function readConfigText(config) {
+  if (!config) throw new CliError('This build of the command line has no config plugin.');
+  try {
+    return await config.readText();
+  } catch (err) {
+    if (err.code === 'EUNSUPPORTED') {
+      throw new CliError('This OnlyKey does not answer OKGETCONFIG. Only an ok-rn soft key built with the config plugin does - a hard key never will (it is not emulated, so the app is not in the middle).');
+    }
+    throw err;
+  }
+}
 
 COMMANDS.getlabels = {
   mirrors: 'getlabels',
@@ -1368,7 +1438,7 @@ function sharedDevice(io, opts, { idleMs = 10000 } = {}) {
     try {
       const { app, identity } = await open();
       requireUnlocked(identity, 'agent');
-      const out = await fn(app.services.okcrypto);
+      const out = await fn(app.services.okcrypto, app.services);
       timer = setTimeout(release, idleMs);
       if (timer.unref) timer.unref();
       return out;
@@ -1519,7 +1589,22 @@ COMMANDS.agent = {
       return 0;
     }
 
-    const sign = (key, data) => dev.use((okcrypto) => {
+    /*
+     * What the key will ask for, so the prompt says only that (the ssh practice,
+     * 2026-10-02: in single-press mode it printed a code first). Read from the
+     * soft key's OKGETCONFIG and kept a minute; a key that has no OKGETCONFIG -
+     * every hard key - gives null, and the prompt names both, as before.
+     */
+    let mode = { at: 0, value: null };
+    const derivedMode = async (services) => {
+      if (Date.now() - mode.at < 60000) return mode.value;
+      let value = null;
+      try { value = services.config ? (await services.config.read({ timeoutMs: 1500 })).input.derived_keys || null : null; } catch (_) { value = null; }
+      mode = { at: Date.now(), value };
+      return value;
+    };
+    const sign = (key, data) => dev.use(async (okcrypto, services) => {
+      const asks = await derivedMode(services);
       /*
        * THE BYTES SENT ARE lib-agent's: the data ssh asked to have signed,
        * then the identity hash (onlykey.py sign(): raw_message = blob + data).
@@ -1539,8 +1624,13 @@ COMMANDS.agent = {
         keyType: key.keyType,
         version,
         confirm: ({ digits }) => {
-          io.err(`Confirm on the OnlyKey to sign for ${key.comment}: enter ${digits.join(' ')}`
-            + ' (or press any button, if the key asks for a single press)');
+          if (asks === 'none') return; /* the key signs without asking */
+          if (asks === 'press') io.err(`Confirm on the OnlyKey to sign for ${key.comment}: press any button`);
+          else if (asks === 'code') io.err(`Confirm on the OnlyKey to sign for ${key.comment}: enter ${digits.join(' ')}`);
+          else {
+            io.err(`Confirm on the OnlyKey to sign for ${key.comment}: enter ${digits.join(' ')}`
+              + ' (or press any button, if the key asks for a single press)');
+          }
         },
       });
     });

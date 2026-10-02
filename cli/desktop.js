@@ -61,6 +61,8 @@ function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, lo
     require('../plugins/session'),
     require('../plugins/device'),
     require('../plugins/okcrypto'),
+    /* OKGETCONFIG (soft key only): silent until a command asks it to read */
+    require('../plugins/config'),
   ];
   plugins.config = {
     ...config,
