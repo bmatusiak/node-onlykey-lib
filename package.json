@@ -35,6 +35,7 @@
     "./plugins/transport/tunnel": "./plugins/transport/tunnel.js",
     "./plugins/device": "./plugins/device/index.js",
     "./plugins/okcrypto": "./plugins/okcrypto/index.js",
+    "./plugins/edge": "./plugins/edge/index.js",
     "./browser": "./plugins/browser.js",
     "./cli/desktop": "./cli/desktop.js",
     "./cli/firmware-plugins": "./cli/firmware-plugins.js",

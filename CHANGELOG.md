@@ -49,6 +49,16 @@ the commit that release ended at.
       key does.
     - Node's own ECDSA agrees in both directions.
     - Budgets have at most 255 uses (owner).
+  - **`node-onlykey-lib/plugins/edge`: the device calls (L4/L5).** A Rectify
+    plugin over the transport, providing `edge`: `head`, `publicKey` (and the
+    device id), `pickup`, `checkpoint`, `grant` (waits for the physical press;
+    `onPress` for the UI), `revoke`, `ticket`, `probe`.
+    - The firmware's `EDGE:xx` replies become an `EdgeError` with a name
+      (`codes.STATUS` holds the words; the firmware sends only the code).
+    - Every wait is bounded. `probe()` returns `'edge'`, `'no-pin'` or
+      `'none'`, and silence never hangs.
+    - It is removable: nothing else depends on it, and a host decides whether to
+      probe (only Edge soft-key builds know 0xF8).
   - Tickets add `waiting`: the latest use can still get its ticket (R16); after
     any newer use it is `missing`.
   - `codes`: every number the spec left open, marked CHOSEN in one place.

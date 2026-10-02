@@ -81,6 +81,34 @@ const TICKET = Object.freeze({
   0xff: 'UNKNOWN',
 });
 
+/*
+ * The firmware's text replies are "EDGE:xx" only (owner, 2026-10-02: "keep the
+ * return strings minimal in firmware") - the words live here, on the host.
+ * Must match the soft-key plugin's okplugin_edge.h.
+ */
+const STATUS = Object.freeze({
+  0x00: { name: 'ok', text: 'Done' },
+  0x01: { name: 'need-pin', text: 'This key has no PIN set yet, so it has no Edge key' },
+  0x02: { name: 'bad-scopes', text: 'A budget has 1 to 4 scopes' },
+  0x03: { name: 'scope-not-allowed', text: 'A budget cannot pay for that operation or slot' },
+  0x04: { name: 'too-many-uses', text: 'A budget has at most 255 uses' },
+  0x05: { name: 'live-full', text: 'Four budgets are already live' },
+  0x06: { name: 'sign-failed', text: 'The key could not sign' },
+  0x07: { name: 'no-such-budget', text: 'No live budget has that id' },
+  0x08: { name: 'no-ticket-waiting', text: 'The latest link is not a use waiting for its ticket' },
+  0x09: { name: 'not-held', text: 'The key no longer holds that link' },
+  0x0a: { name: 'unknown-request', text: 'This key does not know that Edge request' },
+});
+
+/** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */
+function parseStatus(text) {
+  const m = /^EDGE:([0-9A-Fa-f]{2})/.exec(String(text || ''));
+  if (!m) return null;
+  const code = parseInt(m[1], 16);
+  const s = STATUS[code];
+  return { code, name: s ? s.name : 'unknown', text: s ? s.text : `Edge status 0x${m[1]}` };
+}
+
 /** Name and alarm state of a ticket code: alarm = bit 7 OR not a v1 code. */
 function ticketCode(code) {
   const name = Object.prototype.hasOwnProperty.call(TICKET, code) ? TICKET[code] : null;
@@ -100,4 +128,4 @@ function nameOf(table, value) {
   return null;
 }
 
-module.exports = { OP, DECISION, FLAG, TAG, TICKET, ticketCode, nameOf };
+module.exports = { OP, DECISION, FLAG, TAG, TICKET, STATUS, parseStatus, ticketCode, nameOf };

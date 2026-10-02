@@ -64,6 +64,58 @@ export const TICKET: Readonly<{
     143: "NEEDS_REVIEW";
     255: "UNKNOWN";
 }>;
+export const STATUS: Readonly<{
+    0: {
+        name: string;
+        text: string;
+    };
+    1: {
+        name: string;
+        text: string;
+    };
+    2: {
+        name: string;
+        text: string;
+    };
+    3: {
+        name: string;
+        text: string;
+    };
+    4: {
+        name: string;
+        text: string;
+    };
+    5: {
+        name: string;
+        text: string;
+    };
+    6: {
+        name: string;
+        text: string;
+    };
+    7: {
+        name: string;
+        text: string;
+    };
+    8: {
+        name: string;
+        text: string;
+    };
+    9: {
+        name: string;
+        text: string;
+    };
+    10: {
+        name: string;
+        text: string;
+    };
+}>;
+/** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */
+export function parseStatus(text: any): {
+    code: number;
+    name: any;
+    text: any;
+} | null;
 /** Name and alarm state of a ticket code: alarm = bit 7 OR not a v1 code. */
 export function ticketCode(code: any): {
     code: any;
