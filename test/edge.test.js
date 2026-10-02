@@ -389,3 +389,20 @@ test('Hermes: the whole library runs with Buffer, TextEncoder/Decoder and crypto
     for (const [k, v] of Object.entries(saved)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
   }
 });
+
+test('tickets: the key\'s list does not refill - 5 owed, one ticket: 3 waiting + 1 missing, as HEAD says 3 + overflow', () => {
+  const es = entries();
+  pressedUse(es); pressedUse(es); pressedUse(es); /* owed: 1, 5, 6, 7, 8 -> 1 fell off */
+  let d = tickets.keyDebts(es);
+  assert.deepEqual([d.owed, d.overflow, d.dropped], [[5, 6, 7, 8], true, [1]]);
+  /* a ticket for 8 (refHead = head[8]) */
+  grow(es, { op: codes.OP.TICKET, decision: 0x00, grantId: 8, subject: tickets.ticketSubject({ refSeq: 8, refHead: es[8].head, code: 0, msgHash: tickets.messageHash('x') }) });
+  d = tickets.keyDebts(es);
+  assert.deepEqual([d.owed, d.overflow], [[5, 6, 7], true]);
+  const by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
+  assert.deepEqual([by[1], by[5], by[6], by[7], by[8]], ['missing', 'waiting', 'waiting', 'waiting', 'ticketed']);
+  /* the waive over exactly this list and overflow clears both */
+  grow(es, { op: codes.OP.TICKET, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: 5, subject: tickets.waiveSubject([5, 6, 7], true) });
+  d = tickets.keyDebts(es);
+  assert.deepEqual([d.owed, d.overflow], [[], false]);
+});

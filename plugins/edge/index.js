@@ -23,14 +23,22 @@ const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
 const { assertTransport } = require('../../src/transport/contract');
 const { concat } = require('../../src/bytes');
-const { codes, chain } = require('../../src/edge');
+const { codes, chain, copy: copyCheck } = require('../../src/edge');
 
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04,
   GRANT_CREATE: 0x10, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
-  TICKET: 0x20, WAIVE: 0x21, ARM: 0x22,
+  TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24,
 });
+/*
+ * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
+ * bytes, so GRANT_CREATE (50 bytes already) carries only the first 8 bytes of
+ * the verified head, and REPLAY only the link's first 46 (bytes 46-63 are
+ * reserved and zero in every link a key writes; the key fills them back).
+ */
+const GRANT_HEAD_BYTES = 8;
+const REPLAY_BYTES = 46;
 const SEQ_NONE = 0xffffffff;
 const HELD = 8;
 
@@ -135,7 +143,8 @@ function setup(imports, register) {
     /**
      * {seq (null = no link yet), head, oldest (oldest pickable seq, or null),
      *  live: [budget ids], held: [the live ids on hold (R15a)], owed: number of
-     *  uses owing a ticket (R16), overflow: an owed use fell off the key's list}
+     *  uses owing a ticket (R16), overflow: an owed use fell off the key's list,
+     *  restoring: restored from a backup and not yet finished (R26)}
      */
     async head(opts) {
       const [r] = await call(SUB.HEAD, null, opts);
@@ -151,6 +160,7 @@ function setup(imports, register) {
         held: ids.filter((id, i) => id && (mask >> i) & 1),
         owed: r[57],
         overflow: Boolean(r[58]),
+        restoring: Boolean(r[59]),
       };
     },
 
@@ -185,14 +195,18 @@ function setup(imports, register) {
      * key's own 25 s. `onPress` is called once the request is on the key, for
      * the UI to say "press the key".
      * scopes: [{op, slot, cap}] (1-4, caps summing to <= 255)
+     * verifiedHead: the head the host verified its copy up to (R27); the key
+     *   refuses with 'stale-head' when it is not its current head. This is the
+     *   raw call: grants.create() runs the copy check first and fails closed.
      * -> {grantId, uses, genesis, seq, checkpoint: {seq, head, signature}}
      */
-    async grant({ scopes, reasonHash, ticketRequired = false, onPress, timeoutMs = 30000 }) {
+    async grant({ scopes, reasonHash, verifiedHead, onPress, timeoutMs = 30000 }) {
+      if (!(verifiedHead instanceof Uint8Array) || verifiedHead.length !== 32) throw new TypeError('Edge: grant needs the 32-byte head the host verified (R27)');
       const enc = require('../../src/edge').grants.encodeScopes(scopes);
-      const args = new Uint8Array(50);
+      const args = new Uint8Array(49 + GRANT_HEAD_BYTES);
       args.set(enc, 0); /* count + up to 4 x (op, slot, cap u16) */
       args.set(reasonHash, 17);
-      args[49] = ticketRequired ? 0x01 : 0;
+      args.set(verifiedHead.subarray(0, GRANT_HEAD_BYTES), 49);
       await busQuiet();
       const pending = callNow(SUB.GRANT_CREATE, args, { reports: 3, timeoutMs }); /* written synchronously */
       if (onPress) onPress(); /* the request is on the key: now ask for the press */
@@ -242,10 +256,15 @@ function setup(imports, register) {
       return true;
     },
 
-    /** R15a: resume a held budget - the key waits for a PHYSICAL press (`onPress` for the UI). */
-    async resume(grantId, { onPress, timeoutMs = 30000 } = {}) {
+    /**
+     * R15a: resume a held budget - the key waits for a PHYSICAL press (`onPress`
+     * for the UI). verifiedHead as for grant() (R27); grants.resume() checks the
+     * copy first.
+     */
+    async resume(grantId, { verifiedHead, onPress, timeoutMs = 30000 } = {}) {
+      if (!(verifiedHead instanceof Uint8Array) || verifiedHead.length !== 32) throw new TypeError('Edge: resume needs the 32-byte head the host verified (R27)');
       await busQuiet();
-      const pending = callNow(SUB.GRANT_RESUME, u32(grantId), { timeoutMs, text: true });
+      const pending = callNow(SUB.GRANT_RESUME, concat([u32(grantId), verifiedHead]), { timeoutMs, text: true });
       if (onPress) onPress();
       await pending;
       return true;
@@ -262,6 +281,62 @@ function setup(imports, register) {
       if (onPress) onPress();
       const [r] = await pending;
       return { seq: get32(r, 0), head: r.slice(4, 36) };
+    },
+
+    /**
+     * R26: hand the key, while it is restoring, the next link of the newest copy
+     * the host has. The key takes it only if it is its next seq and welds onto
+     * its head ('replay-mismatch' otherwise: where the copy forks or is from
+     * another key - stop there and show it). It moves the head and applies the
+     * debt rules; no press.
+     */
+    async replay(link, opts) {
+      if (!(link instanceof Uint8Array) || link.length !== chain.LINK_BYTES) throw new TypeError(`Edge: a link is ${chain.LINK_BYTES} bytes`);
+      if (!chain.decodeLink(link).reservedZero) {
+        throw Object.assign(new Error('Edge: this link has non-zero reserved bytes - no key wrote it'), { code: 'EDGE_NOT_A_KEY_LINK' });
+      }
+      await call(SUB.REPLAY, link.subarray(0, REPLAY_BYTES), { ...opts, text: true });
+      return true;
+    },
+
+    /**
+     * R26: finish a restore - a PHYSICAL press over "restored to #N, the newest
+     * your copies hold". newestSeq = the newest seq any copy holds; past the
+     * replayed head, the key links a LOSS over the rest (grant_id = the first
+     * lost seq, the subject's first 4 bytes = the last). -> {seq, head}
+     */
+    async replayDone({ newestSeq, onPress, timeoutMs = 30000 } = {}) {
+      if (!Number.isInteger(newestSeq) || newestSeq < 0) throw new TypeError('Edge: replayDone needs the newest seq the copies hold');
+      await busQuiet();
+      const pending = callNow(SUB.REPLAY_DONE, u32(newestSeq), { timeoutMs });
+      if (onPress) onPress();
+      const [r] = await pending;
+      return { seq: get32(r, 0), head: r.slice(4, 36) };
+    },
+
+    /**
+     * R27, the calls a host should use: run the copy check (src/edge/copy.js)
+     * against what the key says NOW, and send the request only if it passes,
+     * with the head it verified. A copy that does not verify throws
+     * code 'EDGE_COPY_UNVERIFIED' with the verdict, and nothing reaches the key.
+     * copy: {links: [{link, head, reveal}], openings: {[grantId]: {...}}}
+     */
+    grants: {
+      async create({ copy, scopes, reasonHash, onPress, timeoutMs }) {
+        const h = await verifiedHeadOf(copy);
+        return edge.grant({ scopes, reasonHash, verifiedHead: h, onPress, timeoutMs });
+      },
+      async resume(grantId, { copy, onPress, timeoutMs } = {}) {
+        const h = await verifiedHeadOf(copy);
+        return edge.resume(grantId, { verifiedHead: h, onPress, timeoutMs });
+      },
+      /** The check alone, for a UI that shows why Yes is off: the verdict from src/edge/copy.js. */
+      async check(copy) {
+        const { publicKey } = await edge.publicKey();
+        const head = await edge.head();
+        const checkpoint = head.seq === null ? null : await edge.checkpoint();
+        return copyCheck.verifyCopy(copy, { publicKey, head, checkpoint });
+      },
     },
 
     /**
@@ -286,6 +361,17 @@ function setup(imports, register) {
       }
     },
   };
+
+  async function verifiedHeadOf(copy) {
+    const verdict = await edge.grants.check(copy || {});
+    if (!verdict.ok) {
+      const at = verdict.seq === undefined || verdict.seq === null ? '' : ` at #${verdict.seq}`;
+      throw Object.assign(new Error(`Edge: your copy of the chain does not verify (${verdict.reason}${at}) - nothing was sent to the key`), {
+        code: 'EDGE_COPY_UNVERIFIED', verdict,
+      });
+    }
+    return verdict.head;
+  }
 
   register(null, { edge });
 }

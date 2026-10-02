@@ -88,6 +88,28 @@ the commit that release ended at.
     - Codes: sub-ops GRANT_HOLD 0x13, GRANT_RESUME 0x14, WAIVE 0x21, ARM 0x22;
       link ops grant-hold 13 / grant-resume 14 (appended last in `OP`); status
       0B stale-head, 0C ticket-owed, 0D nothing-to-arm.
+  - **Restore, then replay (R26) and no budget from a copy that doesn't verify
+    (R27)** - onlykey-edge `0dda6ac`.
+    - `copy.verifyCopy(copy, key)` (new `src/edge/copy.js`): a host's copy must
+      verify from genesis up to the key's live HEAD - every weld, the latest
+      checkpoint, each budget's opening and `G`, every self-press reveal, and
+      the debts HEAD reports. The first failure is the answer: `restoring`,
+      `chain`, `gap`, `checkpoint`, `budget-opening-missing`,
+      `budget-opening`, `reveal-missing`, `reveal`, `debts`.
+    - `edge.grants.create` / `edge.grants.resume` run it first and fail closed
+      (`EDGE_COPY_UNVERIFIED`, with the verdict; nothing reaches the key);
+      `edge.grants.check` gives the verdict alone, for a UI. The raw
+      `grant` / `resume` now require `verifiedHead`.
+    - `edge.replay(link)`, `edge.replayDone({ newestSeq, onPress })`; `head()`
+      adds `restoring`. Statuses 0E restoring, 0F replay-mismatch, 10
+      replay-closed.
+    - CHOSEN, pending the spec: GRANT_CREATE carries the first 8 bytes of the
+      verified head and REPLAY the link's first 46 bytes (a vendor report has
+      58 argument bytes; bytes 46-63 of a link are reserved zeros).
+    - Fixed: `pairTickets` counted "the newest 4 unpaid" as waiting. The key's
+      list does not refill once a use falls off, so after a 5th use and one
+      ticket the key reports 3 owed + overflow while the lib said 4 waiting.
+      New `tickets.keyDebts` replays the key's own list over the chain.
   - `codes`: every number the spec left open, marked CHOSEN in one place.
   - Vectors: `test/vectors/edge-v1.json` is made by
     onlykey-edge/vectors/make_vectors.py (stdlib Python, written from the spec

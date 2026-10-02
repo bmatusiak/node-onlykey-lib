@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const setup = require('../plugins/edge');
-const { chain, codes, grants } = require('../src/edge');
+const { chain, codes, grants, tickets } = require('../src/edge');
 const { p256 } = require('../src/vendor/exports/@noble/curves/nist.js');
 const { IFACE } = require('../src/protocol/msg');
 
@@ -23,7 +23,7 @@ const report = (bytes) => { const r = new Uint8Array(64); r.set(bytes.slice(0, 6
 const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUpperCase().padStart(2, '0')}`)]);
 
 /* a fake key: a tiny chain, one held link, answers by sub-op */
-function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
+function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false } = {}) {
   const listeners = new Set();
   let head = chain.genesis(DEVICE);
   const held = [];
@@ -31,6 +31,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
   const onHold = new Set();
   let owed = [];
   let armed = false;
+  const writes = [];
   const emit = (r) => setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: r })), delay);
   const append = (fields) => {
     const seq = held.length;
@@ -58,10 +59,12 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
       if (noPin) return emit(status(0x01));
       const sub = frame[5];
       const arg = frame.subarray(6);
+      writes.push(sub);
+      const same = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0]));
+        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, restoring ? 1 : 0]));
       } else if (sub === 0x04) {
         emit(report([...PUB]));
       } else if (sub === 0x03) {
@@ -91,10 +94,11 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
         const id = arg[0] | (arg[1] << 8);
         if (!live.includes(id)) return emit(status(0x07));
         if (sub === 0x14 && owed.length) return emit(status(0x0c));
+        if (sub === 0x14 && !same(arg.slice(4, 36), head)) return emit(status(0x0b));
         if (sub === 0x13) onHold.add(id); else onHold.delete(id);
         emit(status(0x00));
       } else if (sub === 0x21) {
-        append({ op: codes.OP.TICKET, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: new Uint8Array(32) });
+        append({ op: codes.OP.TICKET, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: tickets.waiveSubject(owed, false) });
         owed = [];
         emit(seqHead());
       } else if (sub === 0x10) {
@@ -103,6 +107,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
         const uses = scopes.reduce((a, s) => a + s.cap, 0);
         if (uses > 255) return emit(status(0x04));
         if (owed.length) return emit(status(0x0c));
+        if (!same(arg.slice(49, 57), head.slice(0, 8))) return emit(status(0x0b)); /* R27: the verified head */
         const genesis = grants.grantGenesis(new Uint8Array(32).fill(3), uses);
         const seq = held.length;
         const id = seq + 1;
@@ -117,11 +122,25 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
         if (i < 0) return emit(status(0x07));
         live.splice(i, 1);
         emit(status(0x00));
+      } else if (sub === 0x23) {
+        /* R26: 46 bytes, zero-filled to a link; the next seq, welding onto the head */
+        if (!restoring) return emit(status(0x10));
+        const link = new Uint8Array(64);
+        link.set(arg.slice(0, 46));
+        const f = chain.decodeLink(link);
+        if (f.seq !== held.length) return emit(status(0x0f));
+        head = chain.weld(head, link);
+        held.push({ link, head });
+        emit(status(0x00));
+      } else if (sub === 0x24) {
+        restoring = false;
+        emit(seqHead());
       } else {
         emit(status(0x0a));
       }
     },
   };
+  transport.writes = writes;
   return transport;
 }
 
@@ -160,7 +179,7 @@ test('edge: a budget\'s opening comes back as a proof verifyBudgetOpening accept
   const scopes = [{ op: codes.OP.SIGN, slot: 2, cap: 4 }];
   const reasonHash = new Uint8Array(32).fill(7);
   let asked = false;
-  const g = await edge.grant({ scopes, reasonHash, onPress: () => { asked = true; } });
+  const g = await edge.grant({ scopes, reasonHash, verifiedHead: before.head, onPress: () => { asked = true; } });
   assert.ok(asked, 'onPress tells the UI to ask for the press');
   assert.equal(g.uses, 4);
   assert.equal(g.seq, 2);
@@ -180,7 +199,7 @@ test('edge: EDGE:xx refusals become named errors', async () => {
   await assert.rejects(edge.revoke(99), (e) => e instanceof edge.EdgeError && e.status === 'no-such-budget' && e.code === 7);
   await assert.rejects(edge.ticket(5, 0, new Uint8Array(32)), (e) => e.status === 'no-ticket-waiting');
   await assert.rejects(edge.pickup(3, 1), (e) => e.status === 'not-held');
-  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 200 }, { op: 1, slot: 3, cap: 100 }], reasonHash: new Uint8Array(32) }),
+  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 200 }, { op: 1, slot: 3, cap: 100 }], reasonHash: new Uint8Array(32), verifiedHead: new Uint8Array(32) }),
     (e) => e.status === 'too-many-uses' || /255/.test(e.message));
   const t = await edge.ticket(0, 0, new Uint8Array(32));
   assert.equal(t.seq, 1, 'the ticket comes back with the seq and head the next arm() passes');
@@ -193,7 +212,7 @@ test('edge: ARM, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', asy
   assert.equal(h.owed, 1, 'the approved use owes its ticket');
   /* nothing arms, and no budget opens, while a ticket is owed */
   await assert.rejects(edge.arm(h.head), (e) => e.status === 'ticket-owed');
-  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32) }), (e) => e.status === 'ticket-owed');
+  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head }), (e) => e.status === 'ticket-owed');
   /* WAIVE clears it */
   const w = await edge.waive();
   assert.equal(w.seq, 1);
@@ -201,7 +220,7 @@ test('edge: ARM, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', asy
   assert.equal(h.owed, 0);
   /* no live budget: nothing to arm; a stale head: refused */
   await assert.rejects(edge.arm(h.head), (e) => e.status === 'nothing-to-arm');
-  const g = await edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32) });
+  const g = await edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head });
   await assert.rejects(edge.arm(new Uint8Array(32).fill(1)), (e) => e.status === 'stale-head');
   h = await edge.head();
   assert.equal(await edge.arm(h.head), true);
@@ -211,9 +230,66 @@ test('edge: ARM, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', asy
   assert.deepEqual(h.held, [g.grantId]);
   await assert.rejects(edge.arm(h.head), (e) => e.status === 'nothing-to-arm');
   let asked = false;
-  assert.equal(await edge.resume(g.grantId, { onPress: () => { asked = true; } }), true);
+  await assert.rejects(edge.resume(g.grantId, { verifiedHead: new Uint8Array(32).fill(1) }), (e) => e.status === 'stale-head');
+  assert.equal(await edge.resume(g.grantId, { verifiedHead: h.head, onPress: () => { asked = true; } }), true);
   assert.ok(asked, 'resume asks for the press');
   assert.deepEqual((await edge.head()).held, []);
+});
+
+/* everything the key holds, as a copy: links with heads (and reveals) from PICKUP */
+async function copyOf(edge, openings = {}) {
+  const h = await edge.head();
+  const links = h.seq === null ? [] : await edge.pickup(0, h.seq + 1);
+  return { links, openings };
+}
+
+test('edge: grants.create / resume verify the copy first, send the verified head, and fail closed (R27)', async () => {
+  const transport = fakeKey();
+  const edge = edgeOver(transport);
+  let copy = await copyOf(edge);
+  assert.equal((await edge.grants.check(copy)).ok, true, 'a copy of exactly what the key holds verifies');
+  await edge.waive();
+  copy = await copyOf(edge);
+  const scopes = [{ op: 1, slot: 2, cap: 2 }];
+  const reasonHash = new Uint8Array(32).fill(7);
+  const g = await edge.grants.create({ copy, scopes, reasonHash });
+  const opening = { scopes, reasonHash, genesis: g.genesis, uses: g.uses, signature: g.checkpoint.signature };
+  const requests = () => transport.writes.filter((w) => w === 0x10 || w === 0x14).length;
+  const sent = requests();
+
+  /* a copy without the budget's opening: refused before anything is sent */
+  copy = await copyOf(edge);
+  await assert.rejects(edge.grants.create({ copy, scopes, reasonHash }), (e) => e.code === 'EDGE_COPY_UNVERIFIED' && e.verdict.reason === 'budget-opening-missing');
+  /* a flipped byte */
+  copy = await copyOf(edge, { [g.grantId]: opening });
+  const bad = { ...copy, links: copy.links.map((l, i) => (i === 1 ? { ...l, link: Uint8Array.from(l.link, (x, k) => (k === 9 ? x ^ 1 : x)) } : l)) };
+  await assert.rejects(edge.grants.create({ copy: bad, scopes, reasonHash }), (e) => e.code === 'EDGE_COPY_UNVERIFIED' && e.verdict.reason === 'chain');
+  /* a copy missing its last link */
+  await assert.rejects(edge.grants.create({ copy: { ...copy, links: copy.links.slice(0, -1) }, scopes, reasonHash }), (e) => e.verdict.reason === 'gap');
+  assert.equal(requests(), sent, 'a request went out from a copy that does not verify');
+
+  /* the good copy: resume goes out with the full verified head */
+  await edge.hold(g.grantId);
+  copy = await copyOf(edge, { [g.grantId]: opening });
+  assert.equal(await edge.grants.resume(g.grantId, { copy }), true);
+  assert.equal(requests(), sent + 1);
+});
+
+test('edge: a restoring key fails the copy check; REPLAY sends 46 bytes, REPLAY_DONE answers seq + head (R26)', async () => {
+  const edge = edgeOver(fakeKey({ restoring: true }));
+  assert.equal((await edge.head()).restoring, true);
+  assert.equal((await edge.grants.check(await copyOf(edge))).reason, 'restoring');
+  const next = chain.encodeLink({ seq: 1, op: codes.OP.SIGN, decision: codes.DECISION.DENY, subject: new Uint8Array(32).fill(4) });
+  assert.equal(await edge.replay(next), true);
+  assert.equal((await edge.head()).seq, 1);
+  await assert.rejects(edge.replay(chain.encodeLink({ seq: 5, op: 1, decision: 2, subject: new Uint8Array(32) })), (e) => e.status === 'replay-mismatch');
+  await assert.rejects(edge.replay(chain.encodeLink({ seq: 2, op: 1, decision: 2, subject: new Uint8Array(32), reserved: new Uint8Array(18).fill(1) })),
+    (e) => e.code === 'EDGE_NOT_A_KEY_LINK');
+  let asked = false;
+  const done = await edge.replayDone({ newestSeq: 1, onPress: () => { asked = true; } });
+  assert.ok(asked);
+  assert.equal(done.seq, 1);
+  assert.equal((await edge.head()).restoring, false);
 });
 
 test('edge: a stray report on the bus is not taken as the answer (measured on the Pixel soft key)', async () => {

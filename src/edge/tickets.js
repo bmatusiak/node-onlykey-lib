@@ -64,6 +64,49 @@ function waiveSubject(seqs, overflow) {
 /* the key keeps up to this many owed uses (firmware R16); older ones only a waive clears */
 const OWED_MAX = 4;
 
+/* a sign/decrypt that went through owes a ticket, pressed or self-pressed (R16) */
+const OWING = new Set([DECISION.APPROVE, DECISION.SELF_PRESS]);
+
+/**
+ * The key's own debt list, replayed over the chain (firmware R16-R18), so a
+ * host can compare its copy with what HEAD reports (R27):
+ *   - an approved sign/decrypt is pushed; past OWED_MAX the oldest falls off
+ *     for good and `overflow` is set (only a waive clears it);
+ *   - a ticket pays its ref_seq if that use is still on the list;
+ *   - a WAIVE (0x8F, the press flag, the subject over exactly this list and
+ *     this overflow) clears the list and the overflow.
+ * Nothing else changes it: a deny, a timeout, a grant-end, a LOSS.
+ *
+ * The list does not refill: once a use fell off, a later ticket for a newer
+ * one does not bring it back. (Taking "the newest 4 unpaid" instead disagrees
+ * with the key after a 5th use and one ticket - 4 waiting by that count, 3
+ * owed + overflow on the key.)
+ *
+ * Replay from the chain's first link; a copy that starts later cannot know
+ * the list it started with.
+ * -> {owed: [seq, oldest first], overflow, dropped: [seq] (fell off, never paid by a ticket)}
+ */
+function keyDebts(entries) {
+  let owed = [];
+  let overflow = false;
+  const dropped = [];
+  for (const e of entries) {
+    const f = decodeLink(e instanceof Uint8Array ? e : e.link);
+    if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && OWING.has(f.decision)) {
+      if (owed.length === OWED_MAX) { dropped.push(owed.shift()); overflow = true; }
+      owed.push(f.seq);
+    } else if (f.op === OP.TICKET) {
+      if (f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED) && same(f.subject, waiveSubject(owed, overflow))) {
+        owed = [];
+        overflow = false;
+      } else {
+        owed = owed.filter((q) => q !== f.refSeq);
+      }
+    }
+  }
+  return { owed, overflow, dropped };
+}
+
 function pairTickets(entries, messages = {}) {
   const rows = entries.map((e) => (e instanceof Uint8Array ? { link: e, head: null } : e));
   const bySeq = new Map();
@@ -131,9 +174,9 @@ function pairTickets(entries, messages = {}) {
    * ("waiting"). An older one fell off the key's list: only a waive clears it
    * ("missing"). Nothing else - a deny, a timeout, a lock - clears a debt.
    */
-  const open = uses.filter((u) => u.status === 'missing' && OWES(u)).sort((a, b) => b.seq - a.seq);
-  open.slice(0, OWED_MAX).forEach((u) => { u.status = 'waiting'; });
+  const onKey = new Set(keyDebts(rows).owed);
+  for (const u of uses) if (u.status === 'missing' && onKey.has(u.seq)) u.status = 'waiting';
   return { uses, orphans };
 }
 
-module.exports = { messageHash, ticketSubject, waiveSubject, pairTickets, OWED_MAX };
+module.exports = { messageHash, ticketSubject, waiveSubject, pairTickets, keyDebts, OWED_MAX };

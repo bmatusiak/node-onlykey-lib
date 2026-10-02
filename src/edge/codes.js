@@ -100,12 +100,16 @@ const STATUS = Object.freeze({
   0x05: { name: 'live-full', text: 'Four budgets are already live' },
   0x06: { name: 'sign-failed', text: 'The key could not sign' },
   0x07: { name: 'no-such-budget', text: 'No live budget has that id' },
-  0x08: { name: 'no-ticket-waiting', text: 'The latest link is not a use waiting for its ticket' },
+  0x08: { name: 'no-ticket-waiting', text: 'That use owes no ticket (or nothing is owed to waive)' },
   0x09: { name: 'not-held', text: 'The key no longer holds that link' },
   0x0a: { name: 'unknown-request', text: 'This key does not know that Edge request' },
   0x0b: { name: 'stale-head', text: 'The chain moved since that head - read the head and arm again' },
   0x0c: { name: 'ticket-owed', text: 'A use is waiting for its ticket - ticket it, or waive in the app' },
   0x0d: { name: 'nothing-to-arm', text: 'No live budget (or every one is on hold)' },
+  /* R26 (CHOSEN numbers, pending the spec) */
+  0x0e: { name: 'restoring', text: 'The key was restored from a backup - finish the restore in the app first' },
+  0x0f: { name: 'replay-mismatch', text: 'That link is not the next one, or does not weld onto the key\x27s head' },
+  0x10: { name: 'replay-closed', text: 'Replay is closed: the key is not restoring, or already wrote a link of its own' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

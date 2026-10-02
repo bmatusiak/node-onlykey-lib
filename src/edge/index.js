@@ -11,4 +11,5 @@ module.exports = {
   chain: require('./chain'),
   grants: require('./grants'),
   tickets: require('./tickets'),
+  copy: require('./copy'),
 };
