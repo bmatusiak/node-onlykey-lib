@@ -85,6 +85,39 @@ test('load refuses a plugin with no AUDIT.md, an unknown name, and a release old
   assert.deepEqual(plugins.load([], {}), [], 'no plugins asked for: nothing to load, no folder needed');
 });
 
+/* the two backup/restore spots, as the 3.1.0 (and v3.0.4) okcore.cpp spells them */
+const WITH_BACKUP = OKCORE
+  + 'void backup() {\n    //Copy U2F key/Cert to buffer\n}\n'
+  + 'void RESTORE() {\n        while (*ptr) {\n            if (*ptr == 0xFF) {\n            } else {\n                break;\n            }\n        }\n        hidprint("Successfully loaded backup");\n}\n';
+
+test('backup: a plugin that asks for it gets the 0xFB section - generated code and the loader\'s own hooks', () => {
+  const f = fixture({ okcore: WITH_BACKUP });
+  const manifest = require(path.join(f.dir, 'demo', 'plugin.js'));
+  fs.writeFileSync(path.join(f.dir, 'demo', 'plugin.js'), `module.exports = ${JSON.stringify({ ...manifest, backup: true })};\n`);
+  delete require.cache[require.resolve(path.join(f.dir, 'demo', 'plugin.js'))]; /* the loader requires it too */
+  const loaded = plugins.load(['demo'], { dir: f.dir, release: {} });
+  const [r] = plugins.apply(loaded, f.stage);
+  assert.equal(r.backup, true);
+  const out = fs.readFileSync(f.okcorePath, 'utf8');
+  assert.match(out, /#include "plugins\/okplugins_backup.h"\n/);
+  assert.match(out, /okplugins_backup\(large_temp, &large_buffer_offset, \(int\)sizeof\(large_temp\)\);[^\n]*\n {4}\/\/Copy U2F key\/Cert to buffer/);
+  /* the plugin branch comes before the walk's own break, so older firmware never reaches it */
+  assert.match(out, /} else if \(\*ptr == 0xFB\) {[^\n]*\n {16}okplugins_restore\(ptr \+ 1, offset - 1\);\n {16}break;\n {12}} else {\n {16}break;/);
+  const gen = fs.readFileSync(path.join(f.stage, 'libraries', 'onlykey', 'plugins', 'okplugins_backup.cpp'), 'utf8');
+  assert.match(gen, /#include "demo\/okplugin_demo.h"/);
+  assert.match(gen, /put\(buf, p, end, "demo", okplugin_demo_backup\)/);
+  assert.match(gen, /okplugin_demo_restore\(data, n\)/);
+  assert.match(gen, new RegExp(`#define OKPLUGINS_BACKUP_MAX ${plugins.BACKUP_MAX}`));
+  assert.equal(plugins.BACKUP_MAX, 512, 'the owner\'s budget for all plugins together');
+});
+
+test('backup: no plugin asks for it - no section, no hooks', () => {
+  const f = fixture({ okcore: WITH_BACKUP });
+  plugins.apply(plugins.load(['demo'], { dir: f.dir, release: {} }), f.stage);
+  assert.ok(!fs.readFileSync(f.okcorePath, 'utf8').includes('okplugins_'));
+  assert.ok(!fs.existsSync(path.join(f.stage, 'libraries', 'onlykey', 'plugins', 'okplugins_backup.cpp')));
+});
+
 test('slotSuffix: a plugin build gets its own storage; none = the base slot', () => {
   assert.equal(plugins.slotSuffix([]), '');
   assert.equal(plugins.slotSuffix(['hello', 'edge']), 'plugins-edge.hello');

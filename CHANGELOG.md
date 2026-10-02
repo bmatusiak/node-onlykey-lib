@@ -49,6 +49,16 @@ the commit that release ended at.
       key does.
     - Node's own ECDSA agrees in both directions.
     - Budgets have at most 255 uses (owner).
+  - **Plugin backups** (`cli/firmware-plugins`, the owner's rule: plugins back up
+    their important bits, and older firmware is never affected). A plugin whose
+    manifest says `backup: true` gets an entry in one section the loader writes
+    LAST in the device backup:
+    - layout: `0xFB | name length . name . data length (u16) . data` per plugin,
+      at most 512 bytes for all plugins together;
+    - it sits inside the backup's encryption and digest;
+    - older firmware stops its restore at `0xFB` with everything before it
+      applied, and reports success - measured on v3.0.4 and base 3.1.0
+      (node-onlykey-emulator `test/restore-plugin-backup.js`).
   - **`node-onlykey-lib/plugins/edge`: the device calls (L4/L5).** A Rectify
     plugin over the transport, providing `edge`: `head`, `publicKey` (and the
     device id), `pickup`, `checkpoint`, `grant` (waits for the physical press;
