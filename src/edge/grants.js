@@ -1,0 +1,94 @@
+'use strict';
+
+/**
+ * Edge budgets ("grants", spec L2): checking a self-press.
+ *
+ * THE CONSTRUCTION (firmware.md R11-R13; bmatusiak/provable). When a person
+ * clasps a budget of n uses (n = the sum of its scopes' caps, <= 1024), the key
+ * draws a secret seed and publishes only
+ *
+ *   G = H^n(seed)            the grant genesis, H = SHA-256
+ *
+ * Use i (1..n) reveals v_i = H^(n-i)(seed). Anyone can check H^i(v_i) == G,
+ * and nobody without the seed can make a v_{i+1} the key has not revealed (it
+ * would be a SHA-256 preimage of v_i). So each self-press proves it was spent
+ * from THIS budget at THIS step. The key also returns
+ *
+ *   mac = HMAC-SHA256(key = v_i, msg = subject)
+ *
+ * which ties the revealed step to what was approved (the link's subject).
+ * CHOSEN: i counts from 1, so use 1 reveals H^(n-1)(seed) and use n the seed.
+ */
+const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { hmacSha256, bytes32, same } = require('./hash');
+
+const MAX_USES = 1024;
+
+function hashTimes(v, times) {
+  let x = v;
+  for (let k = 0; k < times; k++) x = sha256(x);
+  return x;
+}
+
+/** The value use `step` reveals, from the seed (for tests and fakes - a host never has the seed). */
+function reveal(seed, uses, step) {
+  checkCount(uses);
+  if (!Number.isInteger(step) || step < 1 || step > uses) throw new RangeError(`edge: step ${step} outside 1..${uses}`);
+  return hashTimes(bytes32(seed, 'seed'), uses - step);
+}
+
+function grantGenesis(seed, uses) {
+  checkCount(uses);
+  return hashTimes(bytes32(seed, 'seed'), uses);
+}
+
+function checkCount(uses) {
+  if (!Number.isInteger(uses) || uses < 1 || uses > MAX_USES) throw new RangeError(`edge: a budget has 1..${MAX_USES} uses, not ${uses}`);
+}
+
+/**
+ * Check one self-press: {genesis, uses, step, value, mac, subject}.
+ * -> {ok: true} or {ok: false, reason}:
+ *    past-cap      step beyond the budget's uses (or below 1)
+ *    wrong-step    the value is from THIS budget, but at another step
+ *    wrong-budget  the value is from no step of this budget
+ *    mac-mismatch  the value is right, but the MAC is not over this subject
+ */
+function checkSelfPress({ genesis, uses, step, value, mac, subject }) {
+  bytes32(genesis, 'genesis');
+  bytes32(value, 'value');
+  if (!Number.isInteger(uses) || uses < 1 || uses > MAX_USES || !Number.isInteger(step) || step < 1 || step > uses) {
+    return { ok: false, reason: 'past-cap' };
+  }
+  if (!same(hashTimes(value, step), genesis)) {
+    /* bounded (<= 1024 hashes): tell a mislabelled step from a foreign value */
+    let x = value;
+    for (let k = 1; k <= uses; k++) {
+      x = sha256(x);
+      if (k !== step && same(x, genesis)) return { ok: false, reason: 'wrong-step', actualStep: k };
+    }
+    return { ok: false, reason: 'wrong-budget' };
+  }
+  if (!same(hmacSha256(value, bytes32(subject, 'subject')), mac)) return { ok: false, reason: 'mac-mismatch' };
+  return { ok: true };
+}
+
+/**
+ * Check a budget's spends in the order the chain recorded them: each must pass
+ * checkSelfPress, and the steps must run 1, 2, 3... (a repeated step is a
+ * replayed reveal; a skipped one is a self-press missing from the chain).
+ * -> {ok, spent, failure?: {index, step, reason}}  reasons: the four above,
+ *    plus step-reused and step-skipped.
+ */
+function checkSpends(genesis, uses, spends) {
+  for (let i = 0; i < spends.length; i++) {
+    const s = spends[i];
+    if (s.step <= i) return { ok: false, spent: i, failure: { index: i, step: s.step, reason: 'step-reused' } };
+    if (s.step > i + 1) return { ok: false, spent: i, failure: { index: i, step: s.step, reason: 'step-skipped' } };
+    const r = checkSelfPress({ genesis, uses, ...s });
+    if (!r.ok) return { ok: false, spent: i, failure: { index: i, step: s.step, reason: r.reason } };
+  }
+  return { ok: true, spent: spends.length };
+}
+
+module.exports = { MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends };

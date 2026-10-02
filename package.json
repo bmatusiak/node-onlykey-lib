@@ -16,6 +16,7 @@
     "./transport/webauthn": "./src/transport/webauthn.js",
     "./device": "./src/device/index.js",
     "./keychain": "./src/keychain/index.js",
+    "./edge": "./src/edge/index.js",
     "./device/press": "./src/device/press.js",
     "./device/version": "./src/device/version.js",
     "./device/preferences": "./src/device/preferences.js",

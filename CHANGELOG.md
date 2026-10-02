@@ -17,6 +17,29 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **Edge chain library: `node-onlykey-lib/edge` (Edge step E1).** Pure, no
+  device access, Hermes-clean (vendored @noble only; the test runs it with
+  Buffer, TextEncoder/Decoder and crypto removed). Spec:
+  onlykey-edge/build/okrn-edge-tab.md L1-L3, L6.
+  - `chain`: the 64-byte link (encode/decode), `genesis`, `weld`, and
+    `verify(links, {deviceId, expectHead, anchors, lastSeen, ringFrom, ...})`,
+    which returns `{ok, verifiedThrough, gaps, failure?: {seq, reason}}`.
+    Reasons: `hash-mismatch`, `seq-gap`, `seq-reorder`, `head-mismatch`,
+    `rollback`, `device-mismatch`. Trust spreads forward from genesis or a
+    checkpoint, and backward from the key's head through the heads a mirror
+    stores. Anything it cannot reach is a gap, never "verified".
+  - `grants`: budget self-press checks (`H^i(v_i) == G`, plus an HMAC over the
+    subject); reasons `wrong-budget`, `wrong-step`, `mac-mismatch`,
+    `past-cap`; `checkSpends` also catches a replayed or skipped step.
+  - `tickets`: pairs each sign/decrypt with its ticket (ticketed, alarm,
+    missing, or no ticket owed). A message from sync is shown only when it
+    hashes to the ticket link. Bit 7 or an unknown code means alarm.
+  - `codes`: every number the spec left open, marked CHOSEN in one place.
+  - Vectors: `test/vectors/edge-v1.json` is made by
+    onlykey-edge/vectors/make_vectors.py (stdlib Python, written from the spec
+    text alone). The device calls (L4) and the `capabilities().edge` probe (L5)
+    wait for the Edge firmware plugin (E3).
+
 - **PBKDF2 natively where the platform can, with progress where it cannot.**
   New `src/crypto/pbkdf2.js`: `pbkdf2Sha256(password, salt, iterations, dkLen,
   { onProgress })` uses WebCrypto's PBKDF2 (Node, browsers, or the shim when
