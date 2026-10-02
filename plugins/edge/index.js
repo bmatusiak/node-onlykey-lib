@@ -28,7 +28,8 @@ const { codes, chain } = require('../../src/edge');
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04,
-  GRANT_CREATE: 0x10, GRANT_REVOKE: 0x12, TICKET: 0x20,
+  GRANT_CREATE: 0x10, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
+  TICKET: 0x20, WAIVE: 0x21, ARM: 0x22,
 });
 const SEQ_NONE = 0xffffffff;
 const HELD = 8;
@@ -131,13 +132,26 @@ function setup(imports, register) {
     SUB,
     EdgeError,
 
-    /** {seq (null = no link yet), head, oldest (oldest pickable seq, or null), live: [budget ids]} */
+    /**
+     * {seq (null = no link yet), head, oldest (oldest pickable seq, or null),
+     *  live: [budget ids], held: [the live ids on hold (R15a)], owed: number of
+     *  uses owing a ticket (R16), overflow: an owed use fell off the key's list}
+     */
     async head(opts) {
       const [r] = await call(SUB.HEAD, null, opts);
       const seq = get32(r, 0);
       const oldest = get32(r, 36);
-      const live = [0, 1, 2, 3].map((i) => get32(r, 40 + 4 * i)).filter(Boolean);
-      return { seq: seq === SEQ_NONE ? null : seq, head: r.slice(4, 36), oldest: oldest === SEQ_NONE ? null : oldest, live };
+      const ids = [0, 1, 2, 3].map((i) => get32(r, 40 + 4 * i));
+      const mask = r[56];
+      return {
+        seq: seq === SEQ_NONE ? null : seq,
+        head: r.slice(4, 36),
+        oldest: oldest === SEQ_NONE ? null : oldest,
+        live: ids.filter(Boolean),
+        held: ids.filter((id, i) => id && (mask >> i) & 1),
+        owed: r[57],
+        overflow: Boolean(r[58]),
+      };
     },
 
     /** The Edge public key (X||Y) and the device id derived from it. */
@@ -199,13 +213,55 @@ function setup(imports, register) {
     },
 
     /**
-     * File the ticket for the use just made: it must be the very next link
-     * after that use (the key refuses otherwise - EdgeError 'no-ticket-waiting').
-     * msgHash = tickets.messageHash(message); the message never goes to the key.
+     * File the ticket for an owed use (any of the key's up to 4, R16; the key
+     * refuses another - EdgeError 'no-ticket-waiting'). msgHash =
+     * tickets.messageHash(message); the message never goes to the key.
+     * -> {seq, head} after the ticket link: what the next arm() passes (R13a).
      */
     async ticket(refSeq, code, msgHash, opts) {
-      await call(SUB.TICKET, concat([u32(refSeq), Uint8Array.of(code), msgHash]), { ...opts, text: true });
+      const [r] = await call(SUB.TICKET, concat([u32(refSeq), Uint8Array.of(code), msgHash]), opts);
+      return { seq: get32(r, 0), head: r.slice(4, 36) };
+    },
+
+    /**
+     * R13a: arm ONE self-press. `head` is the head the key returned after the
+     * previous step (the grant's checkpoint for a budget's first use, the
+     * ticket's reply after that). Refused - EdgeError 'stale-head',
+     * 'ticket-owed', 'nothing-to-arm' - when the chain moved, a ticket is owed,
+     * or no live budget that is not on hold exists. The next sign/decrypt uses
+     * it; any other link clears it.
+     */
+    async arm(head, opts) {
+      await call(SUB.ARM, head, { ...opts, text: true });
       return true;
+    },
+
+    /** R15a: pause a live budget - it pays for nothing, nothing arms under it. No press. */
+    async hold(grantId, opts) {
+      await call(SUB.GRANT_HOLD, u32(grantId), { ...opts, text: true });
+      return true;
+    },
+
+    /** R15a: resume a held budget - the key waits for a PHYSICAL press (`onPress` for the UI). */
+    async resume(grantId, { onPress, timeoutMs = 30000 } = {}) {
+      await busQuiet();
+      const pending = callNow(SUB.GRANT_RESUME, u32(grantId), { timeoutMs, text: true });
+      if (onPress) onPress();
+      await pending;
+      return true;
+    },
+
+    /**
+     * R18: clear every owed ticket at once - a PHYSICAL press (the person's Yes
+     * in the app first). Linked as a ticket 0x8F with the press flag
+     * (tickets.waiveSubject). -> {seq, head} after the waive link.
+     */
+    async waive({ onPress, timeoutMs = 30000 } = {}) {
+      await busQuiet();
+      const pending = callNow(SUB.WAIVE, null, { timeoutMs });
+      if (onPress) onPress();
+      const [r] = await pending;
+      return { seq: get32(r, 0), head: r.slice(4, 36) };
     },
 
     /**

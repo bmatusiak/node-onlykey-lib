@@ -28,6 +28,9 @@ const OP = Object.freeze({
   PEER_REMOVE: 10,
   LOSS: 11,
   WIPE: 12,
+  /* firmware.md R15a - appended last so the numbers above never move */
+  GRANT_HOLD: 13,
+  GRANT_RESUME: 14,
 });
 
 /* R3 `decision` (for op = ticket the byte is the ticket code instead). CHOSEN: 1-based. */
@@ -56,6 +59,8 @@ const TAG = Object.freeze({
   DEVICE: 'OKEDGE-DEVICE-v1',
   TICKET: 'OKEDGE-TICKET-v1',
   RECEIPT: 'OKEDGE-RCPT-v1',
+  /* firmware.md R18: a human's press clears every owed ticket at once */
+  WAIVE: 'OKEDGE-WAIVE-v1',
 });
 
 /*
@@ -98,6 +103,9 @@ const STATUS = Object.freeze({
   0x08: { name: 'no-ticket-waiting', text: 'The latest link is not a use waiting for its ticket' },
   0x09: { name: 'not-held', text: 'The key no longer holds that link' },
   0x0a: { name: 'unknown-request', text: 'This key does not know that Edge request' },
+  0x0b: { name: 'stale-head', text: 'The chain moved since that head - read the head and arm again' },
+  0x0c: { name: 'ticket-owed', text: 'A use is waiting for its ticket - ticket it, or waive in the app' },
+  0x0d: { name: 'nothing-to-arm', text: 'No live budget (or every one is on hold)' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

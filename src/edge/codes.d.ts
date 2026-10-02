@@ -24,6 +24,8 @@ export const OP: Readonly<{
     PEER_REMOVE: 10;
     LOSS: 11;
     WIPE: 12;
+    GRANT_HOLD: 13;
+    GRANT_RESUME: 14;
 }>;
 export const DECISION: Readonly<{
     APPROVE: 1;
@@ -45,6 +47,7 @@ export const TAG: Readonly<{
     DEVICE: "OKEDGE-DEVICE-v1";
     TICKET: "OKEDGE-TICKET-v1";
     RECEIPT: "OKEDGE-RCPT-v1";
+    WAIVE: "OKEDGE-WAIVE-v1";
 }>;
 export const TICKET: Readonly<{
     0: "OK";
@@ -106,6 +109,18 @@ export const STATUS: Readonly<{
         text: string;
     };
     10: {
+        name: string;
+        text: string;
+    };
+    11: {
+        name: string;
+        text: string;
+    };
+    12: {
+        name: string;
+        text: string;
+    };
+    13: {
         name: string;
         text: string;
     };

@@ -28,6 +28,9 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
   let head = chain.genesis(DEVICE);
   const held = [];
   const live = [];
+  const onHold = new Set();
+  let owed = [];
+  let armed = false;
   const emit = (r) => setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: r })), delay);
   const append = (fields) => {
     const seq = held.length;
@@ -44,6 +47,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
   };
   /* one approved use, so there is something to pick up and ticket */
   append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: 1, subject: new Uint8Array(32).fill(9) });
+  owed = [0];
+  const seqHead = () => report([...u32(held.length - 1), ...head]);
 
   const transport = {
     open() {}, close() {}, isOpen: () => true, request() { throw new Error('not used'); },
@@ -54,7 +59,9 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
       const sub = frame[5];
       const arg = frame.subarray(6);
       if (sub === 0x01) {
-        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...u32(live[0] || 0), ...u32(0), ...u32(0), ...u32(0)]));
+        const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
+        const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
+        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0]));
       } else if (sub === 0x04) {
         emit(report([...PUB]));
       } else if (sub === 0x03) {
@@ -70,14 +77,32 @@ function fakeKey({ silent = false, noPin = false, delay = 1 } = {}) {
         }
       } else if (sub === 0x20) {
         const ref = arg[0] | (arg[1] << 8);
-        if (ref !== held.length - 1) return emit(status(0x08));
+        if (!owed.includes(ref)) return emit(status(0x08));
         append({ op: codes.OP.TICKET, decision: arg[4], subject: new Uint8Array(32), grantId: ref });
+        owed = owed.filter((q) => q !== ref);
+        emit(seqHead());
+      } else if (sub === 0x22) {
+        if (Buffer.compare(Buffer.from(arg.slice(0, 32)), Buffer.from(head)) !== 0) return emit(status(0x0b));
+        if (owed.length) return emit(status(0x0c));
+        if (!live.some((id) => !onHold.has(id))) return emit(status(0x0d));
+        armed = true;
         emit(status(0x00));
+      } else if (sub === 0x13 || sub === 0x14) {
+        const id = arg[0] | (arg[1] << 8);
+        if (!live.includes(id)) return emit(status(0x07));
+        if (sub === 0x14 && owed.length) return emit(status(0x0c));
+        if (sub === 0x13) onHold.add(id); else onHold.delete(id);
+        emit(status(0x00));
+      } else if (sub === 0x21) {
+        append({ op: codes.OP.TICKET, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: new Uint8Array(32) });
+        owed = [];
+        emit(seqHead());
       } else if (sub === 0x10) {
         const n = arg[0];
         const scopes = Array.from({ length: n }, (_, j) => ({ op: arg[1 + 4 * j], slot: arg[2 + 4 * j], cap: arg[3 + 4 * j] | (arg[4 + 4 * j] << 8) }));
         const uses = scopes.reduce((a, s) => a + s.cap, 0);
         if (uses > 255) return emit(status(0x04));
+        if (owed.length) return emit(status(0x0c));
         const genesis = grants.grantGenesis(new Uint8Array(32).fill(3), uses);
         const seq = held.length;
         const id = seq + 1;
@@ -130,6 +155,7 @@ test('edge: the checkpoint is read and verifies with the Edge key', async () => 
 test('edge: a budget\'s opening comes back as a proof verifyBudgetOpening accepts', async () => {
   const transport = fakeKey();
   const edge = edgeOver(transport);
+  await edge.ticket(0, 0, new Uint8Array(32)); /* R10: no budget while a ticket is owed */
   const before = await edge.head();
   const scopes = [{ op: codes.OP.SIGN, slot: 2, cap: 4 }];
   const reasonHash = new Uint8Array(32).fill(7);
@@ -137,14 +163,14 @@ test('edge: a budget\'s opening comes back as a proof verifyBudgetOpening accept
   const g = await edge.grant({ scopes, reasonHash, onPress: () => { asked = true; } });
   assert.ok(asked, 'onPress tells the UI to ask for the press');
   assert.equal(g.uses, 4);
-  assert.equal(g.seq, 1);
-  assert.equal(g.checkpoint.seq, 1);
-  const [l] = await edge.pickup(1, 1);
+  assert.equal(g.seq, 2);
+  assert.equal(g.checkpoint.seq, 2);
+  const [l] = await edge.pickup(2, 1);
   const r = grants.verifyBudgetOpening({
     deviceId: DEVICE, publicKey: PUB, link: l.link, prevHead: before.head,
     head: g.checkpoint.head, signature: g.checkpoint.signature, scopes, reasonHash, genesis: g.genesis, uses: g.uses,
   });
-  assert.deepEqual(r, { ok: true, grantId: g.grantId, seq: 1 });
+  assert.deepEqual(r, { ok: true, grantId: g.grantId, seq: 2 });
   assert.deepEqual((await edge.head()).live, [g.grantId]);
   assert.equal(await edge.revoke(g.grantId), true);
 });
@@ -156,7 +182,38 @@ test('edge: EDGE:xx refusals become named errors', async () => {
   await assert.rejects(edge.pickup(3, 1), (e) => e.status === 'not-held');
   await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 200 }, { op: 1, slot: 3, cap: 100 }], reasonHash: new Uint8Array(32) }),
     (e) => e.status === 'too-many-uses' || /255/.test(e.message));
-  assert.equal(await edge.ticket(0, 0, new Uint8Array(32)), true, 'the use just made takes its ticket');
+  const t = await edge.ticket(0, 0, new Uint8Array(32));
+  assert.equal(t.seq, 1, 'the ticket comes back with the seq and head the next arm() passes');
+  assert.equal(t.head.length, 32);
+});
+
+test('edge: ARM, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', async () => {
+  const edge = edgeOver(fakeKey());
+  let h = await edge.head();
+  assert.equal(h.owed, 1, 'the approved use owes its ticket');
+  /* nothing arms, and no budget opens, while a ticket is owed */
+  await assert.rejects(edge.arm(h.head), (e) => e.status === 'ticket-owed');
+  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32) }), (e) => e.status === 'ticket-owed');
+  /* WAIVE clears it */
+  const w = await edge.waive();
+  assert.equal(w.seq, 1);
+  h = await edge.head();
+  assert.equal(h.owed, 0);
+  /* no live budget: nothing to arm; a stale head: refused */
+  await assert.rejects(edge.arm(h.head), (e) => e.status === 'nothing-to-arm');
+  const g = await edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32) });
+  await assert.rejects(edge.arm(new Uint8Array(32).fill(1)), (e) => e.status === 'stale-head');
+  h = await edge.head();
+  assert.equal(await edge.arm(h.head), true);
+  /* hold: listed, nothing arms; resume: back */
+  assert.equal(await edge.hold(g.grantId), true);
+  h = await edge.head();
+  assert.deepEqual(h.held, [g.grantId]);
+  await assert.rejects(edge.arm(h.head), (e) => e.status === 'nothing-to-arm');
+  let asked = false;
+  assert.equal(await edge.resume(g.grantId, { onPress: () => { asked = true; } }), true);
+  assert.ok(asked, 'resume asks for the press');
+  assert.deepEqual((await edge.head()).held, []);
 });
 
 test('edge: a stray report on the bus is not taken as the answer (measured on the Pixel soft key)', async () => {

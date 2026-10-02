@@ -20,6 +20,7 @@ export function ticketSubject({ refSeq, refHead, code, msgHash }: {
  *    orphans: tickets for a seq that is not a use (or not one that came
  *             before), or a second ticket for the same use
  */
+export function waiveSubject(seqs: any, overflow: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export function pairTickets(entries: any, messages?: {}): {
     uses: {
         seq: number;
@@ -36,6 +37,8 @@ export function pairTickets(entries: any, messages?: {}): {
         message: string | null;
         /** @type {'none' | 'match' | 'mismatch' | 'unchecked' | null} */
         messageStatus: "none" | "match" | "mismatch" | "unchecked" | null;
+        /** @type {number | null} the waive link that cleared it, if a waive did */
+        waivedBy: number | null;
     }[];
     orphans: {
         seq: number;
@@ -43,3 +46,4 @@ export function pairTickets(entries: any, messages?: {}): {
         reason: string;
     }[];
 };
+export const OWED_MAX: 4;

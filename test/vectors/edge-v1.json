@@ -72,6 +72,15 @@
     "head": "6c4a3f79940120fda81db4df5eec9df67298d61e4074be70ecb8953d2e5a3e82",
     "digest": "87929068ebec5141fc6c28a637fa18dae3a8c41ba3fc13a3ecf237d7f8d89ee2"
   },
+  "waive": {
+    "seqs": [
+      1,
+      5
+    ],
+    "overflow": 0,
+    "subject": "8860d3d88e5e64530a03541373d6a68cc8d71b8fccd3111da0aead2394593ff6",
+    "overflowSubject": "5f68bc34a6c55cbf1a696502dfcaeb38c1e4a92b89da290a22f7b533841182e5"
+  },
   "deviceFromPub": {
     "pub": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
     "deviceId": "67aae89f560737b50a711aa0bf651d3e"

@@ -19,7 +19,7 @@
  * only if recomputing the subject from it matches the ticket link (spec S5); a
  * message that does not match is shown as missing, never as text.
  */
-const { OP, DECISION, TAG, ticketCode } = require('./codes');
+const { OP, DECISION, FLAG, TAG, ticketCode } = require('./codes');
 const { decodeLink } = require('./chain');
 const { H, u32le, u8, bytes32, same } = require('./hash');
 const { utf8ToBytes } = require('../bytes');
@@ -34,6 +34,7 @@ function ticketSubject({ refSeq, refHead, code, msgHash }) {
 
 /* a decision that never reached a result owes no ticket */
 const NO_TICKET_OWED = new Set([DECISION.DENY, DECISION.TIMEOUT]);
+const OWES = (u) => u.status !== 'no-ticket-owed';
 
 /**
  * Pair tickets with the uses they answer.
@@ -50,6 +51,19 @@ const NO_TICKET_OWED = new Set([DECISION.DENY, DECISION.TIMEOUT]);
  *    orphans: tickets for a seq that is not a use (or not one that came
  *             before), or a second ticket for the same use
  */
+/*
+ * WAIVE (firmware.md R18): a human's press clears every owed ticket at once.
+ * The key links it as a ticket (code 0x8F, the press flag, grant_id field =
+ * the oldest seq it waives) whose subject lists what it waived:
+ *   SHA256("OKEDGE-WAIVE-v1" || each waived seq (u32 LE, oldest first) || overflow (1 byte))
+ */
+function waiveSubject(seqs, overflow) {
+  return H(TAG.WAIVE, ...seqs.map((s) => u32le(s)), u8(overflow ? 1 : 0));
+}
+
+/* the key keeps up to this many owed uses (firmware R16); older ones only a waive clears */
+const OWED_MAX = 4;
+
 function pairTickets(entries, messages = {}) {
   const rows = entries.map((e) => (e instanceof Uint8Array ? { link: e, head: null } : e));
   const bySeq = new Map();
@@ -70,6 +84,8 @@ function pairTickets(entries, messages = {}) {
         message: null,
         /** @type {'none' | 'match' | 'mismatch' | 'unchecked' | null} */
         messageStatus: null,
+        /** @type {number | null} the waive link that cleared it, if a waive did */
+        waivedBy: null,
       });
     }
   }
@@ -77,6 +93,21 @@ function pairTickets(entries, messages = {}) {
   for (const r of rows) {
     const f = decodeLink(r.link);
     if (f.op !== OP.TICKET) continue;
+    /* a WAIVE: 0x8F with the press flag, whose subject recomputes from the uses it cleared */
+    if (f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED)) {
+      const owed = uses.filter((u) => u.seq < f.seq && u.seq >= f.refSeq && !u.ticket && !u.waivedBy && OWES(u));
+      const listed = owed.map((u) => u.seq);
+      const overflow = same(f.subject, waiveSubject(listed, true));
+      if (overflow || same(f.subject, waiveSubject(listed, false))) {
+        for (const u of owed) { u.status = 'waived'; u.waivedBy = f.seq; }
+        if (overflow) {
+          for (const u of uses) {
+            if (u.seq < f.refSeq && !u.ticket && !u.waivedBy && OWES(u)) { u.status = 'waived-unlisted'; u.waivedBy = f.seq; }
+          }
+        }
+        continue;
+      }
+    }
     const use = useAt.get(f.refSeq);
     if (!use || f.refSeq >= f.seq) { orphans.push({ seq: f.seq, refSeq: f.refSeq, reason: 'not-a-use' }); continue; }
     if (use.ticket) { orphans.push({ seq: f.seq, refSeq: f.refSeq, reason: 'second-ticket' }); continue; }
@@ -94,16 +125,15 @@ function pairTickets(entries, messages = {}) {
     }
   }
   /*
-   * WAITING vs MISSING (firmware.md R16-R17). The key accepts a ticket only for
-   * its LATEST sign/decrypt, so an unticketed use is still "waiting" until
-   * another use is linked after it; from then on no ticket can ever be filed
-   * for it (the next link carries prev_no_ticket) and it is "missing".
+   * WAITING vs MISSING (firmware.md R16, as the owner changed it 2026-10-02):
+   * every approved use - pressed or self-pressed - owes a ticket, and the key
+   * keeps the latest OWED_MAX owed uses, any of which still takes its ticket
+   * ("waiting"). An older one fell off the key's list: only a waive clears it
+   * ("missing"). Nothing else - a deny, a timeout, a lock - clears a debt.
    */
-  let latest = null;
-  for (const u of uses) if (u.status !== 'no-ticket-owed' && (!latest || u.seq > latest.seq)) latest = u;
-  const lastUse = uses.reduce((m, u) => (u.seq > m ? u.seq : m), -1);
-  if (latest && latest.status === 'missing' && latest.seq === lastUse) latest.status = 'waiting';
+  const open = uses.filter((u) => u.status === 'missing' && OWES(u)).sort((a, b) => b.seq - a.seq);
+  open.slice(0, OWED_MAX).forEach((u) => { u.status = 'waiting'; });
   return { uses, orphans };
 }
 
-module.exports = { messageHash, ticketSubject, pairTickets };
+module.exports = { messageHash, ticketSubject, waiveSubject, pairTickets, OWED_MAX };

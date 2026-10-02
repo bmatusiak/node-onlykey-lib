@@ -267,28 +267,79 @@ test('budget opening: every forged part fails with its own reason', () => {
 
 const T = V.ticket;
 
-test('tickets: each use is ticketed, waiting, missing, alarm or owes none; the message is shown only when it matches', () => {
+test('tickets: every approved use owes one - ticketed, waiting, alarm, or owes none; the message only when it matches', () => {
   const r = tickets.pairTickets(entries(), { [T.refSeq]: T.message });
   const by = Object.fromEntries(r.uses.map((u) => [u.seq, u]));
-  assert.equal(by[1].status, 'missing');
+  /* R16 (Brad, 2026-10-02): pressed or self-pressed, every approved use owes; the key keeps the latest 4 */
+  assert.equal(by[1].status, 'waiting');
   assert.equal(by[2].status, 'ticketed');
   assert.equal(by[2].ticket.name, 'OK');
   assert.equal(by[2].message, T.message);
   assert.equal(by[4].status, 'no-ticket-owed'); // denied decrypt
-  assert.equal(by[5].status, 'waiting'); // the latest use: the key still takes its ticket
+  assert.equal(by[5].status, 'waiting'); // a human press owes too
   assert.deepEqual(r.orphans, []);
 });
 
-test('tickets: a newer use - even a denied one - turns a waiting use into missing (R16: only the latest takes a ticket)', () => {
+/* add links to a chain of {link, head} entries */
+function grow(es, fields) {
+  const l = chain.encodeLink({ seq: es.length, ...fields });
+  es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) });
+  return es.length - 1;
+}
+const pressedUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: 1, subject: new Uint8Array(32).fill(es.length) });
+
+test('tickets: a deny does not clear a debt; past the key\'s 4, the oldest can only be waived (missing)', () => {
   const es = entries();
-  const add = (fields) => { const l = chain.encodeLink({ seq: es.length, ...fields }); es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) }); };
-  add({ op: codes.OP.DECRYPT, decision: codes.DECISION.DENY, slot: 1, subject: new Uint8Array(32) });
-  const by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
-  assert.equal(by[5], 'missing');
-  assert.equal(by[6], 'no-ticket-owed');
-  add({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, subject: new Uint8Array(32) });
-  const after = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
-  assert.equal(after[7], 'waiting');
+  grow(es, { op: codes.OP.DECRYPT, decision: codes.DECISION.DENY, slot: 1, subject: new Uint8Array(32) });
+  let by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
+  assert.equal(by[5], 'waiting', 'a deny in between does not clear the debt');
+  /* 1 and 5 owe; three more uses make 5 owed - the oldest (1) falls off the key's list */
+  pressedUse(es); pressedUse(es); pressedUse(es);
+  by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
+  assert.equal(by[1], 'missing');
+  assert.deepEqual([by[5], by[7], by[8], by[9]], ['waiting', 'waiting', 'waiting', 'waiting']);
+});
+
+/* the WAIVE link the key writes (firmware R18): 0x8F, the press flag, grant_id = oldest waived, subject over the list */
+function waive(es, seqs, overflow) {
+  return grow(es, {
+    op: codes.OP.TICKET, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: seqs[0],
+    subject: tickets.waiveSubject(seqs, overflow),
+  });
+}
+
+test('tickets: the WAIVE subject matches the Python reading', () => {
+  assert.equal(toHex(tickets.waiveSubject(V.waive.seqs, Boolean(V.waive.overflow))), V.waive.subject);
+  assert.equal(toHex(tickets.waiveSubject([5, 6, 7, 8], true)), V.waive.overflowSubject);
+});
+
+test('tickets: a WAIVE clears every use it lists - and, with overflow, the older ones too', () => {
+  const es = entries();
+  const w = waive(es, [1, 5], false);
+  let by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u]));
+  assert.deepEqual([by[1].status, by[1].waivedBy, by[5].status], ['waived', w, 'waived']);
+  /* overflow: five owed, the key lists the latest 4; the oldest is covered as "waived, not listed" */
+  const es2 = entries();
+  pressedUse(es2); pressedUse(es2); pressedUse(es2);
+  const w2 = waive(es2, [5, 6, 7, 8], true);
+  by = Object.fromEntries(tickets.pairTickets(es2).uses.map((u) => [u.seq, u]));
+  assert.equal(by[1].status, 'waived-unlisted');
+  assert.deepEqual([5, 6, 7, 8].map((q) => by[q].status), ['waived', 'waived', 'waived', 'waived']);
+  assert.equal(by[8].waivedBy, w2);
+});
+
+test('tickets: an agent\'s own 0x8F ticket is not a waive - it pays one use and is an alarm', () => {
+  const es = entries();
+  const ref = 5;
+  const l = chain.encodeLink({
+    seq: es.length, op: codes.OP.TICKET, decision: 0x8f, grantId: ref,
+    subject: tickets.ticketSubject({ refSeq: ref, refHead: es[ref].head, code: 0x8f, msgHash: tickets.messageHash('look at this') }),
+  });
+  es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) });
+  const by = Object.fromEntries(tickets.pairTickets(es, { [ref]: 'look at this' }).uses.map((u) => [u.seq, u]));
+  assert.equal(by[5].status, 'alarm');
+  assert.equal(by[5].message, 'look at this');
+  assert.equal(by[1].status, 'waiting', 'it paid only its own use');
 });
 
 test('tickets: a message that does not match its hash is never shown as text', () => {

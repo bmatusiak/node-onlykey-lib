@@ -69,8 +69,25 @@ the commit that release ended at.
       `'none'`, and silence never hangs.
     - It is removable: nothing else depends on it, and a host decides whether to
       probe (only Edge soft-key builds know 0xF8).
-  - Tickets add `waiting`: the latest use can still get its ticket (R16); after
-    any newer use it is `missing`.
+  - **The spec change (onlykey-edge c7c30dd): every approved use owes a
+    ticket, nothing automatic while one is owed.**
+    - Every approved use - pressed or self-pressed - owes a ticket (R16). The
+      key keeps the latest 4 owed; `pairTickets` shows those as `waiting` and
+      older ones as `missing`. A deny does not clear a debt.
+    - WAIVE (R18): one press clears every owed ticket. It is linked as a
+      ticket `0x8F` with the press flag, grant id = the oldest waived, subject
+      `tickets.waiveSubject(seqs, overflow)` =
+      SHA256("OKEDGE-WAIVE-v1" || seqs u32 LE || overflow byte). Uses it lists
+      read `waived`; with overflow, the older ones read `waived-unlisted`. An
+      agent's own `0x8F` ticket (no press flag) still pays one use and is an
+      alarm.
+    - New calls: `arm(head)` before each self-press (R13a), `hold(id)` /
+      `resume(id, { onPress })` (R15a; resume needs a press), `waive({ onPress
+      })`. `ticket()` now returns `{ seq, head }` - the head the next `arm()`
+      passes. `head()` adds `held`, `owed` and `overflow`.
+    - Codes: sub-ops GRANT_HOLD 0x13, GRANT_RESUME 0x14, WAIVE 0x21, ARM 0x22;
+      link ops grant-hold 13 / grant-resume 14 (appended last in `OP`); status
+      0B stale-head, 0C ticket-owed, 0D nothing-to-arm.
   - `codes`: every number the spec left open, marked CHOSEN in one place.
   - Vectors: `test/vectors/edge-v1.json` is made by
     onlykey-edge/vectors/make_vectors.py (stdlib Python, written from the spec
