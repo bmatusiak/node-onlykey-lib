@@ -35,6 +35,19 @@
  * covered gap: what the lost range owed is unknown, so if the key still owes
  * for it the counts disagree and the copy fails `debts` - a waive settles it.
  * Never "verify from a checkpoint" alone as a way out.
+ *
+ * WHAT COUNTS AS VERIFIED (firmware.md R27, tab spec B2; found on the Pixel
+ * 2026-10-02, where a key restart left the copy #30-#36 and #48 and the banner
+ * offered #0-#47 as lost): anchors are heads the key itself stands behind - the
+ * genesis, its live HEAD, and every checkpoint whose signature verifies under
+ * the KEY's public key (key.publicKey, read from the key or pinned for its
+ * device id; never one the copy carries, or a copy could sign for itself).
+ * chain.verify welds forward and back from each, so the gap is only what no
+ * anchor reaches. And a LOSS link counts only when it is itself verified and
+ * later than the gap it covers: a LOSS sitting in an unverified range is as
+ * unproven as the range, and counting it let an edited copy cover its own gap.
+ * assess() is that one answer; the tab's banner and verifyCopy (Approve) both
+ * read it.
  */
 const { OP, DECISION } = require('./codes');
 const chain = require('./chain');
@@ -91,10 +104,70 @@ function missingGaps(entries, gaps, held) {
   return out;
 }
 
-/** The really missing ranges that no LOSS link in the copy covers. held: the key's own links, this session. */
+/*
+ * The LOSS links that count: verified (outside every gap chain.verify left, or
+ * the key's own link this session) - an unverified one proves nothing.
+ */
+function verifiedLosses(entries, gaps, held) {
+  const keep = heldSeqs(entries, held);
+  const inGap = (seq) => gaps.some((g) => g.from <= seq && seq <= g.to);
+  return lossesIn(entries).filter((l) => keep.has(l.seq) || !inGap(l.seq));
+}
+
+/** The really missing ranges no verified, later LOSS link covers. held: the key's own links, this session. */
 function uncoveredGaps(entries, gaps, held) {
-  const losses = lossesIn(entries);
-  return missingGaps(entries, gaps, held).filter((g) => !losses.some((l) => l.from <= g.from && l.to >= g.to));
+  const losses = verifiedLosses(entries, gaps, held);
+  return missingGaps(entries, gaps, held).filter((g) => !losses.some((l) => l.seq > g.to && l.from <= g.from && l.to >= g.to));
+}
+
+/*
+ * The checkpoints the KEY signed, as chain.verify anchors {seq, head}: the
+ * key's latest (key.checkpoint), each budget opening's (the press's answer,
+ * over its grant-create link's stored head) and any the copy kept
+ * (copy.checkpoints). Only signatures that verify under key.publicKey count.
+ */
+function checkpointAnchors(entries, copy, key) {
+  if (!key.publicKey) return []; /* nothing to check a signature with: no checkpoint anchors */
+  const deviceId = chain.deviceIdOf(key.publicKey);
+  const out = new Map();
+  const take = (seq, head, signature) => {
+    if (out.has(seq) || !head || !signature) return;
+    if (chain.verifyCheckpoint({ deviceId, seq, head }, signature, key.publicKey)) out.set(seq, { seq, head });
+  };
+  const openings = copy.openings || {};
+  for (const e of entries) {
+    const f = chain.decodeLink(e.link);
+    if (f.op === OP.GRANT_CREATE && openings[f.grantId]) take(f.seq, e.head, openings[f.grantId].signature);
+  }
+  for (const c of copy.checkpoints || []) take(c.seq, c.head, c.signature);
+  if (key.checkpoint) take(key.checkpoint.seq, key.checkpoint.head, key.checkpoint.signature);
+  return [...out.values()].sort((a, b) => a.seq - b.seq);
+}
+
+/**
+ * The one answer to "what does this copy prove" (R27), for the banner and
+ * Approve alike. key: {publicKey, head {seq, head}, held?, checkpoint?} -
+ * or {deviceId, ...} with no public key (a test key that signs nothing): then
+ * the anchors are the genesis and HEAD only;
+ * opts.ringFrom: the oldest seq the key still holds (missing links at or
+ * above it were removed, not lost); opts.lastSeen: the head this host verified
+ * last session (an older one now is a rollback).
+ * -> {chain (chain.verify's result), anchors, missing, losses, open}
+ *    missing: ranges no anchor reaches, minus the key's own links;
+ *    losses: the verified LOSS links; open: missing ranges none of them covers.
+ */
+function assess(copy, key, opts = {}) {
+  const entries = (copy.links || []).map((e) => (e instanceof Uint8Array ? { link: e } : e));
+  const deviceId = key.publicKey ? chain.deviceIdOf(key.publicKey) : key.deviceId;
+  const anchors = checkpointAnchors(entries, copy, key);
+  const v = chain.verify(entries, {
+    deviceId, expectHead: { seq: key.head.seq, head: key.head.head }, anchors,
+    ...(opts.ringFrom !== undefined ? { ringFrom: opts.ringFrom } : {}),
+    ...(opts.lastSeen ? { lastSeen: opts.lastSeen } : {}),
+  });
+  const missing = missingGaps(entries, v.gaps, key.held);
+  const losses = verifiedLosses(entries, v.gaps, key.held);
+  return { chain: v, anchors, missing, losses, open: uncoveredGaps(entries, v.gaps, key.held) };
 }
 
 /**
@@ -126,11 +199,11 @@ function verifyCopy(copy, key) {
     return { ok: true, verifiedThrough: -1, head: h.head };
   }
 
-  const v = chain.verify(entries, { deviceId, expectHead: { seq: h.seq, head: h.head } });
+  const a = assess({ ...copy, links: entries }, key);
+  const v = a.chain;
   if (!v.ok) return fail('chain', { seq: v.failure.seq, detail: v.failure });
-  const open = uncoveredGaps(entries, v.gaps, key.held);
-  if (open.length) return fail('gap', { seq: open[0].from, detail: { gaps: open } });
-  const lastGapEnd = missingGaps(entries, v.gaps, key.held).reduce((m, g) => Math.max(m, g.to), -1);
+  if (a.open.length) return fail('gap', { seq: a.open[0].from, detail: { gaps: a.open } });
+  const lastGapEnd = a.missing.reduce((m, g) => Math.max(m, g.to), -1);
 
   /*
    * Every link outside a covered gap is now verified, and so is the head the
@@ -213,4 +286,4 @@ function verifyCopy(copy, key) {
   return { ok: true, verifiedThrough: h.seq, head: h.head };
 }
 
-module.exports = { verifyCopy, lossesIn, uncoveredGaps, missingGaps };
+module.exports = { verifyCopy, assess, lossesIn, uncoveredGaps, missingGaps };

@@ -20,13 +20,69 @@ export function verifyCopy(copy: any, key: any): {
     verifiedThrough: any;
     head: any;
 };
+/**
+ * The one answer to "what does this copy prove" (R27), for the banner and
+ * Approve alike. key: {publicKey, head {seq, head}, held?, checkpoint?} -
+ * or {deviceId, ...} with no public key (a test key that signs nothing): then
+ * the anchors are the genesis and HEAD only;
+ * opts.ringFrom: the oldest seq the key still holds (missing links at or
+ * above it were removed, not lost); opts.lastSeen: the head this host verified
+ * last session (an older one now is a rollback).
+ * -> {chain (chain.verify's result), anchors, missing, losses, open}
+ *    missing: ranges no anchor reaches, minus the key's own links;
+ *    losses: the verified LOSS links; open: missing ranges none of them covers.
+ */
+export function assess(copy: any, key: any, opts?: {}): {
+    chain: {
+        ok: boolean;
+        verifiedThrough: number;
+        gaps: never[];
+        failure: {
+            seq: any;
+            reason: any;
+        };
+    } | {
+        ok: boolean;
+        verifiedThrough: number;
+        gaps: {
+            from: any;
+            to: any;
+        }[];
+        failure: {
+            seq: any;
+            reason: string;
+        };
+    } | {
+        ok: boolean;
+        verifiedThrough: number;
+        gaps: {
+            from: any;
+            to: any;
+        }[];
+        failure?: undefined;
+    };
+    anchors: any[];
+    missing: {
+        from: any;
+        to: number;
+    }[];
+    losses: {
+        seq: number;
+        from: number;
+        to: number;
+    }[];
+    open: {
+        from: any;
+        to: number;
+    }[];
+};
 /** The LOSS links in a run of entries: [{seq, from, to}] (to = 0xFFFFFFFF: not said - covers to the LOSS itself). */
 export function lossesIn(entries: any): {
     seq: number;
     from: number;
     to: number;
 }[];
-/** The really missing ranges that no LOSS link in the copy covers. held: the key's own links, this session. */
+/** The really missing ranges no verified, later LOSS link covers. held: the key's own links, this session. */
 export function uncoveredGaps(entries: any, gaps: any, held: any): {
     from: any;
     to: number;

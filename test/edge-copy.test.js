@@ -148,3 +148,63 @@ test('copy: a link the key still holds is not part of a loss - only what is real
   const forged = { ...s.links[2], link: Uint8Array.from(s.links[2].link, (x, i) => (i === 9 ? x ^ 1 : x)) };
   assert.equal(copy.missingGaps([forged, ...copyLinks.slice(1)], v.gaps, held).some((g) => g.from <= 2 && g.to >= 2), true);
 });
+
+/*
+ * WHAT COUNTS AS VERIFIED (firmware.md R27, tab B2; found on the Pixel
+ * 2026-10-02): anchors are the genesis, the key's live HEAD and every
+ * checkpoint whose signature verifies under the KEY's public key. The copy here
+ * lost #0 and #3-#5 (the key restarted, so it holds only its head #6), but keeps
+ * #1-#2 with the budget opening's checkpoint at #2: from that anchor #2 verifies
+ * (and #1's head with it), so only #0-#1 and #3-#5 are missing - not #0-#5.
+ */
+const OTHER_SECRET = new Uint8Array(32).fill(6);
+const OTHER_PUB = p256.getPublicKey(OTHER_SECRET, false).slice(1);
+
+test('copy: a verified checkpoint anchors the copy - the gap is only what no anchor reaches (R27)', () => {
+  const s = story();
+  const links = [s.links[1], s.links[2], s.links[6]];
+  /* the key hands its head link #6 over itself (held), as on a real sync */
+  const key = { ...s.key, held: [s.links[6]] };
+  const a = copy.assess({ links, openings: s.openings }, key);
+  assert.deepEqual(a.missing, [{ from: 0, to: 1 }, { from: 3, to: 5 }]);
+  assert.deepEqual(a.anchors.map((x) => x.seq), [2, 6], 'the opening\'s checkpoint and the key\'s latest one');
+  /* the banner and Approve read the same answer */
+  const v = copy.verifyCopy({ links, openings: s.openings }, key);
+  assert.equal(JSON.stringify([v.reason, v.seq, v.detail.gaps]), JSON.stringify(['gap', 0, a.open]));
+});
+
+test('copy: a checkpoint signed by any key but this one anchors nothing - the public key never comes from the copy', () => {
+  const s = story();
+  const links = [s.links[1], s.links[2], s.links[6]];
+  const head2 = s.links[2].head;
+  const selfSigned = { [s.grantId]: { ...s.openings[s.grantId], signature: chain.signCheckpoint({ deviceId: DEVICE, seq: 2, head: head2 }, OTHER_SECRET) } };
+  const a = copy.assess({ links, openings: selfSigned, publicKey: OTHER_PUB, checkpoints: [{ seq: 2, head: head2, signature: selfSigned[s.grantId].signature }] }, { ...s.key, held: [s.links[6]] });
+  assert.deepEqual(a.missing, [{ from: 0, to: 5 }], 'nothing the copy signed for itself narrows the gap');
+  assert.deepEqual(a.anchors.map((x) => x.seq), [6]);
+});
+
+test('copy: a fake LOSS inside a gap does not unblock Approve - a LOSS counts only when verified and later than its gap', () => {
+  const s = story();
+  /* the copy lost #3-#5; someone who edits it puts a LOSS {3..5} at #4, where nothing can check it */
+  const subject = new Uint8Array(32);
+  new DataView(subject.buffer).setUint32(0, 5, true);
+  const link = chain.encodeLink({ seq: 4, op: OP.LOSS, decision: DECISION.APPROVE, flags: FLAG.PRESS_OBSERVED, subject, grantId: 3 });
+  const fake = { link, head: chain.weld(s.links[2].head, link), reveal: null };
+  const links = [s.links[0], s.links[1], s.links[2], fake, s.links[6]];
+  /* as on a real sync, the key hands its own head link over: the gap is then exactly #3-#5, which the fake claims */
+  const key = { ...s.key, held: [s.links[6]] };
+  const v = copy.verifyCopy({ links, openings: s.openings }, key);
+  assert.equal(JSON.stringify([v.reason, v.seq]), JSON.stringify(['gap', 3]));
+  assert.deepEqual(copy.assess({ links, openings: s.openings }, key).losses, [], 'the fake LOSS is not counted');
+  /* the same LOSS, written by the key after the gap and so verified, does cover it */
+  const real = withLoss(3, 5);
+  const ok = copy.verifyCopy({ links: [...real.links.slice(0, 3), ...real.links.slice(6)], openings: real.openings }, { ...real.key, held: real.links.slice(6) });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+});
+
+test('copy: a key with no public key anchors on its genesis and HEAD only', () => {
+  const s = story();
+  const links = [s.links[1], s.links[2], s.links[6]];
+  const a = copy.assess({ links, openings: s.openings }, { deviceId: DEVICE, head: s.key.head, held: [s.links[6]], checkpoint: s.key.checkpoint });
+  assert.deepEqual([a.anchors, a.missing], [[], [{ from: 0, to: 5 }]]);
+});
