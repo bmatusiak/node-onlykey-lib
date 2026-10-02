@@ -92,7 +92,8 @@ function keyDebts(entries) {
   const dropped = [];
   for (const e of entries) {
     const f = decodeLink(e instanceof Uint8Array ? e : e.link);
-    if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && OWING.has(f.decision)) {
+    /* R16: the KEY decided at the sign, and wrote it into the link (owes_ticket) - the chain could not replay it */
+    if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && OWING.has(f.decision) && (f.flags & FLAG.OWES_TICKET)) {
       if (owed.length === OWED_MAX) { dropped.push(owed.shift()); overflow = true; }
       owed.push(f.seq);
     } else if (f.op === OP.TICKET) {
@@ -120,7 +121,8 @@ function pairTickets(entries, messages = {}) {
       uses.push({
         seq: f.seq,
         op: f.op,
-        status: NO_TICKET_OWED.has(f.decision) ? 'no-ticket-owed' : 'missing',
+        /* a deny or timeout never owes; an approved use owes only when the key marked it (R16) */
+        status: NO_TICKET_OWED.has(f.decision) || !(f.flags & FLAG.OWES_TICKET) ? 'no-ticket-owed' : 'missing',
         /** @type {{seq: number, code: number, name: string | null, alarm: boolean} | null} */
         ticket: null,
         /** @type {string | null} */

@@ -47,6 +47,10 @@ const FLAG = Object.freeze({
   BUDGET_SPENT: 0x02,
   PREV_NO_TICKET: 0x04,
   HISTORY_AT_RISK: 0x08,
+  /* R16 (2026-10-02 evening): set by the key at the sign - this use owes a ticket (ARMed, or its op/slot covered by a budget) */
+  OWES_TICKET: 0x10,
+  /* R16: an arm was waiting when the request was primed (a self-press, or a mismatched ARM that was pressed) */
+  ARMED: 0x20,
 });
 
 /* Domain tags, ASCII, exactly as the spec spells them (R2, R7, R12, R16, R21). */

@@ -47,8 +47,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
     emit(report([...u32(seq), ...head]));
     emit(report([...sig]));
   };
-  /* one approved use, so there is something to pick up and ticket */
-  append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: 1, subject: new Uint8Array(32).fill(9) });
+  /* one approved use that owes (R16: the key marked it owes_ticket - a pressed use on a covered slot), so there is something to pick up and ticket */
+  append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_TICKET, subject: new Uint8Array(32).fill(9) });
   owed = [0];
   /* the fake's vouch tag: any MAC the fake can recompute (a real key keys it with K_vouch) */
   const tagOf = (seq, h) => require('node:crypto').createHmac('sha256', 'fake K_vouch').update(Buffer.concat([Buffer.from(u32(seq)), Buffer.from(h)])).digest().subarray(0, 16);

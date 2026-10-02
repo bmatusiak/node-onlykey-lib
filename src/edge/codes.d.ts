@@ -38,6 +38,8 @@ export const FLAG: Readonly<{
     BUDGET_SPENT: 2;
     PREV_NO_TICKET: 4;
     HISTORY_AT_RISK: 8;
+    OWES_TICKET: 16;
+    ARMED: 32;
 }>;
 export const TAG: Readonly<{
     GENESIS: "OKEDGE-GENESIS-v1";

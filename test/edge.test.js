@@ -300,7 +300,23 @@ function grow(es, fields) {
   es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) });
   return es.length - 1;
 }
-const pressedUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: 1, subject: new Uint8Array(32).fill(es.length) });
+/* a pressed use on a slot a budget covers: it owes (R16 - the key sets owes_ticket, bit 4) */
+const pressedUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_TICKET, subject: new Uint8Array(32).fill(es.length) });
+/* the person's own direct press on a slot no budget covers: linked, owes nothing (R16) */
+const directUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 3, flags: codes.FLAG.PRESS_OBSERVED, subject: new Uint8Array(32).fill(es.length) });
+
+test('tickets: R16 - a direct press with neither owes_ticket nor armed owes nothing; the key decided at the sign', () => {
+  const es = entries();
+  const before = tickets.keyDebts(es);
+  const d = directUse(es);
+  const u = tickets.pairTickets(es).uses.find((x) => x.seq === d);
+  assert.equal(u.status, 'no-ticket-owed');
+  assert.deepEqual(tickets.keyDebts(es), before, 'a direct press added a debt');
+  /* the same press on a covered slot owes */
+  const c = pressedUse(es);
+  assert.equal(tickets.pairTickets(es).uses.find((x) => x.seq === c).status, 'waiting');
+  assert.ok(tickets.keyDebts(es).owed.includes(c));
+});
 
 test('tickets: a deny does not clear a debt; past the key\'s 4, the oldest can only be waived (missing)', () => {
   const es = entries();
