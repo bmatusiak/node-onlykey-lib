@@ -3,9 +3,9 @@
  *
  * The firmware plugin (ok-rn/android/okemu/plugins/config) prints the key's
  * settings; this sends the request and collects the text - whole 64-byte
- * reports, ended by a NUL - and src/config/ini.js reads it. Import is the
- * device plugin's setPreference, one value at a time (see the CLI's `config
- * import`): nothing here writes.
+ * reports, ended by a NUL - and src/config/ini.js reads it. The import is
+ * OKSETCONFIG (write()): the firmware takes an INI, in config mode only, and
+ * hands each value to its own setting write (owner, 2026-10-02).
  *
  * WHO ANSWERS: a soft key or emulator built with the config plugin, unlocked,
  * out of config mode (the firmware's config-mode allow-list stops the request
@@ -23,6 +23,8 @@ const { assertTransport } = require('../../src/transport/contract');
 const ini = require('../../src/config/ini');
 
 const OKGETCONFIG = 0x80 | 0x79; /* CHOSEN, next to edge's 0x78 */
+const OKSETCONFIG = 0x80 | 0x7a; /* CHOSEN: the import, config mode only */
+const OKSETCONFIG_CHUNK = 58;
 
 function setup(imports, register) {
   const { transport } = imports;
@@ -91,9 +93,56 @@ function setup(imports, register) {
     });
   }
 
+  /*
+   * OKSETCONFIG - the import (owner, 2026-10-02: config mode only, in the
+   * firmware). The INI goes in 58-byte chunks: byte 5 is 0xFF for "more", or
+   * the last chunk's length; the key answers once, after the last one:
+   * "OKSETCONFIG applied <n> unknown <u>", or an Error line (out of config
+   * mode it refuses and keeps nothing). What took is for the caller to read
+   * back with read() and compare - the key's own write decided each value.
+   */
+  async function write(text, { timeoutMs = 8000, chunkGapMs = 60 } = {}) {
+    const bytes = [];
+    for (let i = 0; i < text.length; i++) bytes.push(text.charCodeAt(i) & 0xff);
+    if (!bytes.length) throw new Error('config: nothing to import');
+    await busQuiet();
+    return new Promise((resolve, reject) => {
+      let off = null;
+      const timer = setTimeout(() => {
+        off();
+        reject(Object.assign(new Error('config: no answer to OKSETCONFIG - this key has no config plugin (a hard key never does)'), { code: 'EUNSUPPORTED' }));
+      }, timeoutMs);
+      off = transport.on('report', (event) => {
+        if (event.iface !== IFACE.VENDOR) return;
+        const t = okmsg.text(event.data instanceof Uint8Array ? event.data : Uint8Array.from(event.data)).trim();
+        const done = /^OKSETCONFIG applied (\d+) unknown (\d+)/.exec(t);
+        if (!done && !/^Error/.test(t)) return; /* a status broadcast, not ours */
+        clearTimeout(timer);
+        off();
+        if (done) resolve({ applied: Number(done[1]), unknown: Number(done[2]) });
+        else reject(Object.assign(new Error(`config: the key refused OKSETCONFIG: ${t}`), { code: /config mode/.test(t) ? 'ECONFIGMODE' : 'EREFUSED' }));
+      });
+      /* a short gap per chunk: the firmware takes one report per loop pass (the kit's chunked writes do the same) */
+      (async () => {
+        for (let i = 0; i < bytes.length; i += OKSETCONFIG_CHUNK) {
+          const chunk = bytes.slice(i, i + OKSETCONFIG_CHUNK);
+          const last = i + OKSETCONFIG_CHUNK >= bytes.length;
+          transport.write(IFACE.VENDOR, okmsg.build({ msg: OKSETCONFIG, slot: last ? chunk.length : 0xff, payload: chunk }));
+          if (!last) await new Promise((r) => setTimeout(r, chunkGapMs));
+        }
+      })().catch((e) => {
+        clearTimeout(timer);
+        off();
+        reject(e);
+      });
+    });
+  }
+
   const config = {
     OKGETCONFIG,
+    OKSETCONFIG,
     readText,
+    write,
     /** -> {text, version, input, preferences, advanced, unset} */
     async read(opts) {
       const text = await readText(opts);

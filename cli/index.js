@@ -337,11 +337,11 @@ COMMANDS.config = {
    * no table in between. A hard key never answers it (not emulated: the app is
    * not in the middle), so this says so instead of guessing values.
    *
-   * import writes each value with setPreference - the same write every other
-   * settings command makes - so the firmware's own checks still decide: a value
-   * that needs config mode is refused out of it, and that is reported, row by
-   * row. [input] is never written (the key works it out); [advanced] (one-way)
-   * only with --one-way.
+   * import is OKSETCONFIG (owner, 2026-10-02: config mode only, in the
+   * firmware): the file goes to the key, which hands each value to its own
+   * setting write, so the firmware's checks decide. Then the key is read back
+   * and each value reported as taken or not. [input] is never sent (the key
+   * works it out); [advanced] (one-way) only with --one-way.
    */
   async run(io, opts, args) {
     const [sub = 'export', file] = args;
@@ -350,7 +350,7 @@ COMMANDS.config = {
     if (opts['one-way'] && sub !== 'import') throw usage('--one-way is for config import');
     const fsm = require('fs');
     const parsedFile = sub === 'import' ? iniModule().parse(await io.readFile(file)) : null;
-    return withDevice(io, opts, async ({ device, config, identity }) => {
+    return withDevice(io, opts, async ({ config, identity }) => {
       requireUnlocked(identity, `config ${sub}`);
       if (sub === 'export') {
         const text = await readConfigText(config);
@@ -362,21 +362,32 @@ COMMANDS.config = {
         }
         return 0;
       }
-      const { writes, skipped, unknown } = iniModule().plan(parsedFile, { oneWay: !!opts['one-way'] });
-      for (const s of skipped) io.out(`skip  ${s.name}: ${s.why}`);
-      for (const n of unknown) io.out(`skip  ${n}: not a setting this library knows`);
-      let refused = 0;
-      for (const w of writes) {
-        try {
-          await device.setPreference(w.name, w.value);
-          io.out(`set   ${w.name}=${w.value}`);
-        } catch (err) {
-          refused++;
-          const why = String(err.message || err);
-          io.out(`no    ${w.name}=${w.value}: ${why}${/config mode/i.test(why) ? ' (put the key in config mode and import again)' : ''}`);
+      const ini = iniModule();
+      const planned = ini.plan(parsedFile, { oneWay: !!opts['one-way'] });
+      for (const s of planned.skipped) io.out(`skip  ${s.name}: ${s.why}`);
+      for (const n of planned.unknown) io.out(`skip  ${n}: not a setting this library knows`);
+      if (!planned.writes.length) { io.out('nothing to import'); return 0; }
+      if (!config) throw new CliError('This build of the command line has no config plugin.');
+      try {
+        await config.write(ini.format(planned));
+      } catch (err) {
+        if (err.code === 'ECONFIGMODE') {
+          throw new CliError('The OnlyKey takes an import only in config mode. Put it in config mode (hold button 6, then your PIN), then run this again.');
         }
+        if (err.code === 'EUNSUPPORTED') {
+          throw new CliError('This OnlyKey does not answer OKSETCONFIG. Only an ok-rn soft key built with the config plugin does - a hard key never will.');
+        }
+        throw err;
       }
-      return refused ? 1 : 0;
+      /* what took is what the key now says - its own write decided each one */
+      const now = await config.read();
+      let missed = 0;
+      for (const w of planned.writes) {
+        const got = (w.oneWay ? now.advanced : now.preferences)[w.name];
+        if (got === String(w.value)) io.out(`set   ${w.name}=${w.value}`);
+        else { missed++; io.out(`no    ${w.name}=${w.value}: the key kept ${got === undefined ? 'it unset' : got}`); }
+      }
+      return missed ? 1 : 0;
     });
   },
 };

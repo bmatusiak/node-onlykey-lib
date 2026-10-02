@@ -32,6 +32,12 @@ export function plan(ini: any, { oneWay }?: {
     }[];
     unknown: string[];
 };
+/**
+ * The INI an import sends (OKSETCONFIG): the planned writes, under
+ * [preferences] - and [advanced] only for the one-way ones a plan with
+ * oneWay kept. [input] is never in it.
+ */
+export function format(planned: any): string;
 export const SECTIONS: string[];
 export const INPUT_KEYS: string[];
 export const INPUT_WORDS: string[];

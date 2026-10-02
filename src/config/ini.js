@@ -78,4 +78,17 @@ function plan(ini, { oneWay = false } = {}) {
   return { writes, skipped, unknown };
 }
 
-module.exports = { parse, plan, SECTIONS, INPUT_KEYS, INPUT_WORDS };
+/**
+ * The INI an import sends (OKSETCONFIG): the planned writes, under
+ * [preferences] - and [advanced] only for the one-way ones a plan with
+ * oneWay kept. [input] is never in it.
+ */
+function format(planned) {
+  const pref = planned.writes.filter((w) => !w.oneWay);
+  const adv = planned.writes.filter((w) => w.oneWay);
+  const lines = ['; OnlyKey soft key config - OKGETCONFIG v1', '[preferences]', ...pref.map((w) => `${w.name}=${w.value}`)];
+  if (adv.length) lines.push('[advanced]', ...adv.map((w) => `${w.name}=${w.value}`));
+  return `${lines.join('\n')}\n`;
+}
+
+module.exports = { parse, plan, format, SECTIONS, INPUT_KEYS, INPUT_WORDS };

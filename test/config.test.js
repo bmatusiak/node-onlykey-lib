@@ -114,3 +114,46 @@ test('config: a refusal is EREFUSED, silence (a hard key, a key without the plug
   await assert.rejects(refused.read(), (e) => e.code === 'EREFUSED');
   await assert.rejects(over(fakeKey([])).read({ timeoutMs: 300 }), (e) => e.code === 'EUNSUPPORTED' && /hard key never does/.test(e.message));
 });
+
+test('config: an import file holds [preferences], [advanced] only when planned with oneWay, never [input]', () => {
+  const c = ini.parse(SAMPLE);
+  const text = ini.format(ini.plan(c));
+  assert.match(text, /^; OnlyKey soft key config - OKGETCONFIG v1\n\[preferences\]\n/);
+  assert.ok(!/\[input\]|\[advanced\]|derived_keys/.test(text), text);
+  const again = ini.parse(text);
+  assert.equal(again.preferences.lockout, '30');
+  assert.match(ini.format(ini.plan(c, { oneWay: true })), /\[advanced\]\nwipeMode=0\nbackupKeyMode=0\n$/);
+});
+
+/* a fake key that collects OKSETCONFIG chunks and answers once, after the last */
+function importKey({ configMode = true } = {}) {
+  const listeners = new Set();
+  const got = { chunks: [], text: '' };
+  const emit = (t) => setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: Uint8Array.from(Buffer.from(t.padEnd(64, '\0'))) })), 1);
+  return {
+    got,
+    open: async () => {}, close: async () => {}, isOpen: () => true, request: async () => null,
+    on(name, cb) { if (name !== 'report') return () => {}; listeners.add(cb); return () => listeners.delete(cb); },
+    write(iface, bytes) {
+      if (bytes[4] !== (0x80 | 0x7a)) return;
+      if (!configMode) { emit('Error OKSETCONFIG needs config mode'); return; }
+      const mark = bytes[5];
+      const n = mark === 0xff ? 58 : mark;
+      got.chunks.push(mark);
+      got.text += Buffer.from(bytes.subarray(6, 6 + n)).toString('latin1');
+      if (mark !== 0xff) emit('OKSETCONFIG applied 12 unknown 0');
+    },
+  };
+}
+
+test('config: write() sends the INI in 58-byte chunks (0xFF = more, then the last length) and reads the summary', async () => {
+  const key = importKey();
+  const text = ini.format(ini.plan(ini.parse(SAMPLE)));
+  const r = await over(key).write(text, { chunkGapMs: 1 });
+  assert.deepEqual(r, { applied: 12, unknown: 0 });
+  assert.equal(key.got.text, text, 'the key did not get the file back whole');
+  assert.ok(key.got.chunks.length > 1, 'the sample fits one chunk - it proves nothing about chunking');
+  assert.ok(key.got.chunks.slice(0, -1).every((m) => m === 0xff), 'a chunk before the last is not marked "more"');
+  assert.equal(key.got.chunks.at(-1), (text.length % 58) || 58, 'the last chunk does not carry its length');
+  await assert.rejects(over(importKey({ configMode: false })).write(text, { chunkGapMs: 1 }), (e) => e.code === 'ECONFIGMODE');
+});
