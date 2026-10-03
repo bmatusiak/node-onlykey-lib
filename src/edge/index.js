@@ -12,4 +12,8 @@ module.exports = {
   grants: require('./grants'),
   tickets: require('./tickets'),
   copy: require('./copy'),
+  /* L7 (2026-10-03): the budget request message, the app's side, the agent's side */
+  request: require('./request'),
+  approve: require('./approve'),
+  client: require('./client'),
 };
