@@ -102,6 +102,8 @@ function fakePhone({ firmware, phoneFragment = 67 }) {
 function fakeNoble({
   firmware = null, adverts = null, phoneId = null, vendor = true, state = 'poweredOn', mtu = 517,
   phoneFragment = 67, notifyBeforeWriteResolves = false, connectHangs = false,
+  /* WinRT right after another command's link: the first discovery fails, the next works */
+  discoverFailsOnce = false,
 } = {}) {
   const noble = new EventEmitter();
   const phone = fakePhone({ firmware, phoneFragment });
@@ -184,6 +186,10 @@ function fakeNoble({
     };
     p.discoverSomeServicesAndCharacteristicsAsync = async (svcs, chars) => {
       log.push(['discover', svcs, chars]);
+      if (isPhone && discoverFailsOnce) {
+        discoverFailsOnce = false;
+        throw new Error('Device is unreachable while discovering services');
+      }
       if (!isPhone || !vendor) return { services: [], characteristics: [] };
       return { services: [{ uuid: SVC }], characteristics: [req, rsp] };
     };

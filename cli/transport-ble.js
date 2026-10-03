@@ -377,7 +377,7 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
    */
   let req;
   let rsp;
-  try {
+  const discover = async () => {
     const found = await within(
       peripheral.discoverSomeServicesAndCharacteristicsAsync([bare(SERVICE_UUID)], [bare(REQUEST_UUID), bare(RESPONSE_UUID)]),
       timeouts.resolveMs,
@@ -385,9 +385,31 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
     const chars = found.characteristics || [];
     req = chars.find((c) => c.uuid === bare(REQUEST_UUID));
     rsp = chars.find((c) => c.uuid === bare(RESPONSE_UUID));
-  } catch (err) {
-    await giveUp();
-    throw err;
+  };
+  try {
+    await discover();
+  } catch (first) {
+    /*
+     * ONE RETRY (owner, 2026-10-03: pushes now go through the phone, and the
+     * third push in a row failed "Device is unreachable while discovering
+     * services" - WinRT, while the previous command's link was still being
+     * torn down; run again, it worked). Disconnect, let the link settle,
+     * connect and discover once more. Once only: a phone that is really
+     * gone still fails fast, with the first attempt's words.
+     */
+    log(`discovery failed (${first && first.message}); reconnecting once`);
+    try {
+      /* our own disconnect is not the phone dropping the link: unhook that handler around it */
+      peripheral.removeListener('disconnect', onDrop);
+      try { await peripheral.disconnectAsync(); } catch { /* already down */ }
+      await new Promise((r) => setTimeout(r, 1500));
+      await within(peripheral.connectAsync(), timeouts.connectMs, () => bleError('ECONNECT', `${name} did not accept the reconnect`));
+      peripheral.once('disconnect', onDrop);
+      await discover();
+    } catch {
+      await giveUp();
+      throw first;
+    }
   }
   if (!req || !rsp) {
     await giveUp();

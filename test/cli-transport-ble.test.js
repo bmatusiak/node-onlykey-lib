@@ -250,6 +250,22 @@ test('win32: Bluetooth off, a FIDO device without the vendor service, a connect 
   assert.ok(hangs.log.some((l) => l[0] === 'cancelConnect'));
 });
 
+/*
+ * Measured 2026-10-03: the third push in a row through the phone failed
+ * "Device is unreachable while discovering services" (WinRT, the previous
+ * command's link still closing); run again, it worked. The pipe now
+ * reconnects and discovers once more by itself.
+ */
+test('win32: a discovery that fails once ("unreachable") reconnects and works; the drop handler survives the retry', async () => {
+  const noble = fakeNoble({ discoverFailsOnce: true });
+  const pipe = winPipe(noble);
+  await pipe.start();
+  assert.equal(noble.log.filter((l) => l[0] === 'discover').length, 2, 'discovered twice');
+  assert.ok(noble.log.some((l) => l[0] === 'disconnect'), 'let go of the half-made link first');
+  assert.equal(pipe.isRunning(), true, 'our own disconnect was not taken as the phone dropping the link');
+  await pipe.stop();
+});
+
 test('win32: the phone dropping the link stops the pipe, and the next write says why', async () => {
   const noble = fakeNoble({ firmware: fakeFirmware() });
   const pipe = winPipe(noble);
