@@ -29,7 +29,7 @@ const { codes, chain, copy: copyCheck } = require('../../src/edge');
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, VOUCH: 0x05,
-  GRANT_CREATE: 0x10, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
+  GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
   TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, LOSS: 0x34,
 });
 /*
@@ -241,7 +241,18 @@ function setup(imports, register) {
     async grant({ scopes, reasonHash, verifiedHead, ttlMinutes = 0, onPress, timeoutMs = 30000 }) {
       if (!(verifiedHead instanceof Uint8Array) || verifiedHead.length !== 32) throw new TypeError('Edge: grant needs the 32-byte head the host verified (R27)');
       if (!Number.isInteger(ttlMinutes) || ttlMinutes < 0 || ttlMinutes > 0xffff) throw new RangeError(`Edge: ttlMinutes is 0..65535, not ${ttlMinutes}`);
-      const enc = require('../../src/edge').grants.encodeScopes(scopes);
+      const { grants: g0 } = require('../../src/edge');
+      const enc = g0.encodeScopes(scopes);
+      /*
+       * R11a: a scope on a derived code names one identity. A GRANT_CREATE
+       * report has no room for labels, so each is staged first with
+       * GRANT_LABEL {scope index, label} (no press); GRANT_CREATE consumes them
+       * and refuses a derived scope without one (EDGE:03).
+       */
+      for (let j = 0; j < scopes.length; j++) {
+        const label = g0.scopeLabel(scopes[j]);
+        if (label) await call(SUB.GRANT_LABEL, concat([Uint8Array.of(j), label]), { text: true });
+      }
       const args = new Uint8Array(52 + GRANT_HEAD_BYTES);
       args.set(enc, 0); /* count + up to 4 x (op, slot, cap u16) */
       args.set(reasonHash, 17);

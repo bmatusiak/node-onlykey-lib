@@ -54,6 +54,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
   const tagOf = (seq, h) => require('node:crypto').createHmac('sha256', 'fake K_vouch').update(Buffer.concat([Buffer.from(u32(seq)), Buffer.from(h)])).digest().subarray(0, 16);
   const seqHead = () => report([...u32(held.length - 1), ...head, ...tagOf(held.length - 1, head)]);
   let tent = null; /* R26: the tentative replay */
+  let staged = {}; /* R11a: GRANT_LABEL's labels, by scope index, for the next GRANT_CREATE */
 
   const transport = {
     open() {}, close() {}, isOpen: () => true, request() { throw new Error('not used'); },
@@ -105,9 +106,21 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         append({ op: codes.OP.TICKET, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: tickets.waiveSubject(owed, false) });
         owed = [];
         emit(seqHead());
+      } else if (sub === 0x11) {
+        /* R11a: GRANT_LABEL {scope index, label 32} - no press, staged for the next GRANT_CREATE */
+        if (arg[0] >= 4) return emit(status(0x02));
+        staged[arg[0]] = Uint8Array.from(arg.slice(1, 33));
+        emit(status(0x00));
       } else if (sub === 0x10) {
         const n = arg[0];
         const scopes = Array.from({ length: n }, (_, j) => ({ op: arg[1 + 4 * j], slot: arg[2 + 4 * j], cap: arg[3 + 4 * j] | (arg[4 + 4 * j] << 8) }));
+        const labels = staged;
+        staged = {}; /* consumed by this GRANT_CREATE */
+        for (let j = 0; j < n; j++) {
+          if (!grants.isDerivedCode(scopes[j].slot)) continue;
+          if (!labels[j]) return emit(status(0x03)); /* R11a: a derived code must name its identity */
+          scopes[j].label = labels[j];
+        }
         const uses = scopes.reduce((a, s) => a + s.cap, 0);
         if (uses > 1024) return emit(status(0x04));
         if (owed.length) return emit(status(0x0c));
@@ -407,4 +420,44 @@ test('edge: LOSS {from, to} - a pressed loss link with the spec layout; a range 
   assert.equal(Buffer.from(chain.decodeLink(l2.link).subject.slice(4)).toString('hex'), Buffer.from(H(next.link).slice(0, 28)).toString('hex'));
   await assert.rejects(edge.loss({ from: 0, to: 99 }), (e) => e.status === 'bad-range');
   await assert.rejects(edge.loss({ from: 3, to: 1 }), (e) => e instanceof RangeError);
+});
+
+/*
+ * R11a: a scope on a derived code (agent sign 201-203 / 221-223) names one
+ * identity. grant() stages its label with GRANT_LABEL before GRANT_CREATE, and
+ * the budget's opening commits to it - so a budget for the agent's identity
+ * cannot cover Brad's identity on the same code.
+ */
+test('edge: R11a - a derived-code scope stages its identity label first, and the opening commits to it', async () => {
+  const transport = fakeKey();
+  const edge = edgeOver(transport);
+  await edge.ticket(0, 0, new Uint8Array(32)); /* R10: no budget while a ticket is owed */
+  const before = await edge.head();
+  const scopes = [{ op: codes.OP.SIGN, slot: 222, cap: 3, identity: 'ssh://agent@nitro16' }];
+  const reasonHash = new Uint8Array(32).fill(7);
+  const writesBefore = transport.writes.length;
+  const g = await edge.grant({ scopes, reasonHash, verifiedHead: before.head });
+  assert.deepEqual(transport.writes.slice(writesBefore), [0x11, 0x10], 'GRANT_LABEL, then GRANT_CREATE');
+  const [l] = await edge.pickup(g.seq, 1);
+  const opening = (sc) => grants.verifyBudgetOpening({
+    deviceId: DEVICE, publicKey: PUB, link: l.link, prevHead: before.head,
+    head: g.checkpoint.head, signature: g.checkpoint.signature, scopes: sc, reasonHash, genesis: g.genesis, uses: g.uses,
+  });
+  assert.equal(opening(scopes).ok, true, 'the opening verifies with the identity named');
+  assert.equal(opening([{ ...scopes[0], identity: 'ssh://bmatusiak@localhost' }]).ok, false, 'another identity on the same code is not this budget');
+  await edge.revoke(g.grantId);
+});
+
+test('edge: R11a - a derived-code scope without an identity is refused before anything is sent; a stored slot needs none', async () => {
+  const transport = fakeKey();
+  const edge = edgeOver(transport);
+  await edge.ticket(0, 0, new Uint8Array(32));
+  const before = await edge.head();
+  const n = transport.writes.length;
+  await assert.rejects(edge.grant({ scopes: [{ op: codes.OP.SIGN, slot: 201, cap: 1 }], reasonHash: new Uint8Array(32), verifiedHead: before.head }),
+    /must name its identity \(R11a\)/);
+  assert.equal(transport.writes.length, n, 'nothing reached the key');
+  const g = await edge.grant({ scopes: [{ op: codes.OP.SIGN, slot: 102, cap: 1 }], reasonHash: new Uint8Array(32), verifiedHead: before.head });
+  assert.ok(g.grantId, 'a stored slot (ECC2) is its own key - no label');
+  await edge.revoke(g.grantId);
 });

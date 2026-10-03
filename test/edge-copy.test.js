@@ -38,7 +38,7 @@ function story() {
 
   const seed = new Uint8Array(32).fill(9);
   const uses = 2;
-  const scopes = [{ op: OP.SIGN, slot: 222, cap: 2 }];
+  const scopes = [{ op: OP.SIGN, slot: 222, cap: 2, identity: 'ssh://agent@edge-test' }]; /* R11a: a derived code names its identity */
   const reasonHash = new Uint8Array(32).fill(7);
   const genesis = grants.grantGenesis(seed, uses);
   const grantId = links.length + 1;

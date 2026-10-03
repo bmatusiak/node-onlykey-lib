@@ -436,3 +436,27 @@ test('tickets: the key\'s list does not refill - 5 owed, one ticket: 3 waiting +
   d = tickets.keyDebts(es);
   assert.deepEqual([d.owed, d.overflow], [[], false]);
 });
+
+/* R11a: an identity NAME becomes the derive label exactly as the agents hash it, and the grant subject commits to it */
+test('grants: R11a - identityLabel is the agent\'s identity hash; the grant subject ends with derived scopes\' labels', () => {
+  const { identityHash } = require('../src/protocol/agent');
+  const hex = (b) => Buffer.from(b).toString('hex');
+  assert.equal(hex(grants.identityLabel('ssh://agent@nitro16')), hex(identityHash({ ssh: { user: 'agent', host: 'nitro16' } })));
+  assert.equal(hex(grants.identityLabel('ssh://nitro16')), hex(identityHash({ ssh: { host: 'nitro16' } })));
+  assert.equal(hex(grants.identityLabel('gpg://Agent <a@x>')), hex(identityHash({ gpg: 'Agent <a@x>' })));
+  assert.throws(() => grants.identityLabel('agent@nitro16'), /ssh:\/\/user@host/);
+  assert.equal(grants.isDerivedCode(201), true);
+  assert.equal(grants.isDerivedCode(223), true);
+  assert.equal(grants.isDerivedCode(102), false);
+  const base = { reasonHash: new Uint8Array(32).fill(1), genesis: new Uint8Array(32).fill(2), lifetime: 0 };
+  const agent = grants.grantSubject({ ...base, scopes: [{ op: 1, slot: 222, cap: 2, identity: 'ssh://agent@nitro16' }] });
+  const brad = grants.grantSubject({ ...base, scopes: [{ op: 1, slot: 222, cap: 2, identity: 'ssh://bmatusiak@localhost' }] });
+  assert.notEqual(hex(agent), hex(brad), 'the identity is in the subject');
+  assert.throws(() => grants.grantSubject({ ...base, scopes: [{ op: 1, slot: 222, cap: 2 }] }), /must name its identity/);
+  /* a stored slot: the subject is what it was before R11a */
+  const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
+  const stored = grants.grantSubject({ ...base, scopes: [{ op: 1, slot: 102, cap: 2 }] });
+  const enc = grants.encodeScopes([{ op: 1, slot: 102, cap: 2 }]);
+  const pre = sha256(Uint8Array.from([...Buffer.from('OKEDGE-GRANT-v1'), ...enc, ...base.reasonHash, ...base.genesis, 0, 0]));
+  assert.equal(hex(stored), hex(pre));
+});

@@ -126,6 +126,39 @@ function checkSpends(genesis, uses, spends) {
  * Scopes are encoded as a count byte, then per scope op (u8), slot (u8), cap
  * (u16 LE).
  */
+/*
+ * R11a (2026-10-02, found when Brad's GitHub login signed on slot 201): the
+ * agent sign codes 201-203 / 221-223 are shared by EVERY derived identity of
+ * that curve - the 32-byte derive label picks which one signs. So a scope on
+ * them must name one identity, or a budget for the agent's key would pay for,
+ * and make owe, Brad's own logins. A scope carries it as `identity` (a name:
+ * "ssh://agent@nitro16", "gpg://Agent <a@x>") - the app turns the name into
+ * the label itself and never trusts a label hash handed to it - or as `label`
+ * (the 32 bytes) where the caller already holds them.
+ */
+function isDerivedCode(slot) {
+  return (slot >= 201 && slot <= 203) || (slot >= 221 && slot <= 223);
+}
+
+/* the derive label of an identity NAME, exactly as the agents hash it (protocol/agent.js identityHash) */
+function identityLabel(name) {
+  const { identityHash } = require('../protocol/agent');
+  const text = String(name);
+  const gpg = /^gpg:\/\/(.+)$/.exec(text);
+  if (gpg) return identityHash({ gpg: gpg[1] });
+  const ssh = /^ssh:\/\/(?:([^@]+)@)?(.+)$/.exec(text);
+  if (ssh) return identityHash({ ssh: { user: ssh[1] || undefined, host: ssh[2] } });
+  throw new Error(`edge: an identity is "ssh://user@host" or "gpg://user id", not "${text}"`);
+}
+
+/* a derived-code scope's 32-byte label; null for a stored slot (there the slot is the key) */
+function scopeLabel(s) {
+  if (!isDerivedCode(s.slot)) return null;
+  if (s.label instanceof Uint8Array && s.label.length === 32) return s.label;
+  if (typeof s.identity === 'string' && s.identity) return identityLabel(s.identity);
+  throw new RangeError(`edge: a scope on derived code ${s.slot} must name its identity (R11a) - give it identity: "ssh://..." or "gpg://..."`);
+}
+
 function encodeScopes(scopes) {
   if (!Array.isArray(scopes) || scopes.length < 1 || scopes.length > 4) throw new RangeError('edge: a budget has 1 to 4 scopes');
   const out = new Uint8Array(1 + 4 * scopes.length);
@@ -147,7 +180,9 @@ function encodeScopes(scopes) {
  * grant-create link signs the genesis AND how long the budget may live.
  */
 function grantSubject({ scopes, reasonHash, genesis, lifetime = 0 }) {
-  return H(TAG.GRANT, encodeScopes(scopes), bytes32(reasonHash, 'reasonHash'), bytes32(genesis, 'genesis'), u16le(lifetime));
+  /* R11a: then the FULL labels of derived-code scopes, in scope order - the identities the person approved */
+  const labels = scopes.map(scopeLabel).filter(Boolean);
+  return H(TAG.GRANT, encodeScopes(scopes), bytes32(reasonHash, 'reasonHash'), bytes32(genesis, 'genesis'), u16le(lifetime), ...labels);
 }
 
 /*
@@ -201,4 +236,5 @@ function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signat
 module.exports = {
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, armToken, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
+  isDerivedCode, identityLabel, scopeLabel,
 };
