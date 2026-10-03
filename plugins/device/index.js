@@ -12,6 +12,7 @@
  * without a device, and this file is testable against a fake transport.
  */
 'use strict';
+const { inLane } = require('../../src/transport/lane');
 
 const pin = require('../../src/device/pin');
 const slots = require('../../src/device/slots');
@@ -190,7 +191,15 @@ function setup(imports, register) {
    * @returns {Promise<{response: null, confirmed: false}>}
    * @throws okmsg.deviceError on a refusal inside the window
    */
-  async function sendUnanswered(frame, { name, windowMs = 500 } = {}) {
+  /*
+   * ONE CONVERSATION AT A TIME (src/transport/lane.js). Each of these is a whole
+   * conversation - listener, write, answer, a press - so it runs in the key's lane;
+   * the *Now form is the body. None of them calls another laned function.
+   */
+  function sendUnanswered(...args) {
+    return inLane(transport, () => sendUnansweredNow(...args));
+  }
+  async function sendUnansweredNow(frame, { name, windowMs = 500 } = {}) {
     let off = null;
     let timer = null;
     let refusal = null;
@@ -384,7 +393,10 @@ function setup(imports, register) {
     return decided;
   }
 
-  async function runPinSequence(kind, digits, { timeoutMs = 10000, enterDigits = null } = {}) {
+  function runPinSequence(...args) {
+    return inLane(transport, () => runPinSequenceNow(...args));
+  }
+  async function runPinSequenceNow(kind, digits, { timeoutMs = 10000, enterDigits = null } = {}) {
     const problems = pin.validatePin(digits);
     if (problems.length) throw new Error(problems.join(' '));
 
@@ -537,7 +549,10 @@ const BACKUP_REFUSALS = [
    *   payload: bytes after the key type - agent derivation's 32-byte
    *   identity hash (slots 132/232); a stored slot takes none.
    */
-  async function readPublicKey(slotId, { bytes = 0, keyType = 0, payload = undefined, timeoutMs = 8000, settleMs = 60 } = {}) {
+  function readPublicKey(...args) {
+    return inLane(transport, () => readPublicKeyNow(...args));
+  }
+  async function readPublicKeyNow(slotId, { bytes = 0, keyType = 0, payload = undefined, timeoutMs = 8000, settleMs = 60 } = {}) {
     const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
     const frame = okmsg.build({ msg: MSG.OKGETPUBKEY, slot, field: keyType, payload });
 
@@ -663,7 +678,17 @@ const BACKUP_REFUSALS = [
    * the same wait for the device's answer. OKSETSLOT is allowed in config
    * mode, so a label can follow a key written there.
    */
-  async function writeKeyLabel(slot, label, { timeoutMs = 8000 } = {}) {
+  /*
+   * The raw request, for use INSIDE a conversation (src/transport/lane.js):
+   * the lib's transports lane request() and give requestNow(); an older
+   * transport has no lane of its own, so its request() is already raw.
+   */
+  function requestNow(opts) {
+    return typeof transport.requestNow === 'function' ? transport.requestNow(opts) : transport.request(opts);
+  }
+
+  /* inConversation: called from inside a laned conversation (generateKey) - the raw request, or it waits for itself */
+  async function writeKeyLabel(slot, label, { timeoutMs = 8000, inConversation = false } = {}) {
     const labelIndex = slots.labelIndexForKeySlot(slot);
     if (labelIndex === null) {
       throw new Error(`slot ${slot} has no key label - only RSA1-4 and ECC1-16 (101-116) do`);
@@ -671,7 +696,8 @@ const BACKUP_REFUSALS = [
     const frame = label === ''
       ? okmsg.build({ msg: MSG.OKSETSLOT, slot: labelIndex, field: FIELD.LABEL, payload: [] })
       : slotConfig.planSlotWrites({ label: String(label) }, labelIndex)[0].frame;
-    const reply = await transport.request({
+    const ask = inConversation ? requestNow : (o) => transport.request(o);
+    const reply = await ask({
       iface: IFACE.VENDOR, data: frame, timeoutMs, match: isSlotAcknowledgement,
     });
     const said = okmsg.text(reply).trim();
@@ -685,7 +711,10 @@ const BACKUP_REFUSALS = [
    * refusal is a sentence; silence is config mode, which drops OKGETPUBKEY
    * without a word (okcore.cpp:335-340).
    */
-  async function collectPublicKeyReply(slot, field, { timeoutMs, quietMs }) {
+  function collectPublicKeyReply(...args) {
+    return inLane(transport, () => collectPublicKeyReplyNow(...args));
+  }
+  async function collectPublicKeyReplyNow(slot, field, { timeoutMs, quietMs }) {
     const frame = okmsg.build({ msg: MSG.OKGETPUBKEY, slot, field });
     const reports = [];
     let error = null;
@@ -893,7 +922,10 @@ const BACKUP_REFUSALS = [
    *                                above KEY_TYPE, where 5 means two things
    * @returns {Promise<Uint8Array>} the public key, 1184 or 1216 bytes
    */
-  async function generateKey(slotId, keyType, {
+  function generateKey(...args) {
+    return inLane(transport, () => generateKeyNow(...args));
+  }
+  async function generateKeyNow(slotId, keyType, {
     /* confirm, duo, formula: accepted from older callers and ignored - there is no challenge (see above). */
     timeoutMs = 60000,
     settleMs = 60,
@@ -1042,7 +1074,7 @@ const BACKUP_REFUSALS = [
      */
     if (label !== null) {
       try {
-        await writeKeyLabel(slot, label);
+        await writeKeyLabel(slot, label, { inConversation: true });
       } catch (err) {
         err.publicKey = key;
         err.message = `the key was generated in slot ${slot} but its label was not written: ${err.message}`;
@@ -1140,27 +1172,30 @@ const BACKUP_REFUSALS = [
      * @param {number} [opts.timeoutMs]
      */
     async pinStep(label, { kind = 'primary', timeoutMs = 10000 } = {}) {
-      const step = pin.PIN_SEQUENCE.find((entry) => entry.label === label);
-      if (!step) {
-        throw new Error(
-          `unknown PIN step "${label}"; expected ${
-            pin.PIN_SEQUENCE.map((entry) => entry.label).join(', ')}`,
-        );
-      }
-      /*
-       * A digits step is the CALLER'S to perform - it is the one place the
-       * device is waiting for a human - so this does nothing but say so.
-       */
-      if (step.digits) return {label, waiting: 'digits'};
+      /* one conversation (src/transport/lane.js) */
+      return inLane(transport, async () => {
+        const step = pin.PIN_SEQUENCE.find((entry) => entry.label === label);
+        if (!step) {
+          throw new Error(
+            `unknown PIN step "${label}"; expected ${
+              pin.PIN_SEQUENCE.map((entry) => entry.label).join(', ')}`,
+          );
+        }
+        /*
+         * A digits step is the CALLER'S to perform - it is the one place the
+         * device is waiting for a human - so this does nothing but say so.
+         */
+        if (step.digits) return {label, waiting: 'digits'};
 
-      if (step.send || step.digits) console_.clear();
-      /* Listening before the write, as in runPinSequence - see there. */
-      const answered = waitForStep(step, {timeoutMs});
-      answered.catch(() => {});
-      if (step.send) await transport.write(IFACE.VENDOR, pin.pinMessage(kind));
-      await answered;
-      progress(step.label, {kind});
-      return {label, waiting: null};
+        if (step.send || step.digits) console_.clear();
+        /* Listening before the write, as in runPinSequence - see there. */
+        const answered = waitForStep(step, {timeoutMs});
+        answered.catch(() => {});
+        if (step.send) await transport.write(IFACE.VENDOR, pin.pinMessage(kind));
+        await answered;
+        progress(step.label, {kind});
+        return {label, waiting: null};
+      });
     },
 
     /**
@@ -2084,19 +2119,22 @@ const BACKUP_REFUSALS = [
          * first one, long before the last is sent.
          */
         let answer = null;
-        const off = transport.on('report', (event) => {
-          if (event.iface !== IFACE.VENDOR || answer !== null) return;
-          if (isSlotAcknowledgement(event.data)) answer = okmsg.text(event.data);
-        });
-        try {
-          await chunker.sendRsaKey({ slot, type, key: bytes, send, onProgress });
-          const deadline = Date.now() + ackTimeoutMs;
-          while (answer === null && Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, 50));
+        /* one conversation: the chunks and their acknowledgement, with nothing between them */
+        await inLane(transport, async () => {
+          const off = transport.on('report', (event) => {
+            if (event.iface !== IFACE.VENDOR || answer !== null) return;
+            if (isSlotAcknowledgement(event.data)) answer = okmsg.text(event.data);
+          });
+          try {
+            await chunker.sendRsaKey({ slot, type, key: bytes, send, onProgress });
+            const deadline = Date.now() + ackTimeoutMs;
+            while (answer === null && Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, 50));
+            }
+          } finally {
+            off();
           }
-        } finally {
-          off();
-        }
+        });
         if (answer === null) {
           throw new Error(
             `key write to slot ${slot} was never acknowledged within ${ackTimeoutMs}ms`,
@@ -2964,13 +3002,16 @@ const BACKUP_REFUSALS = [
          * in a row looked "normal". A key that says nothing at all (silence,
          * not a refusal) still returns, with verdict 'unknown', as before.
          */
-        const verdict = waitForHid(/Successfully loaded backup/,
-          { reject: [/^Error/i], timeoutMs: verdictTimeoutMs });
-        verdict.catch(() => {});
-        await stream();
         let response = null;
         try {
-          response = (await verdict).trim();
+          /* one conversation: the file and the device's verdict */
+          response = (await inLane(transport, async () => {
+            const verdict = waitForHid(/Successfully loaded backup/,
+              { reject: [/^Error/i], timeoutMs: verdictTimeoutMs });
+            verdict.catch(() => {});
+            await stream();
+            return verdict;
+          })).trim();
         } catch (err) {
           session.configMode = false;
           if (!/did not answer/.test(err.message)) throw okmsg.deviceError(err.message, 'restore');
@@ -2988,14 +3029,16 @@ const BACKUP_REFUSALS = [
 
       /* Subscribed before the first packet: the answer follows the last one
        * inside the same receive, and a listener attached afterwards can miss it. */
-      const verdict = waitForHid(/Successfully loaded backup/,
-        { reject: [/^Error/i], timeoutMs: verdictTimeoutMs });
-      verdict.catch(() => {});
-      await stream();
-
       let response;
       try {
-        response = (await verdict).trim();
+        /* one conversation: the file and the device's verdict */
+        response = (await inLane(transport, async () => {
+          const verdict = waitForHid(/Successfully loaded backup/,
+            { reject: [/^Error/i], timeoutMs: verdictTimeoutMs });
+          verdict.catch(() => {});
+          await stream();
+          return verdict;
+        })).trim();
       } catch (err) {
         /* A refusal restarts the key just as success does. */
         session.configMode = false;
@@ -3206,50 +3249,53 @@ const BACKUP_REFUSALS = [
      * sentence.
      */
     async wipeSlot(slotId, field = null, { timeoutMs = 3000, quietMs = 500 } = {}) {
-      const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
-      const responses = [];
-      let off = null;
-      let timer = null;
-      const collected = new Promise((resolve, reject) => {
-        const finish = (settle, value) => {
+      /* one conversation (src/transport/lane.js) */
+      return inLane(transport, async () => {
+        const slot = typeof slotId === 'number' ? slotId : slots.slotNumber(slotId, currentType());
+        const responses = [];
+        let off = null;
+        let timer = null;
+        const collected = new Promise((resolve, reject) => {
+          const finish = (settle, value) => {
+            clearTimeout(timer);
+            if (off) off();
+            settle(value);
+          };
+          /* The first wait is the caller's timeout; each answer then re-arms the quiet window. */
+          const arm = (ms) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => (responses.length
+              ? finish(resolve, responses)
+              : finish(reject, new Error(`slot ${slot} wipe was never acknowledged within ${timeoutMs}ms`))), ms);
+          };
+          /* Subscribed BEFORE the write, as transport.request() does. */
+          off = transport.on('report', (event) => {
+            if (event.iface !== IFACE.VENDOR || !isSlotAcknowledgement(event.data)) return;
+            const text = okmsg.text(event.data).trim();
+            if (/^Error/i.test(text)) {
+              finish(reject, okmsg.deviceError(text));
+              return;
+            }
+            responses.push(text);
+            arm(quietMs);
+          });
+          arm(timeoutMs);
+        });
+        /*
+         * Handled from birth, awaited below: a refusal that lands while the
+         * write is still in flight must not be an unhandled rejection (2152942).
+         */
+        collected.catch(() => {});
+        try {
+          await transport.write(IFACE.VENDOR, slotConfig.wipeMessage(slot, field));
+        } catch (err) {
           clearTimeout(timer);
           if (off) off();
-          settle(value);
-        };
-        /* The first wait is the caller's timeout; each answer then re-arms the quiet window. */
-        const arm = (ms) => {
-          clearTimeout(timer);
-          timer = setTimeout(() => (responses.length
-            ? finish(resolve, responses)
-            : finish(reject, new Error(`slot ${slot} wipe was never acknowledged within ${timeoutMs}ms`))), ms);
-        };
-        /* Subscribed BEFORE the write, as transport.request() does. */
-        off = transport.on('report', (event) => {
-          if (event.iface !== IFACE.VENDOR || !isSlotAcknowledgement(event.data)) return;
-          const text = okmsg.text(event.data).trim();
-          if (/^Error/i.test(text)) {
-            finish(reject, okmsg.deviceError(text));
-            return;
-          }
-          responses.push(text);
-          arm(quietMs);
-        });
-        arm(timeoutMs);
+          throw err;
+        }
+        const all = await collected;
+        return { slot, response: all[0], responses: all.slice() };
       });
-      /*
-       * Handled from birth, awaited below: a refusal that lands while the
-       * write is still in flight must not be an unhandled rejection (2152942).
-       */
-      collected.catch(() => {});
-      try {
-        await transport.write(IFACE.VENDOR, slotConfig.wipeMessage(slot, field));
-      } catch (err) {
-        clearTimeout(timer);
-        if (off) off();
-        throw err;
-      }
-      const all = await collected;
-      return { slot, response: all[0], responses: all.slice() };
     },
 
     /** Build the field pair for a second factor, without sending it. */

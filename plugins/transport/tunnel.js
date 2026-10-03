@@ -57,6 +57,13 @@ function setup(imports, register) {
     async request({ iface } = {}) {
       throw refusal(`request on interface ${iface}`);
     },
+    async requestNow({ iface } = {}) {
+      throw refusal(`request on interface ${iface}`);
+    },
+    /* the lane's shape (src/transport/lane.js); whatever runs in it meets the refusals above */
+    exclusive(fn) {
+      return Promise.resolve().then(fn);
+    },
 
     /*
      * Subscribing is allowed and hears nothing. Plugins subscribe to 'report'

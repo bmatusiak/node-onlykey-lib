@@ -16,6 +16,7 @@
  * REMOVABLE: nothing else in the library depends on it.
  */
 'use strict';
+const { inLane } = require('../../src/transport/lane');
 
 const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
@@ -46,7 +47,11 @@ function setup(imports, register) {
   }
 
   /** The key's INI text, whole. */
-  async function readText({ timeoutMs = 4000 } = {}) {
+  /* one conversation each (src/transport/lane.js); the *Now form is the body */
+  function readText(...args) {
+    return inLane(transport, () => readTextNow(...args));
+  }
+  async function readTextNow({ timeoutMs = 4000 } = {}) {
     await busQuiet();
     return new Promise((resolve, reject) => {
       const chunks = [];
@@ -99,7 +104,11 @@ function setup(imports, register) {
    * mode it refuses and keeps nothing). What took is for the caller to read
    * back with read() and compare - the key's own write decided each value.
    */
-  async function write(text, { timeoutMs = 8000, chunkGapMs = 60 } = {}) {
+  /* one conversation each (src/transport/lane.js); the *Now form is the body */
+  function write(...args) {
+    return inLane(transport, () => writeNow(...args));
+  }
+  async function writeNow(text, { timeoutMs = 8000, chunkGapMs = 60 } = {}) {
     const bytes = [];
     for (let i = 0; i < text.length; i++) bytes.push(text.charCodeAt(i) & 0xff);
     if (!bytes.length) throw new Error('config: nothing to import');

@@ -69,6 +69,7 @@
  * platform-specific and the library has no business knowing how.
  */
 'use strict';
+const { inLane } = require('../../src/transport/lane');
 
 const age = require('../../src/crypto/age_file');
 const pqc = require('../../src/crypto/age_pqc');
@@ -290,7 +291,11 @@ function setup(imports, register, config) {
     }
   }
 
-  async function deviceOperation(msg, slot, data, opts = {}) {
+  /* one conversation (src/transport/lane.js): the request, the press, the answer */
+  function deviceOperation(...args) {
+    return inLane(transport, () => deviceOperationNow(...args));
+  }
+  async function deviceOperationNow(msg, slot, data, opts = {}) {
     const {
       confirm = null,
       duo = false,

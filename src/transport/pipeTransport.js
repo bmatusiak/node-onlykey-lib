@@ -42,6 +42,7 @@
  * the implementation proven against both a physical key and an emulated one.
  */
 'use strict';
+const { laneOf } = require('./lane');
 
 const { IFACE, DIR, assertTransport, stripPadding, toReport } = require('./contract');
 const { toLatin1 } = require('../bytes');
@@ -161,7 +162,20 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
       return pipe.write(iface, frame);
     },
 
-    async request({ iface, data, timeoutMs = 3000, match = null }) {
+    /*
+     * ONE CONVERSATION AT A TIME (src/transport/lane.js): request() waits its
+     * turn in the key's lane; exclusive(fn) holds the lane for a whole
+     * conversation (a write, its replies, a press); requestNow() is the raw
+     * request, for use INSIDE exclusive() - request() there would wait for
+     * the conversation it is part of.
+     */
+    exclusive(fn) {
+      return laneOf(transport)(fn);
+    },
+    request(opts) {
+      return laneOf(transport)(() => transport.requestNow(opts));
+    },
+    async requestNow({ iface, data, timeoutMs = 3000, match = null }) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           off();

@@ -18,6 +18,7 @@
  * setting) - see probe() for why the library does not guess.
  */
 'use strict';
+const { inLane } = require('../../src/transport/lane');
 
 const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
@@ -110,11 +111,9 @@ function setup(imports, register) {
    * it: both callers see a quiet bus, then both write. So every request - the
    * pressed ones for their whole wait - runs after the one before it settles.
    */
-  let tail = Promise.resolve();
+  /* the KEY's lane, shared with every other plugin (src/transport/lane.js) - not one of Edge's own */
   function exclusive(fn) {
-    const run = tail.then(fn, fn);
-    tail = run.then(() => {}, () => {});
-    return run;
+    return inLane(transport, fn);
   }
 
   function call(sub, args, opts = {}) {
