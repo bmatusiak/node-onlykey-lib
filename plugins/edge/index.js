@@ -100,9 +100,38 @@ function setup(imports, register) {
     });
   }
 
-  async function call(sub, args, opts = {}) {
-    await busQuiet();
-    return callNow(sub, args, opts);
+  /*
+   * ONE EDGE REQUEST AT A TIME. Every OKEDGE reply is binary with no marker,
+   * and callNow takes the next vendor reports as its own - so two requests in
+   * flight on one stack swap answers. MEASURED ON THE PIXEL (2026-10-03): the
+   * app's background copy ran a PICKUP while an e2e test waited for its
+   * GRANT_CREATE, and the grant read link bytes as its answer ("budget
+   * 2381801293: 3618 uses, opened at #4229928469"). busQuiet alone cannot stop
+   * it: both callers see a quiet bus, then both write. So every request - the
+   * pressed ones for their whole wait - runs after the one before it settles.
+   */
+  let tail = Promise.resolve();
+  function exclusive(fn) {
+    const run = tail.then(fn, fn);
+    tail = run.then(() => {}, () => {});
+    return run;
+  }
+
+  function call(sub, args, opts = {}) {
+    return exclusive(async () => {
+      await busQuiet();
+      return callNow(sub, args, opts);
+    });
+  }
+
+  /* a request the key answers only after a physical press: onPress once it is written */
+  function pressed(sub, args, opts, onPress) {
+    return exclusive(async () => {
+      await busQuiet();
+      const pending = callNow(sub, args, opts); /* written synchronously */
+      if (onPress) onPress(); /* the request is on the key: now ask for the press */
+      return pending;
+    });
   }
 
   function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false } = {}) {
@@ -221,9 +250,7 @@ function setup(imports, register) {
       args[50] = ttlMinutes & 0xff;
       args[51] = ttlMinutes >>> 8;
       args.set(verifiedHead.subarray(0, GRANT_HEAD_BYTES), 52);
-      await busQuiet();
-      const pending = callNow(SUB.GRANT_CREATE, args, { reports: 3, timeoutMs }); /* written synchronously */
-      if (onPress) onPress(); /* the request is on the key: now ask for the press */
+      const pending = pressed(SUB.GRANT_CREATE, args, { reports: 3, timeoutMs }, onPress);
       const [g, c, s] = await pending;
       return {
         grantId: get32(g, 0),
@@ -295,9 +322,7 @@ function setup(imports, register) {
      */
     async resume(grantId, { verifiedHead, onPress, timeoutMs = 30000 } = {}) {
       if (!(verifiedHead instanceof Uint8Array) || verifiedHead.length !== 32) throw new TypeError('Edge: resume needs the 32-byte head the host verified (R27)');
-      await busQuiet();
-      const pending = callNow(SUB.GRANT_RESUME, concat([u32(grantId), verifiedHead]), { timeoutMs, text: true });
-      if (onPress) onPress();
+      const pending = pressed(SUB.GRANT_RESUME, concat([u32(grantId), verifiedHead]), { timeoutMs, text: true }, onPress);
       await pending;
       return true;
     },
@@ -308,9 +333,7 @@ function setup(imports, register) {
      * (tickets.waiveSubject). -> {seq, head, tag} after the waive link.
      */
     async waive({ onPress, timeoutMs = 30000 } = {}) {
-      await busQuiet();
-      const pending = callNow(SUB.WAIVE, null, { timeoutMs });
-      if (onPress) onPress();
+      const pending = pressed(SUB.WAIVE, null, { timeoutMs }, onPress);
       const [r] = await pending;
       return seqHeadTag(r);
     },
@@ -348,9 +371,7 @@ function setup(imports, register) {
       if (!Number.isInteger(seq) || seq < 0) throw new TypeError('Edge: replayDone needs the seq the vouch tag is for');
       if (!(tag instanceof Uint8Array) || tag.length !== VOUCH_BYTES) throw new TypeError(`Edge: replayDone needs the key's ${VOUCH_BYTES}-byte vouch tag`);
       const newest = Number.isInteger(newestSeq) && newestSeq >= 0 ? newestSeq : SEQ_NONE;
-      await busQuiet();
-      const pending = callNow(SUB.REPLAY_DONE, concat([u32(seq), tag, u32(newest)]), { timeoutMs });
-      if (onPress) onPress();
+      const pending = pressed(SUB.REPLAY_DONE, concat([u32(seq), tag, u32(newest)]), { timeoutMs }, onPress);
       const [r] = await pending;
       return seqHeadTag(r);
     },
@@ -391,9 +412,7 @@ function setup(imports, register) {
      */
     async loss({ from, to, onPress, timeoutMs = 30000 } = {}) {
       if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) throw new RangeError(`Edge: a loss is #from..#to, not ${from}..${to}`);
-      await busQuiet();
-      const pending = callNow(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs });
-      if (onPress) onPress();
+      const pending = pressed(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs }, onPress);
       const [r] = await pending;
       return seqHeadTag(r);
     },

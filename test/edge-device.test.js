@@ -223,6 +223,31 @@ test('edge: a budget\'s opening comes back as a proof verifyBudgetOpening accept
   assert.equal(await edge.revoke(g.grantId), true);
 });
 
+/*
+ * Measured on the Pixel (2026-10-03): the app's background copy ran a PICKUP
+ * while an e2e test waited for its GRANT_CREATE on the same stack, and the
+ * answers crossed - the grant read "3618 uses, opened at #4229928469". Two
+ * callers at once must each get their own answer.
+ */
+test('edge: requests from two callers at once never swap answers (one Edge request at a time)', async () => {
+  const transport = fakeKey({ delay: 30 });
+  const edge = edgeOver(transport);
+  await edge.ticket(0, 0, new Uint8Array(32)); /* R10: no budget while a ticket is owed */
+  const before = await edge.head();
+  const scopes = [{ op: codes.OP.SIGN, slot: 2, cap: 4 }];
+  const [g, picked, h] = await Promise.all([
+    edge.grant({ scopes, reasonHash: new Uint8Array(32).fill(7), verifiedHead: before.head }),
+    edge.pickup(0, 1),
+    edge.head(),
+  ]);
+  assert.equal(g.uses, 4, 'the grant read another request\'s answer');
+  assert.equal(g.seq, 2);
+  assert.equal(chain.decodeLink(picked[0].link).seq, 0, 'the pickup read another request\'s answer');
+  assert.equal(chain.decodeLink(picked[0].link).op, codes.OP.SIGN);
+  assert.ok(h.seq === 1 || h.seq === 2, `HEAD read another request's answer (seq ${h.seq})`);
+  await edge.revoke(g.grantId);
+});
+
 test('edge: EDGE:xx refusals become named errors', async () => {
   const edge = edgeOver(fakeKey());
   await assert.rejects(edge.revoke(99), (e) => e instanceof edge.EdgeError && e.status === 'no-such-budget' && e.code === 7);
