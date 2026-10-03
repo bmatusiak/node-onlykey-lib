@@ -1757,10 +1757,18 @@ function agentScript(homedir, skey, dkey, windows, device = []) {
    * must say --ble here, or its agent would go looking for a USB key.
    */
   const args = ['gpg-agent', '--homedir', homedir, '--skey', skey, '--dkey', dkey, ...device, '--daemon'];
+  /*
+   * NODE_PATH, when init ran with one: gpg starts this script with ITS
+   * environment, and the optional BLE package (@stoprocent/noble) is an
+   * optional peer that may live outside the lib (owner, 2026-10-03:
+   * ~/.onlykey-js/node_modules) - without it the agent's --ble cannot load.
+   */
+  const nodePath = process.env.NODE_PATH;
   if (windows) {
     return {
       name: 'run-agent.cmd',
       text: `@echo off\r\nrem ${GPG_HOME_MARK.slice(2)}: gpg.conf's agent-program.\r\n`
+        + (nodePath ? `set "NODE_PATH=${nodePath}"\r\n` : '')
         + `"${node}" "${cli}" ${args.map((a) => (a === homedir || /\s/.test(a) ? `"${a}"` : a)).join(' ')}\r\n`,
     };
   }
@@ -1768,6 +1776,7 @@ function agentScript(homedir, skey, dkey, windows, device = []) {
     name: 'run-agent.sh',
     text: `#!/bin/sh\n${GPG_HOME_MARK}: gpg.conf's agent-program. gpg starts it the first time\n`
       + '# it needs a private key; it serves until `gpgconf --kill gpg-agent`.\n'
+      + (nodePath ? `NODE_PATH=${shQuote(nodePath)}\nexport NODE_PATH\n` : '')
       + `exec ${[node, cli, ...args].map(shQuote).join(' ')}\n`,
   };
 }
