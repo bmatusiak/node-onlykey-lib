@@ -8,8 +8,9 @@ export function createEdgeClient({ edge, channel, signer, store }: {
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]
      * (identity on a derived code, R11a). ttlMinutes: 1..1440.
      * Rejects EEDGE_UNSUPPORTED, EEDGE_INVALID, EEDGE_REFUSED (with .refusal:
-     * declined, timeout, copy_unverified, ticket_owed, restoring, invalid) or
-     * EEDGE_OPENING (the answer is not a budget the key opened as asked).
+     * declined, timeout, copy_unverified, ticket_owed, restoring, invalid),
+     * EEDGE_NO_ANSWER (dropped: not registered, replayed) or EEDGE_OPENING
+     * (the answer is not a budget the key opened as asked).
      */
     request({ reason, scopes, ttlMinutes }: {
         reason: any;
@@ -33,6 +34,7 @@ export function createEdgeClient({ edge, channel, signer, store }: {
             link: {
                 seq: number;
                 paid: boolean;
+                paidBy: number | null;
                 step: number | null;
                 reveal: any;
             };
@@ -44,6 +46,54 @@ export function createEdgeClient({ edge, channel, signer, store }: {
         }): Promise<any>;
         /** Revoke what is left. */
         end(): Promise<void>;
+    }>;
+    /**
+     * "Continues <budget>": the same scopes, new uses (caps: one per scope, in
+     * the budget's order; the old caps when left out) and a new lifetime.
+     * Opens with a press like a new budget; the agent checks the opening the
+     * same way. Needs the store the budget was saved to.
+     */
+    continue(grantId: any, { ttlMinutes, caps, reason }: {
+        ttlMinutes: any;
+        caps?: null | undefined;
+        reason?: null | undefined;
+    }): Promise<{
+        grantId: any;
+        uses: any;
+        reason: any;
+        scopes: any;
+        /** the uses still waiting for their ticket (seqs) */
+        pending(): any[];
+        /**
+         * One use: ARM over the head this budget holds and SHA-256(bytes), run
+         * op(bytes), and return the link it caused.
+         * -> {result, link: {seq, paid, step, reveal}}
+         */
+        use(bytes: any, op: any, { reason }?: {}): Promise<{
+            result: any;
+            purpose: any;
+            link: {
+                seq: number;
+                paid: boolean;
+                paidBy: number | null;
+                step: number | null;
+                reveal: any;
+            };
+        }>;
+        /** File the ticket for a use; the new head is kept for the next use(). */
+        ticket(link: any, { code, message }: {
+            code?: string | undefined;
+            message: any;
+        }): Promise<any>;
+        /** Revoke what is left. */
+        end(): Promise<void>;
+    }>;
+    /**
+     * Register this agent's key with the app, under `name` - once, with a
+     * press on the phone. -> {already} ; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
+     */
+    register(name: any): Promise<{
+        already: boolean;
     }>;
     /**
      * Pick up a budget another process asked for (with the same store). The
@@ -67,6 +117,7 @@ export function createEdgeClient({ edge, channel, signer, store }: {
             link: {
                 seq: number;
                 paid: boolean;
+                paidBy: number | null;
                 step: number | null;
                 reveal: any;
             };

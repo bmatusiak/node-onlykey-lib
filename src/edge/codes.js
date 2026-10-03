@@ -31,6 +31,8 @@ const OP = Object.freeze({
   /* firmware.md R15a - appended last so the numbers above never move */
   GRANT_HOLD: 13,
   GRANT_RESUME: 14,
+  /* mcp-service.md 4.7a: an agent's key registered with a press (subject = grants.agentSubject) */
+  AGENT_ADD: 15,
 });
 
 /* R3 `decision` (for op = ticket the byte is the ticket code instead). CHOSEN: 1-based. */

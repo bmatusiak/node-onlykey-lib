@@ -16,4 +16,6 @@ module.exports = {
   request: require('./request'),
   approve: require('./approve'),
   client: require('./client'),
+  /* step 2: EDGE_REQUEST over the Bluetooth vendor channel (OKEDGE_REQUEST 0xF7, kept by the phone for the app) */
+  wire: require('./wire'),
 };

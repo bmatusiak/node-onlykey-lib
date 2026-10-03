@@ -160,6 +160,11 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         if (next <= held.length - 1 && next >= held.length - 8) subject.set(H(held[next].link).slice(0, 28), 4);
         append({ op: codes.OP.LOSS, decision: 1, flags: 1, grantId: from, subject });
         emit(seqHead());
+      } else if (sub === 0x15) {
+        /* 4.7a AGENT_ADD {agent key}, pressed; refused while restoring */
+        if (restoring) return emit(status(0x0e));
+        append({ op: codes.OP.AGENT_ADD, decision: 1, flags: 1, grantId: 0, subject: grants.agentSubject(arg.slice(0, 32)) });
+        emit(seqHead());
       } else if (sub === 0x05) {
         if (restoring) return emit(status(0x0e));
         emit(seqHead());

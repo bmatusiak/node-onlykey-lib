@@ -233,7 +233,17 @@ function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signat
   return { ok: true, grantId: f.grantId, seq: f.seq };
 }
 
+/*
+ * AGENT_ADD's subject (mcp-service.md 4.7a): SHA256("OKEDGE-AGENT-v1" ||
+ * the agent's Ed25519 key). The key links the registration; the app keeps the
+ * list, and a copy shows when each agent was added with a press.
+ */
+function agentSubject(agentKey) {
+  return H('OKEDGE-AGENT-v1', bytes32(agentKey, 'agentKey'));
+}
+
 module.exports = {
+  agentSubject,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, armToken, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel,

@@ -26,6 +26,7 @@ export const OP: Readonly<{
     WIPE: 12;
     GRANT_HOLD: 13;
     GRANT_RESUME: 14;
+    AGENT_ADD: 15;
 }>;
 export const DECISION: Readonly<{
     APPROVE: 1;

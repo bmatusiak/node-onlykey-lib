@@ -1368,6 +1368,144 @@ async function keychainGenHost(io, opts, type, keychain) {
   }
 }
 
+/*
+ * EDGE FROM A COMPUTER (mcp-service.md 4.7a, step 2): ask the phone's app for
+ * a budget over Bluetooth. The request goes to ok-rn, NOT to the key - the
+ * phone's vendor bridge keeps OKEDGE_REQUEST (0xF7) for the app, which shows
+ * the text and names, and the person presses. Then the opening is read back
+ * from the key and checked here (client.js), never taken on the app's word.
+ *
+ * The agent's own key: an Ed25519 secret in ~/.onlykey-js/edge/agent.key
+ * (made on first use, readable by this user only), registered ONCE with the
+ * app (`edge register`, a press on the phone). Budgets this computer asked
+ * for: ~/.onlykey-js/edge/budgets.json (for continue).
+ */
+function edgeHome(opts) {
+  return opts['edge-home'] || require('path').join(require('os').homedir(), '.onlykey-js', 'edge');
+}
+
+function edgeAgent(opts) {
+  const fsm = require('fs');
+  const pathm = require('path');
+  const { request } = require('../src/edge');
+  const dir = edgeHome(opts);
+  fsm.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = pathm.join(dir, 'agent.key');
+  if (!fsm.existsSync(file)) {
+    fsm.writeFileSync(file, Buffer.from(require('crypto').randomBytes(32)).toString('hex') + '\n', { mode: 0o600 });
+  }
+  const signer = request.signerFromSecret(Uint8Array.from(Buffer.from(fsm.readFileSync(file, 'utf8').trim(), 'hex')));
+  const storeFile = pathm.join(dir, 'budgets.json');
+  const read = () => (fsm.existsSync(storeFile) ? JSON.parse(fsm.readFileSync(storeFile, 'utf8')) : {});
+  const store = {
+    async get(k) { return read()[k] || null; },
+    async set(k, v) { const all = read(); all[k] = v; fsm.writeFileSync(storeFile, JSON.stringify(all, null, 2), { mode: 0o600 }); },
+  };
+  return { signer, store };
+}
+
+/* "sign:222:5:ssh://agent@nitro16" -> {op, slot, cap, identity} - the identity keeps its own colons */
+function parseScope(text) {
+  const m = /^(sign|decrypt):(\d+):(\d+)(?::(.+))?$/.exec(text);
+  if (!m) throw usage(`a scope is op:slot:cap[:identity] (e.g. sign:222:5:ssh://agent@host), not "${text}"`);
+  return { op: m[1], slot: Number(m[2]), cap: Number(m[3]), ...(m[4] ? { identity: m[4] } : {}) };
+}
+
+COMMANDS.edge = {
+  mirrors: '(new)',
+  usage: 'register <name> | request <reason> <op:slot:cap[:identity]>... --ttl <minutes> | continue <budget> --ttl <minutes> [--caps n,n] | use <budget> <identity> <text> | ticket <budget> <seq> <message> | end <budget>',
+  summary: 'Edge: register this computer\'s agent key with ok-rn, ask it for a budget, continue one',
+  device: true,
+  options: {
+    ttl: { type: 'string' },
+    caps: { type: 'string' },
+    wait: { type: 'string' },
+    'edge-home': { type: 'string' },
+  },
+  async run(io, opts, args) {
+    const { client, wire } = require('../src/edge');
+    const [sub, ...rest] = args;
+    const ttl = () => {
+      const n = Number(opts.ttl);
+      if (!Number.isInteger(n)) throw usage('--ttl <minutes> is required (1 to 1440) - a budget never falls back to the key\'s default');
+      return n;
+    };
+    if (!['register', 'request', 'continue', 'use', 'ticket', 'end'].includes(sub)) throw usage('edge register | request | continue | use | ticket | end');
+    if (sub === 'use' && rest.length !== 3) throw usage('edge use takes a budget id, the identity (ssh://...) and the text to sign');
+    if (sub === 'ticket' && rest.length !== 3) throw usage('edge ticket takes a budget id, the seq of the use and the message');
+    if (sub === 'end' && rest.length !== 1) throw usage('edge end takes a budget id');
+    if (sub === 'register' && rest.length !== 1) throw usage('edge register takes the name the phone shows');
+    if (sub === 'request' && rest.length < 2) throw usage('edge request takes a reason and at least one scope');
+    if (sub === 'continue' && rest.length !== 1) throw usage('edge continue takes a budget id');
+    const { signer, store } = edgeAgent(opts);
+
+    const app = await io.start(deviceOpts(opts));
+    try {
+      const { transport, device } = app.services;
+      await device.connect();
+      let edge = null;
+      require('../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
+      const channel = wire.createWireChannel(transport, { timeoutMs: (Number(opts.wait) || 120) * 1000 });
+      const c = client.createEdgeClient({ edge, channel, signer, store });
+      try {
+        if (sub === 'register') {
+          const keyHex = Buffer.from(signer.publicKey).toString('hex');
+          /* the phone's sheet shows the same fingerprint: compare them before you press */
+          io.out(row('agent key', require('../src/edge').request.fingerprint(keyHex)));
+          io.out(row('full key', keyHex));
+          io.out('Check the phone shows the same key, Register there, then press the key...');
+          const r = await c.register(rest[0]);
+          io.out(r.already ? 'already registered' : 'registered');
+          return 0;
+        }
+        if (sub === 'use') {
+          /*
+           * One agent sign (P-256, agent v2) paid by the budget: ARM over its
+           * head and this request, sign, and the link it caused. The ticket is
+           * NOT filed here - `edge ticket` does that - so a use can be left
+           * owing on purpose (a test of ticket_owed).
+           */
+          const { grants } = require('../src/edge');
+          const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
+          const identity = grants.identityLabel(rest[1]);
+          const message = sha256(new TextEncoder().encode(rest[2]));
+          const b = await c.resume(Number(rest[0]));
+          const { okcrypto } = app.services;
+          const { link } = await b.use(new Uint8Array([...message, ...identity]), () => okcrypto.agent.sign(identity, message, { keyType: 2, version: 2 }));
+          io.out(row('use', `#${link.seq}${link.paid ? `, paid by budget ${rest[0]} (step ${link.step})` : link.paidBy !== null ? `, paid by another live budget: ${link.paidBy}` : ', not paid by a budget (a direct use)'}`));
+          io.out(row('ticket', `owed - file it with: edge ticket ${rest[0]} ${link.seq} "<what happened>"`));
+          return 0;
+        }
+        if (sub === 'ticket') {
+          const b = await c.resume(Number(rest[0]));
+          const r = await b.ticket({ seq: Number(rest[1]) }, { code: 'OK', message: rest[2] });
+          io.out(row('ticket', `filed for #${rest[1]} (the key's head is now #${r.seq})`));
+          return 0;
+        }
+        if (sub === 'end') {
+          await (await c.resume(Number(rest[0]))).end();
+          io.out(`budget ${rest[0]} ended`);
+          return 0;
+        }
+        io.out('Waiting for the phone - read the request there, then press...');
+        const b = sub === 'request'
+          ? await c.request({ reason: rest[0], scopes: rest.slice(1).map(parseScope), ttlMinutes: ttl() })
+          : await c.continue(Number(rest[0]), { ttlMinutes: ttl(), caps: opts.caps ? opts.caps.split(',').map(Number) : null });
+        io.out(row('budget', String(b.grantId)));
+        io.out(row('uses', String(b.uses)));
+        io.out(row('lifetime', `${ttl()} min`));
+        return 0;
+      } catch (e) {
+        if (e.code === 'EEDGE_REFUSED') { io.err(`refused: ${e.refusal}`); return 1; }
+        if (e.code && String(e.code).startsWith('EEDGE_')) { io.err(e.message); return 1; }
+        throw e;
+      }
+    } finally {
+      await app.destroy();
+    }
+  },
+};
+
 COMMANDS.wipekey = {
   mirrors: 'wipekey',
   usage: '<RSA1-4|ECC1-16|HMAC1-2>',

@@ -1,25 +1,29 @@
 export const TYPE: "EDGE_REQUEST";
+export const REGISTER_TYPE: "EDGE_REGISTER";
 export const MAX_REQUEST_USES: 300;
 export const MAX_LIFETIME_MINUTES: number;
 export const REFUSALS: readonly string[];
-export function body({ agent, nonce, reason, scopes, lifetime }: {
+export function body({ agent, nonce, reason, scopes, lifetime, continue: cont }: {
     agent: any;
     nonce: any;
     reason: any;
     scopes: any;
     lifetime: any;
+    continue: any;
 }): Uint8Array<any>;
 /**
  * The agent side: a signed request. signer: {publicKey: 32 bytes,
  * sign(bytes) -> 64 bytes (sync or async)} - the agent service's own key.
  */
-export function build({ signer, reason, scopes, lifetime, nonce }: {
+export function build({ signer, reason, scopes, lifetime, continueOf, nonce }: {
     signer: any;
     reason: any;
     scopes: any;
     lifetime: any;
+    continueOf?: null | undefined;
     nonce?: (Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>) | undefined;
 }): Promise<{
+    continue?: undefined;
     type: string;
     v: number;
     agent: string;
@@ -71,8 +75,9 @@ export function reasonHash(reason: any): Uint8Array<ArrayBufferLike> & Uint8Arra
  * starting with ssh://bmatusiak@localhost) - a scope naming one is marked own,
  * and the sheet shows a red warning and asks a second confirm (Brad, 2026-10-03).
  */
-export function view(msg: any, { ownIdentities }?: {
+export function view(msg: any, { ownIdentities, covered }?: {
     ownIdentities?: never[] | undefined;
+    covered?: never[] | undefined;
 }): {
     agent: any;
     reason: any;
@@ -80,4 +85,33 @@ export function view(msg: any, { ownIdentities }?: {
     uses: any;
     scopes: any;
     ownWarning: any;
+    continues: any;
+    covered: any[];
 };
+export function sameScopes(a: any, b: any): any;
+export function registerBody({ agent, nonce, name }: {
+    agent: any;
+    nonce: any;
+    name: any;
+}): Uint8Array<any>;
+/** The agent side: ask to be registered, under a name the person reads. */
+export function buildRegister({ signer, name, nonce }: {
+    signer: any;
+    name: any;
+    nonce?: (Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>) | undefined;
+}): Promise<{
+    type: string;
+    v: number;
+    agent: string;
+    name: string;
+    nonce: string;
+}>;
+/** The app side: a registration signed by the key it names, and new. -> {ok} or {ok: false, reason} */
+export function verifyRegister(msg: any, { seen }?: {}): {
+    ok: boolean;
+    reason: string;
+} | {
+    ok: boolean;
+    reason?: undefined;
+};
+export function fingerprint(agentHex: any): string;

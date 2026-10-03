@@ -24,6 +24,10 @@
  *   instead of sending an operation that would wait for a press nobody gives.
  * - use() refuses while this budget owes a ticket (EEDGE_ARM 'ticket-owed').
  * - No Edge on this key: request() rejects EEDGE_UNSUPPORTED.
+ * - The app answers nothing to a key it has not registered: EEDGE_NO_ANSWER.
+ *   register(name) first - once, with a press on the phone.
+ * - continue(id) ends the old budget first (4.7a: only an ended budget is
+ *   continued; the app refuses a live one with 'still_live').
  * - A budget outlives one process: with a `store` ({get, set}, an app's own
  *   storage), request() saves it and resume(id) picks it up.
  *
@@ -103,7 +107,13 @@ function createEdgeClient({ edge, channel, signer, store = null }) {
         if (f.flags & codes.FLAG.OWES_TICKET) state.owed.push(f.seq);
         state.head = h.head;
         await save();
-        return { result, purpose: reason, link: { seq: f.seq, paid, step: paid ? f.grantStep : null, reveal: paid ? l.reveal : null } };
+        /*
+         * paidBy: the budget the KEY spent - it pays from the first live budget
+         * that covers the request, so another of this agent's budgets (one a
+         * continue left live) may pay instead of this one (seen 2026-10-03).
+         */
+        const paidBy = f.decision === codes.DECISION.SELF_PRESS ? f.grantId : null;
+        return { result, purpose: reason, link: { seq: f.seq, paid, paidBy, step: paid ? f.grantStep : null, reveal: paid ? l.reveal : null } };
       },
       /** File the ticket for a use; the new head is kept for the next use(). */
       async ticket(link, { code = 'OK', message }) {
@@ -126,39 +136,86 @@ function createEdgeClient({ edge, channel, signer, store = null }) {
     };
   }
 
+  async function open({ reason, scopes, ttlMinutes, continueOf = null }) {
+    const { publicKey, deviceId } = await deviceIdentity();
+    const msg = await request.build({ signer, reason, scopes, lifetime: ttlMinutes, continueOf });
+    const c = request.check(msg);
+    if (!c.ok) throw fail('EEDGE_INVALID', `edge: ${c.reason}`);
+    const answer = await channel.send(msg);
+    /* nothing back: the app DROPS a request it will not read - this key is not registered, or the request was replayed */
+    if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the app answered nothing - is this agent registered? (client.register)');
+    if (!answer.ok) {
+      const refusal = answer.refusal || 'declined';
+      throw fail('EEDGE_REFUSED', `edge: the budget was refused - ${refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal });
+    }
+    const b = answer.budget;
+    /* NOT taken on its word: the opening, from the key, against what THIS client asked for */
+    const [opened] = await edge.pickup(b.seq, 1);
+    const verdict = grants.verifyBudgetOpening({
+      deviceId, publicKey, link: opened.link, prevHead: await headBefore(b.seq, deviceId),
+      head: fromHex(b.checkpoint.head), signature: fromHex(b.checkpoint.signature),
+      scopes: request.grantScopes(msg), reasonHash: request.reasonHash(reason),
+      genesis: fromHex(b.genesis), uses: b.uses, lifetime: ttlMinutes,
+    });
+    if (!verdict.ok || verdict.grantId !== b.grantId) {
+      throw fail('EEDGE_OPENING', `edge: the answer is not a budget the key opened as asked (${verdict.reason || 'another budget'})`);
+    }
+    const record = { grantId: b.grantId, uses: b.uses, genesis: b.genesis, head: b.checkpoint.head, reason, scopes: msg.scopes, lifetime: ttlMinutes, owed: [], ...(continueOf !== null ? { continues: continueOf } : {}) };
+    if (store) await store.set(storeKey(b.grantId), JSON.stringify(record));
+    return budgetOf(record);
+  }
+
   return {
     /**
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]
      * (identity on a derived code, R11a). ttlMinutes: 1..1440.
      * Rejects EEDGE_UNSUPPORTED, EEDGE_INVALID, EEDGE_REFUSED (with .refusal:
-     * declined, timeout, copy_unverified, ticket_owed, restoring, invalid) or
-     * EEDGE_OPENING (the answer is not a budget the key opened as asked).
+     * declined, timeout, copy_unverified, ticket_owed, restoring, invalid),
+     * EEDGE_NO_ANSWER (dropped: not registered, replayed) or EEDGE_OPENING
+     * (the answer is not a budget the key opened as asked).
      */
     async request({ reason, scopes, ttlMinutes }) {
-      const { publicKey, deviceId } = await deviceIdentity();
-      const msg = await request.build({ signer, reason, scopes, lifetime: ttlMinutes });
-      const c = request.check(msg);
-      if (!c.ok) throw fail('EEDGE_INVALID', `edge: ${c.reason}`);
-      const answer = await channel.send(msg);
-      if (!answer || !answer.ok) {
-        const refusal = (answer && answer.refusal) || 'declined';
-        throw fail('EEDGE_REFUSED', `edge: the budget was refused - ${refusal}${answer && answer.detail ? ` (${answer.detail})` : ''}`, { refusal });
+      return open({ reason, scopes, ttlMinutes });
+    },
+
+    /**
+     * "Continues <budget>": the same scopes, new uses (caps: one per scope, in
+     * the budget's order; the old caps when left out) and a new lifetime.
+     * Opens with a press like a new budget; the agent checks the opening the
+     * same way. Needs the store the budget was saved to.
+     */
+    async continue(grantId, { ttlMinutes, caps = null, reason = null }) {
+      if (!store) throw fail('EEDGE_NO_STORE', 'edge: continue needs the store the budget was saved to');
+      const raw = await store.get(storeKey(grantId));
+      if (!raw) throw fail('EEDGE_UNKNOWN', `edge: no saved budget ${grantId}`);
+      const was = JSON.parse(raw);
+      /*
+       * 4.7a: only an ended budget can be continued, so the old one is ended
+       * FIRST (a revoke, no press) - two live budgets covering one identity
+       * let the key pay from the older one (seen 2026-10-03: budget 93 paid a
+       * use asked under its continuation 94). A declined continue leaves the
+       * old one ended.
+       */
+      try {
+        await edge.revoke(grantId);
+      } catch (e) {
+        if (!(e && e.status === 'no-such-budget')) throw e; /* already ended: expired, revoked, or the key locked */
       }
-      const b = answer.budget;
-      /* NOT taken on its word: the opening, from the key, against what THIS client asked for */
-      const [opened] = await edge.pickup(b.seq, 1);
-      const verdict = grants.verifyBudgetOpening({
-        deviceId, publicKey, link: opened.link, prevHead: await headBefore(b.seq, deviceId),
-        head: fromHex(b.checkpoint.head), signature: fromHex(b.checkpoint.signature),
-        scopes: request.grantScopes(msg), reasonHash: request.reasonHash(reason),
-        genesis: fromHex(b.genesis), uses: b.uses, lifetime: ttlMinutes,
-      });
-      if (!verdict.ok || verdict.grantId !== b.grantId) {
-        throw fail('EEDGE_OPENING', `edge: the answer is not a budget the key opened as asked (${verdict.reason || 'another budget'})`);
-      }
-      const record = { grantId: b.grantId, uses: b.uses, genesis: b.genesis, head: b.checkpoint.head, reason, scopes: msg.scopes, lifetime: ttlMinutes, owed: [] };
-      if (store) await store.set(storeKey(b.grantId), JSON.stringify(record));
-      return budgetOf(record);
+      await store.set(storeKey(grantId), JSON.stringify({ ...was, ended: true }));
+      if (caps && caps.length !== was.scopes.length) throw fail('EEDGE_INVALID', `edge: budget ${grantId} has ${was.scopes.length} scopes - give one cap each`);
+      const scopes = was.scopes.map((s, i) => ({ ...s, cap: caps ? caps[i] : s.cap }));
+      return open({ reason: reason === null ? was.reason : reason, scopes, ttlMinutes, continueOf: grantId });
+    },
+
+    /**
+     * Register this agent's key with the app, under `name` - once, with a
+     * press on the phone. -> {already} ; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
+     */
+    async register(name) {
+      const answer = await channel.send(await request.buildRegister({ signer, name }));
+      if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the app answered nothing - a bad signature or a replayed registration');
+      if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: the registration was refused - ${answer.refusal}`, { refusal: answer.refusal });
+      return { already: Boolean(answer.already) };
     },
 
     /**

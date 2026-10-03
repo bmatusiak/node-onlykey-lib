@@ -31,6 +31,7 @@ const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, VOUCH: 0x05,
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
   TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, LOSS: 0x34,
+  AGENT_ADD: 0x15,
 });
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
@@ -154,6 +155,19 @@ function setup(imports, register) {
           return;
         }
         if (/^(UNLOCKED|INITIALIZED)/.test(okmsg.text(bytes))) return; /* a status broadcast, not ours */
+        /*
+         * The key gave up waiting for the press: the firmware says so in a
+         * sentence ("Timeout occured while waiting for confirmation on
+         * OnlyKey"), not an EDGE status. Taken as an answer, it was parsed as
+         * a seq . head and the caller went looking for a link that was never
+         * written (a registration's sheet sat on "Press" for good, 2026-10-03).
+         */
+        if (/^Timeout/i.test(okmsg.text(bytes))) {
+          clearTimeout(timer);
+          off();
+          reject(Object.assign(new Error(`Edge: the key stopped waiting for the press (request ${sub})`), { code: 'ETIMEDOUT', pressTimeout: true }));
+          return;
+        }
         if (text) return;
         got.push(bytes);
         if (got.length >= reports) {
@@ -420,6 +434,19 @@ function setup(imports, register) {
      * (copy.uncoveredGaps). Refused while restoring ('restoring') and for a
      * range past the key's head ('bad-range'). -> {seq, head, tag}
      */
+    /**
+     * mcp-service.md 4.7a: register an agent's key - the person's Yes in the
+     * app first, then a PHYSICAL press; the key links op = agent-add with
+     * subject grants.agentSubject(key). Refused while restoring.
+     * -> {seq, head, tag}
+     */
+    async agentAdd(agentKey, { onPress, timeoutMs = 30000 } = {}) {
+      if (!(agentKey instanceof Uint8Array) || agentKey.length !== 32) throw new TypeError('Edge: agentAdd needs a 32-byte Ed25519 key');
+      const pending = pressed(SUB.AGENT_ADD, agentKey, { timeoutMs }, onPress);
+      const [r] = await pending;
+      return seqHeadTag(r);
+    },
+
     async loss({ from, to, onPress, timeoutMs = 30000 } = {}) {
       if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) throw new RangeError(`Edge: a loss is #from..#to, not ${from}..${to}`);
       const pending = pressed(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs }, onPress);
