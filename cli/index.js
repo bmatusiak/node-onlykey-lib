@@ -1736,7 +1736,7 @@ const shQuote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 function runGpg(io, args) {
   if (io.gpg) return io.gpg(args);
   const { spawnSync } = require('child_process');
-  const r = spawnSync('gpg', args, { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(require('./gpg-agent').gnupgProgram('gpg'), args, { encoding: 'utf8', timeout: 60000 });
   if (r.error) return Promise.resolve({ code: 127, stdout: '', stderr: r.error.message });
   return Promise.resolve({ code: r.status === null ? 1 : r.status, stdout: r.stdout || '', stderr: r.stderr || '' });
 }
@@ -1961,7 +1961,7 @@ COMMANDS.gpg = {
       if (io.gpgconf) io.gpgconf(['--kill', 'gpg-agent'], { ...process.env, GNUPGHOME: homedir });
       else {
         try {
-          require('child_process').execFileSync('gpgconf', ['--kill', 'gpg-agent'],
+          require('child_process').execFileSync(require('./gpg-agent').gnupgProgram('gpgconf'), ['--kill', 'gpg-agent'],
             { env: { ...process.env, GNUPGHOME: homedir }, stdio: 'ignore', timeout: 10000 });
         } catch { /* none running, or no gpgconf */ }
       }

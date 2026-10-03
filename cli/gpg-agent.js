@@ -550,9 +550,27 @@ function gnupgVersion({ gpgconf = runGpgconf } = {}) {
   return m ? m[1] : null;
 }
 
+/*
+ * Which GnuPG program to start. ON WINDOWS, GPG4WIN'S (owner, 2026-10-03):
+ * from Git Bash the first `gpg` on PATH is Git's MSYS build, which has no
+ * Assuan socket emulation the agent can serve - the kit's native-GnuPG rule
+ * (gpgUnusableWhy) says the same. So Gpg4win's own bin is used when it is
+ * installed; otherwise the name, from PATH, as everywhere else.
+ */
+function gnupgProgram(name) {
+  if (process.platform !== 'win32') return name;
+  const fs = require('fs');
+  for (const root of [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], 'C:\Program Files', 'C:\Program Files (x86)']) {
+    if (!root) continue;
+    const exe = path.join(root, 'GnuPG', 'bin', `${name}.exe`);
+    if (fs.existsSync(exe)) return exe;
+  }
+  return name;
+}
+
 function runGpgconf(args, env) {
   try {
-    return require('child_process').execFileSync('gpgconf', args, {
+    return require('child_process').execFileSync(gnupgProgram('gpgconf'), args, {
       env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000,
     });
   } catch {
@@ -667,6 +685,7 @@ async function serveGpgAgent({ handler, socketPath, log = () => {}, onKill = () 
 }
 
 module.exports = {
+  gnupgProgram,
   createGpgAgentHandler,
   serveGpgAgent,
   agentSocketPath,
