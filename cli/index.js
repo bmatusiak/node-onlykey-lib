@@ -1381,7 +1381,8 @@ async function keychainGenHost(io, opts, type, keychain) {
  * for: ~/.onlykey-js/edge/budgets.json (for continue).
  */
 function edgeHome(opts) {
-  return opts['edge-home'] || require('path').join(require('os').homedir(), '.onlykey-js', 'edge');
+  /* --edge-home, else OKEDGE_HOME, else ~/.onlykey-js/edge - one home for edge, edge-agent and okedge */
+  return opts['edge-home'] || require('./edge-control').edgeHome();
 }
 
 function edgeAgent(opts) {
@@ -1500,6 +1501,83 @@ COMMANDS.edge = {
         if (e.code && String(e.code).startsWith('EEDGE_')) { io.err(e.message); return 1; }
         throw e;
       }
+    } finally {
+      await app.destroy();
+    }
+  },
+};
+
+/*
+ * THE AGENT SERVICE (Edge Phase 2; onlykey-edge mcp-service.md §4.2 / §4.2a,
+ * decided 2026-10-03). One long-running process, ONE link to the phone, the
+ * agent's OWN keys (D2), the work budget, and the endpoints okedge and git
+ * use. See cli/edge-agent.js for the rules (one-shot endpoints per exec, the
+ * shared endpoint never pays, session-bind pins).
+ */
+COMMANDS['edge-agent'] = {
+  mirrors: '(new)',
+  usage: '[--ssh ssh://user@host --gpg "Name <email>" --committer-name N --committer-email E]',
+  summary: 'Edge: the agent service - the agent\'s own ssh/gpg keys, its work budget, the endpoints okedge uses',
+  device: true,
+  options: {
+    ssh: { type: 'string' },
+    gpg: { type: 'string' },
+    'committer-name': { type: 'string' },
+    'committer-email': { type: 'string' },
+    'edge-home': { type: 'string' },
+    wait: { type: 'string' },
+  },
+  async run(io, opts) {
+    const fsm = require('fs');
+    const pathm = require('path');
+    const { client, wire } = require('../src/edge');
+    const { startEdgeAgent } = require('./edge-agent');
+    const home = edgeHome(opts);
+    if (opts['edge-home']) process.env.OKEDGE_HOME = home; /* okedge and the gpg shim find the same home */
+    const cfgFile = pathm.join(home, 'agent.json');
+    const config = fsm.existsSync(cfgFile) ? JSON.parse(fsm.readFileSync(cfgFile, 'utf8')) : {};
+    if (opts.ssh) config.ssh = opts.ssh;
+    if (opts.gpg) config.gpgUid = opts.gpg;
+    if (opts['committer-name'] || opts['committer-email']) {
+      config.committer = { name: opts['committer-name'] || (config.committer || {}).name, email: opts['committer-email'] || (config.committer || {}).email };
+    }
+    if (!config.ssh) throw usage('the first run needs --ssh ssh://user@host (the agent\'s own SSH identity) and --gpg "Name <email>"');
+    const saveConfig = (c) => {
+      fsm.mkdirSync(home, { recursive: true, mode: 0o700 });
+      fsm.writeFileSync(cfgFile, JSON.stringify(c, null, 2), { mode: 0o600 });
+    };
+    saveConfig(config);
+    const { signer, store } = edgeAgent(opts);
+
+    const app = await io.start(deviceOpts(opts));
+    try {
+      const { transport, device, okcrypto } = app.services;
+      await device.connect();
+      let edge = null;
+      require('../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
+      const channel = wire.createWireChannel(transport, { timeoutMs: (Number(opts.wait) || 150) * 1000 });
+      const c = client.createEdgeClient({ edge, channel, signer, store });
+      const svc = await startEdgeAgent({
+        okcrypto, client: c, edge, config, saveConfig, openpgp: require('../src/crypto/pgp'),
+        shimCommand: pathm.resolve(__dirname, 'edge-gpg-shim.js').split(pathm.sep).join('/'),
+        log: (l) => io.err(`edge-agent: ${l}`),
+        confirm: () => io.err('edge-agent: confirm on the OnlyKey (a press)'),
+      });
+      io.out(row('ssh key', svc.sshLine));
+      if (svc.fingerprint) io.out(row('gpg key', svc.fingerprint));
+      if (svc.certArmored) {
+        fsm.writeFileSync(pathm.join(home, 'agent-gpg.asc'), svc.certArmored);
+        io.out(row('gpg cert', pathm.join(home, 'agent-gpg.asc')));
+      }
+      io.out(row('ssh agent', `${svc.sharedPath}  (shared: every sign here asks for a press)`));
+      io.out(row('control', svc.controlPath));
+      io.out('ready - okedge budget / exec / ticket; Ctrl-C to stop');
+      await new Promise((resolve) => {
+        process.once('SIGINT', resolve);
+        process.once('SIGTERM', resolve);
+      });
+      await svc.close();
+      return 0;
     } finally {
       await app.destroy();
     }

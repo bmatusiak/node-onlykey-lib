@@ -71,7 +71,7 @@ function oneShotPath({ windows = agentSrv.IS_WINDOWS } = {}) {
  * @param {string[]} [o.pins] host key fingerprints the budget may pay for (default github.com's)
  * @param {(line: string) => void} [o.log]
  */
-function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log = () => {}, endpointPath = oneShotPath }) {
+function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log = () => {}, endpointPath = oneShotPath, edge = null }) {
   let budget = null;          /* the work budget (src/edge/client.js budget), once asked for or resumed */
   const execs = new Map();    /* token -> the open exec */
 
@@ -107,6 +107,18 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   async function openExec({ head, reason, capMs = EXEC_CAP_MS }) {
     if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget - ask for one first (okedge budget)');
     if (typeof reason !== 'string' || !reason.trim()) throw fail('EEDGE_REASON', 'an exec needs a reason');
+    /*
+     * Refused BEFORE the command runs (daily-loop §3, must fail safely): a
+     * ticket still owed (R18 - the key would refuse the ARM anyway, mid-git),
+     * the budget held or gone on the key (Hold from the phone), a stale head.
+     */
+    const owed = budget.pending();
+    if (owed.length) throw fail('EEDGE_TICKET_OWED', `ticket owed for #${owed.join(', #')} - okedge ticket first`);
+    if (edge) {
+      const h = await edge.head();
+      if (!h.live.includes(budget.grantId)) throw fail('EEDGE_GONE', `budget ${budget.grantId} is not live on the key (ended, expired, or the key locked) - ask for a new one`);
+      if ((h.held || []).includes(budget.grantId)) throw fail('EEDGE_HELD', `budget ${budget.grantId} is on hold (from the phone) - Resume there first`);
+    }
     if (String(head || '').toLowerCase() !== budget.head()) {
       throw fail('EEDGE_STALE_HEAD', `--head is not the budget's head (${budget.head().slice(0, 16)}…): file the last ticket and use the head it printed`);
     }
@@ -235,4 +247,97 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
   };
 }
 
-module.exports = { createEdgeAgent, controlHandlers, oneShotPath, EXEC_CAP_MS };
+/**
+ * The agent service, put together over a running app (the CLI's `edge-agent`
+ * command, and the kit's emulator test). Derives the agent's OWN keys (D2:
+ * derived identities, separate from the person's - ed25519, agent derivation
+ * v2), makes its PGP certificate ONCE (two signatures by the device - presses
+ * on a real key) and keeps it in agent.json, resumes a budget the store still
+ * has, and serves: the shared ssh-agent endpoint (never paid), the control
+ * endpoint (okedge, the gpg shim). Exec endpoints open per command.
+ *
+ * @param {object} o
+ * @param {object} o.okcrypto the app's okcrypto service (agent.publicKey / agent.sign)
+ * @param {object} o.client the L7 client (createEdgeClient) for this key and channel
+ * @param {object} o.config {ssh: 'ssh://user@host', gpgUid, committer: {name, email}, pins?}
+ * @param {(cfg: object) => void} o.saveConfig persists config changes (the certificate, the budget id)
+ * @param {object} o.openpgp the openpgp fork (src/crypto/pgp)
+ * @param {string} [o.shimCommand] what git runs as gpg.program
+ */
+async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm }) {
+  const wire = require('./ssh-wire');
+  const sshPub = require('../src/crypto/ssh-pub');
+  const pgpCert = require('../src/crypto/pgp-cert');
+  const { serveControl } = require('./edge-control');
+  const VERSION = 2;
+  const ED25519 = 1;
+  const X25519 = 4;
+  const device = {
+    publicKey: (identity) => okcrypto.agent.publicKey(identity, { keyType: ED25519, version: VERSION }),
+    sign: (identity, message) => okcrypto.agent.sign(identity, message, { keyType: ED25519, version: VERSION, ...(confirm ? { confirm } : {}) }),
+  };
+
+  const sshId = wire.parseIdentity(config.ssh);
+  const sshName = `ssh://${sshId.user ? `${sshId.user}@` : ''}${sshId.host}`;
+  const sshIdentity = wire.derivationIdentity(sshId);
+  const sshRaw = await device.publicKey(sshIdentity);
+  const ssh = { identity: sshIdentity, name: sshName, comment: sshName, curve: 'ed25519', raw: sshRaw };
+
+  let gpg = null;
+  if (config.gpgUid) {
+    const gpgIdentity = { gpg: config.gpgUid };
+    const gpgRaw = await device.publicKey(gpgIdentity);
+    if (!config.cert || config.cert.signPublic !== Buffer.from(gpgRaw).toString('hex')) {
+      log('making the agent\'s PGP certificate - two signatures by the OnlyKey (press when asked)');
+      const created = Math.floor(Date.now() / 1000);
+      const ecdhPublic = await okcrypto.agent.publicKey(gpgIdentity, { keyType: X25519, version: VERSION });
+      const cert = await pgpCert.buildCertificate(openpgp, {
+        userId: config.gpgUid, curve: 'ed25519', created, signPublic: gpgRaw, ecdhPublic,
+        sign: (digest) => device.sign(gpgIdentity, digest),
+      });
+      config.cert = { armored: cert.armored, fingerprint: cert.fingerprint, created, signPublic: Buffer.from(gpgRaw).toString('hex') };
+      saveConfig(config);
+    }
+    gpg = {
+      identity: gpgIdentity, name: `gpg://${config.gpgUid}`, raw: gpgRaw, created: config.cert.created,
+      fingerprint: config.cert.fingerprint, committer: config.committer || null,
+    };
+  }
+
+  const agent = createEdgeAgent({ device, ssh, pins: config.pins || bindLib.GITHUB_FINGERPRINTS, log, edge });
+  if (config.budget) {
+    try {
+      agent.setBudget(await client.resume(config.budget));
+      log(`resumed budget ${config.budget}`);
+    } catch (e) {
+      log(`budget ${config.budget} is not live any more (${e.message})`);
+      config.budget = null;
+      saveConfig(config);
+    }
+  }
+
+  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand });
+  for (const op of ['budget', 'continue', 'end']) {
+    const h = handlers[op];
+    handlers[op] = async (req) => {
+      const r = await h(req);
+      config.budget = op === 'end' ? null : r.budget;
+      saveConfig(config);
+      return r;
+    };
+  }
+  const shared = await agentSrv.serveAgent({ handler: agent.sharedHandler, where: agentSrv.defaultAgentPath(), log });
+  const control = await serveControl({ handlers, log });
+
+  return {
+    agent,
+    sshLine: sshPub.publicKeyLine('ed25519', sshRaw, sshName),
+    certArmored: config.cert ? config.cert.armored : null,
+    fingerprint: gpg ? gpg.fingerprint : null,
+    sharedPath: shared.path,
+    controlPath: control.path,
+    async close() { await agent.closeAll(); await shared.close(); await control.close(); },
+  };
+}
+
+module.exports = { createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS };

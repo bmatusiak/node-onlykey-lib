@@ -197,8 +197,11 @@ test('a stale --head is refused before anything opens; after a ticket the printe
   const sid = crypto.randomBytes(32);
   await sshClient(ex.sshPath, [h.bind(sid), signMsg(keyBlob, userauth(sid))]);
   const [link] = await ex.close();
-  await assert.rejects(agent.openExec({ head: before, reason: 'next' }), { code: 'EEDGE_STALE_HEAD' }, 'the head moved with the use');
+  /* the ticket is owed: refused for THAT first, before the command runs (daily-loop §3) */
+  await assert.rejects(agent.openExec({ head: b.head(), reason: 'next' }), { code: 'EEDGE_TICKET_OWED' });
   const next = await agent.ticket(link.seq, { message: 'pushed' });
+  /* ticketed: the old head is stale now */
+  await assert.rejects(agent.openExec({ head: before, reason: 'next' }), { code: 'EEDGE_STALE_HEAD' }, 'the head moved with the use');
   assert.equal(next, b.head());
   await (await agent.openExec({ head: next, reason: 'next push' })).close();
 });
