@@ -293,7 +293,34 @@ function setup(imports, register, config) {
 
   /* one conversation (src/transport/lane.js): the request, the press, the answer */
   function deviceOperation(...args) {
-    return inLane(transport, () => deviceOperationNow(...args));
+    return inLane(transport, () => deviceOperationBusyAware(...args));
+  }
+
+  /*
+   * THE 5-SECOND WIPE AFTER AN UNANSWERED PRESS (Brad, 2026-10-03: "it must
+   * be a 5 sec wipe" - measured on the Pixel soft key and read in 3.1.0).
+   * When nobody presses, the key gives up at 20 s (fadeoffafter20sec, "Timeout
+   * occured ...") but leaves CRYPTO_AUTH set; it is cleared only by
+   * wipetasks(), which the 5-second wipe timer started by that fadeoff runs
+   * (okcore.cpp:5620, :5651, :5606). Until then EVERY OKSIGN / OKDECRYPT is
+   * answered "Error device locked" (okcore.cpp:472) by a key that is not
+   * locked - a locked key answers nothing at all. Rapid agent calls (a push
+   * right after one that timed out, an Edge agent's use after a refused
+   * press) hit it. So: once, wait the wipe out and send again. A new process
+   * cannot know the last one timed out, which is why this keys on the answer,
+   * not on remembered state; a key that is really locked says the same thing
+   * twice and the second answer stands.
+   */
+  const CRYPTO_BUSY_WAIT_MS = 5500;
+  async function deviceOperationBusyAware(msg, slot, data, opts = {}) {
+    try {
+      return await deviceOperationNow(msg, slot, data, opts);
+    } catch (e) {
+      if (!(e && /^Error device locked/.test(String(e.deviceText || '')))) throw e;
+      if (opts.onBusy) opts.onBusy({ waitMs: CRYPTO_BUSY_WAIT_MS });
+      await new Promise((r) => setTimeout(r, opts.busyWaitMs ?? CRYPTO_BUSY_WAIT_MS));
+      return deviceOperationNow(msg, slot, data, opts);
+    }
   }
   async function deviceOperationNow(msg, slot, data, opts = {}) {
     const {

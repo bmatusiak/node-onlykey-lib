@@ -65,6 +65,13 @@ const WIPED_FIELDS = [
 
 function fakeFirmware(opts = {}) {
   const {
+    /*
+     * The 5-second wipe after an unanswered press (okcore.cpp:472/5606): the
+     * next N sign/decrypt messages are answered "Error device locked" - one
+     * report per packet, as the gate runs per packet - by a key that is not
+     * locked.
+     */
+    cryptoBusy = 0,
     slotError = null,
     slotSilent = false,
     /* The real firmware drops OKSETPRIV outside config mode, saying nothing. */
@@ -120,6 +127,7 @@ function fakeFirmware(opts = {}) {
     /* a key whose backup key fits any file: for tests about checking and streaming, not the key */
     restoreKeyFits = false,
   } = opts;
+  let busyLeft = cryptoBusy;
 
   const pipe = fakePipe({ autoStart: true });
   /*
@@ -185,6 +193,10 @@ function fakeFirmware(opts = {}) {
      * `agent: { k132, v2 = true }`; with v2 false the v2 codes go unanswered,
      * as they do on firmware before 3.0.5.
      */
+    if (busyLeft > 0 && (msg === MSG.OKSIGN || msg === MSG.OKDECRYPT)) {
+      if (frame[6] !== 0xff) busyLeft--; /* the message's last packet */
+      return pipe.deliver(reportText('Error device locked'));
+    }
     if (slotKeys[frame[5]] && (msg === MSG.OKSIGN || msg === MSG.OKDECRYPT)) {
       const key = slotKeys[frame[5]];
       const more = frame[6] === 0xff;

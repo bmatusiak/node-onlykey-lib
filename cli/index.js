@@ -1777,6 +1777,8 @@ COMMANDS.agent = {
       return okcrypto.agent.sign(wire.derivationIdentity(key.identity), message, {
         keyType: key.keyType,
         version,
+        /* the key is still clearing a request whose press timed out (its 5-second wipe) */
+        onBusy: ({ waitMs }) => io.err(`The OnlyKey is still clearing an unanswered request; trying again in ${Math.round(waitMs / 1000)} s`),
         confirm: ({ digits }) => {
           if (asks === 'none') return; /* the key signs without asking */
           if (asks === 'press') io.err(`Confirm on the OnlyKey to sign for ${key.comment}: press any button`);

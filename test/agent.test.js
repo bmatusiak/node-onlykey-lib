@@ -180,3 +180,20 @@ test('agent.ecdh refuses a low-order X25519 peer before the device sees it', asy
   assert.equal(pipe.writes.length, before, 'a low-order point was sent to the device');
   await app.destroy();
 });
+
+test('the 5-second wipe after an unanswered press: "Error device locked" from an unlocked key is waited out once, then the sign goes through', async () => {
+  const { app, ok } = await start({ fw: { cryptoBusy: 1 } });
+  const pub = await ok.agent.publicKey(SSH, { keyType: 1 });
+  const message = ascii('a push right after one that timed out');
+  const busy = [];
+  const sig = await ok.agent.sign(SSH, message, { keyType: 1, busyWaitMs: 50, onBusy: (b) => busy.push(b) });
+  assert.equal(busy.length, 1, 'waited the wipe out once');
+  assert.ok(ed25519.verify(sig, message, pub), 'the retry is a real signature over THIS message');
+  await app.destroy();
+});
+
+test('a key still "locked" after the wait: the second answer stands - one retry, not a loop', async () => {
+  const { app, ok } = await start({ fw: { cryptoBusy: 5 } });
+  await assert.rejects(ok.agent.sign(SSH, ascii('m'), { keyType: 1, busyWaitMs: 20 }), /Error device locked/);
+  await app.destroy();
+});
