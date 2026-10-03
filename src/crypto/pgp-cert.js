@@ -434,6 +434,64 @@ async function buildCertificate(openpgp, {
   }
 }
 
+/**
+ * A DETACHED signature over `data` by a derived key, as `gpg -bsa` prints it -
+ * what git stores in a signed commit (the agent service's gpg shim; onlykey-edge
+ * mcp-service.md §4.2a: "the gpg shim signs itself, no Gpg4win; it holds only the
+ * agent's key"). The same hook and the same checks as buildCertificate: the
+ * digest openpgp.js computes goes to the device (`sign`), and the signature is
+ * checked against the device's own key before it is encoded.
+ *
+ * @param {object} openpgp the fork (node-onlykey-lib/crypto/pgp)
+ * @param {object} o
+ * @param {Uint8Array} o.data what is signed (a commit object, as git hands it to gpg)
+ * @param {Uint8Array} o.signPublic the derived signing key's public key
+ * @param {string} o.curve 'ed25519' | 'p256' - the certificate's curve
+ * @param {number} o.created the certificate's creation time (seconds) - it is in the fingerprint
+ * @param {(digest: Uint8Array) => Promise<Uint8Array>} o.sign the device signer (64-byte r||s)
+ * @param {Date} [o.when] the signature's time (default now)
+ * @returns {Promise<{armored: string, fingerprint: string, created: number}>}
+ */
+async function signDetached(openpgp, { data, signPublic, curve, created, sign, when = new Date() }) {
+  const kinds = CURVES[curve];
+  if (!kinds) throw new Error(`no GPG key for curve ${curve}`);
+  if (typeof sign !== 'function') throw new TypeError('signDetached needs sign(digest), the device signer');
+  const primary = new openpgp.PublicKeyPacket();
+  await primary.read(keyPacketBody(kinds.sign, signPublic, toSeconds(created, 'created')));
+  const config = { ...openpgp.config, nonDeterministicSignaturesViaNotation: false };
+  const hooks = openpgp.setHardwareHooks({});
+  const before = { ...hooks };
+  const signQ = openpgpPoint(signPublic);
+  openpgp.setHardwareHooks({
+    signer: async (algo, hashAlgo, hashed, publicKeyParams) => {
+      if (algo !== kinds.sign.algo || !bytesEqual(publicKeyParams.Q, signQ)) return null;
+      const sig = Uint8Array.from(await sign(Uint8Array.from(hashed)));
+      if (!verifyDigest(kinds.sign.keyType, signPublic, hashed, sig)) {
+        throw new Error("the OnlyKey's signature does not verify against its own public key");
+      }
+      return { r: sig.slice(0, 32), s: sig.slice(32, 64) };
+    },
+  });
+  try {
+    const literal = new openpgp.LiteralDataPacket();
+    literal.setBytes(Uint8Array.from(data), 'binary');
+    const packet = new openpgp.SignaturePacket();
+    Object.assign(packet, {
+      signatureType: openpgp.enums.signature.binary,
+      publicKeyAlgorithm: kinds.sign.algo,
+      hashAlgorithm: openpgp.enums.hash.sha256,
+    });
+    await packet.sign(primary, literal, when, true, config);
+    const list = new openpgp.PacketList();
+    list.push(packet);
+    /* WITH the CRC-24 line, as for certificates: GnuPG 2.4.4 (git verify-commit) rejects armor without it */
+    const armored = openpgp.armor(openpgp.enums.armor.signature, list.write(), undefined, undefined, undefined, true);
+    return { armored, fingerprint: primary.getFingerprint().toUpperCase(), created: Math.floor(when.getTime() / 1000) };
+  } finally {
+    openpgp.setHardwareHooks(before);
+  }
+}
+
 /*
  * An algorithm + OID pair back to the device key it came from - the inverse
  * of CURVES, for reading a certificate back. Anything else (an RSA key, a key
@@ -462,4 +520,5 @@ module.exports = {
   verifyDigest,
   kindOf,
   buildCertificate,
+  signDetached,
 };

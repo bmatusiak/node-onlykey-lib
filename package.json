@@ -6,7 +6,9 @@
   "type": "commonjs",
   "main": "src/index.js",
   "bin": {
-    "onlykey-js": "cli/index.js"
+    "onlykey-js": "cli/index.js",
+    "okedge": "cli/okedge.js",
+    "onlykey-edge-gpg": "cli/edge-gpg-shim.js"
   },
   "exports": {
     ".": "./src/index.js",

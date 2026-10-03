@@ -137,3 +137,33 @@ export function buildCertificate(openpgp: object, { userId, userIds, curve, crea
         ecdh: string;
     };
 }>;
+/**
+ * A DETACHED signature over `data` by a derived key, as `gpg -bsa` prints it -
+ * what git stores in a signed commit (the agent service's gpg shim; onlykey-edge
+ * mcp-service.md §4.2a: "the gpg shim signs itself, no Gpg4win; it holds only the
+ * agent's key"). The same hook and the same checks as buildCertificate: the
+ * digest openpgp.js computes goes to the device (`sign`), and the signature is
+ * checked against the device's own key before it is encoded.
+ *
+ * @param {object} openpgp the fork (node-onlykey-lib/crypto/pgp)
+ * @param {object} o
+ * @param {Uint8Array} o.data what is signed (a commit object, as git hands it to gpg)
+ * @param {Uint8Array} o.signPublic the derived signing key's public key
+ * @param {string} o.curve 'ed25519' | 'p256' - the certificate's curve
+ * @param {number} o.created the certificate's creation time (seconds) - it is in the fingerprint
+ * @param {(digest: Uint8Array) => Promise<Uint8Array>} o.sign the device signer (64-byte r||s)
+ * @param {Date} [o.when] the signature's time (default now)
+ * @returns {Promise<{armored: string, fingerprint: string, created: number}>}
+ */
+export function signDetached(openpgp: object, { data, signPublic, curve, created, sign, when }: {
+    data: Uint8Array;
+    signPublic: Uint8Array;
+    curve: string;
+    created: number;
+    sign: (digest: Uint8Array) => Promise<Uint8Array>;
+    when?: Date | undefined;
+}): Promise<{
+    armored: string;
+    fingerprint: string;
+    created: number;
+}>;

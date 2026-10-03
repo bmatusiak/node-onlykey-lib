@@ -183,3 +183,23 @@ test('kindOf is the inverse of CURVES, and passes anything else by', () => {
   assert.equal(pgpCert.kindOf(1, new Uint8Array(0)), null, 'RSA');
   assert.equal(pgpCert.kindOf(pgpCert.ALGO.ECDSA, pgpCert.OID.ed25519), null, 'a right OID under the wrong algorithm');
 });
+
+test('signDetached: a detached signature by the derived key that openpgp verifies against the certificate (what git stores in a signed commit)', async () => {
+  for (const curve of ['ed25519', 'nist256p1']) {
+    const { opts: o } = opts(curve, { created: 1700000000 });
+    const cert = await pgpCert.buildCertificate(openpgp, o);
+    const data = new TextEncoder().encode('tree 0123456789abcdef\nauthor Claude <claude@test> 1700000000 +0000\n\nEdge: a commit\n');
+    const sig = await pgpCert.signDetached(openpgp, { data, signPublic: DEV[curve].sign, curve, created: 1700000000, sign: async (d) => DEV[curve].sig(d) });
+    assert.equal(sig.fingerprint, cert.fingerprint, `${curve}: the issuer is the certificate`);
+    assert.match(sig.armored, /^-----BEGIN PGP SIGNATURE-----/);
+    assert.match(sig.armored, /\n=[A-Za-z0-9+/]{4}\n-----END PGP SIGNATURE-----/, `${curve}: the CRC-24 line GnuPG needs`);
+    const { signatures } = await openpgp.verify({
+      message: await openpgp.createMessage({ binary: data }),
+      signature: await openpgp.readSignature({ armoredSignature: sig.armored }),
+      verificationKeys: await openpgp.readKey({ armoredKey: cert.armored }),
+    });
+    await assert.doesNotReject(signatures[0].verified, `${curve}: does not verify`);
+    /* the device's signature is checked before it is encoded: a wrong one is refused, not shipped */
+    await assert.rejects(pgpCert.signDetached(openpgp, { data, signPublic: DEV[curve].sign, curve, created: 1700000000, sign: async () => new Uint8Array(64) }), /does not verify/);
+  }
+});

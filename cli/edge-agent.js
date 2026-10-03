@@ -158,6 +158,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     openExec,
     shimSign,
     setBudget(b) { budget = b; },
+    execByToken: (token) => execs.get(token) || null,
     budget: () => budget,
     async ticket(seq, { code = 'OK', message }) {
       if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget');
@@ -173,4 +174,65 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   };
 }
 
-module.exports = { createEdgeAgent, oneShotPath, EXEC_CAP_MS };
+/**
+ * The control endpoint's requests (cli/edge-control.js), over a service and
+ * the L7 client. `gpg` the agent's own PGP identity: {identity, name, raw,
+ * created, fingerprint, committer: {name, email}}; `shimCommand` what git runs
+ * as gpg.program. Scopes are the agent's own identities on the ed25519 v2
+ * sign code (221), told apart by label (R11a); sizes come from the request
+ * (D4, at most 300 together).
+ */
+function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221 }) {
+  const scopes = ({ ssh: nSsh = 0, gpg: nGpg = 0 }) => [
+    ...(nSsh ? [{ op: 'sign', slot: signCode, cap: nSsh, identity: ssh.name }] : []),
+    ...(nGpg && gpg ? [{ op: 'sign', slot: signCode, cap: nGpg, identity: gpg.name }] : []),
+  ];
+  const summary = (b) => ({ budget: b.grantId, uses: b.uses, head: b.head() });
+  return {
+    status: async () => agent.status(),
+    budget: async ({ reason, uses, ttl }) => {
+      const b = await client.request({ reason, scopes: scopes(uses || {}), ttlMinutes: ttl });
+      agent.setBudget(b);
+      return summary(b);
+    },
+    continue: async ({ ttl, caps }) => {
+      const old = agent.budget();
+      if (!old) throw Object.assign(new Error('no budget to continue'), { code: 'EEDGE_NO_BUDGET' });
+      const b = await client.continue(old.grantId, { ttlMinutes: ttl, caps: caps || null });
+      agent.setBudget(b);
+      return summary(b);
+    },
+    'exec-open': async ({ head, reason }) => {
+      const ex = await agent.openExec({ head, reason });
+      const git = {};
+      if (gpg && shimCommand) {
+        git['gpg.program'] = shimCommand;
+        git['gpg.format'] = 'openpgp';
+        git['user.signingkey'] = gpg.fingerprint;
+      }
+      return { sshPath: ex.sshPath, token: ex.token, git, committer: gpg ? gpg.committer : null };
+    },
+    'exec-close': async ({ token }) => {
+      const ex = agent.execByToken(token);
+      const links = ex ? await ex.close() : [];
+      return { links, head: agent.budget() ? agent.budget().head() : null };
+    },
+    ticket: async ({ seq, code, message }) => ({ head: await agent.ticket(seq, { code: code || 'OK', message }) }),
+    end: async () => {
+      const b = agent.budget();
+      if (b) await b.end();
+      agent.setBudget(null);
+      return { ended: b ? b.grantId : null };
+    },
+    'gpg-sign': async ({ token, data }) => {
+      if (!gpg || !openpgp) throw new Error('this agent service has no PGP identity');
+      const { signDetached } = require('../src/crypto/pgp-cert');
+      return signDetached(openpgp, {
+        data: Buffer.from(String(data), 'base64'), signPublic: gpg.raw, curve: 'ed25519', created: gpg.created,
+        sign: (digest) => agent.shimSign(token, gpg.identity, digest),
+      });
+    },
+  };
+}
+
+module.exports = { createEdgeAgent, controlHandlers, oneShotPath, EXEC_CAP_MS };
