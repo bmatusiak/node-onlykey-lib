@@ -74,6 +74,14 @@ function createEdgeClient({ edge, channel, signer, store = null }) {
       uses: record.uses,
       reason: record.reason,
       scopes: record.scopes,
+      /**
+       * The head this budget holds (hex): what the agent's next use ARMs over,
+       * and what `okedge exec --head` must name - proof the agent saw its own
+       * last ticket's reply (mcp-service.md §4.2a).
+       */
+      head() {
+        return toHex(state.head);
+      },
       /** the uses still waiting for their ticket (seqs) */
       pending() {
         return [...state.owed];
@@ -88,6 +96,16 @@ function createEdgeClient({ edge, channel, signer, store = null }) {
         if (state.owed.length) throw fail('EEDGE_ARM', `edge: a ticket is owed for #${state.owed[0]} - ticket it first`, { reason: 'ticket-owed' });
         const data = Uint8Array.from(bytes);
         const subject = grants.requestSubject(data);
+        /*
+         * ARM over the KEY's head, read now - not the one this budget last saw.
+         * Other links land between this budget's uses: a person's own pressed
+         * sign, another agent, the key's own events. An ARM over the older head
+         * makes the key treat the use as a press, and the budget would never
+         * pay again (found 2026-10-03 by the agent service's test: another
+         * process signing during an exec). "Did the agent see its last
+         * ticket?" is asked separately (okedge exec --head vs head()).
+         */
+        state.head = (await edge.head()).head;
         try {
           await edge.arm(state.head, subject);
         } catch (e) {

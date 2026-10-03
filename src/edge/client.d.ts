@@ -21,6 +21,12 @@ export function createEdgeClient({ edge, channel, signer, store }: {
         uses: any;
         reason: any;
         scopes: any;
+        /**
+         * The head this budget holds (hex): what the agent's next use ARMs over,
+         * and what `okedge exec --head` must name - proof the agent saw its own
+         * last ticket's reply (mcp-service.md §4.2a).
+         */
+        head(): string;
         /** the uses still waiting for their ticket (seqs) */
         pending(): any[];
         /**
@@ -62,6 +68,12 @@ export function createEdgeClient({ edge, channel, signer, store }: {
         uses: any;
         reason: any;
         scopes: any;
+        /**
+         * The head this budget holds (hex): what the agent's next use ARMs over,
+         * and what `okedge exec --head` must name - proof the agent saw its own
+         * last ticket's reply (mcp-service.md §4.2a).
+         */
+        head(): string;
         /** the uses still waiting for their ticket (seqs) */
         pending(): any[];
         /**
@@ -104,6 +116,12 @@ export function createEdgeClient({ edge, channel, signer, store }: {
         uses: any;
         reason: any;
         scopes: any;
+        /**
+         * The head this budget holds (hex): what the agent's next use ARMs over,
+         * and what `okedge exec --head` must name - proof the agent saw its own
+         * last ticket's reply (mcp-service.md §4.2a).
+         */
+        head(): string;
         /** the uses still waiting for their ticket (seqs) */
         pending(): any[];
         /**

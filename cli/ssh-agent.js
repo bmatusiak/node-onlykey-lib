@@ -30,6 +30,7 @@ const os = require('os');
 const path = require('path');
 
 const wire = require('./ssh-wire');
+const bind = require('./ssh-session-bind');
 
 const { MSG } = wire;
 
@@ -96,7 +97,7 @@ function verifySignature(curve, raw, data, sig) {
  * @returns {{handle: (message: Buffer) => Promise<Buffer>}} `handle` takes
  *   one message (no length word) and resolves to one whole framed reply
  */
-function createAgentHandler({ keys, sign, log = () => {} }) {
+function createAgentHandler({ keys, sign, log = () => {}, sessionBind = false }) {
   const entries = keys.map((k) => ({ ...k, blob: wire.publicKeyBlob(k.curve, k.raw) }));
   const failure = () => wire.frame(Buffer.of(MSG.FAILURE));
 
@@ -106,7 +107,7 @@ function createAgentHandler({ keys, sign, log = () => {} }) {
     return wire.frame(...parts);
   }
 
-  async function signRequest(r) {
+  async function signRequest(r, conn) {
     const blob = r.string();
     const data = r.string();
     /*
@@ -121,7 +122,8 @@ function createAgentHandler({ keys, sign, log = () => {} }) {
       log('asked to sign with a key this agent does not hold');
       return failure();
     }
-    const sig = Buffer.from(await sign(key, Buffer.from(data)));
+    /* conn: this connection's state - its verified session-bind, when sessionBind is on (Edge's one-shot endpoints) */
+    const sig = Buffer.from(await sign(key, Buffer.from(data), conn));
     if (!verifySignature(key.curve, key.raw, data, sig)) {
       log(`the OnlyKey's signature for ${key.comment} does not verify against its own public key - not sent`);
       return failure();
@@ -129,12 +131,27 @@ function createAgentHandler({ keys, sign, log = () => {} }) {
     return wire.frame(Buffer.of(MSG.SIGN_RESPONSE), wire.string(wire.signatureBlob(key.curve, sig)));
   }
 
-  async function handle(message) {
+  async function handle(message, conn = {}) {
     const r = new wire.Reader(message);
     const type = r.uint8();
     try {
       if (type === MSG.REQUEST_IDENTITIES) return identities();
-      if (type === MSG.SIGN_REQUEST) return await signRequest(r);
+      if (type === MSG.SIGN_REQUEST) return await signRequest(r, conn);
+      /*
+       * session-bind@openssh.com, when asked for (sessionBind: Edge's agent
+       * endpoints): which host this connection talks to, PROVEN by the host's
+       * signature over the session id (cli/ssh-session-bind.js). Kept per
+       * connection; answered SUCCESS like OpenSSH's own agent. A bind that
+       * does not verify is kept too, marked so - it never counts as bound.
+       */
+      if (sessionBind && type === MSG.EXTENSION) {
+        const name = r.string().toString('latin1');
+        if (name === bind.SESSION_BIND) {
+          conn.bind = bind.parseSessionBind(r);
+          if (!conn.bind.verified) log(`session-bind from ${conn.bind.fingerprint} does not verify - not counted`);
+          return wire.frame(Buffer.of(MSG.SUCCESS));
+        }
+      }
     } catch (err) {
       /*
        * A refused challenge, a timeout, a locked key: ssh gets FAILURE and
@@ -250,11 +267,13 @@ async function serveAgent({ handler, where, log = () => {} }) {
 
   const server = net.createServer((socket) => {
     sockets.add(socket);
+    /* this connection's own state (its session-bind): never shared with another connection */
+    const conn = {};
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => { /* the client went away; nothing to answer */ });
     const feed = wire.createDeframer((message) => {
       queue = queue.then(async () => {
-        const reply = await handler.handle(message);
+        const reply = await handler.handle(message, conn);
         if (!socket.destroyed) socket.write(reply);
       }).catch((err) => log(`agent: ${err && err.message ? err.message : err}`));
     });
