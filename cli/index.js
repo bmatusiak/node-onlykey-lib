@@ -1465,13 +1465,18 @@ function sharedDevice(io, opts, { idleMs = 10000 } = {}) {
 /*
  * lib-agent's --skey values that name the DERIVED key (libagent/device/
  * onlykey.py convert_keyslot, _parse_slot_value): ECC32 / 132 is v1, the
- * default; derived-v2 / ECC32v2 / 232 is v2 (3.0.5 on). ECC1-16 - an ssh key
- * STORED in a slot - is a different feature, not built here.
+ * default; derived-v2 / ECC32v2 / 232 is v2 (3.0.5 on).
+ *
+ * ECC1-16 - a key STORED in a slot - for gpg only (allowSlot; owner,
+ * 2026-10-03: a PGP pair made in Key Chain, ECC2 signing and ECC1 decrypt,
+ * signing git commits). -> {slot: 101..116, name}. Not for the ssh agent yet.
  */
-function parseSkey(value, flag = '--skey', command = 'agent') {
+function parseSkey(value, flag = '--skey', command = 'agent', { allowSlot = false } = {}) {
   const v = String(value).toLowerCase();
   if (['ecc32', '132', 'derived', 'derived-v1'].includes(v)) return 1;
   if (['derived-v2', 'ecc32v2', '232'].includes(v)) return 2;
+  const ecc = /^ecc([1-9]|1[0-6])$/.exec(v);
+  if (ecc && allowSlot) return { slot: 100 + Number(ecc[1]), name: `ECC${ecc[1]}` };
   if (/^(ecc([1-9]|1[0-6])|rsa[1-4])$/.test(v)) {
     throw usage(`${flag} ${value}: a key stored in an ECC slot (or an RSA slot) is not supported by "${NAME} ${command}" yet; `
       + 'it uses the derived key (ECC32, or derived-v2)');
@@ -1770,7 +1775,7 @@ function agentScript(homedir, skey, dkey, windows, device = []) {
 COMMANDS.gpg = {
   mirrors: 'onlykey-gpg init (lib-agent)',
   usage: 'init "<user id>" [-e ed25519|nist256p1] [-t <time>] [--homedir <dir>] '
-    + '[--skey ECC32|derived-v2] [--dkey ECC32|derived-v2] [--force]',
+    + '[--skey ECC32|derived-v2|ECC1-16] [--dkey ECC32|derived-v2|ECC1-16] [--import-pub <key.asc>] [--force]',
   summary: 'a GPG key derived in the key: print it, and make a GnuPG home that uses it',
   device: true,
   /*
@@ -1789,6 +1794,8 @@ COMMANDS.gpg = {
     homedir: { type: 'string' },
     skey: { type: 'string' },
     dkey: { type: 'string' },
+    /* a slot pair's certificate, already made (Key Chain -> Share PGP public key): imported, never re-signed */
+    'import-pub': { type: 'string' },
     force: { type: 'boolean' },
   },
   /**
@@ -1811,21 +1818,32 @@ COMMANDS.gpg = {
     const gpgKey = require('./gpg-key');
     const agentProto = require('../src/protocol/agent');
 
-    const [action, userId, ...extra] = args;
+    const [action, givenUserId, ...extra] = args;
     if (action !== 'init') throw usage('gpg takes one action: init "<user id>"');
-    if (!userId) throw usage('gpg init needs a user id, e.g. "Alice <alice@example.com>"');
     if (extra.length) throw usage(`gpg init takes ONE user id - quote it: "${args.slice(1).join(' ')}"`);
-    try {
-      agentProto.identityHash({ gpg: userId });
-    } catch (err) {
-      throw usage(err.message);
+    const slotMode = /^ecc([1-9]|1[0-6])$/i.test(String(opts.skey || '')) || /^ecc([1-9]|1[0-6])$/i.test(String(opts.dkey || ''));
+    let userId = givenUserId;
+    if (!slotMode) {
+      if (!userId) throw usage('gpg init needs a user id, e.g. "Alice <alice@example.com>"');
+      try {
+        agentProto.identityHash({ gpg: userId });
+      } catch (err) {
+        throw usage(err.message);
+      }
     }
     const curve = parseCurve(opts['ecdsa-curve'] || opts['ecdsa-curve-name'] || 'ed25519');
     const created = parseTime(opts.time);
     const skeyName = opts.skey || 'ECC32';
     const dkeyName = opts.dkey || 'ECC32';
-    const skey = parseSkey(skeyName, '--skey', 'gpg');
-    const dkey = parseSkey(dkeyName, '--dkey', 'gpg');
+    const skey = parseSkey(skeyName, '--skey', 'gpg', { allowSlot: true });
+    const dkey = parseSkey(dkeyName, '--dkey', 'gpg', { allowSlot: true });
+    if (slotMode && (typeof skey !== 'object' || typeof dkey !== 'object')) {
+      throw usage('a key pair stored in slots takes both: --skey ECC<n> (signing) and --dkey ECC<n> (decrypt), e.g. --skey ECC2 --dkey ECC1');
+    }
+    if (slotMode && !opts['import-pub']) {
+      throw usage('a key pair stored in slots already has its certificate: pass --import-pub <its .asc> '
+        + '(Key Chain -> Share PGP public key). Re-signing would make a different PGP key - the fingerprint covers the creation time');
+    }
     const homedir = pathm.resolve(opts.homedir || process.env.GNUPGHOME || defaultGpgHome());
 
     /*
@@ -1857,10 +1875,8 @@ COMMANDS.gpg = {
       if (!ours) throw new CliError(`--force replaces only a home ${NAME} made, and ${homedir} is not one; remove it yourself if it should go`);
     }
 
-    const kinds = gpgKey.CURVES[curve];
-    const identity = { gpg: userId };
-    const label = `gpg://${userId}|${curve}`;
     let cert;
+    let createdAt = created;
     /*
      * One session for the whole of it (sharedDevice, as the ssh agent uses):
      * the two public keys and the two signatures come back to back, and the
@@ -1868,7 +1884,55 @@ COMMANDS.gpg = {
      * wait out its fade before the second.
      */
     const dev = sharedDevice(io, opts);
-    try {
+    if (slotMode) {
+      /*
+       * IMPORT, NOT DERIVE: the slots hold the private keys, the file the
+       * certificate. It is used only if it is genuine and its keys are the
+       * ones the slots report (keychain.pgpImport - the checks the phone's
+       * Import PGP key runs). Every signature the agent makes with it is
+       * verified against it again before gpg gets it.
+       */
+      const pgpImport = require('../src/keychain/pgp-import');
+      const openpgpLib = require('../src/vendor/openpgp/openpgp.js');
+      let armored;
+      try {
+        armored = fsm.readFileSync(opts['import-pub'], 'utf8');
+      } catch (err) {
+        throw new CliError(`cannot read ${opts['import-pub']} (${err.code || err.message})`);
+      }
+      let info;
+      try {
+        info = await pgpImport.inspect(openpgpLib, armored);
+      } catch (err) {
+        throw new CliError(`${opts['import-pub']}: ${err.message}`);
+      }
+      if (givenUserId && givenUserId !== info.userId) {
+        throw new CliError(`the certificate's user id is "${info.userId}", not "${givenUserId}" - leave the user id out to use the certificate's`);
+      }
+      userId = info.userId;
+      let probes;
+      try {
+        probes = await dev.use(async (okcrypto, services) => [
+          await services.device.probeKeySlot(skey.slot),
+          await services.device.probeKeySlot(dkey.slot),
+        ]);
+      } finally {
+        await dev.release();
+      }
+      const match = pgpImport.matchSlots(info, probes);
+      if (match.signSlot !== skey.slot) {
+        throw new CliError(`${skey.name} does not hold the certificate's signing key (it reads ${probes[0].kind}) - wrong slot, or another OnlyKey`);
+      }
+      if (info.encryption && match.ecdhSlot !== dkey.slot) {
+        throw new CliError(`${dkey.name} does not hold the certificate's decrypt key (it reads ${probes[1].kind}) - wrong slot, or another OnlyKey`);
+      }
+      cert = { armored: info.key.armor(), fingerprint: info.fingerprint };
+      createdAt = Math.floor(info.key.getCreationTime().getTime() / 1000);
+    }
+    const kinds = gpgKey.CURVES[curve];
+    const identity = { gpg: userId };
+    const label = `gpg://${userId}|${curve}`;
+    if (!slotMode) try {
       const pub = await dev.use(async (okcrypto) => ({
         sign: await okcrypto.agent.publicKey(identity, { keyType: kinds.sign.keyType, version: skey }),
         ecdh: await okcrypto.agent.publicKey(identity, { keyType: kinds.ecdh.keyType, version: dkey }),
@@ -1938,7 +2002,7 @@ COMMANDS.gpg = {
     }
 
     io.out(cert.armored.trimEnd());
-    io.err(`${NAME}: ${curve} key ${cert.fingerprint} for "${userId}" (created ${new Date(created * 1000).toISOString()})`);
+    io.err(`${NAME}: ${slotMode ? `${skey.name} + ${dkey.name} certificate` : `${curve} key`} ${cert.fingerprint} for "${userId}" (created ${new Date(createdAt * 1000).toISOString()})`);
     io.err(`${NAME}: GnuPG home ${homedir}; use it with GNUPGHOME=${homedir} or gpg --homedir ${homedir}`);
     return 0;
   },
@@ -1946,7 +2010,7 @@ COMMANDS.gpg = {
 
 COMMANDS['gpg-agent'] = {
   mirrors: 'onlykey-gpg-agent (lib-agent)',
-  usage: '[--homedir <dir>] [--skey ECC32|derived-v2] [--dkey ECC32|derived-v2] [--daemon]',
+  usage: '[--homedir <dir>] [--skey ECC32|derived-v2|ECC1-16] [--dkey ECC32|derived-v2|ECC1-16] [--daemon]',
   summary: 'the gpg-agent for a home `gpg init` made (gpg starts it; run it by hand to watch it)',
   device: true,
   options: {
@@ -1987,8 +2051,8 @@ COMMANDS['gpg-agent'] = {
 
     const homedir = opts.homedir || process.env.GNUPGHOME;
     if (!homedir) throw usage('gpg-agent needs --homedir (or GNUPGHOME): the home `gpg init` made');
-    const skey = parseSkey(opts.skey || 'ECC32', '--skey', 'gpg-agent');
-    const dkey = parseSkey(opts.dkey || 'ECC32', '--dkey', 'gpg-agent');
+    const skey = parseSkey(opts.skey || 'ECC32', '--skey', 'gpg-agent', { allowSlot: true });
+    const dkey = parseSkey(opts.dkey || 'ECC32', '--dkey', 'gpg-agent', { allowSlot: true });
     const background = io.daemonChild !== undefined ? io.daemonChild : process.env[GPG_AGENT_CHILD] === '1';
 
     const logFile = opts.daemon || background ? pathm.join(homedir, 'gpg-agent.log') : null;
@@ -2017,6 +2081,11 @@ COMMANDS['gpg-agent'] = {
 
     const dev = sharedDevice(io, opts);
     const versionFor = (key) => (key.role === 'sign' ? skey : dkey);
+    /* a stored key (--skey/--dkey ECC<n>): its slot; null = the derived key */
+    const slotOf = (key) => {
+      const k = versionFor(key);
+      return typeof k === 'object' ? k.slot : null;
+    };
     const confirm = (key, session, what) => ({ digits }) => {
       const line = `Confirm on the OnlyKey to ${what} for <gpg://${key.userId}|${key.curve}>: enter ${digits.join(' ')}`
         + ' (or press any button, if the key asks for a single press)';
@@ -2031,12 +2100,23 @@ COMMANDS['gpg-agent'] = {
       keys,
       version,
       log,
-      publicKey: (key) => dev.use((okcrypto) => okcrypto.agent.publicKey({ gpg: key.userId },
-        { keyType: key.keyType, version: versionFor(key) })),
-      sign: (key, digest, session) => dev.use((okcrypto) => okcrypto.agent.sign({ gpg: key.userId }, digest,
-        { keyType: key.keyType, version: skey, confirm: confirm(key, session, 'sign') })),
-      ecdh: (key, point, session) => dev.use((okcrypto) => okcrypto.agent.ecdh({ gpg: key.userId }, point,
-        { keyType: key.keyType, version: dkey, confirm: confirm(key, session, 'decrypt') })),
+      /* a stored key: what its slot reports (the key computes it from the private key), its OKSIGN / OKDECRYPT */
+      publicKey: (key) => (slotOf(key) !== null
+        ? dev.use(async (okcrypto, services) => {
+          const p = await services.device.probeKeySlot(slotOf(key));
+          if (!p.publicKey) throw new Error(`slot ${slotOf(key)} holds no key (${p.kind})`);
+          return p.publicKey;
+        })
+        : dev.use((okcrypto) => okcrypto.agent.publicKey({ gpg: key.userId },
+          { keyType: key.keyType, version: versionFor(key) }))),
+      sign: (key, digest, session) => (slotOf(key) !== null
+        ? dev.use((okcrypto) => okcrypto.sign(slotOf(key), digest, { expectBytes: 64, confirm: confirm(key, session, 'sign') }))
+        : dev.use((okcrypto) => okcrypto.agent.sign({ gpg: key.userId }, digest,
+          { keyType: key.keyType, version: skey, confirm: confirm(key, session, 'sign') }))),
+      ecdh: (key, point, session) => (slotOf(key) !== null
+        ? dev.use((okcrypto) => okcrypto.decrypt(slotOf(key), point, { expectBytes: 32, confirm: confirm(key, session, 'decrypt') }))
+        : dev.use((okcrypto) => okcrypto.agent.ecdh({ gpg: key.userId }, point,
+          { keyType: key.keyType, version: dkey, confirm: confirm(key, session, 'decrypt') }))),
       askPassphrase: (session, request) => (io.askPassphrase || require('./pinentry').askPassphrase)(
         { options: session.options, ...request },
       ),

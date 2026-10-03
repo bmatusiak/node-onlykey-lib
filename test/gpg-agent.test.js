@@ -641,3 +641,113 @@ test('gpg-agent refuses a home with no derived key, and a socket another agent a
     fs.rmSync(parent, { recursive: true, force: true });
   }
 });
+
+/*
+ * SLOT KEYS (owner, 2026-10-03): a PGP pair made in Key Chain - Ed25519 in
+ * ECC2 to sign, X25519 in ECC1 to decrypt - signing git commits from the PC.
+ * Its certificate already exists and is published, so `gpg init` IMPORTS it
+ * (--import-pub) after checking it against the slots; re-signing would change
+ * the fingerprint. The agent then signs with ECC2 and decrypts with ECC1.
+ */
+function slotPair() {
+  const sk = new Uint8Array(32).fill(3);
+  const xk = new Uint8Array(32).fill(5);
+  const signPub = ed25519.getPublicKey(sk);
+  const ecdhPub = x25519.getPublicKey(xk);
+  const fw = {
+    pubKeys: { 101: ecdhPub, 102: signPub },
+    keyKinds: { 102: 'ed25519' },
+    converted: { 102: ed25519.utils.toMontgomery(signPub) },
+    slotKeys: { 101: { kind: 'x25519', sk: xk }, 102: { kind: 'ed25519', sk } },
+  };
+  const cert = () => require('../src/crypto/pgp-cert.js').buildCertificate(openpgp, {
+    userId: USER_ID, curve: 'ed25519', created: 1700000000,
+    signPublic: signPub, ecdhPublic: ecdhPub, sign: async (d) => ed25519.sign(d, sk),
+  });
+  return { fw, cert, signPub, ecdhPub };
+}
+
+test('gpg init --skey ECC2 --dkey ECC1 --import-pub: the slots\' certificate is imported as it is, after it is checked against them', async () => {
+  const parent = tmpdir();
+  const home = path.join(parent, 'home');
+  try {
+    const { fw, cert } = slotPair();
+    const c = await cert();
+    const file = path.join(parent, 'mine.asc');
+    fs.writeFileSync(file, c.armored);
+    const { start } = stack(fw);
+    const calls = [];
+    const r = await runCli(['gpg', 'init', '--skey', 'ECC2', '--dkey', 'ECC1', '--import-pub', file, '--homedir', home], { start, gpg: fakeGpg(calls) });
+    assert.equal(r.code, 0, r.err.join('\n'));
+    assert.equal(r.err.filter((l) => /Confirm on the OnlyKey/.test(l)).length, 0, 'an import signs nothing');
+    const kept = await openpgp.readKey({ armoredKey: fs.readFileSync(path.join(home, 'pubkey.asc'), 'utf8') });
+    assert.equal(kept.getFingerprint(), c.fingerprint.toLowerCase(), 'the SAME certificate - its fingerprint is the published one');
+    assert.ok(fs.readFileSync(path.join(home, 'gpg.conf'), 'utf8').includes(`default-key "${USER_ID}"`), 'the certificate\'s user id');
+    const script = process.platform === 'win32' ? 'run-agent.cmd' : 'run-agent.sh';
+    assert.match(fs.readFileSync(path.join(home, script), 'utf8'), /--skey'? '?ECC2'? '?--dkey'? '?ECC1/);
+
+    /* refused: the wrong slot, an edited certificate, no certificate at all */
+    const wrong = await runCli(['gpg', 'init', '--skey', 'ECC3', '--dkey', 'ECC1', '--import-pub', file, '--homedir', path.join(parent, 'h2')], { start, gpg: fakeGpg([]) });
+    assert.equal(wrong.code, 1);
+    assert.match(wrong.err.join('\n'), /ECC3 does not hold the certificate's signing key/);
+    const edited = await openpgp.readKey({ armoredKey: c.armored });
+    edited.users[0].userID.userID = 'Mallory <m@example.com>';
+    fs.writeFileSync(file, edited.armor());
+    const forged = await runCli(['gpg', 'init', '--skey', 'ECC2', '--dkey', 'ECC1', '--import-pub', file, '--homedir', path.join(parent, 'h3')], { start, gpg: fakeGpg([]) });
+    assert.equal(forged.code, 1);
+    assert.match(forged.err.join('\n'), /does not verify/);
+    const none = await runCli(['gpg', 'init', '--skey', 'ECC2', '--dkey', 'ECC1', '--homedir', path.join(parent, 'h4')], { start: () => assert.fail('opened the key'), gpg: fakeGpg([]) });
+    assert.equal(none.code, 2);
+    assert.match(none.err.join('\n'), /--import-pub/);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('gpg-agent --skey ECC2 --dkey ECC1: gpg\'s signature comes from ECC2, its ECDH from ECC1', async () => {
+  const parent = tmpdir();
+  const home = path.join(parent, 'home');
+  try {
+    const { fw, cert, ecdhPub } = slotPair();
+    const c = await cert();
+    const file = path.join(parent, 'mine.asc');
+    fs.writeFileSync(file, c.armored);
+    const { start } = stack(fw);
+    const init = await runCli(['gpg', 'init', '--skey', 'ECC2', '--dkey', 'ECC1', '--import-pub', file, '--homedir', home], { start, gpg: fakeGpg([]) });
+    assert.equal(init.code, 0, init.err.join('\n'));
+    const keys = await gpgKey.readDerivedKeys(fs.readFileSync(path.join(home, 'pubkey.asc'), 'utf8'));
+    const sockPath = path.join(parent, 'S.gpg-agent');
+    const gpgconf = (args) => (args[0] === '--version' ? 'gpgconf (GnuPG) 2.4.4\n' : `${sockPath.replace(/:/g, '%3a')}\n`);
+    const r = await runCli(['gpg-agent', '--homedir', home, '--skey', 'ECC2', '--dkey', 'ECC1'], {
+      start,
+      gpgconf,
+      untilStopped: async (server) => {
+        const cl = await client(server.path);
+        await cl.transact('OPTION ttyname=/dev/null-not-a-tty');
+        const digest = crypto.createHash('sha512').update('a commit\n').digest();
+        await cl.transact(`SIGKEY ${keys[0].keygrip}`);
+        await cl.transact(`SETHASH 10 ${hex(digest).toUpperCase()}`);
+        const signed = await cl.transact('PKSIGN');
+        assert.equal(signed.pop(), 'OK');
+        const sexp = A.parseSexp(Buffer.concat(signed.map((l) => A.unescapeData(Buffer.from(l.slice(2), 'latin1')))));
+        const sig = Buffer.concat([A.findToken(sexp, 'r')[1], A.findToken(sexp, 's')[1]]);
+        assert.ok(gpgKey.verifyDigest(keys[0].keyType, keys[0].raw, digest, sig), 'the slot\'s signature verifies with the imported certificate');
+
+        const esk = crypto.randomBytes(32);
+        const e = Buffer.concat([Buffer.of(0x40), x25519.getPublicKey(esk)]);
+        const expect = Buffer.concat([Buffer.of(0x40), x25519.getSharedSecret(esk, ecdhPub)]);
+        await cl.transact(`SETKEY ${keys[1].keygrip}`);
+        const dec = await cl.transact('PKDECRYPT', A.encodeSexp(['enc-val', ['ecdh', ['s', Buffer.alloc(48, 2)], ['e', e]]]));
+        assert.equal(dec.pop(), 'OK');
+        const value = A.findToken(A.parseSexp(Buffer.concat(dec.slice(2).map((l) => A.unescapeData(Buffer.from(l.slice(2), 'latin1'))))), 'value')[1];
+        assert.equal(hex(value), hex(expect), 'ECC1\'s X25519 exchange');
+        assert.deepEqual(await cl.transact('KILLAGENT'), ['OK']);
+        cl.end();
+        await new Promise(() => {});
+      },
+    });
+    assert.equal(r.code, 0, r.err.join('\n'));
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});

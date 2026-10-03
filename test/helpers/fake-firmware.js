@@ -94,6 +94,13 @@ function fakeFirmware(opts = {}) {
      * sentence). Anything else answers `pubKeys[slot]` whatever the field.
      */
     keyKinds = {},
+    /*
+     * slot -> {kind: 'ed25519' | 'x25519', sk}: a STORED key that signs (OKSIGN,
+     * the input as given, as the firmware signs a 32/64-byte digest) or does
+     * an X25519 exchange (OKDECRYPT; a 0x40-prefixed point has the prefix
+     * dropped, as the firmware does) - a PGP pair made in the key.
+     */
+    slotKeys = {},
     converted = {},
     /* Config mode: OKGETPUBKEY is dropped without a word (okcore.cpp:335-340). */
     inConfigMode = false,
@@ -127,6 +134,7 @@ function fakeFirmware(opts = {}) {
   let generations = 0;
   /* Agent derivation: the slot stream being assembled, and every completed payload. */
   let agentStream = null;
+  let slotStream = null;
   const agentPayloads = [];
   let pinStep = 0;
   /* RESTORE: the slot-131 key last set, the packets so far, and every verdict. */
@@ -177,6 +185,27 @@ function fakeFirmware(opts = {}) {
      * `agent: { k132, v2 = true }`; with v2 false the v2 codes go unanswered,
      * as they do on firmware before 3.0.5.
      */
+    if (slotKeys[frame[5]] && (msg === MSG.OKSIGN || msg === MSG.OKDECRYPT)) {
+      const key = slotKeys[frame[5]];
+      const more = frame[6] === 0xff;
+      const part = frame.slice(7, 7 + (more ? 57 : frame[6]));
+      slotStream = slotStream ? concatBytes(slotStream, part) : part;
+      if (more) return undefined;
+      const payload = slotStream;
+      slotStream = null;
+      const report = new Uint8Array(64);
+      if (msg === MSG.OKSIGN && key.kind === 'ed25519') {
+        report.set(ed25519.sign(payload, key.sk));
+        return pipe.deliver(report);
+      }
+      if (msg === MSG.OKDECRYPT && key.kind === 'x25519') {
+        const point = payload.length === 33 && payload[0] === 0x40 ? payload.slice(1) : payload.slice(-32);
+        report.set(x25519.getSharedSecret(key.sk, point));
+        return pipe.deliver(report);
+      }
+      return pipe.deliver(reportText('Error this key cannot do that'));
+    }
+
     if (agent && (msg === MSG.OKGETPUBKEY || msg === MSG.OKSIGN || msg === MSG.OKDECRYPT)) {
       const code = frame[5];
       const version = code === 132 || (code > 200 && code < 205) ? 1
