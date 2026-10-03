@@ -2955,9 +2955,29 @@ const BACKUP_REFUSALS = [
       });
 
       if (passphrase === null || passphrase === undefined) {
+        /*
+         * The key's own backup key decrypts it - and the device's verdict is
+         * awaited here too. MEASURED ON THE PIXEL SOFT KEY (2026-10-03): this
+         * path returned when the last packet was out, so an app reported a
+         * restore as done while the firmware had answered "Error incorrect
+         * backup key set" and restarted with nothing written - three restores
+         * in a row looked "normal". A key that says nothing at all (silence,
+         * not a refusal) still returns, with verdict 'unknown', as before.
+         */
+        const verdict = waitForHid(/Successfully loaded backup/,
+          { reject: [/^Error/i], timeoutMs: verdictTimeoutMs });
+        verdict.catch(() => {});
         await stream();
-        progress('restore', { bytes: hex.length / 2 });
-        return { bytes: hex.length / 2, digest: check.digest };
+        let response = null;
+        try {
+          response = (await verdict).trim();
+        } catch (err) {
+          session.configMode = false;
+          if (!/did not answer/.test(err.message)) throw okmsg.deviceError(err.message, 'restore');
+        }
+        session.configMode = false;
+        progress('restore', { bytes: hex.length / 2, response });
+        return { bytes: hex.length / 2, digest: check.digest, response, verdict: response ? 'loaded' : 'unknown' };
       }
 
       /* Chosen before anything is sent - a wrong passphrase throws here. */

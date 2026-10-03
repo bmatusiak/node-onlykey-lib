@@ -871,7 +871,7 @@ test('an unreadable subkey aborts the import with nothing written', async () => 
 /* --------------------------------------------------------------- restore */
 
 test('a valid backup is verified and then streamed', async () => {
-  const pipe = fakeFirmware();
+  const pipe = fakeFirmware({ restoreKeyFits: true });
   const app = await start(pipe);
 
   const text = makeBackup([[1, 2, 3, 4], [5, 6, 7, 8]]);
@@ -885,6 +885,21 @@ test('a valid backup is verified and then streamed', async () => {
     'every frame is an OKRESTORE',
   );
 
+  await app.destroy();
+});
+
+/*
+ * MEASURED ON THE PIXEL SOFT KEY (2026-10-03): a restore without a passphrase
+ * returned when the last packet was out, so the App said the restore went
+ * normally three times while the firmware answered "Error incorrect backup
+ * key set" and wrote nothing. The verdict is read on this path too.
+ */
+test('without a passphrase, the device\'s refusal is what the caller gets - a wrong backup key is never "done"', async () => {
+  const pipe = fakeFirmware();
+  const app = await start(pipe);
+  await assert.rejects(app.services.device.restore(makeBackup([[1, 2, 3, 4]])), /no backup key set/);
+  await app.services.device.setBackupPassphrase('a different passphrase than the file was made with');
+  await assert.rejects(app.services.device.restore(makeBackup([[1, 2, 3, 4]])), /incorrect backup key set/);
   await app.destroy();
 });
 
@@ -1551,7 +1566,7 @@ test('a backup with no digest line is refused by default, and SENDS NOTHING', as
 });
 
 test('the same backup restores when the caller opts in', async () => {
-  const pipe = fakeFirmware();
+  const pipe = fakeFirmware({ restoreKeyFits: true });
   const app = await start(pipe);
 
   const text = makeBackupWithoutDigest([[1, 2, 3, 4], [5, 6, 7, 8]]);
@@ -1620,9 +1635,10 @@ test('a backup a real device typed verifies and restores', async () => {
   const check = parsers.verifyBackup(REAL_BACKUP);
   assert.equal(check.ok, true, `the captured file does not verify: ${check.reason || ''}`);
 
-  const pipe = fakeFirmware();
+  const pipe = fakeFirmware({ restoreKeyFits: true });
   const app = await start(pipe);
   const result = await app.services.device.restore(REAL_BACKUP);
+  assert.equal(result.verdict, 'loaded', 'the device\'s answer is read, not assumed');
 
   assert.equal(result.bytes, 563, 'the fixture is 563 bytes of slot data');
   assert.equal(result.digest, check.digest);

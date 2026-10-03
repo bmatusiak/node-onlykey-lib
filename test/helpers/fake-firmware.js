@@ -110,6 +110,8 @@ function fakeFirmware(opts = {}) {
     agent = null,
     /* Answer every restore with this refusal, whatever the key. */
     restoreRefusal = null,
+    /* a key whose backup key fits any file: for tests about checking and streaming, not the key */
+    restoreKeyFits = false,
   } = opts;
 
   const pipe = fakePipe({ autoStart: true });
@@ -160,6 +162,7 @@ function fakeFirmware(opts = {}) {
        * comes before the key is looked at, so it says nothing (:6535). */
       if (!blob.length) return undefined;
       const words = restoreRefusal
+        || (restoreKeyFits ? 'Successfully loaded backup' : null)
         || (!backupKey ? 'Error no backup key set'
           : openBackup(blob, backupKey) ? 'Successfully loaded backup'
             : 'Error incorrect backup key set');
