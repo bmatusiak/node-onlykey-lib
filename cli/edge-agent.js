@@ -259,7 +259,9 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
  * @param {object} o
  * @param {object} o.okcrypto the app's okcrypto service (agent.publicKey / agent.sign)
  * @param {object} o.client the L7 client (createEdgeClient) for this key and channel
- * @param {object} o.config {ssh: 'ssh://user@host', gpgUid, committer: {name, email}, pins?}
+ * @param {object} o.config {ssh: 'ssh://user@host', gpgUid, committer: {name, email}, pins?, expires?}
+ *   expires: the certificate's lifetime in seconds after it is made (absent or 0: it
+ *   never expires). Changing it makes a new certificate - two presses again.
  * @param {(cfg: object) => void} o.saveConfig persists config changes (the certificate, the budget id)
  * @param {object} o.openpgp the openpgp fork (src/crypto/pgp)
  * @param {string} [o.shimCommand] what git runs as gpg.program
@@ -287,15 +289,16 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
   if (config.gpgUid) {
     const gpgIdentity = { gpg: config.gpgUid };
     const gpgRaw = await device.publicKey(gpgIdentity);
-    if (!config.cert || config.cert.signPublic !== Buffer.from(gpgRaw).toString('hex')) {
+    if (!config.cert || config.cert.signPublic !== Buffer.from(gpgRaw).toString('hex') || (config.cert.expires || 0) !== (config.expires || 0)) {
       log('making the agent\'s PGP certificate - two signatures by the OnlyKey (press when asked)');
       const created = Math.floor(Date.now() / 1000);
       const ecdhPublic = await okcrypto.agent.publicKey(gpgIdentity, { keyType: X25519, version: VERSION });
       const cert = await pgpCert.buildCertificate(openpgp, {
         userId: config.gpgUid, curve: 'ed25519', created, signPublic: gpgRaw, ecdhPublic,
+        ...(config.expires ? { expires: config.expires } : {}),
         sign: (digest) => device.sign(gpgIdentity, digest),
       });
-      config.cert = { armored: cert.armored, fingerprint: cert.fingerprint, created, signPublic: Buffer.from(gpgRaw).toString('hex') };
+      config.cert = { armored: cert.armored, fingerprint: cert.fingerprint, created, expires: config.expires || 0, signPublic: Buffer.from(gpgRaw).toString('hex') };
       saveConfig(config);
     }
     gpg = {

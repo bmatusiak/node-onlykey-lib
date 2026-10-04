@@ -1516,7 +1516,7 @@ COMMANDS.edge = {
  */
 COMMANDS['edge-agent'] = {
   mirrors: '(new)',
-  usage: '[--ssh ssh://user@host --gpg "Name <email>" --committer-name N --committer-email E]',
+  usage: '[--ssh ssh://user@host --gpg "Name <email>" --committer-name N --committer-email E --expires 1y|<n>d|never]',
   summary: 'Edge: the agent service - the agent\'s own ssh/gpg keys, its work budget, the endpoints okedge uses',
   device: true,
   options: {
@@ -1525,6 +1525,7 @@ COMMANDS['edge-agent'] = {
     'committer-name': { type: 'string' },
     'committer-email': { type: 'string' },
     'edge-home': { type: 'string' },
+    expires: { type: 'string' },
     wait: { type: 'string' },
   },
   async run(io, opts) {
@@ -1541,6 +1542,13 @@ COMMANDS['edge-agent'] = {
     if (opts['committer-name'] || opts['committer-email']) {
       config.committer = { name: opts['committer-name'] || (config.committer || {}).name, email: opts['committer-email'] || (config.committer || {}).email };
     }
+    /* the certificate's lifetime (Brad, 2026-10-03: one year for the real key): 1y, <n>d, or never */
+    if (opts.expires !== undefined) {
+      const m = /^(\d+)([yd])$/.exec(String(opts.expires).trim());
+      if (/^(never|0)$/.test(String(opts.expires).trim())) config.expires = 0;
+      else if (m) config.expires = Number(m[1]) * (m[2] === 'y' ? 365 : 1) * 86400;
+      else throw usage('--expires takes 1y, <n>d (days) or never');
+    }
     if (!config.ssh) throw usage('the first run needs --ssh ssh://user@host (the agent\'s own SSH identity) and --gpg "Name <email>"');
     const saveConfig = (c) => {
       fsm.mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -1555,7 +1563,8 @@ COMMANDS['edge-agent'] = {
       await device.connect();
       let edge = null;
       require('../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
-      const channel = wire.createWireChannel(transport, { timeoutMs: (Number(opts.wait) || 150) * 1000 });
+      /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */
+      const channel = wire.createWireChannel(transport, { timeoutMs: (Number(opts.wait) || 180) * 1000 });
       const c = client.createEdgeClient({ edge, channel, signer, store });
       const svc = await startEdgeAgent({
         okcrypto, client: c, edge, config, saveConfig, openpgp: require('../src/crypto/pgp'),
