@@ -88,7 +88,12 @@ async function sync(edge, home, { status = false } = {}) {
   const ringFrom = h.oldest === null ? keySeq + 1 : h.oldest;
   const candidate = { ...c, links: [...c.links] };
   let stopped = null;
-  if (!status) {
+  /*
+   * --status reads too (reads change nothing, R8) and only skips the save: a copy
+   * that has not read the newest links yet is behind, not tampered - judging it
+   * without them said "does not verify: seq-gap" for a fresh copy (2026-10-04).
+   */
+  {
     const last = candidate.links.length ? seqOf(candidate.links[candidate.links.length - 1]) : -1;
     for (let from = Math.max(last + 1, ringFrom); from <= keySeq;) {
       const got = await edge.pickup(from, Math.min(PICKUP_MAX, keySeq - from + 1));
@@ -119,7 +124,7 @@ async function sync(edge, home, { status = false } = {}) {
   return {
     deviceId: toHex(deviceId),
     key: { seq: keySeq, head: toHex(h.head), ringFrom },
-    copy: { file: copyFile(home, deviceId), count: candidate.links.length, newest, added: status ? 0 : added, saved },
+    copy: { file: copyFile(home, deviceId), count: candidate.links.length, newest, added, saved },
     verdict,
     stoppedAt: stopped,
   };
@@ -129,7 +134,7 @@ async function sync(edge, home, { status = false } = {}) {
 function lines(r, { status = false } = {}) {
   const out = [];
   out.push(`key ${r.deviceId.slice(0, 16)}: head #${r.key.seq} (${r.key.head.slice(0, 12)}...), holds #${r.key.ringFrom}..#${r.key.seq}`);
-  out.push(`PC copy: ${r.copy.count} link(s), newest #${r.copy.newest === null ? '-' : r.copy.newest}${status ? '' : `, ${r.copy.added} new${r.copy.saved ? '' : ' - NOT kept'}`}`);
+  out.push(`PC copy: ${r.copy.count - (status ? r.copy.added : 0)} link(s)${status ? (r.copy.added ? `, ${r.copy.added} to read (okedge sync)` : ', up to date') : `, ${r.copy.added} new${r.copy.saved ? '' : ' - NOT kept'}`}`);
   const v = r.verdict;
   if (v.kind === 'verified') out.push(`verified through #${v.through}`);
   else if (v.kind === 'gap') out.push(`gap: ${v.gaps.map((g) => (g.from === g.to ? `#${g.from}` : `#${g.from}-#${g.to}`)).join(', ')} - links no copy here holds (repairs are the phone's)`);
