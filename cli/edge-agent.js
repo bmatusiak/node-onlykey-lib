@@ -229,10 +229,21 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     execByToken: (token) => execs.get(token) || null,
     budget: () => budget,
     async ticket(seq, { code = 'OK', message }) {
-      if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget');
-      await budget.ticket({ seq }, { code, message });
+      if (budget) {
+        await budget.ticket({ seq }, { code, message });
+        note(seq, { ticket: { code, message } });
+        return budget.head();
+      }
+      /*
+       * No budget in this process (it restarted, or the budget ended) but the key
+       * still owes a ticket for this use: file it straight to the key - the key
+       * only checks the seq is owed (R16). Spec rule 10 (2026-10-04): an owed
+       * ticket is filed, never waived by a script.
+       */
+      if (!edge) throw fail('EEDGE_NO_BUDGET', 'no work budget');
+      const r = await edge.ticket(seq, codes.ticketCode(code), tickets.messageHash(message));
       note(seq, { ticket: { code, message } });
-      return budget.head();
+      return r.head;
     },
     /*
      * okedge watch's feed (mcp-service.md: "the same live feed in a terminal",
