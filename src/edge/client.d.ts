@@ -1,8 +1,9 @@
-export function createEdgeClient({ edge, channel, signer, store }: {
+export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }: {
     edge: any;
     channel: any;
     signer: any;
     store?: null | undefined;
+    noteTimeoutMs?: number | undefined;
 }): {
     /**
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]

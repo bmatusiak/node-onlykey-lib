@@ -4,6 +4,7 @@ export let grants: typeof import("./grants");
 export let tickets: typeof import("./tickets");
 export let copy: typeof import("./copy");
 export let live: typeof import("./live");
+export let note: typeof import("./note");
 export let request: typeof import("./request");
 export let approve: typeof import("./approve");
 export let client: typeof import("./client");

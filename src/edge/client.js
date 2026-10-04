@@ -39,13 +39,40 @@ const grants = require('./grants');
 const tickets = require('./tickets');
 const chain = require('./chain');
 const codes = require('./codes');
+const note = require('./note');
+const { utf8ToBytes } = require('../bytes');
+
+/* at most `max` UTF-8 bytes, cut on a character (a note's reason is capped, not refused) */
+function clip(text, max) {
+  if (utf8ToBytes(text).length <= max) return text;
+  let out = '';
+  for (const ch of text) {
+    if (utf8ToBytes(out + ch + '…').length > max) break;
+    out += ch;
+  }
+  return out + '…';
+}
 const { toHex, fromHex } = require('../bytes');
 
 const fail = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 const storeKey = (grantId) => `okedge.budget.${grantId}`;
 
-function createEdgeClient({ edge, channel, signer, store = null }) {
+function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs = 4000 }) {
+  /*
+   * B7 stage 2: EDGE_NOTE - the agent's words about a use, a ticket or a refused
+   * ARM, to the phone. Changes nothing anywhere, so it never fails what it
+   * describes: no channel, an old phone, no answer within noteTimeoutMs - all
+   * the same, the use stands.
+   */
+  async function sendNote(fields) {
+    if (!channel || !signer) return;
+    try {
+      const msg = await note.build({ signer, ...fields });
+      let t = null;
+      await Promise.race([channel.send(msg), new Promise((r) => { t = setTimeout(r, noteTimeoutMs); })]).finally(() => clearTimeout(t));
+    } catch { /* a note is never worth a failed use */ }
+  }
   async function deviceIdentity() {
     if ((await edge.probe()) !== 'edge') throw fail('EEDGE_UNSUPPORTED', 'edge: this key has no Edge - sign with a press per use instead');
     return edge.publicKey();
@@ -109,6 +136,7 @@ function createEdgeClient({ edge, channel, signer, store = null }) {
         try {
           await edge.arm(state.head, subject);
         } catch (e) {
+          await sendNote({ seq: (await edge.head().catch(() => ({ seq: 0 }))).seq ?? 0, armRefused: String(e.status || e.message || 'refused').slice(0, note.MAX_ARM_REFUSED) });
           throw fail('EEDGE_ARM', `edge: the key refused the ARM (${e.status || e.message})`, { reason: e.status || 'refused' });
         }
         const result = await op(data);
@@ -131,6 +159,7 @@ function createEdgeClient({ edge, channel, signer, store = null }) {
          * continue left live) may pay instead of this one (seen 2026-10-03).
          */
         const paidBy = f.decision === codes.DECISION.SELF_PRESS ? f.grantId : null;
+        if (reason !== undefined && reason !== null) await sendNote({ seq: f.seq, reason: clip(String(reason), note.MAX_REASON) });
         return { result, purpose: reason, link: { seq: f.seq, paid, paidBy, step: paid ? f.grantStep : null, reveal: paid ? l.reveal : null } };
       },
       /** File the ticket for a use; the new head is kept for the next use(). */
@@ -139,6 +168,7 @@ function createEdgeClient({ edge, channel, signer, store = null }) {
         state.owed = state.owed.filter((s) => s !== link.seq);
         state.head = r.head;
         await save();
+        if (message !== undefined && message !== null) await sendNote({ seq: link.seq, ticketMsg: String(message) });
         return r;
       },
       /** Revoke what is left. */
