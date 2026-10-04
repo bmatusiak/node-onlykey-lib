@@ -20,7 +20,8 @@ const { OP, DECISION, FLAG } = codes;
  * A key's story: a pressed use and its ticket, a budget of 2 opened at a press,
  * two self-presses each with its reveal and ticket. -> {links, openings, key}
  */
-function story() {
+/* R3: scopes = the budget's, spendScopes = byte 46 on each spend (default: an older chain, all 0) */
+function story({ scopes: given = null, spendScopes = [] } = {}) {
   const links = [];
   let head = chain.genesis(DEVICE);
   const add = (fields, reveal = null) => {
@@ -38,7 +39,7 @@ function story() {
 
   const seed = new Uint8Array(32).fill(9);
   const uses = 2;
-  const scopes = [{ op: OP.SIGN, slot: 222, cap: 2, identity: 'ssh://agent@edge-test' }]; /* R11a: a derived code names its identity */
+  const scopes = given || [{ op: OP.SIGN, slot: 222, cap: 2, identity: 'ssh://agent@edge-test' }]; /* R11a: a derived code names its identity */
   const reasonHash = new Uint8Array(32).fill(7);
   const genesis = grants.grantGenesis(seed, uses);
   const grantId = links.length + 1;
@@ -47,7 +48,7 @@ function story() {
   const openings = { [grantId]: { scopes, reasonHash, genesis, uses, signature } };
 
   for (let step = 1; step <= uses; step++) {
-    const use = add({ op: OP.SIGN, decision: DECISION.SELF_PRESS, slot: 222, flags: FLAG.BUDGET_SPENT, subject: new Uint8Array(32).fill(20 + step), grantId, grantStep: step },
+    const use = add({ op: OP.SIGN, decision: DECISION.SELF_PRESS, slot: 222, flags: FLAG.BUDGET_SPENT, subject: new Uint8Array(32).fill(20 + step), grantId, grantStep: step, scope: spendScopes[step - 1] || 0 },
       grants.reveal(seed, uses, step));
     ticketFor(use);
   }
@@ -267,4 +268,38 @@ test('copy: overlapping or adjoining LOSS links cover a range together, cleanly'
   /* #3-#4 and then #5 alone */
   const adj = withLosses([{ from: 3, to: 4 }, { from: 5, to: 5 }]);
   assert.deepEqual(copy.assess({ links: lostThreeFour(adj), openings: adj.openings }, adj.key).open, []);
+});
+
+/* R3 (2026-10-03): byte 46, the scope that paid */
+const TWO = [
+  { op: OP.SIGN, slot: 222, cap: 1, identity: 'ssh://agent@edge-test' },
+  { op: OP.SIGN, slot: 222, cap: 1, identity: 'gpg://Agent <a@edge-test>' },
+];
+const verdict = (o) => { const s = story(o); return copy.verifyCopy({ links: s.links, openings: s.openings }, s.key); };
+
+test('R3: each spend names its scope - in range, covering the op and slot - and verifies', () => {
+  assert.equal(verdict({ scopes: TWO, spendScopes: [1, 2] }).ok, true);
+});
+
+test('R3: an older chain (byte 46 = 0 on every spend) still verifies', () => {
+  assert.equal(verdict({ scopes: TWO, spendScopes: [0, 0] }).ok, true);
+  assert.equal(verdict({}).ok, true);
+});
+
+test('R3: a forged spend - scope 0 among scoped ones, or past the scope count - fails', () => {
+  let v = verdict({ scopes: TWO, spendScopes: [1, 0] });
+  assert.equal(v.ok, false);
+  assert.equal(v.detail.reason, 'missing');
+  v = verdict({ scopes: TWO, spendScopes: [3, 1] });
+  assert.equal(v.ok, false);
+  assert.equal(v.detail.reason, 'out-of-range');
+});
+
+test('R3: one scope past its cap fails; a scope that does not cover the op+slot fails', () => {
+  let v = verdict({ scopes: TWO, spendScopes: [1, 1] });
+  assert.equal(v.ok, false);
+  assert.equal(v.detail.reason, 'over-cap');
+  v = verdict({ scopes: [{ op: OP.SIGN, slot: 221, cap: 1, identity: 'ssh://x@y' }, TWO[1]], spendScopes: [1, 2] });
+  assert.equal(v.ok, false);
+  assert.equal(v.detail.reason, 'does-not-cover');
 });

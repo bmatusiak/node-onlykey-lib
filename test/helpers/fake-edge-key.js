@@ -169,15 +169,15 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         if (restoring) return emit(status(0x0e));
         emit(seqHead());
       } else if (sub === 0x23) {
-        /* R26: 46 bytes, zero-filled to a link; the next seq, welding onto the TENTATIVE head */
+        /* R26: 47 bytes (R3: through the scope byte), zero-filled to a link; the next seq, welding onto the TENTATIVE head */
         if (!restoring) return emit(status(0x10));
         tent ??= { head, links: [] };
         const link = new Uint8Array(64);
-        link.set(arg.slice(0, 46));
+        link.set(arg.slice(0, 47));
         const f = chain.decodeLink(link);
         if (f.seq !== held.length + tent.links.length) return emit(status(0x0f));
         const h2 = chain.weld(tent.head, link);
-        if (!same(h2.slice(0, 8), arg.slice(46, 54))) return emit(status(0x0f));
+        if (!same(h2.slice(0, 8), arg.slice(47, 55))) return emit(status(0x0f));
         tent.head = h2;
         tent.links.push({ link, head: h2 });
         emit(status(0x00));
@@ -214,9 +214,18 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
     if (id) {
       const b = budgets.get(id);
       b.used += 1;
+      /* R3: byte 46 - the first of its scopes that covers this sign and has room (the firmware's budget_for) */
+      const scopes = b.scopes || [];
+      b.scopeUsed = b.scopeUsed || scopes.map(() => 0);
+      /* the label too, as R11a: an agent request ends with its 32-byte identity label */
+      const tail = Uint8Array.from(bytes).slice(-32);
+      const labelOk = (sc) => !sc.label || same(Uint8Array.from(sc.label), tail.slice(0, sc.label.length));
+      let si = scopes.findIndex((sc, j) => sc.op === codes.OP.SIGN && sc.slot === slot && labelOk(sc) && b.scopeUsed[j] < sc.cap);
+      if (si < 0) si = 0;
+      b.scopeUsed[si] += 1;
       const F = codes.FLAG;
       const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.SELF_PRESS, slot, flags: F.BUDGET_SPENT | F.OWES_TICKET | F.ARMED,
-        subject, grantId: id, grantStep: b.used }, grants.reveal(b.seed, b.uses, b.used));
+        subject, grantId: id, grantStep: b.used, scope: scopes.length ? si + 1 : 0 }, grants.reveal(b.seed, b.uses, b.used));
       owed.push(seq);
       return { seq, paid: true };
     }

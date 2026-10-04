@@ -67,6 +67,11 @@ function encodeLink(f) {
   b[44] = step & 0xff;
   b[45] = step >>> 8;
   if (f.reserved) b.set(f.reserved.subarray(0, 18), 46);
+  /* R3 (2026-10-03): byte 46 = which of the budget's scopes paid, 1-based, on a budget-spending link; 0 elsewhere */
+  if (f.scope !== undefined) {
+    if (!Number.isInteger(f.scope) || f.scope < 0 || f.scope > 0xff) throw new RangeError(`edge: scope not a byte: ${f.scope}`);
+    b[46] = f.scope;
+  }
   return b;
 }
 
@@ -85,7 +90,9 @@ function decodeLink(b) {
     grantStep: b[44] | (b[45] << 8),
     /* the ticket reuses two fields (R16): its code and the seq it answers */
     ...(isTicket ? { code: b[5], refSeq: u32(40) } : {}),
-    reservedZero: b.subarray(46).every((x) => x === 0),
+    /* R3: the scope that paid (1-based) on a link that spends a budget; 0 on every other link and on links before R3 */
+    scope: b[46],
+    reservedZero: b.subarray(47).every((x) => x === 0),
   };
 }
 

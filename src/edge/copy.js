@@ -272,6 +272,10 @@ function verifyCopy(copy, key) {
   const openings = copy.openings || {};
   const spends = new Map();
   for (const f of fields) {
+    /* R3: a scope only on a link that spends a budget; bytes 47-63 always zero */
+    const spend = (f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS;
+    if (f.scope !== 0 && !spend) return fail('scope', { seq: f.seq, detail: { scope: f.scope, reason: 'not-a-spend' } });
+    if (!f.reservedZero) return fail('reserved', { seq: f.seq });
     if (f.op === OP.GRANT_CREATE) {
       const o = openings[f.grantId];
       if (!o) return fail('budget-opening-missing', { seq: f.seq, detail: { grantId: f.grantId } });
@@ -301,13 +305,35 @@ function verifyCopy(copy, key) {
     } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS) {
       const list = spends.get(f.grantId);
       if (!list) return fail('budget-opening-missing', { seq: f.seq, detail: { grantId: f.grantId } });
+      /*
+       * R3 (2026-10-03): byte 46 names the scope that paid - in range, covering
+       * this op and slot, and each scope within its cap (checked after the
+       * loop). A budget's spends all carry one (written since R3) or none (an
+       * older chain); a 0 among scoped spends is a forged link.
+       */
+      const o = openings[f.grantId];
+      if (f.scope !== 0) {
+        const sc = o.scopes[f.scope - 1];
+        if (!sc) return fail('scope', { seq: f.seq, detail: { grantId: f.grantId, scope: f.scope, scopes: o.scopes.length, reason: 'out-of-range' } });
+        if (sc.op !== f.op || sc.slot !== f.slot) return fail('scope', { seq: f.seq, detail: { grantId: f.grantId, scope: f.scope, reason: 'does-not-cover' } });
+      }
       const value = bySeq.get(f.seq).reveal;
       if (!value || !value.some((x) => x)) return fail('reveal-missing', { seq: f.seq });
-      list.push({ seq: f.seq, step: f.grantStep, value, subject: f.subject, mac: hmacSha256(value, f.subject) });
+      list.push({ seq: f.seq, step: f.grantStep, scope: f.scope, value, subject: f.subject, mac: hmacSha256(value, f.subject) });
     }
   }
   for (const [grantId, list] of spends) {
     const o = openings[grantId];
+    /* R3: all scoped or none (older chain); each scope within its cap */
+    const scoped = list.filter((x) => x.scope !== 0);
+    if (scoped.length && scoped.length !== list.length) {
+      return fail('scope', { seq: list.find((x) => x.scope === 0).seq, detail: { grantId, reason: 'missing' } });
+    }
+    const per = new Map();
+    for (const x of scoped) {
+      per.set(x.scope, (per.get(x.scope) || 0) + 1);
+      if (per.get(x.scope) > o.scopes[x.scope - 1].cap) return fail('scope', { seq: x.seq, detail: { grantId, scope: x.scope, reason: 'over-cap' } });
+    }
     const r = grants.checkSpends(o.genesis, o.uses, list);
     if (!r.ok) return fail('reveal', { seq: list[r.failure.index].seq, detail: { grantId, ...r.failure } });
   }

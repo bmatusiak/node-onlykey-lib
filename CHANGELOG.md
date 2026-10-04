@@ -17,6 +17,7 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **R3: the scope that paid, in byte 46** (spec session, 2026-10-03; firmware.md R3). A budget-spending link names which of its budget's scopes paid (1-based); 0 on every other link and on links written before. `chain.decodeLink` gives `scope`; "reserved zero" is now bytes 47-63; `encodeLink` takes `scope`. `verifyCopy` checks it: in range, covering the link's op and slot, each scope within its cap, a budget's spends all scoped or none (an older chain), no scope on a link that is not a spend, bytes 47-63 zero. REPLAY sends 47 bytes. The fake Edge key writes it (matching the label, as R11a); the external vectors (onlykey-edge `vectors/`) carry it.
 - **The spec session's answers (2026-10-03, night).**
   - `keychain cert` under R16 (no firmware exemption): refuses to start while the key owes anything, and tickets its own presses right after (code OK, "cert self-signature <fingerprint>") - `cert.guardOwed` / `cert.ticketOwnPresses`.
   - One entry per key: `list.merge` pairs a phone's `hash:…` entry with a named one holding the same public key (`findTwin` / `combine`: the name, the hash kept as `labelHash`, first seen earliest, last seen latest, tools, transport and rpId joined); `record()` pairs the same way; new `onlykey-js keychain import <file>` merges the phone's export into this machine's list.

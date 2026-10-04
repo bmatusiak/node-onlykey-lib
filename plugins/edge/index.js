@@ -47,7 +47,8 @@ const GRANT_HEAD_BYTES = 6;
 const VOUCH_BYTES = 16;
 /* seq . head . tag: TICKET's, WAIVE's, VOUCH's and REPLAY_DONE's answer */
 const seqHeadTag = (r) => ({ seq: (r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24)) >>> 0, head: r.slice(4, 36), tag: r.slice(36, 36 + VOUCH_BYTES) });
-const REPLAY_BYTES = 46;
+/* R3: through byte 46 (the scope that paid); 47-63 stay reserved zero */
+const REPLAY_BYTES = 47;
 const REPLAY_HEAD_BYTES = 8;
 const SEQ_NONE = 0xffffffff;
 const HELD = 8;
