@@ -1174,9 +1174,9 @@ function printArtifacts(io, a) {
 
 COMMANDS.keychain = {
   mirrors: '(new)',
-  usage: 'list | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
+  usage: 'list [--json] | show <label> [--json] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
   writes: true,
-  summary: 'Key Chain: list key slots, show/derive public keys, generate keys on the OnlyKey or this machine',
+  summary: 'Key Chain: the derived keys this machine has used (list, show), the key slots, derive/generate keys',
   options: {
     host: { type: 'boolean' },
     slot: { type: 'string' },
@@ -1186,14 +1186,49 @@ COMMANDS.keychain = {
     'export-pgp': { type: 'string' },
     'user-id': { type: 'string' },
     v2: { type: 'boolean' },
+    json: { type: 'boolean' },
   },
   async run(io, opts, args) {
     const keychain = require('../src/keychain');
     const [sub, ...rest] = args;
 
-    if (sub === 'list') {
+    /*
+     * list / show: the host's Key Chain list (~/.onlykey-js/keychain.json) -
+     * every derived public key a command on this machine made, read-only and
+     * with no device. --json for agents and scripts. Public data only.
+     */
+    if (sub === 'list' || sub === 'show') {
+      const rec = require('./keychain-record');
+      const entries = rec.load();
+      const pick = sub === 'show' ? entries.filter((e) => e.label === rest[0] || e.id === rest[0]) : entries;
+      if (sub === 'show' && (rest.length !== 1)) throw usage('keychain show takes one label (as `keychain list` prints it)');
+      if (sub === 'show' && !pick.length) throw new CliError(`no derived key "${rest[0]}" in ${rec.keychainFile()}`);
+      const shape = (e) => ({
+        label: e.label, scheme: e.scheme, type: e.type, code: e.code, publicKey: Buffer.from(e.publicKey).toString('hex'),
+        fingerprint: e.fingerprint || keychain.list.fingerprint(e.publicKey), firstSeen: e.firstSeen, lastSeen: e.lastSeen, tools: e.tools || [],
+        ...(sub === 'show' ? { artifacts: e.artifacts || {} } : {}),
+      });
+      if (opts.json) {
+        io.out(JSON.stringify(sub === 'show' ? shape(pick[0]) : pick.map(shape), null, 2));
+        return 0;
+      }
+      if (!pick.length) {
+        io.out(`no derived keys recorded yet (${rec.keychainFile()})`);
+        return 0;
+      }
+      if (sub === 'show') {
+        const e = shape(pick[0]);
+        for (const [k, v] of Object.entries({ label: e.label, type: e.type, code: e.code, fingerprint: e.fingerprint, 'first seen': e.firstSeen, 'last seen': e.lastSeen, 'derived by': e.tools.join(', ') })) io.out(row(k, String(v ?? '')));
+        printArtifacts(io, pick[0].artifacts || {});
+        return 0;
+      }
+      for (const e of pick.map(shape)) io.out(`${e.label.padEnd(44)} ${e.type.padEnd(8)} ${e.fingerprint}  ${e.tools.join(', ')}`.trimEnd());
+      return 0;
+    }
+
+    if (sub === 'slots') {
       return withDevice(io, opts, async ({ device, identity }) => {
-        requireUnlocked(identity, 'keychain list');
+        requireUnlocked(identity, 'keychain slots');
         const labels = new Map();
         try {
           const { keys } = await device.readKeyLabels();
@@ -1248,7 +1283,7 @@ COMMANDS.keychain = {
       return opts.host ? keychainGenHost(io, opts, type, keychain) : keychainGenDevice(io, opts, type);
     }
 
-    throw usage('keychain takes list, pub, derive or gen');
+    throw usage('keychain takes list, show, slots, pub, derive or gen');
   },
 };
 
@@ -2568,6 +2603,14 @@ async function main(argv, io = {}) {
     full.err(`${NAME}: "${name}" does not take ${foreign.map((k) => `--${k}`).join(', ')}.`);
     return 2;
   }
+  /*
+   * Every derived public key this run makes goes into the host's Key Chain list
+   * (cli/keychain-record.js; spec session, 2026-10-03). A test that supplies its
+   * own start records nothing unless it supplies io.keychainRecord too.
+   */
+  const recordFn = io.keychainRecord !== undefined ? io.keychainRecord : (io.start ? null : require('./keychain-record').record);
+  full.keychainRecord = recordFn;
+  if (recordFn) full.start = require('./keychain-record').recordingStart(full.start, { tool: `${NAME} ${name}`, err: full.err, recordFn });
   /*
    * --path names a USB key and --address a phone: each without its bus, or
    * both buses at once, is a command line that cannot mean what it says.

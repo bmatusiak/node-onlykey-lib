@@ -44,6 +44,7 @@
     "./cli/desktop": "./cli/desktop.js",
     "./cli/edge-agent": "./cli/edge-agent.js",
     "./cli/edge-control": "./cli/edge-control.js",
+    "./cli/keychain-record": "./cli/keychain-record.js",
     "./cli/okedge": "./cli/okedge.js",
     "./cli/ssh-wire": "./cli/ssh-wire.js",
     "./cli/ssh-session-bind": "./cli/ssh-session-bind.js",

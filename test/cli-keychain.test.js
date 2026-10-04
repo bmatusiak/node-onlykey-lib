@@ -34,9 +34,9 @@ async function run(argv, firmwareOpts = {}, extra = {}) {
 }
 const sent = (fw, msg) => fw.writes.filter((w) => w.data[4] === msg).map((w) => w.data);
 
-test('keychain list: every key slot, what it holds, its label and fingerprint', async () => {
+test('keychain slots: every key slot, what it holds, its label and fingerprint', async () => {
   const ed = ed25519.getPublicKey(crypto.randomBytes(32));
-  const r = await run(['keychain', 'list'], {
+  const r = await run(['keychain', 'slots'], {
     pubKeys: { 101: ed, 2: Buffer.from(crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ format: 'jwk' }).n, 'base64url') },
     keyLabels: { 29: 'ssh:laptop', 26: 'Work key' },
     keyKinds: { 101: 'ed25519' },

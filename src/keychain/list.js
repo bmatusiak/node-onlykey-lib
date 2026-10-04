@@ -29,6 +29,8 @@ const TYPES = ['ed25519', 'x25519', 'p256', 'secp256k1', 'rsa', 'mlkem768', 'xwi
 
 /* Field names a private key travels under, and text that only a private key carries. */
 const PRIVATE_FIELDS = ['secret', 'privateKey', 'private', 'scalar', 'seed', 'd', 'p', 'q', 'dp', 'dq', 'qi', 'blob'];
+/* the own-identities mark, under any spelling an entry might bring it */
+const OWN_FIELDS = ['yours', 'own', 'mine', 'ownIdentity'];
 const PRIVATE_TEXT = /PRIVATE KEY|AGE-SECRET-KEY-|-----BEGIN PGP PRIVATE/i;
 
 function refusePrivate(value, where) {
@@ -58,6 +60,13 @@ function entryId(e) {
 function createEntry(fields) {
   refusePrivate(fields, 'entry');
   const e = { ...fields };
+  /*
+   * "Yours" (the own-identities mark behind the phone's red warning) is the
+   * phone's alone - set and removed only there, with its confirm (spec session,
+   * 2026-10-03). No entry carries it: not one a CLI or an agent records, not one
+   * a file brings in. Dropped, so it can be neither set nor cleared this way.
+   */
+  for (const k of OWN_FIELDS) delete e[k];
   if (!KINDS.includes(e.kind)) throw new Error(`entry kind is one of ${KINDS.join(', ')}; got "${e.kind}"`);
   if (!TYPES.includes(e.type)) throw new Error(`entry type is one of ${TYPES.join(', ')}; got "${e.type}"`);
   e.publicKey = typeof e.publicKey === 'string' ? fromHex(e.publicKey) : Uint8Array.from(e.publicKey || []);
