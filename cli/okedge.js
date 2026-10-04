@@ -24,7 +24,7 @@
 
 const { spawn } = require('child_process');
 const { ask } = require('./edge-control');
-const { codes } = require('../src/edge');
+const { codes, live } = require('../src/edge');
 
 /* okedge watch: what each link's op is called */
 const OP_NAME = {
@@ -57,13 +57,9 @@ function watchLines(feed, { color = false, time = new Date() } = {}) {
       continue;
     }
     if (l.op === codes.OP.SIGN || l.op === codes.OP.DECRYPT) {
-      let how = 'pressed';
-      let alarm = null;
-      if (l.decision === codes.DECISION.SELF_PRESS) how = `self-press · budget ${l.grantId}, use ${l.grantStep}`;
-      else if (l.decision === codes.DECISION.DENY) how = 'denied';
-      else if (l.decision === codes.DECISION.TIMEOUT) how = 'timed out';
-      else if (l.flags & codes.FLAG.ARMED) alarm = 'an ARM that did not match its request - someone else jumped in?';
-      else if (l.flags & codes.FLAG.OWES_TICKET) alarm = 'a press asked for under a live budget (it owes a ticket, R16)';
+      const { kind, alarm } = live.classifyUse(l);
+      const how = kind === live.KIND.SELF_PRESS ? `self-press · budget ${l.grantId}, use ${l.grantStep}`
+        : kind === live.KIND.DENIED ? 'denied' : kind === live.KIND.TIMED_OUT ? 'timed out' : 'pressed';
       const line = `#${l.seq} ${at} ${OP_NAME[l.op]} slot ${l.slot} · ${how}${n.reason ? ` · "${plain(n.reason)}"` : ''}`;
       lines.push(alarm ? red(`${line}  ⚠ ${alarm}`) : line);
       continue;

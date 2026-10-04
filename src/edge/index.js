@@ -12,6 +12,8 @@ module.exports = {
   grants: require('./grants'),
   tickets: require('./tickets'),
   copy: require('./copy'),
+  /* B7: what a use was and whether it stands out - the phone's Live view and okedge watch */
+  live: require('./live'),
   /* L7 (2026-10-03): the budget request message, the app's side, the agent's side */
   request: require('./request'),
   approve: require('./approve'),
