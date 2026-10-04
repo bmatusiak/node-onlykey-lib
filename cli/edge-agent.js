@@ -85,6 +85,18 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     const seqs = tickets.keyDebts(rows || await ring(h)).owed;
     return { seqs, older: Math.max(0, h.owed - seqs.length) + (h.overflow ? 1 : 0) };
   };
+  /* okedge watch: what this agent knows about a link (reason, ticket), and its own events - kept short */
+  const notes = new Map();
+  const note = (seq, add) => {
+    notes.set(seq, { ...(notes.get(seq) || {}), ...add });
+    while (notes.size > 256) notes.delete(notes.keys().next().value);
+  };
+  const events = [];
+  let eventN = 0;
+  const event = (kind, message) => {
+    events.push({ n: ++eventN, at: new Date().toISOString(), kind, message });
+    while (events.length > 64) events.shift();
+  };
   const owedText = (k) => [k.seqs.length ? `tickets for #${k.seqs.join(', #')}` : '', k.older ? `${k.older} older than the key's ring (waive on the phone)` : ''].filter(Boolean).join(' and ');
   let budget = null;          /* the work budget (src/edge/client.js budget), once asked for or resumed */
   const execs = new Map();    /* token -> the open exec */
@@ -109,6 +121,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     const bytes = new Uint8Array([...message, ...agentProto.identityHash(identity)]);
     const { result, link } = await budget.use(bytes, () => device.sign(identity, message), { reason: exec.reason });
     exec.links.push({ ...link, what });
+    note(link.seq, { reason: exec.reason, what });
     log(`signed: link #${link.seq} (${what})${link.paid ? '' : ' - NOT paid by the budget'} - ticket owed for #${link.seq}`);
     return result;
   }
@@ -118,7 +131,15 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
    * ticket's reply), then a fresh endpoint and token for this one command.
    * -> {sshPath, token, close}
    */
-  async function openExec({ head, reason, capMs = EXEC_CAP_MS }) {
+  async function openExec(o) {
+    try {
+      return await openExecChecked(o);
+    } catch (e) {
+      event('refused', `exec "${o && o.reason}" refused: ${e.message}`);
+      throw e;
+    }
+  }
+  async function openExecChecked({ head, reason, capMs = EXEC_CAP_MS }) {
     if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget - ask for one first (okedge budget)');
     if (typeof reason !== 'string' || !reason.trim()) throw fail('EEDGE_REASON', 'an exec needs a reason');
     /*
@@ -148,6 +169,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
         const ok = bindLib.boundToPinned(conn && conn.bind, data, pins);
         if (!ok.ok) {
           log(`not paid by the budget: ${ok.reason} - the key asks for a press`);
+          event('press', `not paid by the budget: ${ok.reason}`);
           return plainSign(ssh.identity, data);
         }
         return paid(exec, ssh.identity, data, `ssh ${ok.host}`);
@@ -191,7 +213,39 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     async ticket(seq, { code = 'OK', message }) {
       if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget');
       await budget.ticket({ seq }, { code, message });
+      note(seq, { ticket: { code, message } });
       return budget.head();
+    },
+    /*
+     * okedge watch's feed (mcp-service.md: "the same live feed in a terminal",
+     * okrn-edge-tab.md B7) - READ-ONLY: the key's links from `from` on, each with
+     * what this agent knows about it (the exec's reason, the ticket's message -
+     * the agent's own claims, shown as such), the links that fell out of the
+     * key's ring before they were read, and this agent's events (refusals,
+     * presses) since `since`.
+     */
+    async feed({ from = null, since = 0 } = {}) {
+      const out = { seq: null, links: [], missed: 0, events: events.filter((e) => e.n > since), budget: null };
+      if (budget) out.budget = { id: budget.grantId, uses: budget.uses, head: budget.head() };
+      if (!edge) return out;
+      const h = await edge.head();
+      out.seq = h.seq;
+      if (h.seq === null) return out;
+      /* null: just the newest; below 0: everything the key's ring still holds (okedge watch starts there) */
+      const first = from === null ? h.seq : from < 0 ? (h.oldest === null ? h.seq : h.oldest) : from;
+      const start = Math.max(first, h.oldest === null ? first : h.oldest);
+      out.missed = Math.max(0, start - first);
+      if (start <= h.seq) {
+        for (const row of await edge.pickup(start, h.seq - start + 1)) {
+          const f = chain.decodeLink(row.link);
+          out.links.push({ seq: f.seq, op: f.op, decision: f.decision, slot: f.slot, flags: f.flags, grantId: f.grantId, grantStep: f.grantStep, code: f.code, refSeq: f.refSeq,
+            /* a ticket's message was noted on the use it answers */
+            note: notes.get(f.op === codes.OP.TICKET ? f.refSeq : f.seq) || null });
+        }
+      }
+      out.live = h.live;
+      out.held = h.held;
+      return out;
     },
     /*
      * The agent's own view plus the KEY's (spec session, 2026-10-03, bug 1): the
@@ -234,6 +288,8 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
   const summary = (b) => ({ budget: b.grantId, uses: b.uses, head: b.head() });
   return {
     status: async () => agent.status(),
+    /* okedge watch: read-only */
+    feed: async ({ from = null, since = 0 }) => agent.feed({ from, since }),
     budget: async ({ reason, uses, ttl }) => {
       const b = await client.request({ reason, scopes: scopes(uses || {}), ttlMinutes: ttl });
       agent.setBudget(b);

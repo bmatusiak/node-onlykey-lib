@@ -13,6 +13,7 @@
  *   okedge ticket <seq> [--code OK] --msg "…"                 file the ticket; prints the next head
  *   okedge status                                             the budget, its head, tickets owed
  *   okedge end                                                end the budget
+ *   okedge watch [--once]                                     follow the key's links live (read-only)
  *
  * exec: the command runs with ITS OWN endpoint - SSH_AUTH_SOCK on a fresh
  * owner-only socket, the gpg shim's one-time token, git's gpg.program and
@@ -23,6 +24,56 @@
 
 const { spawn } = require('child_process');
 const { ask } = require('./edge-control');
+const { codes } = require('../src/edge');
+
+/* okedge watch: what each link's op is called */
+const OP_NAME = {
+  1: 'sign', 2: 'decrypt', 3: 'fido register', 4: 'fido sign', 5: 'hmac', 6: 'budget opened', 7: 'budget ended',
+  8: 'ticket', 9: 'peer added', 10: 'peer removed', 11: 'LOSS', 12: 'wipe', 13: 'hold', 14: 'resume', 15: 'agent registered',
+};
+/* reasons and ticket messages are the agent's own untrusted text: one plain line, never interpreted */
+const plain = (t) => String(t).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
+
+/**
+ * okedge watch's lines for one feed (mcp-service.md: one line per use, its
+ * reason, then its ticket; alarms highlighted - okrn-edge-tab.md B7): an alarm
+ * ticket (bit 7 or an unknown code), a press asked for under a live budget, an
+ * ARM that did not match its request, a refused exec, a budget ended, a LOSS or
+ * a wipe, links lost from the key's ring.
+ */
+function watchLines(feed, { color = false, time = new Date() } = {}) {
+  const red = (t) => (color ? `\u001b[31;1m${t}\u001b[0m` : t);
+  const at = time.toTimeString().slice(0, 8);
+  const lines = [];
+  if (feed.missed) lines.push(red(`⚠ ${feed.missed} link(s) fell out of the key's ring before they were read`));
+  for (const l of feed.links || []) {
+    const n = l.note || {};
+    if (l.op === codes.OP.TICKET) {
+      const name = codes.TICKET[l.code];
+      const alarm = (l.code & 0x80) || !name;
+      const msg = n.ticket && n.ticket.message ? ` · "${plain(n.ticket.message)}"` : '';
+      const line = `        ↳ #${l.seq} ticket for #${l.refSeq}: ${name || `0x${l.code.toString(16)}`}${msg}`;
+      lines.push(alarm ? red(`${line}  ⚠ ALARM`) : line);
+      continue;
+    }
+    if (l.op === codes.OP.SIGN || l.op === codes.OP.DECRYPT) {
+      let how = 'pressed';
+      let alarm = null;
+      if (l.decision === codes.DECISION.SELF_PRESS) how = `self-press · budget ${l.grantId}, use ${l.grantStep}`;
+      else if (l.decision === codes.DECISION.DENY) how = 'denied';
+      else if (l.decision === codes.DECISION.TIMEOUT) how = 'timed out';
+      else if (l.flags & codes.FLAG.ARMED) alarm = 'an ARM that did not match its request - someone else jumped in?';
+      else if (l.flags & codes.FLAG.OWES_TICKET) alarm = 'a press asked for under a live budget (it owes a ticket, R16)';
+      const line = `#${l.seq} ${at} ${OP_NAME[l.op]} slot ${l.slot} · ${how}${n.reason ? ` · "${plain(n.reason)}"` : ''}`;
+      lines.push(alarm ? red(`${line}  ⚠ ${alarm}`) : line);
+      continue;
+    }
+    const line = `#${l.seq} ${at} ${OP_NAME[l.op] || `op ${l.op}`}${l.grantId ? ` ${l.grantId}` : ''}`;
+    lines.push([codes.OP.GRANT_END, codes.OP.LOSS, codes.OP.WIPE].includes(l.op) ? red(`${line}  ⚠`) : line);
+  }
+  for (const e of feed.events || []) lines.push(red(`⚠ agent: ${plain(e.message)}`));
+  return lines;
+}
 
 function opt(args, name) {
   const i = args.indexOf(name);
@@ -115,7 +166,32 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       }
       return code;
     }
-    err('okedge budget | continue | exec | ticket | status | end');
+    if (cmd === 'watch') {
+      /* read-only: it cannot approve, hold or waive - that stays on the phone */
+      const once = args.includes('--once');
+      const color = !once && Boolean(process.stdout.isTTY);
+      out('watching the key - read-only (approve, hold and waive stay on the phone); Ctrl-C to stop');
+      let from = -1;
+      let since = 0;
+      let liveBudget = null;
+      for (;;) {
+        const f = await ask('feed', { from, since });
+        for (const l of watchLines(f, { color })) out(l);
+        if (f.seq !== null && f.seq !== undefined) from = f.seq + 1;
+        for (const e of f.events || []) since = Math.max(since, e.n);
+        /* a budget spent, expired, ended or lost with a lock: once */
+        if (f.budget && f.live) {
+          if (f.live.includes(f.budget.id)) liveBudget = f.budget.id;
+          else if (liveBudget === f.budget.id) {
+            out(color ? `\u001b[31;1m⚠ budget ${liveBudget} is no longer live (spent, expired, ended, or the key locked)\u001b[0m` : `⚠ budget ${liveBudget} is no longer live (spent, expired, ended, or the key locked)`);
+            liveBudget = null;
+          }
+        }
+        if (once) return 0;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+    err('okedge budget | continue | exec | ticket | status | end | watch');
     return 2;
   } catch (e) {
     err(`okedge: ${e.message}`);
@@ -123,7 +199,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
   }
 }
 
-module.exports = { main };
+module.exports = { main, watchLines };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });

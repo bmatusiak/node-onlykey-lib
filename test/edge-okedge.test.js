@@ -72,7 +72,7 @@ async function stack() {
     userId: gpgIdentity.gpg, curve: 'ed25519', created, signPublic: gpgRaw, ecdhPublic: new Uint8Array(ecdh),
     sign: async (d) => new Uint8Array(crypto.sign(null, Buffer.from(d), keyOf(gpgIdentity).privateKey)),
   });
-  const agent = createEdgeAgent({ device, ssh: { identity: sshIdentity, name: 'ssh://claude@test', comment: 'claude@test', curve: 'ed25519', raw: sshRaw } });
+  const agent = createEdgeAgent({ device, edge, ssh: { identity: sshIdentity, name: 'ssh://claude@test', comment: 'claude@test', curve: 'ed25519', raw: sshRaw } });
   const gpg = { identity: gpgIdentity, name: 'gpg://Claude (agent) <claude@test>', raw: gpgRaw, created, fingerprint: cert.fingerprint, committer: { name: 'Claude (agent)', email: 'claude@test' } };
   const control = await serveControl({ handlers: controlHandlers({ agent, client: c, ssh: { name: 'ssh://claude@test' }, gpg, openpgp, shimCommand: SHIM }) });
   const lastLink = async () => { const hd = await edge.head(); return chain.decodeLink((await edge.pickup(hd.seq, 1))[0].link); };
@@ -159,6 +159,38 @@ test('okedge exec returns the command\'s own exit code', async () => {
     cap = capture();
     assert.equal(await okedge.main(['exec', '--head', head, '--reason', 'fails', '--', process.execPath, '-e', 'process.exit(7)'], cap.io), 7);
     assert.ok(cap.lines.includes('signed: nothing under the budget'));
+  } finally {
+    await s.agent.closeAll();
+    await s.control.close();
+  }
+});
+
+test('okedge watch --once: one line per use with its reason, its ticket under it, and a press under a live budget as an alarm', async () => {
+  const s = await stack();
+  try {
+    let cap = capture();
+    await okedge.main(['budget', '--reason', 'work', '--ssh', '1', '--gpg', '2', '--ttl', '30'], cap.io);
+    const head = cap.lines.find((l) => l.startsWith('head = ')).slice(7);
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-watch-'));
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Claude (agent)']);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'claude@test']);
+    cap = capture();
+    await okedge.main(['exec', '--head', head, '--reason', 'commit: watch me', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'w'], cap.io);
+    const seq = Number(/link #(\d+)/.exec(cap.lines.find((l) => l.startsWith('signed:')) || 'link #0')[1]);
+    await okedge.main(['ticket', String(seq), '--msg', 'committed\nwith a newline'], capture().io);
+    /* a pressed sign with the agent's key while the budget covers it (the shim outside an exec) */
+    await new Promise((resolve) => {
+      const p = require('child_process').spawn(process.execPath, [SHIM, '--status-fd=2', '-bsau', 'x'], { env: { ...process.env, OKEDGE_GPG_TOKEN: '' } });
+      p.on('exit', resolve);
+      p.stdin.end('data');
+    });
+    cap = capture();
+    assert.equal(await okedge.main(['watch', '--once'], cap.io), 0, cap.lines.join('\n'));
+    const text = cap.lines.join('\n');
+    assert.match(text, new RegExp(`#${seq} \\d\\d:\\d\\d:\\d\\d sign slot 221 · self-press · budget \\d+, use 1 · "commit: watch me"`));
+    assert.match(text, new RegExp(`↳ #\\d+ ticket for #${seq}: OK · "committed with a newline"`), 'the message on one plain line');
+    assert.match(text, /pressed .*⚠ a press asked for under a live budget/);
   } finally {
     await s.agent.closeAll();
     await s.control.close();
