@@ -165,14 +165,17 @@ function setup(imports, register) {
   }
 
   /*
-   * `accept(bytes, got)`: false = not ours, keep waiting. The vendor channel is
-   * shared with a computer on the Bluetooth bridge, and its answers reach every
-   * listener on this stack: a pressed ssh sign answers when the press lands,
-   * long after the bus went quiet. MEASURED ON THE A13 (2026-10-04): Brad's
-   * signature arrived while the tab's PICKUP waited, and the copy stored it as
-   * link #447194052 - above the key's head, so the copy read as a rollback and
-   * Sync, starting past it, read nothing. Replies whose shape can be checked
-   * are checked; a report that fails is someone else's.
+   * `accept(bytes, got)`: false = not ours, keep waiting. Every vendor report
+   * reaches every listener here, and nothing in an OKEDGE reply says which
+   * request it answers. MEASURED ON THE A13 (2026-10-04, decoded from its
+   * storage): a PICKUP timed out after link #86 but before #86's head; the late
+   * head arrived first in the next PICKUP, every report after it shifted by
+   * one, and the copy stored that head (32 bytes, then zeros) as "link
+   * #447194052" - above the key's head, so the copy read as a rollback and
+   * Sync, starting past it, read nothing. A report from another speaker (a
+   * computer on the Bluetooth bridge) would land the same way. Replies whose
+   * shape can be checked are checked; a report that fails is someone else's,
+   * or late.
    */
   function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null } = {}) {
     return new Promise((resolve, reject) => {
