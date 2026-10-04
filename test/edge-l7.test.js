@@ -63,16 +63,18 @@ test('L7: request -> use -> ticket -> use -> ticket -> end, each use paid by the
   assert.equal(JSON.stringify([one.link.paid, one.link.step]), '[true,1]', 'the budget paid for use 1');
   assert.deepEqual(budget.pending(), [one.link.seq]);
   await assert.rejects(budget.use(Uint8Array.from([4]), sign), (e) => e.code === 'EEDGE_ARM' && e.reason === 'ticket-owed', 'use() before the ticket');
-  await budget.ticket(one.link, { code: 'OK', message: 'pushed' });
+  const first = await budget.ticket(one.link, { code: 'OK', message: 'pushed' });
+  assert.equal(first.ended, undefined, 'a ticket with uses left must not end the budget');
   const two = await budget.use(Uint8Array.from([4, 5]), sign);
   assert.equal(JSON.stringify([two.link.paid, two.link.step]), '[true,2]');
-  await budget.ticket(two.link, { message: 'pushed again' });
-  /* used up: the key refuses the ARM - thrown at once, no operation sent */
+  /* R16 (spec 2026-10-04): the last use's ticket ends the used-up budget - a grant-end link, the slot freed */
+  const last = await budget.ticket(two.link, { message: 'pushed again' });
+  assert.equal(last.ended, true, 'the last ticket did not end the used-up budget');
+  assert.deepEqual((await edge.head()).live, [], 'the used-up budget still holds a live slot');
   let ran = false;
-  await assert.rejects(budget.use(Uint8Array.from([6]), async (b) => { ran = true; return sign(b); }), (e) => e.code === 'EEDGE_ARM' && e.reason === 'nothing-to-arm');
-  assert.equal(ran, false, 'a refused ARM never runs the operation');
-  await budget.end();
-  assert.deepEqual((await edge.head()).live, []);
+  await assert.rejects(budget.use(Uint8Array.from([6]), async (b) => { ran = true; return sign(b); }), (e) => e.code === 'EEDGE_ARM' && e.reason === 'ended');
+  assert.equal(ran, false, 'an ended budget never runs the operation');
+  await budget.end(); /* again: harmless */
 });
 
 test('L7: a request naming the person\'s own identity is flagged for the red warning; an agent identity is not', async () => {

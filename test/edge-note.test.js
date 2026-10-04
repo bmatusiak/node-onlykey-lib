@@ -59,12 +59,14 @@ test('the edge client sends a note for a use (its reason), its ticket (the messa
     },
   };
   const c = client.createEdgeClient({ edge, channel, signer: AGENT });
-  const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: 'ssh://agent@nitro16' }], ttlMinutes: 10 });
+  const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: 'ssh://agent@nitro16' }], ttlMinutes: 10 });
   const used = await b.use(Uint8Array.from([1, 2]), (x) => transport.use(x, { slot: 222 }), { reason: 'git push origin master' });
   assert.deepEqual(notes.map((n) => [n.seq, n.reason]), [[used.link.seq, 'git push origin master']]);
   await b.ticket(used.link, { message: 'pushed' });
   assert.deepEqual(notes[1].ticketMsg, 'pushed');
   assert.equal(notes[1].seq, used.link.seq);
+  /* a refused ARM at the KEY: the budget on hold (a used-up one now ends at its last ticket and never reaches the key) */
+  await edge.hold(b.grantId);
   await assert.rejects(b.use(Uint8Array.from([3]), (x) => transport.use(x, { slot: 222 }), { reason: 'again' }), { code: 'EEDGE_ARM' });
   assert.ok(notes[2].armRefused, 'the refused ARM is reported in the agent\'s own note');
 });

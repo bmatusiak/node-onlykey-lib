@@ -105,10 +105,12 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       head: fromHex(record.head),
       owed: [...(record.owed || [])],
       ended: false,
+      /* the highest self-press step this budget paid: all uses spent at step == uses */
+      spent: record.spent || 0,
     };
     const genesis = fromHex(record.genesis);
     const save = async () => {
-      if (store) await store.set(storeKey(record.grantId), JSON.stringify({ ...record, head: toHex(state.head), owed: state.owed, ended: state.ended }));
+      if (store) await store.set(storeKey(record.grantId), JSON.stringify({ ...record, head: toHex(state.head), owed: state.owed, ended: state.ended, spent: state.spent }));
     };
 
     return {
@@ -166,6 +168,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
           if (!r.ok) throw fail('EEDGE_LINK', `edge: the self-press's reveal does not belong to this budget (${r.reason})`);
         }
         if (f.flags & codes.FLAG.OWES_TICKET) state.owed.push(f.seq);
+        if (paid) state.spent = Math.max(state.spent, f.grantStep);
         state.head = h.head;
         await save();
         /*
@@ -184,19 +187,32 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
         state.head = r.head;
         await save();
         if (message !== undefined && message !== null) await sendNote({ seq: link.seq, ticketMsg: String(message) });
+        /*
+         * R16 (spec 2026-10-04): a used-up budget still COVERS its identities until it
+         * ends - a later pressed use of them owes a ticket - and it holds one of the
+         * key's live slots. So the client ends it itself the moment its last use is
+         * ticketed: a grant-end link, the slot freed. (The key does not end it on its
+         * own: "used up" must not quietly drop the coverage.)
+         */
+        if (!state.ended && !state.owed.length && state.spent >= record.uses) {
+          await end();
+          return { ...r, ended: true };
+        }
         return r;
       },
       /** Revoke what is left. */
-      async end() {
-        try {
-          await edge.revoke(record.grantId);
-        } catch (e) {
-          if (!(e && e.status === 'no-such-budget')) throw e; /* already gone: expired, or a lock */
-        }
-        state.ended = true;
-        await save();
-      },
+      end,
     };
+    /* revoke what is left (a grant-end link); also called by ticket() once the last use is ticketed */
+    async function end() {
+      try {
+        await edge.revoke(record.grantId);
+      } catch (e) {
+        if (!(e && e.status === 'no-such-budget')) throw e; /* already gone: expired, or a lock */
+      }
+      state.ended = true;
+      await save();
+    }
   }
 
   async function open({ reason, scopes, ttlMinutes, continueOf = null }) {
