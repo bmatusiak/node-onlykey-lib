@@ -1735,6 +1735,18 @@ COMMANDS['edge-agent'] = {
       });
       io.out(row('ssh key', svc.sshLine));
       if (svc.fingerprint) io.out(row('gpg key', svc.fingerprint));
+      /* the certificate into the host's Key Chain list too, so `keychain export --pgp` prints it (spec session, step 3) */
+      if (io.keychainRecord && config.cert && config.gpgUid) {
+        try {
+          io.keychainRecord({
+            scheme: 'gpg', label: `gpg://${config.gpgUid}`, type: 'ed25519', publicKey: config.cert.signPublic, code: 232,
+            pgp: config.cert.armored, pgpFingerprint: config.cert.fingerprint, certCreated: config.cert.created,
+            certExpires: config.cert.expires || 0, tool: 'onlykey-js edge-agent',
+          });
+        } catch (e) {
+          io.err(`edge-agent: the certificate was not recorded in the Key Chain list (${e.message})`);
+        }
+      }
       if (svc.certArmored) {
         fsm.writeFileSync(pathm.join(home, 'agent-gpg.asc'), svc.certArmored);
         io.out(row('gpg cert', pathm.join(home, 'agent-gpg.asc')));
