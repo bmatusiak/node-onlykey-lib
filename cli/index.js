@@ -1172,9 +1172,18 @@ function printArtifacts(io, a) {
   io.out(`hex     ${a.hex}`);
 }
 
+/* --expires 1y | <n>d | never -> seconds (0 = never); edge-agent and keychain cert */
+function parseExpires(text) {
+  const t = String(text).trim();
+  if (/^(never|0)$/.test(t)) return 0;
+  const m = /^(\d+)([yd])$/.exec(t);
+  if (!m) throw usage('--expires takes 1y, <n>d (days) or never');
+  return Number(m[1]) * (m[2] === 'y' ? 365 : 1) * 86400;
+}
+
 COMMANDS.keychain = {
   mirrors: '(new)',
-  usage: 'list [--json] | show <label> [--json] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
+  usage: 'list [--json] | show <label> [--json] | export <label|fingerprint> --pgp|--ssh|--age [-o file] | cert <gpg-label> [--expires 1y] [--revoke [--reason N]] [--v2] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
   writes: true,
   summary: 'Key Chain: the derived keys this machine has used (list, show), the key slots, derive/generate keys',
   options: {
@@ -1187,6 +1196,13 @@ COMMANDS.keychain = {
     'user-id': { type: 'string' },
     v2: { type: 'boolean' },
     json: { type: 'boolean' },
+    pgp: { type: 'boolean' },
+    ssh: { type: 'boolean' },
+    age: { type: 'boolean' },
+    output: { type: 'string', short: 'o' },
+    expires: { type: 'string' },
+    revoke: { type: 'boolean' },
+    reason: { type: 'string' },
   },
   async run(io, opts, args) {
     const keychain = require('../src/keychain');
@@ -1224,6 +1240,75 @@ COMMANDS.keychain = {
       }
       for (const e of pick.map(shape)) io.out(`${e.label.padEnd(44)} ${e.type.padEnd(8)} ${e.fingerprint}  ${e.tools.join(', ')}`.trimEnd());
       return 0;
+    }
+
+    /*
+     * export: what the host list saved for a key - its armored PGP certificate,
+     * its authorized_keys line or its age recipient. No device, no press,
+     * public only (spec session, 2026-10-03). A derived key has nothing private
+     * to export; host-made keys keep their own encrypted-copy flow (gen --host).
+     */
+    if (sub === 'export') {
+      const rec = require('./keychain-record');
+      const want = ['pgp', 'ssh', 'age'].filter((k) => opts[k]);
+      if (rest.length !== 1 || want.length !== 1) throw usage('keychain export takes one label or fingerprint and one of --pgp, --ssh, --age');
+      const key = rest[0].replace(/\s+/g, '').toLowerCase();
+      const e = rec.load().find((x) => x.label === rest[0] || x.id === rest[0]
+        || String(x.fingerprint || '').replace(/\s+/g, '') === key || String(x.pgpFingerprint || '').toLowerCase() === key);
+      if (!e) throw new CliError(`no key "${rest[0]}" in ${rec.keychainFile()} - keychain list shows what is there`);
+      const text = want[0] === 'pgp' ? e.pgp : (e.artifacts || {})[want[0]];
+      if (!text) {
+        throw new CliError(want[0] === 'pgp'
+          ? `no certificate saved for ${e.label} - make one: ${NAME} keychain cert ${e.label}`
+          : `${e.label} (${e.type}) has no ${want[0]} form`);
+      }
+      if (opts.output) {
+        await io.writeFile(opts.output, text.endsWith('\n') ? text : `${text}\n`);
+        io.out(`wrote ${opts.output}`);
+      } else {
+        io.out(text.replace(/\n$/, ''));
+      }
+      return 0;
+    }
+
+    /*
+     * cert: build (or renew) the PGP certificate of a derived gpg identity, or
+     * --revoke it. Each self-signature is a PHYSICAL PRESS on the key - never an
+     * Edge budget, even under a live one that covers the label (src/keychain/
+     * cert.js never ARMs). The certificate is saved into the host list, where
+     * `keychain export --pgp` finds it.
+     */
+    if (sub === 'cert') {
+      if (rest.length !== 1) throw usage('keychain cert takes one gpg label: gpg://Name <email>');
+      const rec = require('./keychain-record');
+      const label = `gpg://${keychain.cert.uidOf(rest[0])}`;
+      const saved = rec.load().find((x) => x.label === label && x.type === 'ed25519');
+      const version = opts.v2 || (saved && saved.code === 232) ? 2 : 1;
+      const expires = opts.expires !== undefined ? parseExpires(opts.expires) : (saved && saved.certExpires) || 0;
+      const record = io.keychainRecord || rec.record;
+      return withDevice(io, opts, async ({ okcrypto, identity }) => {
+        requireUnlocked(identity, 'keychain cert');
+        const onPress = () => io.err('keychain: confirm on the OnlyKey (a press)');
+        const openpgp = require('../src/crypto/pgp');
+        if (opts.revoke) {
+          if (!saved || !saved.certCreated) throw new CliError(`no certificate saved for ${label} - there is nothing to revoke yet`);
+          const r = await keychain.cert.makeRevocation(okcrypto, openpgp, { label, version, created: saved.certCreated, reason: Number(opts.reason) || 0, onPress });
+          record({ scheme: 'gpg', label, type: 'ed25519', publicKey: saved.publicKey, code: version === 2 ? 232 : 132, revocation: r.armored, tool: `${NAME} keychain cert` });
+          io.out(row('revoked', r.fingerprint));
+          if (opts.output) { await io.writeFile(opts.output, r.armored); io.out(`wrote ${opts.output}`); } else io.out(r.armored.replace(/\n$/, ''));
+          return 0;
+        }
+        /* a renewal keeps the creation time, so the fingerprint stays */
+        const c = await keychain.cert.makeCertificate(okcrypto, openpgp, { label, version, created: saved && saved.certCreated, expires, onPress });
+        record({
+          scheme: 'gpg', label, type: 'ed25519', publicKey: c.signPublic, code: version === 2 ? 232 : 132,
+          pgp: c.armored, pgpFingerprint: c.fingerprint, certCreated: c.created, certExpires: c.expires, tool: `${NAME} keychain cert`,
+        });
+        io.out(row('fingerprint', c.fingerprint));
+        io.out(row('expires', c.expires ? new Date((c.created + c.expires) * 1000).toISOString().slice(0, 10) : 'never'));
+        io.out(`saved - ${NAME} keychain export "${label}" --pgp`);
+        return 0;
+      });
     }
 
     if (sub === 'slots') {
@@ -1283,7 +1368,7 @@ COMMANDS.keychain = {
       return opts.host ? keychainGenHost(io, opts, type, keychain) : keychainGenDevice(io, opts, type);
     }
 
-    throw usage('keychain takes list, show, slots, pub, derive or gen');
+    throw usage('keychain takes list, show, export, cert, slots, pub, derive or gen');
   },
 };
 
@@ -1578,12 +1663,7 @@ COMMANDS['edge-agent'] = {
       config.committer = { name: opts['committer-name'] || (config.committer || {}).name, email: opts['committer-email'] || (config.committer || {}).email };
     }
     /* the certificate's lifetime (Brad, 2026-10-03: one year for the real key): 1y, <n>d, or never */
-    if (opts.expires !== undefined) {
-      const m = /^(\d+)([yd])$/.exec(String(opts.expires).trim());
-      if (/^(never|0)$/.test(String(opts.expires).trim())) config.expires = 0;
-      else if (m) config.expires = Number(m[1]) * (m[2] === 'y' ? 365 : 1) * 86400;
-      else throw usage('--expires takes 1y, <n>d (days) or never');
-    }
+    if (opts.expires !== undefined) config.expires = parseExpires(opts.expires);
     if (!config.ssh) throw usage('the first run needs --ssh ssh://user@host (the agent\'s own SSH identity) and --gpg "Name <email>"');
     const saveConfig = (c) => {
       fsm.mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -2584,12 +2664,26 @@ async function main(argv, io = {}) {
       options,
     });
   } catch (err) {
-    full.err(`${NAME}: ${err.message}`);
-    full.err(`Run "${NAME} help" for the commands.`);
-    return 2;
+    /*
+     * Two commands may give one option name different shapes (edge-agent's
+     * `--ssh ssh://user@host`, keychain export's bare `--ssh`): the union cannot
+     * hold both. Find the command loosely, then parse again with ITS options.
+     */
+    const loose = parseArgs({ args: argv, allowPositionals: true, strict: false, options: GLOBAL_OPTIONS });
+    const guess = loose.positionals[0];
+    const own = guess && Object.prototype.hasOwnProperty.call(COMMANDS, guess) ? COMMANDS[guess] : null;
+    try {
+      if (!own) throw err;
+      parsed = parseArgs({ args: argv, allowPositionals: true, strict: true, options: { ...GLOBAL_OPTIONS, ...(own.options || {}) } });
+    } catch (err2) {
+      full.err(`${NAME}: ${err2.message}`);
+      full.err(`Run "${NAME} help" for the commands.`);
+      return 2;
+    }
   }
 
-  const [name, ...rest] = parsed.positionals;
+  const name = parsed.positionals[0];
+  let rest = parsed.positionals.slice(1);
   if (parsed.values.help || !name) return COMMANDS.help.run(full);
 
   const cmd = Object.prototype.hasOwnProperty.call(COMMANDS, name) ? COMMANDS[name] : null;
@@ -2602,6 +2696,16 @@ async function main(argv, io = {}) {
   if (foreign.length) {
     full.err(`${NAME}: "${name}" does not take ${foreign.map((k) => `--${k}`).join(', ')}.`);
     return 2;
+  }
+  /* the union gave a shared name the other command's shape: parse again with this command's own */
+  if (cmd.options) {
+    try {
+      parsed = parseArgs({ args: argv, allowPositionals: true, strict: true, options: { ...GLOBAL_OPTIONS, ...cmd.options } });
+      rest = parsed.positionals.slice(1);
+    } catch (err) {
+      full.err(`${NAME}: ${err.message}`);
+      return 2;
+    }
   }
   /*
    * Every derived public key this run makes goes into the host's Key Chain list

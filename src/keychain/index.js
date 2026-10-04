@@ -14,5 +14,6 @@ module.exports = {
   artifacts: require('./artifacts'),
   derive: require('./derive'),
   list: require('./list'),
+  cert: require('./cert'),
   pgpImport: require('./pgp-import'),
 };

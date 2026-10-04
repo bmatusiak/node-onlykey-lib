@@ -492,6 +492,58 @@ async function signDetached(openpgp, { data, signPublic, curve, created, sign, w
   }
 }
 
+/**
+ * A REVOCATION CERTIFICATE for a derived key (spec session, 2026-10-03:
+ * `keychain cert --revoke`): a key revocation signature (0x20) over the primary
+ * key, made by the device - a physical press, never a budget - and armored as a
+ * public key block, as `gpg --gen-revoke` writes it. Importing it into a keyring
+ * that holds the certificate marks the key revoked. The derived key can always
+ * be re-derived, so a revocation can always be made later, too.
+ *
+ * @param {object} openpgp the fork
+ * @param {{signPublic: Uint8Array, curve: string, created: number, sign: Function, reason?: number, text?: string, when?: Date}} o
+ *   reason: RFC 4880 5.2.3.23 (0 no reason, 1 superseded, 2 compromised, 3 retired); default 0
+ * @returns {Promise<{armored: string, fingerprint: string}>}
+ */
+async function buildRevocation(openpgp, { signPublic, curve, created, sign, reason = 0, text = '', when = new Date() }) {
+  const kinds = CURVES[curve];
+  if (!kinds) throw new Error(`no GPG key for curve ${curve}`);
+  if (typeof sign !== 'function') throw new TypeError('buildRevocation needs sign(digest), the device signer');
+  const primary = new openpgp.PublicKeyPacket();
+  await primary.read(keyPacketBody(kinds.sign, signPublic, toSeconds(created, 'created')));
+  const config = { ...openpgp.config, nonDeterministicSignaturesViaNotation: false };
+  const hooks = openpgp.setHardwareHooks({});
+  const before = { ...hooks };
+  const signQ = openpgpPoint(signPublic);
+  openpgp.setHardwareHooks({
+    signer: async (algo, hashAlgo, hashed, publicKeyParams) => {
+      if (algo !== kinds.sign.algo || !bytesEqual(publicKeyParams.Q, signQ)) return null;
+      const sig = Uint8Array.from(await sign(Uint8Array.from(hashed)));
+      if (!verifyDigest(kinds.sign.keyType, signPublic, hashed, sig)) {
+        throw new Error("the OnlyKey's revocation signature does not verify against its own public key");
+      }
+      return { r: sig.slice(0, 32), s: sig.slice(32, 64) };
+    },
+  });
+  try {
+    const packet = new openpgp.SignaturePacket();
+    Object.assign(packet, {
+      signatureType: openpgp.enums.signature.keyRevocation,
+      publicKeyAlgorithm: kinds.sign.algo,
+      hashAlgorithm: openpgp.enums.hash.sha256,
+      reasonForRevocationFlag: reason,
+      reasonForRevocationString: text,
+    });
+    await packet.sign(primary, { key: primary }, when, false, config);
+    const list = new openpgp.PacketList();
+    list.push(packet);
+    const armored = openpgp.armor(openpgp.enums.armor.publicKey, list.write(), undefined, undefined, undefined, true);
+    return { armored, fingerprint: primary.getFingerprint().toUpperCase() };
+  } finally {
+    openpgp.setHardwareHooks(before);
+  }
+}
+
 /*
  * An algorithm + OID pair back to the device key it came from - the inverse
  * of CURVES, for reading a certificate back. Anything else (an RSA key, a key
@@ -511,6 +563,7 @@ function kindOf(algo, oidBytes) {
 }
 
 module.exports = {
+  buildRevocation,
   ALGO,
   OID,
   CURVES,

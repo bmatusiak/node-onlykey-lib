@@ -101,3 +101,24 @@ test('recordingStart: any command\'s agent.publicKey is recorded (ssh and gpg na
   assert.equal(raw.length, 32, 'the derive still answers');
   assert.match(errs[0], /could not record/);
 });
+
+test('keychain export --ssh / --age / --pgp: what the list saved; no certificate yet names the cert command', async () => {
+  fs.rmSync(FILE, { force: true });
+  await run(['keychain', 'derive', 'ssh', 'ed25519', 'me@host']);
+  let r = await run(['keychain', 'export', 'ssh://me@host', '--ssh'], { record: false });
+  assert.equal(r.code, 0, r.err.join('\n'));
+  assert.match(r.out[0], /^ssh-ed25519 /);
+  /* a label x25519 derive goes over CTAP, which this fake firmware does not answer: recorded directly */
+  rec.record({ scheme: 'label', label: 'age:personal', type: 'x25519', publicKey: new Uint8Array(32).fill(0x42), tool: 'test' });
+  r = await run(['keychain', 'export', 'age:personal', '--age'], { record: false });
+  assert.match(r.out[0], /^age1/);
+  r = await run(['keychain', 'export', 'ssh://me@host', '--pgp'], { record: false });
+  assert.equal(r.code, 1);
+  assert.match(r.err.join('\n'), /keychain cert/);
+  r = await run(['keychain', 'cert', 'gpg://Test <t@t>', '--expires', '1y']);
+  assert.equal(r.code, 0, r.err.join('\n'));
+  assert.ok(r.out.some((l) => /saved/.test(l)));
+  r = await run(['keychain', 'export', 'gpg://Test <t@t>', '--pgp'], { record: false });
+  assert.match(r.out.join('\n'), /BEGIN PGP PUBLIC KEY BLOCK/);
+  assert.doesNotMatch(r.out.join('\n'), /PRIVATE/);
+});

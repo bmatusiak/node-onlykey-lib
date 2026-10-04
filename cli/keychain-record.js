@@ -66,6 +66,8 @@ function record(fields, { file = keychainFile(), now = new Date().toISOString() 
     old.lastSeen = now;
     old.tools = [...new Set([...(old.tools || []), ...e.tools])];
     if (!old.fingerprint) old.fingerprint = e.fingerprint;
+    /* keychain cert: a new certificate (or renewal) and a revocation replace the saved ones - public blocks only (createEntry checked them) */
+    for (const k of ['pgp', 'pgpFingerprint', 'certCreated', 'certExpires', 'revocation']) if (e[k] !== undefined) old[k] = e[k];
   } else {
     entries.push(e);
   }

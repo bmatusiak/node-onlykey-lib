@@ -76,6 +76,9 @@ function createEntry(fields) {
   if (e.pgp !== undefined && (typeof e.pgp !== 'string' || !/BEGIN PGP PUBLIC KEY BLOCK/.test(e.pgp))) {
     throw new Error('an entry\'s pgp is an armored PUBLIC key block');
   }
+  if (e.revocation !== undefined && (typeof e.revocation !== 'string' || !/BEGIN PGP PUBLIC KEY BLOCK/.test(e.revocation))) {
+    throw new Error('an entry revocation is an armored PUBLIC key block');
+  }
   if (!e.artifacts && e.publicKey.length) {
     try { e.artifacts = artifacts.forKey({ type: e.type, publicKey: e.publicKey }); } catch (_) { e.artifacts = {}; }
   }
