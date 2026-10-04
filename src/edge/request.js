@@ -52,7 +52,8 @@ const MAX_REQUEST_USES = 300;
 const MAX_LIFETIME_MINUTES = 24 * 60;
 /* the typed refusals an app answers with (4.7a), plus 'invalid' for a request that fails check() */
 /* still_live (4.7a, 2026-10-03): a continue names a budget that has not ended - only an ended budget can be continued */
-const REFUSALS = Object.freeze(['declined', 'timeout', 'copy_unverified', 'ticket_owed', 'restoring', 'still_live', 'invalid']);
+/* busy (2026-10-04): another request is on the phone's sheet - one at a time, never queued */
+const REFUSALS = Object.freeze(['declined', 'timeout', 'copy_unverified', 'ticket_owed', 'restoring', 'still_live', 'invalid', 'busy']);
 const OPS = Object.freeze({ sign: OP.SIGN, decrypt: OP.DECRYPT });
 
 const u16 = (n) => Uint8Array.of(n & 0xff, (n >>> 8) & 0xff);

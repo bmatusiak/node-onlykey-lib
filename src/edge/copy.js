@@ -237,7 +237,14 @@ function verifyCopy(copy, key) {
   const v = a.chain;
   if (!v.ok) return fail('chain', { seq: v.failure.seq, detail: v.failure });
   if (a.open.length) return fail('gap', { seq: a.open[0].from, detail: { gaps: a.open } });
-  const lastGapEnd = a.missing.reduce((m, g) => Math.max(m, g.to), -1);
+  /*
+   * Checked from after the last range set aside: a gap a LOSS covers, and ALSO any range a
+   * LOSS names that this copy still holds (2026-10-04: budget 166's links, written between
+   * the two R3 builds, fail the exact rule; the spec's fix is a LOSS over them - your press -
+   * and the copy is then checked after them, not stuck on them).
+   */
+  const lossEnd = lossesIn(entries).reduce((m, l) => Math.max(m, l.to), -1);
+  const lastGapEnd = Math.max(a.missing.reduce((m, g) => Math.max(m, g.to), -1), lossEnd);
 
   /*
    * Every link outside a covered gap is now verified, and so is the head the

@@ -106,8 +106,8 @@ test('copy: an empty key verifies only an empty copy', () => {
 });
 
 /* the story, then a pressed LOSS {from, to} the person accepted (R24) - the key's head moves on with it */
-function withLoss(from, to) {
-  const s = story();
+function withLoss(from, to, opts = {}) {
+  const s = story(opts);
   const subject = new Uint8Array(32);
   new DataView(subject.buffer).setUint32(0, to, true);
   const seq = s.key.head.seq + 1;
@@ -317,4 +317,14 @@ test('R3 exact: an opening that says 2 with a spend at 0 fails; one that says 0 
   assert.equal(v.ok, false);
   assert.equal(v.detail.reason, 'opening-count');
   assert.equal(verdict({ scopes: TWO, spendScopes: [0, 0], openingScope: 0 }).ok, true, 'an old budget');
+});
+
+test('a LOSS over links the copy still holds sets them aside: a budget that fails R3, then a pressed LOSS over its links - the copy verifies (2026-10-04, budget 166)', () => {
+  const bad = { scopes: TWO, spendScopes: [1, 2], openingScope: 0 };
+  const s0 = story(bad);
+  assert.equal(copy.verifyCopy({ links: s0.links, openings: s0.openings }, s0.key).reason, 'scope', 'the budget fails the exact rule');
+  const opening = s0.grantId - 1;
+  const s = withLoss(opening, s0.key.head.seq, bad);
+  const v = copy.verifyCopy({ links: s.links, openings: s.openings }, s.key);
+  assert.equal(v.ok, true, JSON.stringify(v));
 });
