@@ -254,9 +254,22 @@ ${reads}
   for (const [i, h] of BACKUP_HOOKS.entries()) applyHook(stageDir, h, `plugin backups hook ${i + 1} (${h.file})`);
 }
 
-/** The storage-slot suffix a plugin build uses, so it never shares the base build's flash. */
+/**
+ * The plugins a build's storage slot is named after: those that keep state of
+ * their own. A manifest with `stateless: true` (key_chain: it only reports)
+ * keeps nothing in flash or EEPROM, so adding or removing it must not move the
+ * soft key to another, empty slot (2026-10-03: a slot change reads to the person
+ * as "set up this key").
+ * @param {{name: string, stateless?: boolean}[]} manifests  load()'s result
+ * @returns {string[]}
+ */
+function slotPlugins(manifests) {
+  return manifests.filter((m) => !m.stateless).map((m) => m.name);
+}
+
+/** The storage-slot suffix a plugin build uses, so it never shares the base build's flash. Pass slotPlugins() names. */
 function slotSuffix(names) {
   return names.length ? `plugins-${[...names].sort().join('.')}` : '';
 }
 
-module.exports = { selected, available, load, apply, slotSuffix, BACKUP_MAX };
+module.exports = { selected, available, load, apply, slotPlugins, slotSuffix, BACKUP_MAX };

@@ -122,3 +122,10 @@ test('slotSuffix: a plugin build gets its own storage; none = the base slot', ()
   assert.equal(plugins.slotSuffix([]), '');
   assert.equal(plugins.slotSuffix(['hello', 'edge']), 'plugins-edge.hello');
 });
+
+test('slotPlugins: a stateless plugin does not name the storage slot (key_chain joins without moving the soft key)', () => {
+  const fp = require('../cli/firmware-plugins');
+  const set = [{ name: 'edge' }, { name: 'key_chain', stateless: true }, { name: 'config' }];
+  assert.deepEqual(fp.slotPlugins(set), ['edge', 'config']);
+  assert.equal(fp.slotSuffix(fp.slotPlugins(set)), 'plugins-config.edge');
+});
