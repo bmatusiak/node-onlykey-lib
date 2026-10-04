@@ -283,6 +283,15 @@ function setup(imports, register, config) {
   function agentAvailable(version) {
     const name = version === 2 ? 'agentDerivationV2' : 'agentDerivation';
     if (deviceCan(name) === false) {
+      /*
+       * No version read is not an old firmware (2026-10-03: a soft key caught
+       * locked right after an app restart read as "no agent derivation v2" on
+       * 3.1.0). Say what is actually wrong.
+       */
+      const id = session && session.identity;
+      if (!id || !id.version) {
+        throw new Error(`the key did not say its firmware version (${id ? id.state : 'no status'}) - unlock it, then try again`);
+      }
       throw new Error(
         version === 2
           ? 'this firmware has no agent derivation v2 (it arrived in 3.0.5); use version 1'

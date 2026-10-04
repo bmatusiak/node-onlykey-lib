@@ -103,7 +103,7 @@ async function setup({ cap = 4 } = {}) {
   const h = host();
   const logs = [];
   const agent = createEdgeAgent({
-    device, pins: [h.fingerprint], log: (l) => logs.push(l),
+    device, edge, pins: [h.fingerprint], log: (l) => logs.push(l),
     ssh: { identity: SSH_IDENTITY, name: SSH_NAME, comment: SSH_NAME, curve: 'ed25519', raw },
   });
   agent.setBudget(b);
@@ -154,25 +154,36 @@ test('an exec\'s endpoint: a sign bound to the pinned host is paid by the budget
   assert.equal(links[0].paid, true);
 });
 
-test('THE FIX: another process signing during an exec gets a press, not the budget (the shared endpoint never pays)', async () => {
+test('THE FIX: another process signing during an exec gets a press, not the budget - and under R16 that press owes a ticket, which status names and exec refuses on', async () => {
   const { agent, b, h, keyBlob, lastLink } = await setup();
   const ex = await agent.openExec({ head: b.head(), reason: 'push lib' });
   /* the other process: the shared endpoint, even bound to the pinned host */
   const sid = crypto.randomBytes(32);
-  const replies = [];
   const conn = {};
-  replies.push(await agent.sharedHandler.handle(h.bind(sid), conn));
-  replies.push(await agent.sharedHandler.handle(signMsg(keyBlob, userauth(sid)), conn));
+  await agent.sharedHandler.handle(h.bind(sid), conn);
+  await agent.sharedHandler.handle(signMsg(keyBlob, userauth(sid)), conn);
   const f = await lastLink();
   assert.equal(f.decision, codes.DECISION.APPROVE, 'a press - the budget did not pay');
   assert.notEqual(f.grantId, b.grantId);
-  /* and the exec's own use is still there for the exec */
-  const sid2 = crypto.randomBytes(32);
-  await sshClient(ex.sshPath, [h.bind(sid2), signMsg(keyBlob, userauth(sid2))]);
-  assert.equal((await lastLink()).decision, codes.DECISION.SELF_PRESS);
   await ex.close();
+  /*
+   * R16 (seen on the Pixel, 2026-10-03): a pressed sign with the agent's key owes
+   * a ticket while a budget covers it, and nothing is paid until it is ticketed
+   * (R18). The key says so; the agent names the seq and refuses before running.
+   */
+  const st = await agent.status();
+  assert.deepEqual(st.keyOwed, [f.seq], 'status names what the key owes');
+  await assert.rejects(agent.openExec({ head: b.head(), reason: 'next' }), { code: 'EEDGE_KEY_OWED' });
+  const next = await agent.ticket(f.seq, { message: 'the pressed sign on the shared endpoint' });
+  assert.deepEqual((await agent.status()).keyOwed, []);
+  /* ticketed: the exec's own use pays again */
+  const ex2 = await agent.openExec({ head: next, reason: 'push lib' });
+  const sid2 = crypto.randomBytes(32);
+  await sshClient(ex2.sshPath, [h.bind(sid2), signMsg(keyBlob, userauth(sid2))]);
+  assert.equal((await lastLink()).decision, codes.DECISION.SELF_PRESS);
+  await ex2.close();
+  assert.equal((await agent.status()).spent, 1, 'spent, from the budget steps');
 });
-
 test('the budget does not pay for a host that is not pinned, a forged bind, no bind, or a request for another session', async () => {
   const { agent, b, h, keyBlob, lastLink } = await setup();
   const cases = [
@@ -184,8 +195,11 @@ test('the budget does not pay for a host that is not pinned, a forged bind, no b
   for (const [name, msgs] of cases) {
     const ex = await agent.openExec({ head: b.head(), reason: name });
     await sshClient(ex.sshPath, msgs(crypto.randomBytes(32)));
-    assert.equal((await lastLink()).decision, codes.DECISION.APPROVE, `${name}: paid by the budget`);
+    const f = await lastLink();
+    assert.equal(f.decision, codes.DECISION.APPROVE, `${name}: paid by the budget`);
     await ex.close();
+    /* R16: that press used the agent's key under its budget - it owes a ticket before the next exec */
+    await agent.ticket(f.seq, { message: `pressed: ${name}` });
   }
 });
 
@@ -213,7 +227,7 @@ test('the endpoint closes with the exec, and at its cap', async () => {
   await assert.rejects(new Promise((resolve, reject) => { const s = net.connect(ex.sshPath); s.once('connect', () => { s.destroy(); resolve(); }); s.once('error', reject); }));
   const capped = await agent.openExec({ head: b.head(), reason: 'y', capMs: 50 });
   await new Promise((r) => setTimeout(r, 150));
-  assert.equal(agent.status().execs, 0, 'closed at the cap');
+  assert.equal((await agent.status()).execs, 0, 'closed at the cap');
   await assert.rejects(new Promise((resolve, reject) => { const s = net.connect(capped.sshPath); s.once('connect', () => { s.destroy(); resolve(); }); s.once('error', reject); }));
 });
 

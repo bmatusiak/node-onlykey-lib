@@ -33,6 +33,7 @@ const path = require('path');
 const agentSrv = require('./ssh-agent');
 const bindLib = require('./ssh-session-bind');
 const agentProto = require('../src/protocol/agent');
+const { chain, tickets, codes } = require('../src/edge');
 
 const EXEC_CAP_MS = 10 * 60 * 1000;
 
@@ -72,6 +73,19 @@ function oneShotPath({ windows = agentSrv.IS_WINDOWS } = {}) {
  * @param {(line: string) => void} [o.log]
  */
 function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log = () => {}, endpointPath = oneShotPath, edge = null }) {
+  /* the key's ring: its recent links, oldest first (R5) */
+  const ring = async (h) => (h.seq === null || h.oldest === null ? [] : edge.pickup(h.oldest, h.seq - h.oldest + 1));
+  /*
+   * R16: what the KEY says is owed. HEAD gives the count; the seqs come from
+   * replaying the ring - an owed use is older than its ticket, so every owed use
+   * still in the ring is found; the rest are older than the ring.
+   */
+  const keyOwed = async (h, rows = null) => {
+    if (!h.owed && !h.overflow) return { seqs: [], older: 0 };
+    const seqs = tickets.keyDebts(rows || await ring(h)).owed;
+    return { seqs, older: Math.max(0, h.owed - seqs.length) + (h.overflow ? 1 : 0) };
+  };
+  const owedText = (k) => [k.seqs.length ? `tickets for #${k.seqs.join(', #')}` : '', k.older ? `${k.older} older than the key's ring (waive on the phone)` : ''].filter(Boolean).join(' and ');
   let budget = null;          /* the work budget (src/edge/client.js budget), once asked for or resumed */
   const execs = new Map();    /* token -> the open exec */
 
@@ -116,6 +130,8 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     if (owed.length) throw fail('EEDGE_TICKET_OWED', `ticket owed for #${owed.join(', #')} - okedge ticket first`);
     if (edge) {
       const h = await edge.head();
+      const k = await keyOwed(h);
+      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - okedge ticket them first (R16: a pressed sign with the agent's key owes one too)`);
       if (!h.live.includes(budget.grantId)) throw fail('EEDGE_GONE', `budget ${budget.grantId} is not live on the key (ended, expired, or the key locked) - ask for a new one`);
       if ((h.held || []).includes(budget.grantId)) throw fail('EEDGE_HELD', `budget ${budget.grantId} is on hold (from the phone) - Resume there first`);
     }
@@ -177,10 +193,26 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
       await budget.ticket({ seq }, { code, message });
       return budget.head();
     },
-    status() {
-      return budget
-        ? { budget: budget.grantId, uses: budget.uses, head: budget.head(), owed: budget.pending(), execs: execs.size }
-        : { budget: null, execs: execs.size };
+    /*
+     * The agent's own view plus the KEY's (spec session, 2026-10-03, bug 1): the
+     * seqs the key says are owed - this agent's paid uses and any pressed sign
+     * with its key (R16) - and the uses spent, from the budget's steps.
+     */
+    async status() {
+      if (!budget) return { budget: null, execs: execs.size };
+      const r = { budget: budget.grantId, uses: budget.uses, spent: null, head: budget.head(), owed: budget.pending(), keyOwed: [], keyOwedOlder: 0, execs: execs.size };
+      if (edge) {
+        const h = await edge.head();
+        const rows = await ring(h);
+        const k = await keyOwed(h, rows);
+        r.keyOwed = k.seqs;
+        r.keyOwedOlder = k.older;
+        const steps = rows.map((row) => chain.decodeLink(row.link))
+          .filter((f) => f.grantId === budget.grantId && f.decision === codes.DECISION.SELF_PRESS)
+          .map((f) => f.grantStep);
+        if (steps.length) r.spent = Math.max(...steps);
+      }
+      return r;
     },
     async closeAll() { for (const e of [...execs.values()]) await e.close(); },
   };

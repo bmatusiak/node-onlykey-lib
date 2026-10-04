@@ -35,7 +35,15 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     if (cmd === 'status') {
       const s = await ask('status');
       if (!s.budget) out('no budget');
-      else out(`budget ${s.budget}: ${s.uses} uses · head ${s.head}${s.owed.length ? ` · ticket owed for #${s.owed.join(', #')}` : ''}`);
+      else {
+        const used = s.spent === null || s.spent === undefined ? `${s.uses} uses` : `${s.spent} of ${s.uses} used, ${s.uses - s.spent} left`;
+        out(`budget ${s.budget}: ${used} · head ${s.head}`);
+        const keyOwed = s.keyOwed || [];
+        if (keyOwed.length || s.keyOwedOlder) {
+          out(`the key owes ${keyOwed.length ? `tickets for #${keyOwed.join(', #')}` : ''}${keyOwed.length && s.keyOwedOlder ? ' and ' : ''}${s.keyOwedOlder ? `${s.keyOwedOlder} older (waive on the phone)` : ''}`);
+          for (const q of keyOwed) out(`  #${q}: ${s.owed.includes(q) ? "this budget's use" : "a pressed sign with the agent's key (R16)"} - okedge ticket ${q} --msg "…"`);
+        } else if (s.owed.length) out(`ticket owed for #${s.owed.join(', #')}`);
+      }
       return 0;
     }
     if (cmd === 'budget') {

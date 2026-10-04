@@ -138,7 +138,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         append({ op: codes.OP.GRANT_CREATE, decision: 1, flags: 1, grantId: id,
           subject: grants.grantSubject({ scopes, reasonHash: arg.slice(17, 49), genesis, lifetime }) });
         live.push(id);
-        budgets.set(id, { uses, used: 0, seed: new Uint8Array(32).fill(3) });
+        budgets.set(id, { uses, used: 0, seed: new Uint8Array(32).fill(3), scopes });
         emit(report([...u32(id), uses & 0xff, uses >> 8, ...genesis, ...u32(seq)]));
         checkpoint();
       } else if (sub === 0x12) {
@@ -200,7 +200,9 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
    * A sign the KEY decides (okplugin_edge_primed / _decision): it pays when the
    * ARM token is over THIS head and THESE bytes and a live budget off hold has
    * room - a self-press link with its reveal - and otherwise it is a pressed
-   * use (owing when an arm was waiting, R16).
+   * use - owing when an arm was waiting, or when a live budget covers the
+   * slot (R16: the agent's key used outside Edge; the fake matches the slot,
+   * not the label).
    */
   transport.use = (bytes, { slot = 2 } = {}) => {
     const subject = grants.requestSubject(Uint8Array.from(bytes));
@@ -217,9 +219,11 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
       return { seq, paid: true };
     }
     const F = codes.FLAG;
+    const covered = live.some((i) => (budgets.get(i).scopes || []).some((sc) => sc.op === codes.OP.SIGN && sc.slot === slot));
+    const owes = wasArmed || covered;
     const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot, subject,
-      flags: F.PRESS_OBSERVED | (wasArmed ? F.OWES_TICKET | F.ARMED : 0) });
-    if (wasArmed) owed.push(seq);
+      flags: F.PRESS_OBSERVED | (owes ? F.OWES_TICKET : 0) | (wasArmed ? F.ARMED : 0) });
+    if (owes) owed.push(seq);
     return { seq, paid: false };
   };
   return transport;
