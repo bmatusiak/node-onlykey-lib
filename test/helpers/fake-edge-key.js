@@ -34,6 +34,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
   const onHold = new Set();
   let owed = [];
   let armed = false;
+  let refusedArms = 0; /* B7 stage 2: HEAD byte 60, as the firmware counts them */
   const writes = [];
   const emit = (r) => setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: r })), delay);
   const budgets = new Map(); /* id -> {uses, used, seed}: what a live budget can still pay */
@@ -74,7 +75,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, restoring ? 1 : 0]));
+        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, restoring ? 1 : 0, refusedArms]));
       } else if (sub === 0x04) {
         emit(report([...PUB]));
       } else if (sub === 0x03) {
@@ -96,9 +97,9 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         emit(seqHead());
       } else if (sub === 0x22) {
         /* R13a: a token over head + the request's subject; the fake keeps it (a real key checks it at the sign) */
-        if (owed.length) return emit(status(0x0c));
+        if (owed.length) { refusedArms = Math.min(255, refusedArms + 1); return emit(status(0x0c)); }
         /* as the firmware's any_budget_payable: live, off hold, with uses left */
-        if (!live.some((id) => !onHold.has(id) && (!budgets.has(id) || budgets.get(id).used < budgets.get(id).uses))) return emit(status(0x0d));
+        if (!live.some((id) => !onHold.has(id) && (!budgets.has(id) || budgets.get(id).used < budgets.get(id).uses))) { refusedArms = Math.min(255, refusedArms + 1); return emit(status(0x0d)); }
         armed = arg.slice(0, 32);
         emit(status(0x00));
       } else if (sub === 0x13 || sub === 0x14) {

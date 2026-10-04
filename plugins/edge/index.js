@@ -69,12 +69,13 @@ const get16 = (b, o) => b[o] | (b[o + 1] << 8);
 const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /*
- * Is this report a HEAD answer? The key pads its 60 bytes with zeros and its
- * flags are small: four zero bytes, a 4-bit hold mask, owed <= OWED_MAX, two
- * booleans. A signature passes all of that about once in 2^40.
+ * Is this report a HEAD answer? The key pads its 61 bytes with zeros and its
+ * flags are small: three zero bytes, a 4-bit hold mask, owed <= OWED_MAX, two
+ * booleans. A signature passes all of that about once in 2^32. (Byte 60 is the
+ * refused-ARM counter since B7 stage 2; older firmware sends 0 there.)
  */
 function isHeadReply(r) {
-  if (r.length < 64 || r[60] | r[61] | r[62] | r[63]) return false;
+  if (r.length < 64 || r[61] | r[62] | r[63]) return false;
   return r[56] < 16 && r[57] <= tickets.OWED_MAX && r[58] <= 1 && r[59] <= 1;
 }
 
@@ -238,7 +239,10 @@ function setup(imports, register) {
      * {seq (null = no link yet), head, oldest (oldest pickable seq, or null),
      *  live: [budget ids], held: [the live ids on hold (R15a)], owed: number of
      *  uses owing a ticket (R16), overflow: an owed use fell off the key's list,
-     *  restoring: restored from a backup and not yet finished (R26)}
+     *  restoring: restored from a backup and not yet finished (R26),
+     *  refusedArms: ARMs the key refused since power-up, RAM only (B7 stage 2;
+     *  0 on firmware before it) - a refused ARM writes no link, so this is the
+     *  key's own evidence; the phone alarms when it rises}
      */
     async head(opts) {
       const [r] = await call(SUB.HEAD, null, { ...opts, accept: isHeadReply });
@@ -255,6 +259,7 @@ function setup(imports, register) {
         owed: r[57],
         overflow: Boolean(r[58]),
         restoring: Boolean(r[59]),
+        refusedArms: r[60],
       };
     },
 

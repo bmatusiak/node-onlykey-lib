@@ -78,3 +78,12 @@ test('HEAD skips a signature that lands while it waits', async () => {
   assert.equal(h.seq, clean.seq);
   assert.deepEqual(h.head, clean.head);
 });
+
+/* B7 stage 2: HEAD byte 60 counts refused ARMs since power-up (the key writes no link for them) */
+test('HEAD carries the refused-ARM counter, and it rises with each refused ARM', async () => {
+  const { edge } = await withLinks(0);
+  assert.equal((await edge.head()).refusedArms, 0);
+  /* no budget is live: the key refuses each ARM (EDGE:0D) */
+  for (let i = 0; i < 2; i++) await assert.rejects(edge.arm(new Uint8Array(32), new Uint8Array(32)));
+  assert.equal((await edge.head()).refusedArms, 2);
+});
