@@ -309,7 +309,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
  * sign code (221), told apart by label (R11a); sizes come from the request
  * (D4, at most 300 together).
  */
-function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221 }) {
+function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null, home = null }) {
   const scopes = ({ ssh: nSsh = 0, gpg: nGpg = 0 }) => [
     ...(nSsh ? [{ op: 'sign', slot: signCode, cap: nSsh, identity: ssh.name }] : []),
     ...(nGpg && gpg ? [{ op: 'sign', slot: signCode, cap: nGpg, identity: gpg.name }] : []),
@@ -347,6 +347,11 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       return { links, head: agent.budget() ? agent.budget().head() : null };
     },
     ticket: async ({ seq, code, message }) => ({ head: await agent.ticket(seq, { code: code || 'OK', message }) }),
+    /* okedge sync, phase 1: the PC's own copy - reads only (R8), no press; --status changes nothing */
+    sync: async ({ status }) => {
+      if (!edge) throw new Error('this agent service has no Edge key to sync from');
+      return require('./edge-copy').sync(edge, home || require('./edge-control').edgeHome(), { status: !!status });
+    },
     end: async () => {
       const b = agent.budget();
       if (b) await b.end();
@@ -454,7 +459,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
     }
   }
 
-  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand });
+  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge });
   for (const op of ['budget', 'continue', 'end']) {
     const h = handlers[op];
     handlers[op] = async (req) => {

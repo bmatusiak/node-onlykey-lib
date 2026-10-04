@@ -11,6 +11,8 @@
  *   okedge continue --ttl MIN [--caps n,n]                    continue it after a lock (ends the old one first)
  *   okedge exec --head H --reason "…" -- <command…>           run one command; its signature is paid by the budget
  *   okedge ticket <seq> [--code OK] --msg "…"                 file the ticket; prints the next head
+ *   okedge sync [--status]                                    the PC's own copy of the key's chain: read new links,
+ *                                                             verify (R27), keep; --status reports only (no press)
  *   okedge status                                             the budget, its head, tickets owed
  *   okedge end                                                end the budget
  *   okedge watch [--once]                                     follow the key's links live (read-only)
@@ -122,6 +124,14 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       out(`ticket filed for #${seq}`);
       out(`head = ${r.head}`);
       return 0;
+    }
+    if (cmd === 'sync') {
+      /* phase 1 (mcp-service.md 4.2b): PC <-> this key only; --with worker comes with E5 */
+      if (args.includes('--with')) { err('okedge sync --with: other copies (the Worker, another device) come later - phase 1 is this PC and the key'); return 2; }
+      const status = args.includes('--status');
+      const r = await ask('sync', { status });
+      for (const l of require('./edge-copy').lines(r, { status })) out(l);
+      return r.verdict.kind === 'tampered' ? 1 : 0;
     }
     if (cmd === 'end') {
       const r = await ask('end');
