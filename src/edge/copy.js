@@ -195,6 +195,7 @@ function assess(copy, key, opts = {}) {
   const deviceId = key.publicKey ? chain.deviceIdOf(key.publicKey) : key.deviceId;
   const anchors = checkpointAnchors(entries, copy, key);
   const v = chain.verify(entries, {
+    ...chain.chainStart(entries, deviceId), /* R28: a chain that begins with a continue starts there */
     deviceId, expectHead: { seq: key.head.seq, head: key.head.head }, anchors,
     ...(opts.ringFrom !== undefined ? { ringFrom: opts.ringFrom } : {}),
     ...(opts.lastSeen ? { lastSeen: opts.lastSeen } : {}),
@@ -255,7 +256,8 @@ function verifyCopy(copy, key) {
   /* the key's own links this session: their heads are the key's word */
   const keyHeld = heldSeqs(entries, key.held);
   const heldHead = new Map((key.held || []).map((k) => [chain.decodeLink(k.link).seq, k.head]));
-  const memo = new Map([[-1, chain.genesis(deviceId)]]);
+  const start = chain.chainStart(entries, deviceId);
+  const memo = new Map([[start.fromSeq - 1, start.fromHead]]);
   const headAt = (seq) => {
     if (memo.has(seq)) return memo.get(seq);
     const e = bySeq.get(seq);

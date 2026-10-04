@@ -27,6 +27,10 @@ export const OP: Readonly<{
     GRANT_HOLD: 13;
     GRANT_RESUME: 14;
     AGENT_ADD: 15;
+    CONTINUE: 16;
+    SIBLING_ADD: 17;
+    SIBLING_REMOVE: 18;
+    ANCHOR: 19;
 }>;
 export const DECISION: Readonly<{
     APPROVE: 1;
@@ -44,6 +48,7 @@ export const FLAG: Readonly<{
 }>;
 export const TAG: Readonly<{
     GENESIS: "OKEDGE-GENESIS-v1";
+    CONTINUE: "OKEDGE-CONTINUE-v1";
     LINK: "OKEDGE-LINK-v1";
     CHECKPOINT: "OKEDGE-CKPT-v1";
     GRANT: "OKEDGE-GRANT-v1";

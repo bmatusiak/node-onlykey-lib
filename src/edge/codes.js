@@ -35,8 +35,11 @@ const OP = Object.freeze({
   AGENT_ADD: 15,
   /*
    * Assigned 2026-10-04 for the spec session (firmware.md R20/R29/R30, okedge sync),
-   * appended so nothing above moves. Not written by the firmware yet:
-   * CONTINUE - a budget continued; SIBLING_ADD / SIBLING_REMOVE - another key with
+   * appended so nothing above moves.
+   * CONTINUE (R28, written by the firmware since 2026-10-04) - the FIRST link of a
+   * device's own chain: the next seq after the chain it continues, welded onto the
+   * new genesis, grant_id = debts carried, subject = chain.continueSubject. Not
+   * written yet: SIBLING_ADD / SIBLING_REMOVE - another key with
    * its own chain, added or removed with a press, subject SHA256("OKEDGE-SIBLING-v1"
    * || pubkey || device_id) (R29); ANCHOR - written by the key only inside a sync
    * Brad approved with a press: slot = sibling index, grant_id = sibling seq,
@@ -72,6 +75,7 @@ const FLAG = Object.freeze({
 /* Domain tags, ASCII, exactly as the spec spells them (R2, R7, R12, R16, R21). */
 const TAG = Object.freeze({
   GENESIS: 'OKEDGE-GENESIS-v1',
+  CONTINUE: 'OKEDGE-CONTINUE-v1',
   LINK: 'OKEDGE-LINK-v1',
   CHECKPOINT: 'OKEDGE-CKPT-v1',
   GRANT: 'OKEDGE-GRANT-v1',

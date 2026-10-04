@@ -2,6 +2,7 @@ export const LINK_BYTES: 64;
 export const REASONS: readonly string[];
 export function encodeLink(f: any): Uint8Array<ArrayBuffer>;
 export function decodeLink(b: any): {
+    scope: number;
     reservedZero: boolean;
     code?: number | undefined;
     refSeq?: number | undefined;
@@ -15,6 +16,16 @@ export function decodeLink(b: any): {
     grantStep: number;
 };
 export function genesis(deviceId: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export function continueSubject({ oldDeviceId, oldSeq, oldHead, owedSeqs }: {
+    oldDeviceId: any;
+    oldSeq: any;
+    oldHead: any;
+    owedSeqs?: never[] | undefined;
+}): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export function chainStart(entries: any, deviceId: any): {
+    fromSeq: number;
+    fromHead: Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+};
 export function weld(head: any, link: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /** Heads for a run of links from a start head: [head[first], head[first+1], ...]. */
 export function heads(links: any, startHead: any): (Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>)[];

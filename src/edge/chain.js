@@ -101,6 +101,35 @@ function genesis(deviceId) {
   return H(TAG.GENESIS, deviceId);
 }
 
+/*
+ * R28 continue (onlykey-edge firmware.md, decided 2026-10-04): a device moving to
+ * its own chain - a pre-R28 key after the update, or a backup restored onto another
+ * device - writes as its FIRST link op CONTINUE, at the next seq after the chain it
+ * continues, welded onto its NEW genesis. Its subject commits to the chain it came
+ * from and the debts it carries (oldest first):
+ *   SHA256("OKEDGE-CONTINUE-v1" || old device_id || old seq u32 || old head || debt seqs u32...)
+ * A host keeps the old copy (and the old checkpoint key) beside the new one and
+ * checks this subject against it.
+ */
+function continueSubject({ oldDeviceId, oldSeq, oldHead, owedSeqs = [] }) {
+  if (!(oldDeviceId instanceof Uint8Array) || oldDeviceId.length !== 16) throw new TypeError('edge: oldDeviceId must be 16 bytes');
+  return H(TAG.CONTINUE, oldDeviceId, u32le(oldSeq), bytes32(oldHead, 'oldHead'), ...owedSeqs.map((s) => u32le(s)));
+}
+
+/*
+ * Where a copy's chain starts: genesis at seq 0, or - when its first link is a
+ * CONTINUE - genesis at that link's seq (R28). Everything before it belongs to the
+ * chain it continued, not to this one.
+ */
+function chainStart(entries, deviceId) {
+  const first = (entries || [])[0];
+  if (first) {
+    const d = decodeLink(first.link || first);
+    if (d.op === OP.CONTINUE) return { fromSeq: d.seq, fromHead: genesis(deviceId) };
+  }
+  return { fromSeq: 0, fromHead: genesis(deviceId) };
+}
+
 function weld(head, link) {
   if (!(link instanceof Uint8Array) || link.length !== LINK_BYTES) throw new TypeError(`edge: a link is ${LINK_BYTES} bytes`);
   return H(TAG.LINK, bytes32(head, 'head'), link);
@@ -273,6 +302,6 @@ function signCheckpoint(fields, secretKey) {
 }
 
 module.exports = {
-  LINK_BYTES, REASONS, encodeLink, decodeLink, genesis, weld, heads, verify,
+  LINK_BYTES, REASONS, encodeLink, decodeLink, genesis, continueSubject, chainStart, weld, heads, verify,
   deviceIdOf, checkpointMessage, checkpointDigest, verifyCheckpoint, signCheckpoint,
 };
