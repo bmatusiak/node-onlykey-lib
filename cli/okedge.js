@@ -98,7 +98,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     if (cmd === 'budget') {
       const reason = opt(args, '--reason');
       const ttl = Number(opt(args, '--ttl'));
-      const uses = { ssh: Number(opt(args, '--ssh') || 0), gpg: Number(opt(args, '--gpg') || 0) };
+      const uses = { ssh: Number(opt(args, '--ssh') || 0), gpg: Number(opt(args, '--gpg') || 0), identity: opt(args, '--identity') || null };
       if (!reason || !Number.isInteger(ttl)) { err('okedge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES'); return 2; }
       out('Waiting for the phone - read the request there, then press…');
       const r = await ask('budget', { reason, uses, ttl }, { timeoutMs: 200000 });

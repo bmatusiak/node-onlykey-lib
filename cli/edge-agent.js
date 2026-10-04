@@ -310,8 +310,13 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
  * (D4, at most 300 together).
  */
 function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null, home = null }) {
-  const scopes = ({ ssh: nSsh = 0, gpg: nGpg = 0 }) => [
-    ...(nSsh ? [{ op: 'sign', slot: signCode, cap: nSsh, identity: ssh.name }] : []),
+  /*
+   * identity: name another identity in the ssh scope (okedge budget --identity) - for
+   * rule-10 tests with an identity the phone marks as test. Such a budget cannot
+   * pay this agent's own signs (the key derives a different key); it only asks.
+   */
+  const scopes = ({ ssh: nSsh = 0, gpg: nGpg = 0, identity = null }) => [
+    ...(nSsh ? [{ op: 'sign', slot: signCode, cap: nSsh, identity: identity || ssh.name }] : []),
     ...(nGpg && gpg ? [{ op: 'sign', slot: signCode, cap: nGpg, identity: gpg.name }] : []),
   ];
   const summary = (b) => ({ budget: b.grantId, uses: b.uses, head: b.head() });
