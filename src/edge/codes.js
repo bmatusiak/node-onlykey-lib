@@ -33,6 +33,20 @@ const OP = Object.freeze({
   GRANT_RESUME: 14,
   /* mcp-service.md 4.7a: an agent's key registered with a press (subject = grants.agentSubject) */
   AGENT_ADD: 15,
+  /*
+   * Assigned 2026-10-04 for the spec session (firmware.md R20/R29/R30, okedge sync),
+   * appended so nothing above moves. Not written by the firmware yet:
+   * CONTINUE - a budget continued; SIBLING_ADD / SIBLING_REMOVE - another key with
+   * its own chain, added or removed with a press, subject SHA256("OKEDGE-SIBLING-v1"
+   * || pubkey || device_id) (R29); ANCHOR - written by the key only inside a sync
+   * Brad approved with a press: slot = sibling index, grant_id = sibling seq,
+   * subject SHA256("OKEDGE-ANCHOR-v1" || sibling device_id || seq || head ||
+   * checkpoint sig) (R30). PEER_ADD / PEER_REMOVE (9, 10) are the wire's 0x30 / 0x31.
+   */
+  CONTINUE: 16,
+  SIBLING_ADD: 17,
+  SIBLING_REMOVE: 18,
+  ANCHOR: 19,
 });
 
 /* R3 `decision` (for op = ticket the byte is the ticket code instead). CHOSEN: 1-based. */
