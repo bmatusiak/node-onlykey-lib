@@ -94,3 +94,22 @@ export function missingGaps(entries: any, gaps: any, held: any): {
     from: any;
     to: number;
 }[];
+export function checkContinue(link: any, oldCopy: any): {
+    ok: boolean;
+    reason: string;
+    oldSeq?: undefined;
+    debts?: undefined;
+    debtsChecked?: undefined;
+} | {
+    ok: boolean;
+    reason: string;
+    oldSeq: number;
+    debts?: undefined;
+    debtsChecked?: undefined;
+} | {
+    ok: boolean;
+    oldSeq: number;
+    debts: any[];
+    debtsChecked: boolean;
+    reason?: undefined;
+};

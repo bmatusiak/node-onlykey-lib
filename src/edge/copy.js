@@ -371,4 +371,37 @@ function verifyCopy(copy, key) {
   return { ok: true, verifiedThrough: h.seq, head: h.head };
 }
 
-module.exports = { verifyCopy, assess, lossesIn, uncoveredGaps, missingGaps };
+/*
+ * R28: does a new chain's first link (op CONTINUE) continue THIS old copy?
+ * oldCopy: {deviceId, links: [{link, head?}]} - the copy kept for the chain it
+ * names, with its checkpoint key beside it. The subject commits to the old device
+ * id, the seq before the continue, the old head at that seq and the debts carried
+ * (tickets.keyDebts over the old copy). A copy that starts after the chain's first
+ * link may not see every debt: a match is still a match (debtsChecked false), a
+ * mismatch there is "unverifiable", never "ok".
+ * -> {ok: true, oldSeq, debts, debtsChecked} or {ok: false, reason}
+ */
+function checkContinue(link, oldCopy) {
+  const f = chain.decodeLink(link instanceof Uint8Array ? link : link.link);
+  if (f.op !== OP.CONTINUE) return { ok: false, reason: 'not-a-continue' };
+  const oldSeq = f.seq - 1;
+  const entries = (oldCopy.links || []).map((e) => (e instanceof Uint8Array ? { link: e } : e));
+  const bySeq = new Map(entries.map((e) => [chain.decodeLink(e.link).seq, e]));
+  const at = bySeq.get(oldSeq);
+  if (!at) return { ok: false, reason: 'old-copy-lacks-the-head', oldSeq };
+  /* the head at oldSeq: stored with the record, else welded from the record before it */
+  let head = at.head || null;
+  if (!head && bySeq.get(oldSeq - 1) && bySeq.get(oldSeq - 1).head) head = chain.weld(bySeq.get(oldSeq - 1).head, at.link);
+  if (!head) return { ok: false, reason: 'old-copy-lacks-the-head', oldSeq };
+  const raw = entries.map((e) => e.link).filter((l) => chain.decodeLink(l).seq <= oldSeq);
+  const fromStart = raw.length > 0 && chain.decodeLink(raw[0]).seq === chain.chainStart(entries, oldCopy.deviceId).fromSeq;
+  /* the debts this copy can see; from a copy that starts later they may be incomplete */
+  const debts = keyDebts(raw).owed;
+  if (debts.length === f.grantId && same(f.subject, chain.continueSubject({ oldDeviceId: oldCopy.deviceId, oldSeq, oldHead: head, owedSeqs: debts }))) {
+    return { ok: true, oldSeq, debts, debtsChecked: fromStart };
+  }
+  /* never 'ok' on a subject that did not match: a copy that starts late cannot tell a lie from a debt it never saw */
+  return { ok: false, reason: fromStart ? 'subject-mismatch' : 'unverifiable', oldSeq };
+}
+
+module.exports = { verifyCopy, assess, lossesIn, uncoveredGaps, missingGaps, checkContinue };

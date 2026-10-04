@@ -52,3 +52,20 @@ test('R28: a copy without a continue still starts at genesis #0', () => {
   assert.deepStrictEqual(chain.chainStart([{ link: l0 }], newId), { fromSeq: 0, fromHead: chain.genesis(newId) });
   assert.deepStrictEqual(chain.chainStart([], newId), { fromSeq: 0, fromHead: chain.genesis(newId) });
 });
+
+test('R28: copy.checkContinue - matches the old copy it continues; a forged head and a late copy are not "ok"', () => {
+  const copy = require('../src/edge/copy');
+  /* an old chain of two plain signs from genesis */
+  const l0 = chain.encodeLink({ seq: 0, op: OP.SIGN, decision: DECISION.APPROVE, flags: 1, subject: new Uint8Array(32).fill(1) });
+  const l1 = chain.encodeLink({ seq: 1, op: OP.SIGN, decision: DECISION.APPROVE, flags: 1, subject: new Uint8Array(32).fill(2) });
+  const h0 = chain.weld(chain.genesis(oldId), l0);
+  const h1 = chain.weld(h0, l1);
+  const oldCopy = { deviceId: oldId, links: [{ link: l0, head: h0 }, { link: l1, head: h1 }] };
+  const cont = (head) => chain.encodeLink({ seq: 2, op: OP.CONTINUE, decision: DECISION.APPROVE, subject: chain.continueSubject({ oldDeviceId: oldId, oldSeq: 1, oldHead: head }), grantId: 0 });
+  assert.deepStrictEqual(copy.checkContinue(cont(h1), oldCopy), { ok: true, oldSeq: 1, debts: [], debtsChecked: true });
+  assert.deepStrictEqual(copy.checkContinue(cont(new Uint8Array(32).fill(9)), oldCopy), { ok: false, reason: 'subject-mismatch', oldSeq: 1 });
+  /* a copy holding only #1 (it starts late): a match is still a match, but not "debts checked" */
+  assert.strictEqual(copy.checkContinue(cont(h1), { deviceId: oldId, links: [{ link: l1, head: h1 }] }).debtsChecked, false);
+  assert.strictEqual(copy.checkContinue(cont(new Uint8Array(32).fill(9)), { deviceId: oldId, links: [{ link: l1, head: h1 }] }).reason, 'unverifiable');
+  assert.strictEqual(copy.checkContinue(l1, oldCopy).reason, 'not-a-continue');
+});
