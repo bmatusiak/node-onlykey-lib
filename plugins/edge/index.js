@@ -24,7 +24,7 @@ const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
 const { assertTransport } = require('../../src/transport/contract');
 const { concat } = require('../../src/bytes');
-const { codes, chain, copy: copyCheck } = require('../../src/edge');
+const { codes, chain, tickets, copy: copyCheck } = require('../../src/edge');
 
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
@@ -66,6 +66,35 @@ class EdgeError extends Error {
 const u32 = (n) => Uint8Array.of(n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff);
 const get32 = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
 const get16 = (b, o) => b[o] | (b[o + 1] << 8);
+const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/*
+ * Is this report a HEAD answer? The key pads its 60 bytes with zeros and its
+ * flags are small: four zero bytes, a 4-bit hold mask, owed <= OWED_MAX, two
+ * booleans. A signature passes all of that about once in 2^40.
+ */
+function isHeadReply(r) {
+  if (r.length < 64 || r[60] | r[61] | r[62] | r[63]) return false;
+  return r[56] < 16 && r[57] <= tickets.OWED_MAX && r[58] <= 1 && r[59] <= 1;
+}
+
+/*
+ * PICKUP's answer, report by report: each link is the seq asked for, with its 17
+ * reserved bytes zero (R3), and from the second link on, the head after it must
+ * weld from the head before. The first head has nothing to weld from here; the
+ * copy's own weld check is its test.
+ */
+function pickupReply(from) {
+  return (bytes, got) => {
+    const i = got.length;
+    if (i % 2 === 0) {
+      const f = chain.decodeLink(bytes);
+      return f.reservedZero && f.seq === from + i / 2;
+    }
+    if (i < 3) return true;
+    return sameBytes(chain.weld(got[i - 2].slice(0, 32), got[i - 1]), bytes.slice(0, 32));
+  };
+}
 
 function setup(imports, register) {
   const { transport } = imports;
@@ -135,7 +164,17 @@ function setup(imports, register) {
     });
   }
 
-  function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false } = {}) {
+  /*
+   * `accept(bytes, got)`: false = not ours, keep waiting. The vendor channel is
+   * shared with a computer on the Bluetooth bridge, and its answers reach every
+   * listener on this stack: a pressed ssh sign answers when the press lands,
+   * long after the bus went quiet. MEASURED ON THE A13 (2026-10-04): Brad's
+   * signature arrived while the tab's PICKUP waited, and the copy stored it as
+   * link #447194052 - above the key's head, so the copy read as a rollback and
+   * Sync, starting past it, read nothing. Replies whose shape can be checked
+   * are checked; a report that fails is someone else's.
+   */
+  function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null } = {}) {
     return new Promise((resolve, reject) => {
       const got = [];
       let off = null;
@@ -170,6 +209,7 @@ function setup(imports, register) {
           return;
         }
         if (text) return;
+        if (accept && !accept(bytes, got)) return;
         got.push(bytes);
         if (got.length >= reports) {
           clearTimeout(timer);
@@ -198,7 +238,7 @@ function setup(imports, register) {
      *  restoring: restored from a backup and not yet finished (R26)}
      */
     async head(opts) {
-      const [r] = await call(SUB.HEAD, null, opts);
+      const [r] = await call(SUB.HEAD, null, { ...opts, accept: isHeadReply });
       const seq = get32(r, 0);
       const oldest = get32(r, 36);
       const ids = [0, 1, 2, 3].map((i) => get32(r, 40 + 4 * i));
@@ -225,7 +265,7 @@ function setup(imports, register) {
     /** Links the key still holds: [{link, head, reveal|null}] (reveal = a self-press's v_i). */
     async pickup(from, count = 1, opts) {
       if (count < 1 || count > HELD) throw new RangeError(`Edge: pick up 1 to ${HELD} links, not ${count}`);
-      const rs = await call(SUB.PICKUP, concat([u32(from), Uint8Array.of(count)]), { ...opts, reports: 2 * count });
+      const rs = await call(SUB.PICKUP, concat([u32(from), Uint8Array.of(count)]), { ...opts, reports: 2 * count, accept: pickupReply(from) });
       const out = [];
       for (let i = 0; i < rs.length; i += 2) {
         const reveal = rs[i + 1].slice(32, 64);
