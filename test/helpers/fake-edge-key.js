@@ -135,7 +135,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         const genesis = grants.grantGenesis(new Uint8Array(32).fill(3), uses);
         const seq = held.length;
         const id = seq + 1;
-        append({ op: codes.OP.GRANT_CREATE, decision: 1, flags: 1, grantId: id,
+        append({ op: codes.OP.GRANT_CREATE, decision: 1, flags: 1, grantId: id, scope: n, /* R3: the scope count */
           subject: grants.grantSubject({ scopes, reasonHash: arg.slice(17, 49), genesis, lifetime }) });
         live.push(id);
         budgets.set(id, { uses, used: 0, seed: new Uint8Array(32).fill(3), scopes });

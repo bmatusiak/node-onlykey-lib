@@ -271,10 +271,13 @@ function verifyCopy(copy, key) {
   const fields = raw.map((l) => chain.decodeLink(l)).filter((f) => f.seq > lastGapEnd);
   const openings = copy.openings || {};
   const spends = new Map();
+  /* R3: what each opening in this copy says its scope count is (0 = an older budget) */
+  const openingScopes = new Map();
   for (const f of fields) {
     /* R3: a scope only on a link that spends a budget; bytes 47-63 always zero */
     const spend = (f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS;
-    if (f.scope !== 0 && !spend) return fail('scope', { seq: f.seq, detail: { scope: f.scope, reason: 'not-a-spend' } });
+    /* R3: the opening carries its scope count (0 on an older one); a spend names its scope; nothing else carries one */
+    if (f.scope !== 0 && !spend && f.op !== OP.GRANT_CREATE) return fail('scope', { seq: f.seq, detail: { scope: f.scope, reason: 'not-a-spend' } });
     if (!f.reservedZero) return fail('reserved', { seq: f.seq });
     if (f.op === OP.GRANT_CREATE) {
       const o = openings[f.grantId];
@@ -301,6 +304,10 @@ function verifyCopy(copy, key) {
         r = { ok: false, reason: 'prev-head-unknown' };
       }
       if (!r.ok || r.grantId !== f.grantId) return fail('budget-opening', { seq: f.seq, detail: { grantId: f.grantId, reason: r.reason || 'grant-id' } });
+      if (f.scope !== 0 && f.scope !== o.scopes.length) {
+        return fail('scope', { seq: f.seq, detail: { grantId: f.grantId, scope: f.scope, scopes: o.scopes.length, reason: 'opening-count' } });
+      }
+      openingScopes.set(f.grantId, f.scope);
       spends.set(f.grantId, []);
     } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS) {
       const list = spends.get(f.grantId);
@@ -324,9 +331,18 @@ function verifyCopy(copy, key) {
   }
   for (const [grantId, list] of spends) {
     const o = openings[grantId];
-    /* R3: all scoped or none (older chain); each scope within its cap */
+    /*
+     * R3, exact: the opening says N -> every spend names 1..N (range checked in
+     * the loop); it says 0 -> every spend is 0 (an older budget). An opening not
+     * in this copy (a LOSS range) -> all scoped or none.
+     */
     const scoped = list.filter((x) => x.scope !== 0);
-    if (scoped.length && scoped.length !== list.length) {
+    const n = openingScopes.get(grantId);
+    if (n > 0 && scoped.length !== list.length) {
+      return fail('scope', { seq: list.find((x) => x.scope === 0).seq, detail: { grantId, reason: 'missing' } });
+    }
+    if (n === 0 && scoped.length) return fail('scope', { seq: scoped[0].seq, detail: { grantId, reason: 'unexpected' } });
+    if (n === undefined && scoped.length && scoped.length !== list.length) {
       return fail('scope', { seq: list.find((x) => x.scope === 0).seq, detail: { grantId, reason: 'missing' } });
     }
     const per = new Map();

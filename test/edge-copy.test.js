@@ -21,7 +21,7 @@ const { OP, DECISION, FLAG } = codes;
  * two self-presses each with its reveal and ticket. -> {links, openings, key}
  */
 /* R3: scopes = the budget's, spendScopes = byte 46 on each spend (default: an older chain, all 0) */
-function story({ scopes: given = null, spendScopes = [] } = {}) {
+function story({ scopes: given = null, spendScopes = [], openingScope = null } = {}) {
   const links = [];
   let head = chain.genesis(DEVICE);
   const add = (fields, reveal = null) => {
@@ -43,7 +43,9 @@ function story({ scopes: given = null, spendScopes = [] } = {}) {
   const reasonHash = new Uint8Array(32).fill(7);
   const genesis = grants.grantGenesis(seed, uses);
   const grantId = links.length + 1;
-  const at = add({ op: OP.GRANT_CREATE, decision: DECISION.APPROVE, flags: FLAG.PRESS_OBSERVED, grantId, subject: grants.grantSubject({ scopes, reasonHash, genesis }) });
+  /* R3: the opening's byte 46 = its scope count when its spends are scoped (a new budget), else 0 */
+  const opening = openingScope !== null ? openingScope : spendScopes.some((x) => x) ? scopes.length : 0;
+  const at = add({ op: OP.GRANT_CREATE, decision: DECISION.APPROVE, flags: FLAG.PRESS_OBSERVED, grantId, scope: opening, subject: grants.grantSubject({ scopes, reasonHash, genesis }) });
   const signature = chain.signCheckpoint({ deviceId: DEVICE, seq: at, head }, SECRET);
   const openings = { [grantId]: { scopes, reasonHash, genesis, uses, signature } };
 
@@ -302,4 +304,17 @@ test('R3: one scope past its cap fails; a scope that does not cover the op+slot 
   v = verdict({ scopes: [{ op: OP.SIGN, slot: 221, cap: 1, identity: 'ssh://x@y' }, TWO[1]], spendScopes: [1, 2] });
   assert.equal(v.ok, false);
   assert.equal(v.detail.reason, 'does-not-cover');
+});
+
+test('R3 exact: an opening that says 2 with a spend at 0 fails; one that says 0 with a scoped spend fails; an old budget verifies', () => {
+  let v = verdict({ scopes: TWO, spendScopes: [0, 0], openingScope: 2 });
+  assert.equal(v.ok, false);
+  assert.equal(v.detail.reason, 'missing');
+  v = verdict({ scopes: TWO, spendScopes: [1, 2], openingScope: 0 });
+  assert.equal(v.ok, false);
+  assert.equal(v.detail.reason, 'unexpected');
+  v = verdict({ scopes: TWO, spendScopes: [1, 2], openingScope: 3 });
+  assert.equal(v.ok, false);
+  assert.equal(v.detail.reason, 'opening-count');
+  assert.equal(verdict({ scopes: TWO, spendScopes: [0, 0], openingScope: 0 }).ok, true, 'an old budget');
 });
