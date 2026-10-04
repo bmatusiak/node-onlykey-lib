@@ -74,7 +74,22 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     } catch { /* a note is never worth a failed use */ }
   }
   async function deviceIdentity() {
-    if ((await edge.probe()) !== 'edge') throw fail('EEDGE_UNSUPPORTED', 'edge: this key has no Edge - sign with a press per use instead');
+    /*
+     * SILENCE IS NOT "NO EDGE". A key without the plugin is silent, but so is a
+     * locked one, or a soft key whose app is starting - the phone's restart
+     * (2026-10-04) read as "this key has no Edge" when it only had not answered
+     * yet. Same code (callers branch on it), honest words.
+     */
+    /*
+     * 4 s, not the probe's 1 s default: right after ok-rn starts, its background
+     * Edge sync reads the whole chain from the soft key, and a HEAD that arrives
+     * mid-read waits behind those reads. 1 failure in 8 restarts on the Pixel
+     * (2026-10-04) - the likely cause, not a proven one; a key that answers costs
+     * nothing extra, a silent one 3 s more.
+     */
+    const probed = await edge.probe({ timeoutMs: 4000 });
+    if (probed === 'no-pin') throw fail('EEDGE_UNSUPPORTED', 'edge: this key has no PIN set yet, so it has no Edge key');
+    if (probed !== 'edge') throw fail('EEDGE_UNSUPPORTED', 'edge: the key did not answer an Edge request - it may be locked, still starting (the phone app just opened?), or have no Edge (then sign with a press per use)');
     return edge.publicKey();
   }
 
