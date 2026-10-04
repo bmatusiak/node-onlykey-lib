@@ -122,3 +122,28 @@ test('keychain export --ssh / --age / --pgp: what the list saved; no certificate
   assert.match(r.out.join('\n'), /BEGIN PGP PUBLIC KEY BLOCK/);
   assert.doesNotMatch(r.out.join('\n'), /PRIVATE/);
 });
+
+test('keychain import pairs the phone hash entry with the named one: one entry per key, under the name', async () => {
+  fs.rmSync(FILE, { force: true });
+  await run(['keychain', 'derive', 'ssh', 'ed25519', 'me@host']);
+  const named = rec.load()[0];
+  const hash = require('crypto').createHash('sha256').update('me@host').digest('hex');
+  const phone = [
+    list.createEntry({ kind: 'derived', scheme: 'agent-v1', label: 'hash:' + hash, type: 'ed25519', publicKey: named.publicKey, transport: 'vendor', tools: ['soft key'], firstSeen: '2026-10-01T00:00:00Z', lastSeen: '2026-10-01T00:00:00Z' }),
+    list.createEntry({ kind: 'derived', scheme: 'web', label: 'hash:' + 'ab'.repeat(32), type: 'x25519', publicKey: new Uint8Array(32).fill(3), transport: 'fido', rpIdHash: 'cd'.repeat(32), tools: ['soft key'] }),
+  ];
+  const file = path.join(path.dirname(FILE), 'phone-export.json');
+  fs.writeFileSync(file, list.serialize(phone));
+  const out = [];
+  const code = await main(['keychain', 'import', file], { out: (l) => out.push(l), err: (l) => out.push(l), start: () => { throw new Error('no device needed'); }, keychainRecord: null });
+  assert.equal(code, 0, out.join('\n'));
+  assert.match(out[0], /1 added, 1 paired/);
+  const all = rec.load();
+  assert.equal(all.length, 2, 'one entry per key');
+  const one = all.find((e) => e.label === 'ssh://me@host');
+  assert.equal(one.labelHash, hash, 'the hash the phone saw, kept beside the name');
+  assert.equal(one.transport, 'vendor');
+  assert.deepEqual(one.tools.sort(), ['onlykey-js keychain', 'soft key']);
+  assert.equal(one.firstSeen, '2026-10-01T00:00:00Z', 'first seen: the earliest');
+  assert.ok(all.some((e) => e.rpIdHash === 'cd'.repeat(32)));
+});

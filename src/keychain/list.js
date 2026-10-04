@@ -118,15 +118,56 @@ function parse(text) {
 function merge(existing, incoming) {
   const byId = new Map(existing.map((e) => [e.id, e]));
   let added = 0;
+  let paired = 0;
   for (const e of incoming) {
     if (byId.has(e.id)) continue;
+    const twin = findTwin([...byId.values()], e);
+    if (twin) {
+      const one = combine(twin, e);
+      byId.delete(twin.id);
+      byId.set(one.id, one);
+      paired += 1;
+      continue;
+    }
     byId.set(e.id, e);
     added += 1;
   }
-  return { entries: [...byId.values()], added, kept: incoming.length - added };
+  return { entries: [...byId.values()], added, paired, kept: incoming.length - added - paired };
+}
+
+/*
+ * ONE ENTRY PER KEY (spec session, 2026-10-03). The phone records a derive by
+ * the label HASH it saw (`hash:…` - the firmware never has the text); a
+ * computer records the same derive by its NAME (`ssh://…`, `gpg://…`). Same type
+ * and the same public key = the same key: they become one entry under the name.
+ */
+const bytesEqual = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** The entry in `entries` holding the same derived key as `e` (type + public key), or null. */
+function findTwin(entries, e) {
+  if (e.kind !== 'derived' || !e.publicKey || !e.publicKey.length) return null;
+  return entries.find((x) => x !== e && x.kind === 'derived' && x.type === e.type
+    && x.publicKey && bytesEqual(x.publicKey, e.publicKey)) || null;
+}
+
+/** Two entries of one key -> one: the name over the hash, first seen earliest, last seen latest, everything each one knew. */
+function combine(a, b) {
+  const named = (x) => x.label && !String(x.label).startsWith('hash:');
+  const [base, other] = named(b) && !named(a) ? [b, a] : [a, b];
+  const one = { ...other, ...base };
+  const hashOf = [a, b].map((x) => x.labelHash || (String(x.label).startsWith('hash:') ? String(x.label).slice(5) : null)).find(Boolean);
+  if (hashOf) one.labelHash = hashOf;
+  const times = (k, pick) => [a[k], b[k]].filter(Boolean).sort()[pick === 'min' ? 0 : 1] || a[k] || b[k];
+  if (a.firstSeen || b.firstSeen) one.firstSeen = times('firstSeen', 'min');
+  if (a.lastSeen || b.lastSeen) one.lastSeen = [a.lastSeen, b.lastSeen].filter(Boolean).sort().pop();
+  one.tools = [...new Set([...(a.tools || []), ...(b.tools || [])])];
+  for (const k of ['pgp', 'pgpFingerprint', 'certCreated', 'certExpires', 'revocation', 'transport', 'rpIdHash', 'rpId', 'code']) {
+    if (one[k] === undefined) one[k] = a[k] !== undefined ? a[k] : b[k];
+  }
+  return createEntry(one);
 }
 
 /** A short fingerprint to show beside an entry. */
 const fingerprint = (publicKey) => toHex(sha256(publicKey)).slice(0, 16).match(/.{4}/g).join(' ');
 
-module.exports = { FORMAT, VERSION, KINDS, TYPES, createEntry, serialize, parse, merge, fingerprint };
+module.exports = { FORMAT, VERSION, KINDS, TYPES, createEntry, serialize, parse, merge, findTwin, combine, fingerprint };

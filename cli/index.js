@@ -140,9 +140,9 @@ function deviceArgs(opts) {
 async function withDevice(io, opts, fn) {
   const app = await io.start(deviceOpts(opts));
   try {
-    const { device, okcrypto, config } = app.services;
+    const { device, okcrypto, config, transport } = app.services;
     const connected = await device.connect();
-    return await fn({ device, okcrypto, config, connected, identity: connected.identity });
+    return await fn({ device, okcrypto, config, transport, connected, identity: connected.identity });
   } finally {
     await app.destroy();
   }
@@ -1172,6 +1172,18 @@ function printArtifacts(io, a) {
   io.out(`hex     ${a.hex}`);
 }
 
+/* the key's Edge plugin over this transport, or null when the key has none (a hard key, a plugin-less build) */
+async function edgeOf(transport) {
+  let edge = null;
+  try {
+    require('../plugins/edge')({ transport }, (err, s) => { if (!err) edge = s.edge; });
+    if (edge) await edge.head({ timeoutMs: 3000 });
+    return edge;
+  } catch (_) {
+    return null;
+  }
+}
+
 /* --expires 1y | <n>d | never -> seconds (0 = never); edge-agent and keychain cert */
 function parseExpires(text) {
   const t = String(text).trim();
@@ -1183,7 +1195,7 @@ function parseExpires(text) {
 
 COMMANDS.keychain = {
   mirrors: '(new)',
-  usage: 'list [--json] | show <label> [--json] | export <label|fingerprint> --pgp|--ssh|--age [-o file] | cert <gpg-label> [--expires 1y] [--revoke [--reason N]] [--v2] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
+  usage: 'list [--json] | show <label> [--json] | import <file> | export <label|fingerprint> --pgp|--ssh|--age [-o file] | cert <gpg-label> [--expires 1y] [--revoke [--reason N]] [--v2] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
   writes: true,
   summary: 'Key Chain: the derived keys this machine has used (list, show), the key slots, derive/generate keys',
   options: {
@@ -1286,13 +1298,30 @@ COMMANDS.keychain = {
       const version = opts.v2 || (saved && saved.code === 232) ? 2 : 1;
       const expires = opts.expires !== undefined ? parseExpires(opts.expires) : (saved && saved.certExpires) || 0;
       const record = io.keychainRecord || rec.record;
-      return withDevice(io, opts, async ({ okcrypto, identity }) => {
+      return withDevice(io, opts, async ({ okcrypto, identity, transport }) => {
         requireUnlocked(identity, 'keychain cert');
         const onPress = () => io.err('keychain: confirm on the OnlyKey (a press)');
+        /*
+         * Under R16 a press with a key a live budget covers owes a ticket (spec
+         * session, 2026-10-03: no firmware exemption). So: refuse while anything
+         * is already owed, and ticket our own presses right after (code OK,
+         * "cert self-signature <fingerprint>"). A key without Edge skips this.
+         */
+        const edge = await edgeOf(transport);
+        let startSeq;
+        try {
+          startSeq = await keychain.cert.guardOwed(edge);
+        } catch (e) {
+          throw new CliError(e.message);
+        }
+        const ticketOurs = async (fingerprint) => {
+          for (const seq of await keychain.cert.ticketOwnPresses(edge, startSeq, fingerprint)) io.out(row('ticketed', `#${seq} (cert self-signature, R16)`));
+        };
         const openpgp = require('../src/crypto/pgp');
         if (opts.revoke) {
           if (!saved || !saved.certCreated) throw new CliError(`no certificate saved for ${label} - there is nothing to revoke yet`);
           const r = await keychain.cert.makeRevocation(okcrypto, openpgp, { label, version, created: saved.certCreated, reason: Number(opts.reason) || 0, onPress });
+          await ticketOurs(r.fingerprint);
           record({ scheme: 'gpg', label, type: 'ed25519', publicKey: saved.publicKey, code: version === 2 ? 232 : 132, revocation: r.armored, tool: `${NAME} keychain cert` });
           io.out(row('revoked', r.fingerprint));
           if (opts.output) { await io.writeFile(opts.output, r.armored); io.out(`wrote ${opts.output}`); } else io.out(r.armored.replace(/\n$/, ''));
@@ -1300,6 +1329,7 @@ COMMANDS.keychain = {
         }
         /* a renewal keeps the creation time, so the fingerprint stays */
         const c = await keychain.cert.makeCertificate(okcrypto, openpgp, { label, version, created: saved && saved.certCreated, expires, onPress });
+        await ticketOurs(c.fingerprint);
         record({
           scheme: 'gpg', label, type: 'ed25519', publicKey: c.signPublic, code: version === 2 ? 232 : 132,
           pgp: c.armored, pgpFingerprint: c.fingerprint, certCreated: c.created, certExpires: c.expires, tool: `${NAME} keychain cert`,
@@ -1309,6 +1339,22 @@ COMMANDS.keychain = {
         io.out(`saved - ${NAME} keychain export "${label}" --pgp`);
         return 0;
       });
+    }
+
+    /*
+     * import: merge another Key Chain file (the phone's export) into this
+     * machine's list - one entry per key: a phone's hash:… entry and this list's
+     * named entry for the same public key become one, under the name. Public
+     * data only (list.parse refuses anything private); "yours" never comes in.
+     */
+    if (sub === 'import') {
+      if (rest.length !== 1) throw usage('keychain import takes one Key Chain file (the phone export)');
+      const rec = require('./keychain-record');
+      const incoming = keychain.list.parse(await io.readFile(rest[0]));
+      const r = keychain.list.merge(rec.load(), incoming);
+      rec.save(r.entries);
+      io.out(`imported ${rest[0]}: ${r.added} added, ${r.paired} paired with a named entry, ${r.kept} already here`);
+      return 0;
     }
 
     if (sub === 'slots') {
@@ -1368,7 +1414,7 @@ COMMANDS.keychain = {
       return opts.host ? keychainGenHost(io, opts, type, keychain) : keychainGenDevice(io, opts, type);
     }
 
-    throw usage('keychain takes list, show, export, cert, slots, pub, derive or gen');
+    throw usage('keychain takes list, show, import, export, cert, slots, pub, derive or gen');
   },
 };
 

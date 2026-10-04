@@ -70,4 +70,39 @@ async function makeRevocation(okcrypto, openpgp, { label, version = 2, created, 
   return { uid, armored: r.armored, fingerprint: r.fingerprint };
 }
 
-module.exports = { makeCertificate, makeRevocation, uidOf };
+/**
+ * Before a certificate (spec session, 2026-10-03, no firmware exemption):
+ * refuse while the key owes anything - R18 would hold every budget anyway, and
+ * our own presses would join an unexplained list. -> the seq to ticket after.
+ * @param {object|null} edge the key's Edge plugin, or null (no Edge: nothing to do)
+ * @returns {Promise<number|null>}
+ */
+async function guardOwed(edge) {
+  if (!edge) return null;
+  const h = await edge.head();
+  if (h.owed || h.overflow) {
+    throw Object.assign(new Error(`the key owes ${h.owed} ticket(s)${h.overflow ? ' and more' : ''} - ticket or waive them before a certificate (okedge status names them)`), { code: 'EEDGE_KEY_OWED' });
+  }
+  return h.seq === null ? -1 : h.seq;
+}
+
+/**
+ * After the presses: under R16 a press with a key a live budget covers owes a
+ * ticket. File ours at once - code OK, "cert self-signature <fingerprint>".
+ * @returns {Promise<number[]>} the seqs ticketed
+ */
+async function ticketOwnPresses(edge, startSeq, fingerprint) {
+  if (!edge || startSeq === null) return [];
+  const { tickets, codes } = require('../edge');
+  const h = await edge.head();
+  if (!h.owed || h.seq === null || h.oldest === null) return [];
+  const rows = await edge.pickup(h.oldest, h.seq - h.oldest + 1);
+  const done = [];
+  for (const seq of tickets.keyDebts(rows).owed.filter((q) => q > startSeq)) {
+    await edge.ticket(seq, codes.ticketCode('OK'), tickets.messageHash(`cert self-signature ${fingerprint}`));
+    done.push(seq);
+  }
+  return done;
+}
+
+module.exports = { makeCertificate, makeRevocation, uidOf, guardOwed, ticketOwnPresses };

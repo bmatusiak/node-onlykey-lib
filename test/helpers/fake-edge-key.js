@@ -196,6 +196,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
   };
   transport.writes = writes;
   transport.armed = () => armed;
+  /* the soft key's idle restart / a lock: live budgets live in RAM and are gone, with no link written */
+  transport.restart = () => { live.length = 0; onHold.clear(); };
   /*
    * A sign the KEY decides (okplugin_edge_primed / _decision): it pays when the
    * ARM token is over THIS head and THESE bytes and a live budget off hold has

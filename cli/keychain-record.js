@@ -60,7 +60,15 @@ function record(fields, { file = keychainFile(), now = new Date().toISOString() 
   const { tool, ...rest } = fields;
   const e = list.createEntry({ kind: 'derived', ...rest, firstSeen: now, lastSeen: now, tools: tool ? [tool] : [] });
   e.fingerprint = list.fingerprint(e.publicKey);
-  const entries = load(file);
+  let entries = load(file);
+  /* the same key already here under its other name (a phone's hash:…): one entry, under the name */
+  const twin = entries.find((x) => x.id === e.id) ? null : list.findTwin(entries, e);
+  if (twin) {
+    const one = list.combine(twin, e);
+    entries = entries.filter((x) => x !== twin).concat(one);
+    save(entries, file);
+    return one;
+  }
   const old = entries.find((x) => x.id === e.id);
   if (old) {
     old.lastSeen = now;

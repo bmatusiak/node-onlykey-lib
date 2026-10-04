@@ -81,6 +81,20 @@ test('a certificate under a live budget covering its label: both self-signatures
   assert.equal(Math.round(((await key.getExpirationTime()).getTime() / 1000 - c.created) / 86400), 365);
 });
 
+test('R16, no exemption: the cert refuses to start while anything is owed, and tickets its own presses right after', async () => {
+  const s = await stack();
+  const start = await certLib.guardOwed(s.edge);
+  const c = await certLib.makeCertificate(s.okcrypto, openpgp, { label: LABEL });
+  assert.equal((await s.edge.head()).owed, 2, 'two presses under a covering budget owe two tickets');
+  await assert.rejects(certLib.guardOwed(s.edge), { code: 'EEDGE_KEY_OWED' }, 'a second cert waits for those');
+  const done = await certLib.ticketOwnPresses(s.edge, start, c.fingerprint);
+  assert.equal(done.length, 2);
+  assert.equal((await s.edge.head()).owed, 0, 'nothing owed after');
+  const t = (await s.links(1))[0];
+  assert.equal(t.op, codes.OP.TICKET);
+  assert.equal(t.code, 0x00, 'code OK');
+});
+
 test('renewal keeps the fingerprint; a revocation (one press) revokes that key', async () => {
   const s = await stack();
   const first = await certLib.makeCertificate(s.okcrypto, openpgp, { label: LABEL, expires: 30 * 86400 });

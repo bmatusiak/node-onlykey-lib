@@ -222,7 +222,8 @@ function createEdgeClient({ edge, channel, signer, store = null }) {
       await store.set(storeKey(grantId), JSON.stringify({ ...was, ended: true }));
       if (caps && caps.length !== was.scopes.length) throw fail('EEDGE_INVALID', `edge: budget ${grantId} has ${was.scopes.length} scopes - give one cap each`);
       const scopes = was.scopes.map((s, i) => ({ ...s, cap: caps ? caps[i] : s.cap }));
-      return open({ reason: reason === null ? was.reason : reason, scopes, ttlMinutes, continueOf: grantId });
+      /* no lifetime given (the agent's automatic continue after a key restart): the one it had */
+      return open({ reason: reason === null ? was.reason : reason, scopes, ttlMinutes: ttlMinutes || was.lifetime, continueOf: grantId });
     },
 
     /**

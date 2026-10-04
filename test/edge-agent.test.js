@@ -70,6 +70,7 @@ async function sshClient(sockPath, messages) {
 const signMsg = (keyBlob, data) => Buffer.concat([Buffer.of(wire.MSG.SIGN_REQUEST), wire.string(keyBlob), wire.string(data), wire.uint32(0)]);
 
 /* the fake key plus derived keys: the device signs with a key per identity and links each sign on the fake key */
+let goneAsked = 0;
 async function setup({ cap = 4 } = {}) {
   const transport = fakeKey();
   const edge = edgeOver(transport);
@@ -88,22 +89,30 @@ async function setup({ cap = 4 } = {}) {
     },
   };
   const seen = new Set();
+  /* the phone remembers what it opened, for whom - a continue must match it (approve budgetOf) */
+  const opened = new Map();
   const channel = {
     async send(msg) {
       const r = await approve.approveRequest(msg, {
         edge, registered: [hex(AGENT.publicKey)], seen, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
+        budgetOf: (id) => opened.get(id) || null,
       });
+      if (r.ok && r.budget) opened.set(r.budget.grantId, { agent: msg.agent, scopes: msg.scopes });
       return r.dropped ? null : r;
     },
   };
-  const c = client.createEdgeClient({ edge, channel, signer: AGENT });
+  /* the agent's budget store (continue reads the budget it continues from here) */
+  const saved = new Map();
+  const store = { get: async (k) => saved.get(k) ?? null, set: async (k, v) => { saved.set(k, v); }, delete: async (k) => { saved.delete(k); } };
+  const c = client.createEdgeClient({ edge, channel, signer: AGENT, store });
   const b = await c.request({ reason: 'work: push and sign', scopes: [{ op: 'sign', slot: 221, cap, identity: SSH_NAME }], ttlMinutes: 60 });
   const raw = await device.publicKey(SSH_IDENTITY);
   const h = host();
   const logs = [];
   const agent = createEdgeAgent({
     device, edge, pins: [h.fingerprint], log: (l) => logs.push(l),
+    onGone: (old) => { goneAsked += 1; return c.continue(old.grantId, {}); },
     ssh: { identity: SSH_IDENTITY, name: SSH_NAME, comment: SSH_NAME, curve: 'ed25519', raw },
   });
   agent.setBudget(b);
@@ -252,4 +261,23 @@ test('POSIX: the exec endpoint is owner-only (directory 0700, socket 0600)', { s
   assert.equal(fs.statSync(ex.sshPath).mode & 0o777, 0o600);
   assert.equal(fs.statSync(require('path').dirname(ex.sshPath)).mode & 0o777, 0o700);
   await ex.close();
+});
+
+test('after a key restart the budget is gone: the agent asks to continue ONCE, refuses that exec with the new head, and the next exec runs on it', async () => {
+  const { agent, b, transport, h, keyBlob, lastLink } = await setup();
+  goneAsked = 0;
+  transport.restart();
+  const err = await agent.openExec({ head: b.head(), reason: 'after a restart' }).catch((e) => e);
+  assert.equal(err.code, 'EEDGE_CONTINUED', err.message);
+  assert.equal(goneAsked, 1, 'one continue request');
+  const nb = agent.budget();
+  assert.notEqual(nb.grantId, b.grantId);
+  assert.match(err.message, new RegExp(`head = ${nb.head()}`));
+  /* the next exec, with the new head, runs - and pays */
+  const ex = await agent.openExec({ head: nb.head(), reason: 'after the continue' });
+  const sid = crypto.randomBytes(32);
+  await sshClient(ex.sshPath, [h.bind(sid), signMsg(keyBlob, userauth(sid))]);
+  assert.equal((await lastLink()).decision, codes.DECISION.SELF_PRESS);
+  await ex.close();
+  assert.equal(goneAsked, 1, 'still one: no retry');
 });

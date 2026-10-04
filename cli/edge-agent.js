@@ -72,7 +72,9 @@ function oneShotPath({ windows = agentSrv.IS_WINDOWS } = {}) {
  * @param {string[]} [o.pins] host key fingerprints the budget may pay for (default github.com's)
  * @param {(line: string) => void} [o.log]
  */
-function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log = () => {}, endpointPath = oneShotPath, edge = null }) {
+function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log = () => {}, endpointPath = oneShotPath, edge = null, onGone = null }) {
+  /* budgets an automatic continue was already asked for - once each, never a loop */
+  const continued = new Set();
   /* the key's ring: its recent links, oldest first (R5) */
   const ring = async (h) => (h.seq === null || h.oldest === null ? [] : edge.pickup(h.oldest, h.seq - h.oldest + 1));
   /*
@@ -153,6 +155,22 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
       const h = await edge.head();
       const k = await keyOwed(h);
       if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - okedge ticket them first (R16: a pressed sign with the agent's key owes one too)`);
+      if (!h.live.includes(budget.grantId) && onGone && !continued.has(budget.grantId)) {
+        /*
+         * The budget is gone - the soft key's idle restart, a lock (spec session,
+         * 2026-10-03). Ask the phone ONCE to continue it (your Yes and a press);
+         * the exec is not run: its --head belongs to the old budget. No retry.
+         */
+        const old = budget;
+        continued.add(old.grantId);
+        log(`budget ${old.grantId} is gone - asking the phone to continue it`);
+        const nb = await onGone(old);
+        if (nb) {
+          budget = nb;
+          event('continue', `budget ${old.grantId} was gone; continued as budget ${nb.grantId}`);
+          throw fail('EEDGE_CONTINUED', `budget ${old.grantId} ended (the key locked or restarted); continued as budget ${nb.grantId} with your Yes and press - head = ${nb.head()} - run the exec again with that head`);
+        }
+      }
       if (!h.live.includes(budget.grantId)) throw fail('EEDGE_GONE', `budget ${budget.grantId} is not live on the key (ended, expired, or the key locked) - ask for a new one`);
       if ((h.held || []).includes(budget.grantId)) throw fail('EEDGE_HELD', `budget ${budget.grantId} is on hold (from the phone) - Resume there first`);
     }
@@ -395,7 +413,25 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
     };
   }
 
-  const agent = createEdgeAgent({ device, ssh, pins: config.pins || bindLib.GITHUB_FINGERPRINTS, log, edge });
+  /*
+   * The automatic continue (spec session, 2026-10-03): only for a budget the
+   * key lost to a lock or restart - one it ENDED (revoked on the phone, ended by
+   * okedge end) has a grant-end link in the ring, and is left ended.
+   */
+  const onGone = async (old) => {
+    if (edge) {
+      const h = await edge.head();
+      if (h.seq !== null && h.oldest !== null) {
+        const rows = await edge.pickup(h.oldest, h.seq - h.oldest + 1);
+        if (rows.some((r) => { const f = chain.decodeLink(r.link); return f.op === codes.OP.GRANT_END && f.grantId === old.grantId; })) return null;
+      }
+    }
+    const nb = await client.continue(old.grantId, {});
+    config.budget = nb.grantId;
+    saveConfig(config);
+    return nb;
+  };
+  const agent = createEdgeAgent({ device, ssh, pins: config.pins || bindLib.GITHUB_FINGERPRINTS, log, edge, onGone });
   if (config.budget) {
     try {
       agent.setBudget(await client.resume(config.budget));
