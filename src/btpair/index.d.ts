@@ -115,36 +115,24 @@ export function cliHello(record: any, { name }?: {}): {
     msg: Uint8Array<any>;
 };
 export function phoneOnHello(records: any, msg: any, now: any, { peerAddress }?: {}): {
-    silence: boolean;
-    alarm?: undefined;
-    revoke?: undefined;
-    reason?: undefined;
-    expired?: undefined;
-    session?: undefined;
-    record?: undefined;
-    msg?: undefined;
-} | {
-    alarm: string;
-    silence?: undefined;
-    revoke?: undefined;
-    reason?: undefined;
-    expired?: undefined;
-    session?: undefined;
-    record?: undefined;
-    msg?: undefined;
-} | {
-    revoke: string;
+    revoke: any;
     reason: string;
     silence?: undefined;
-    alarm?: undefined;
     expired?: undefined;
     session?: undefined;
     record?: undefined;
     msg?: undefined;
 } | {
     silence: boolean;
-    expired: string;
-    alarm?: undefined;
+    revoke?: undefined;
+    reason?: undefined;
+    expired?: undefined;
+    session?: undefined;
+    record?: undefined;
+    msg?: undefined;
+} | {
+    silence: boolean;
+    expired: any;
     revoke?: undefined;
     reason?: undefined;
     session?: undefined;
@@ -158,15 +146,16 @@ export function phoneOnHello(records: any, msg: any, now: any, { peerAddress }?:
         recvCtr: number;
         dirSend: number;
         dirRecv: number;
-        id: string;
+        id: any;
     };
     record: any;
     msg: Uint8Array<any>;
-    silence?: undefined;
-    alarm?: undefined;
     revoke?: undefined;
     reason?: undefined;
+    silence?: undefined;
     expired?: undefined;
+} | {
+    alarm: string;
 };
 /** CLI: HELLO_OK -> its session (throws on a bad answer - never talks to a phone that can't prove PS). */
 export function cliOnHelloOk(state: any, msg: any): {
@@ -193,10 +182,19 @@ export function phoneRenewOffer(): {
     };
     payload: Uint8Array<any>;
 };
-/** CLI: RENEW_OFFER -> RENEW_ACCEPT {ct, MAC(PS')} (send it sealed) and the renewed record (old PS gone). */
+/**
+ * CLI: RENEW_OFFER -> RENEW_ACCEPT {ct, MAC(PS')} (send it sealed) and the record
+ * to SAVE: the current secret kept, the renewed one beside it as `next`
+ * (two-phase - see phoneOnHello). cliUseNext / cliDropNext settle it on the
+ * next connection.
+ */
 export function cliRenewAccept(record: any, payload: any, now: any): {
     record: any;
     payload: Uint8Array<any>;
 };
-/** Phone: RENEW_ACCEPT -> the renewed record, keeping the old secret ONLY to recognise a copy (or null). */
+/** Phone: RENEW_ACCEPT -> the record with the renewed secret PENDING until the CLI first proves it (or null). */
 export function phoneRenewFinish(record: any, state: any, payload: any, now: any): any;
+/** CLI: the renewed secret worked (the phone answered a hello under it) - it becomes the pairing; the old is forgotten. */
+export function cliUseNext(record: any): any;
+/** CLI: the phone never got the renewal (it answered the current secret) - forget the unused one. */
+export function cliDropNext(record: any): any;

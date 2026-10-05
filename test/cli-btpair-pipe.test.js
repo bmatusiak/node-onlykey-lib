@@ -61,6 +61,7 @@ function gate({ windowOpen = true, approve = true } = {}) {
           g.lastHello = r;
           if (!r.session) return [];
           g.session = r.session;
+          g.records = g.records.map((x) => (x.id === r.record.id ? r.record : x)); /* a promoted renewal sticks */
           return [{ cmd: 0x85, bytes: r.msg }];
         }
         return [];
@@ -163,13 +164,17 @@ test('renewal on day 6 travels inside the session; the CLI saves the new secret;
   for (let i = 0; i < 40 && !g.renewed; i++) await new Promise((r) => setTimeout(r, 25));
   assert.ok(g.renewed, 'the phone never finished the renewal');
   assert.strictEqual(saved.length, 1);
-  assert.strictEqual(saved[0].epoch, 1);
-  assert.strictEqual(store.pairingFor('PIXEL', home).ps, g.renewed.ps, 'the CLI did not save the renewed secret');
+  /* two-phase: saved beside the current secret, the phone holds it pending */
+  assert.strictEqual(saved[0].next.epoch, 1);
+  assert.strictEqual(store.pairingFor('PIXEL', home).next.ps, g.renewed.pending.ps, 'the CLI did not save the renewed secret');
   await p.stop();
-  /* the renewed pairing connects; the copy is the alarm */
-  const ok = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+  /* the next connection uses the renewed secret, the phone promotes it, the CLI settles and saves */
+  const ok = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), onPairingRenewed: (rec) => store.savePairing('PIXEL', rec, home) });
   assert.strictEqual((await ok.start()).encrypted, true);
   await ok.stop();
+  assert.strictEqual(store.pairingFor('PIXEL', home).epoch, 1);
+  assert.strictEqual(store.pairingFor('PIXEL', home).next, undefined);
+  assert.strictEqual(g.records[0].epoch, 1);
   const thief = pipeOver(g, { pairing: copied });
   await assert.rejects(() => thief.start(), (e) => e.code === 'ESILENT');
   assert.strictEqual(g.lastHello.alarm, record.id, 'the copied pairing raised no alarm');

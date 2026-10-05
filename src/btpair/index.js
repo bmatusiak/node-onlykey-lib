@@ -275,7 +275,26 @@ function phoneOnHello(records, msg, now, { peerAddress } = {}) {
   for (const old of rec.oldPs || []) {
     if (same(tag, mac(fromHex(old.ps), 'okt/hello/v1', body))) return { alarm: id };
   }
-  if (!same(tag, mac(fromHex(rec.ps), 'okt/hello/v1', body)) || epoch !== rec.epoch) return { silence: true };
+  /*
+   * TWO-PHASE RENEWAL (found on the Pixel, 2026-10-04: a short command ended
+   * the link before the phone got the CLI's answer, the CLI had already dropped
+   * the old secret, and the pairing was dead). The phone keeps the renewed
+   * secret as PENDING; the first hello that proves it promotes it, and only
+   * then does the old secret join oldPs (the copy alarm). A hello under the
+   * current secret means the CLI never kept the renewal: the pending one goes.
+   */
+  let rec2;
+  if (rec.pending && epoch === rec.pending.epoch && same(tag, mac(fromHex(rec.pending.ps), 'okt/hello/v1', body))) {
+    rec2 = { ...rec, ps: rec.pending.ps, epoch: rec.pending.epoch, renewedAt: rec.pending.renewedAt, oldPs: [...(rec.oldPs || []), { epoch: rec.epoch, ps: rec.ps }], pending: null };
+  } else if (epoch === rec.epoch && same(tag, mac(fromHex(rec.ps), 'okt/hello/v1', body))) {
+    rec2 = rec.pending ? { ...rec, pending: null } : rec;
+  } else {
+    return { silence: true };
+  }
+  return helloAccepted(rec2, id, name, ephPub, body, now, peerAddress);
+}
+
+function helloAccepted(rec, id, name, ephPub, body, now, peerAddress) {
   /* the pairing is bound to the computer's name and its Bluetooth address: either changed -> revoked */
   if (name !== rec.name) return { revoke: id, reason: 'name' };
   if (rec.mac) {
@@ -341,19 +360,24 @@ function phoneRenewOffer() {
   return { state: { eph }, payload: concat(header(T.RENEW_OFFER), eph.publicKey) };
 }
 
-/** CLI: RENEW_OFFER -> RENEW_ACCEPT {ct, MAC(PS')} (send it sealed) and the renewed record (old PS gone). */
+/**
+ * CLI: RENEW_OFFER -> RENEW_ACCEPT {ct, MAC(PS')} (send it sealed) and the record
+ * to SAVE: the current secret kept, the renewed one beside it as `next`
+ * (two-phase - see phoneOnHello). cliUseNext / cliDropNext settle it on the
+ * next connection.
+ */
 function cliRenewAccept(record, payload, now) {
   const m = parse(payload, T.RENEW_OFFER, 2 + PUB);
   if (!m) throw fail('EBTPAIR_MSG', 'not a renewal offer');
   const { cipherText, sharedSecret } = xwing.encapsulate(m.slice(2));
   const next = hkdf(sha256, concat(fromHex(record.ps), sharedSecret), H('OKT-RENEW-v1', u32(record.epoch), cipherText), ascii('okt/renew/v1'), N);
   return {
-    record: { ...record, ps: toHex(next), epoch: record.epoch + 1, renewedAt: now },
+    record: { ...record, next: { ps: toHex(next), epoch: record.epoch + 1, renewedAt: now } },
     payload: concat(header(T.RENEW_ACCEPT), cipherText, mac(next, 'okt/renew/confirm', u32(record.epoch + 1))),
   };
 }
 
-/** Phone: RENEW_ACCEPT -> the renewed record, keeping the old secret ONLY to recognise a copy (or null). */
+/** Phone: RENEW_ACCEPT -> the record with the renewed secret PENDING until the CLI first proves it (or null). */
 function phoneRenewFinish(record, state, payload, now) {
   const m = parse(payload, T.RENEW_ACCEPT, 2 + CT + N);
   if (!m) return null;
@@ -362,7 +386,20 @@ function phoneRenewFinish(record, state, payload, now) {
   state.eph.secretKey.fill(0);
   const next = hkdf(sha256, concat(fromHex(record.ps), ss), H('OKT-RENEW-v1', u32(record.epoch), ct), ascii('okt/renew/v1'), N);
   if (!same(m.slice(2 + CT), mac(next, 'okt/renew/confirm', u32(record.epoch + 1)))) return null;
-  return { ...record, ps: toHex(next), epoch: record.epoch + 1, renewedAt: now, oldPs: [...(record.oldPs || []), { epoch: record.epoch, ps: record.ps }] };
+  return { ...record, pending: { ps: toHex(next), epoch: record.epoch + 1, renewedAt: now } };
+}
+
+/** CLI: the renewed secret worked (the phone answered a hello under it) - it becomes the pairing; the old is forgotten. */
+function cliUseNext(record) {
+  if (!record.next) return record;
+  const { next, ...rest } = record;
+  return { ...rest, ps: next.ps, epoch: next.epoch, renewedAt: next.renewedAt };
+}
+/** CLI: the phone never got the renewal (it answered the current secret) - forget the unused one. */
+function cliDropNext(record) {
+  if (!record.next) return record;
+  const { next, ...rest } = record;
+  return rest;
 }
 
 module.exports = {
@@ -371,5 +408,5 @@ module.exports = {
   cliPairStart, phonePairOnCommit, cliPairOnKeys, phonePairOnReveal, phonePairApprove, cliPairOnDone, phonePairOnConfirm, phonePairAck, cliPairOnAck,
   cliHello, phoneOnHello, cliOnHelloOk,
   seal, open,
-  renewDue, phoneRenewOffer, cliRenewAccept, phoneRenewFinish,
+  renewDue, phoneRenewOffer, cliRenewAccept, phoneRenewFinish, cliUseNext, cliDropNext,
 };

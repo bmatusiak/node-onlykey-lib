@@ -917,11 +917,16 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     if (payload[0] !== btpair.T.RENEW_OFFER || !pairing || renewing) return;
     renewing = (async () => {
       const acc = btpair.cliRenewAccept(pairing, payload, now());
-      /* saved BEFORE answering: a crash after the answer must not leave only the old (now alarm-raising) secret */
+      /*
+       * Saved BEFORE answering, and TWO-PHASE: the record keeps the current
+       * secret with the renewed one beside it (`next`). Whether the answer
+       * reaches the phone or the link ends first, the next connection tries
+       * `next`, falls back to the current one, and settles it (see start()).
+       */
       if (onPairingRenewed) await onPairingRenewed(acc.record);
       pairing = acc.record;
       await sendRaw(CMD_SEALED, btpair.seal(session, concat2(Uint8Array.of(KIND_CONTROL), acc.payload)));
-      trace(`pairing renewed to epoch ${acc.record.epoch}`);
+      trace(`pairing renewal sent (epoch ${acc.record.next.epoch} takes over on the next connection)`);
     })().catch((e) => trace(`renewal failed: ${e.message}`)).finally(() => { renewing = null; });
   }
 
@@ -990,10 +995,26 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
          * either changes (Brad, 2026-10-04). Sending the stored name would let a
          * renamed computer keep connecting.
          */
-        const h = btpair.cliHello(pairing, { name: computerName || pairing.name });
-        const answer = await pairExchange(h.msg, limits.helloMs || 8000);
-        if (!answer) throw bleError('ESILENT', SILENT_MESSAGE);
-        session = btpair.cliOnHelloOk(h.state, answer);
+        const name = computerName || pairing.name;
+        const hello = async (rec) => {
+          const h = btpair.cliHello(rec, { name });
+          const answer = await pairExchange(h.msg, limits.helloMs || 8000);
+          return answer ? btpair.cliOnHelloOk(h.state, answer) : null;
+        };
+        /* a renewal still settling: the renewed secret first, then the current one (two-phase, btpair phoneOnHello) */
+        if (pairing.next) {
+          session = await hello(btpair.cliUseNext(pairing));
+          const settled = session ? btpair.cliUseNext(pairing) : btpair.cliDropNext(pairing);
+          if (!session) session = await hello(settled);
+          if (session) {
+            pairing = settled;
+            if (onPairingRenewed) await onPairingRenewed(pairing);
+            trace(`pairing at epoch ${pairing.epoch}`);
+          }
+        } else {
+          session = await hello(pairing);
+        }
+        if (!session) throw bleError('ESILENT', SILENT_MESSAGE);
         trace('encrypted session open (Part T)');
       }
       return { started: true, address: link.describe, encrypted: !!session };

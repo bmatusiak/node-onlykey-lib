@@ -136,16 +136,49 @@ test('renewal on day 6, and THE COPY ALARM: after renewal, any use of the old se
   const acc = bt.cliRenewAccept(cliRec, bt.open(cli, bt.seal(phone.session, offer.payload)), day6);
   const renewed = bt.phoneRenewFinish(phoneRec, offer.state, bt.open(phone.session, bt.seal(cli, acc.payload)), day6);
   assert.ok(renewed, 'the renewal did not complete');
-  assert.strictEqual(renewed.epoch, 1);
-  assert.strictEqual(acc.record.ps, renewed.ps, 'the two sides renewed to different secrets');
-  assert.notStrictEqual(renewed.ps, phoneRec.ps);
-  /* the CLI connects with the new secret */
-  assert.ok(connect(acc.record, [renewed], day6 + 1000).cli, 'the renewed pairing does not connect');
+  /* two-phase: the phone holds the renewed secret as pending, the CLI saves it as next */
+  assert.strictEqual(renewed.epoch, 0);
+  assert.strictEqual(renewed.pending.epoch, 1);
+  assert.strictEqual(acc.record.next.ps, renewed.pending.ps, 'the two sides renewed to different secrets');
+  assert.notStrictEqual(renewed.pending.ps, phoneRec.ps);
+  /* the CLI connects with the new secret: the phone promotes it, the old one becomes the alarm */
+  const useNext = bt.cliUseNext(acc.record);
+  const first = connect(useNext, [renewed], day6 + 1000);
+  assert.ok(first.cli, 'the renewed pairing does not connect');
+  const promoted = first.phone.record;
+  assert.strictEqual(promoted.epoch, 1);
+  assert.strictEqual(promoted.pending, null);
   /* the copy uses the old one -> alarm (the caller drops the pairing) */
-  const hit = connect(copied, [renewed], day6 + 2000).phone;
-  assert.strictEqual(hit.alarm, renewed.id, 'a copied pairing used after renewal raised no alarm');
+  const hit = connect(copied, [promoted], day6 + 2000).phone;
+  assert.strictEqual(hit.alarm, promoted.id, 'a copied pairing used after renewal raised no alarm');
   /* after the drop, even the real CLI gets silence until it re-pairs */
-  assert.ok(connect(acc.record, [], day6 + 3000).phone.silence);
+  assert.ok(connect(useNext, [], day6 + 3000).phone.silence);
+});
+
+test('a renewal whose answer never reached the phone loses nothing: the CLI falls back to its current secret, no alarm', () => {
+  const { cliRec, phoneRec } = pair();
+  const day6 = t0 + 6 * DAY;
+  const { phone, cli } = connect(cliRec, [phoneRec], day6);
+  const offer = bt.phoneRenewOffer();
+  const acc = bt.cliRenewAccept(cliRec, bt.open(cli, bt.seal(phone.session, offer.payload)), day6);
+  /* the link ended before RENEW_ACCEPT arrived: the phone still has only the current secret */
+  assert.ok(connect(bt.cliUseNext(acc.record), [phoneRec], day6 + 1000).phone.silence, 'the phone took a secret it never agreed');
+  const back = connect(bt.cliDropNext(acc.record), [phoneRec], day6 + 2000);
+  assert.ok(back.cli, 'the fallback to the current secret did not connect');
+  assert.ok(!back.phone.alarm);
+});
+
+test('the phone got the answer but the CLI fell back: the pending secret is dropped, no alarm', () => {
+  const { cliRec, phoneRec } = pair();
+  const day6 = t0 + 6 * DAY;
+  const { phone, cli } = connect(cliRec, [phoneRec], day6);
+  const offer = bt.phoneRenewOffer();
+  const acc = bt.cliRenewAccept(cliRec, bt.open(cli, bt.seal(phone.session, offer.payload)), day6);
+  const renewed = bt.phoneRenewFinish(phoneRec, offer.state, bt.open(phone.session, bt.seal(cli, acc.payload)), day6);
+  const back = connect(bt.cliDropNext(acc.record), [renewed], day6 + 1000);
+  assert.ok(back.cli && !back.phone.alarm);
+  assert.strictEqual(back.phone.record.pending, null);
+  assert.strictEqual(back.phone.record.epoch, 0);
 });
 
 test('a forged renewal answer is refused (the phone keeps its record)', () => {
