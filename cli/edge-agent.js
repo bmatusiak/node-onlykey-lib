@@ -455,6 +455,44 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         await other.close().catch(() => undefined);
       }
     },
+    /*
+     * R30 (P2c): a sync between this agent's key and the key on another phone
+     * (paired both ways, R29), by cross-anchors. Each key's signed checkpoint is
+     * read from the key itself; each phone's copy of its own chain comes from
+     * that phone (GIVE, no press); then each phone gets the OTHER's chain up to
+     * the other's checkpoint and anchors it - both sheets at once, a press on
+     * each. Each phone checks the chain against the paired key and against what
+     * it anchored before (a rollback or a changed head is its alarm). One may
+     * anchor while the other is declined - each result is reported.
+     */
+    'sync-with': async ({ address, name = null, otherName = null }) => {
+      if (!edge) throw new Error('this agent service has no Edge key');
+      if (!openOther) throw new Error('this agent service cannot open a second phone');
+      if (!address) throw new Error('sync --with needs the other phone\'s Bluetooth address');
+      const signer = require('./edge-copy').peerSigner(home || require('./edge-control').edgeHome());
+      const hex = (b) => Buffer.from(b).toString('hex');
+      const other = await openOther(address);
+      try {
+        const [ka, kb] = [await edge.publicKey(), await other.edge.publicKey()];
+        if (hex(ka.publicKey) === hex(kb.publicKey)) throw new Error('both links reach the same key - give the OTHER phone\'s address');
+        const paired = async (e, k) => (await e.siblings()).siblings.some((s) => hex(s.publicKey) === hex(k.publicKey));
+        if (!(await paired(edge, kb)) || !(await paired(other.edge, ka))) throw new Error('the two keys are not paired both ways - okedge sibling add first');
+        /* the checkpoints first: each phone's copy, read after, reaches at least that far */
+        const [cpA, cpB] = [await edge.checkpoint(), await other.edge.checkpoint()];
+        const [recA, recB] = [await client.copyFromPhone(signer, { deviceId: ka.deviceId }), await other.client.copyFromPhone(signer, { deviceId: kb.deviceId })];
+        const one = (p) => p.then((r) => ({ ok: true, ...r }), (e) => ({ ok: false, refusal: e.refusal || null, error: e.message }));
+        const [onThis, onOther] = await Promise.all([
+          one(client.anchorToPhone(signer, { deviceId: ka.deviceId, chain: kb.deviceId, records: recB, checkpoint: cpB, name: otherName || address })),
+          one(other.client.anchorToPhone(signer, { deviceId: kb.deviceId, chain: ka.deviceId, records: recA, checkpoint: cpA, name: name || selfName || 'the other phone' })),
+        ]);
+        return {
+          this: { deviceId: hex(ka.deviceId), anchored: { seq: cpB.seq }, ...onThis },
+          other: { deviceId: hex(kb.deviceId), anchored: { seq: cpA.seq }, ...onOther },
+        };
+      } finally {
+        await other.close().catch(() => undefined);
+      }
+    },
     /* R29: the keys this agent's key is paired with (no press) */
     siblings: async () => {
       if (!edge) throw new Error('this agent service has no Edge key to read the list from');

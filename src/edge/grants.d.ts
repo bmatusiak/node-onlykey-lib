@@ -2,6 +2,12 @@ export function agentSubject(agentKey: any): Uint8Array<ArrayBufferLike> & Uint8
 export function peerSubject(peerKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export function siblingSubject(key: any, deviceId: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export function siblingCode(a: any, b: any): string;
+export function anchorSubject({ deviceId, seq, head, signature }: {
+    deviceId: any;
+    seq: any;
+    head: any;
+    signature: any;
+}): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export const MAX_USES: 1024;
 export function grantGenesis(seed: any, uses: any): any;
 /** The value use `step` reveals, from the seed (for tests and fakes - a host never has the seed). */

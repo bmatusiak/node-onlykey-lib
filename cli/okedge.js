@@ -22,6 +22,9 @@
  *                                                             pair this key with the key on the phone at <address>
  *                                                             (R29): both phones show a code - pair only if they match
  *   okedge sibling list                                       the keys this key is paired with (no press)
+ *   okedge sync --with <address> [--name "…"] [--other-name "…"]
+ *                                                             sync with the key on another phone (R30): each phone
+ *                                                             anchors the other's chain - a sheet + press on each
  *   okedge status                                             the budget, its head, tickets owed
  *   okedge end                                                end the budget
  *   okedge watch [--once]                                     follow the key's links live (read-only)
@@ -136,7 +139,18 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     }
     if (cmd === 'sync') {
       /* mcp-service.md 4.2b: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone (its sheet + press). --with worker comes with E5 */
-      if (args.includes('--with')) { err('okedge sync --with: other copies (the Worker, another device) come later - today it is this PC, the key and its phone'); return 2; }
+      if (args.includes('--with')) {
+        /* R30 (P2c): with the key on another phone (paired both ways) - each anchors the other, a sheet + press on each */
+        const address = opt(args, '--with');
+        if (!address || address.startsWith('--') || address === 'worker') { err('okedge sync --with <the other phone\'s Bluetooth address> (the Worker comes with E5)'); return 2; }
+        const r = await ask('sync-with', { address, name: opt(args, '--name') || null, otherName: opt(args, '--other-name') || null },
+          { timeoutMs: 600000, onSent: () => out('Waiting for the phones - each shows the other key\'s chain to anchor') });
+        for (const [what, x] of [['this phone', r.this], ['the other phone', r.other]]) {
+          if (!x.ok) out(`${what}: not anchored - ${x.error}`);
+          else out(`${what}: anchored the other at #${x.anchored.seq} (link #${x.seq}, ${x.sent} link${x.sent === 1 ? '' : 's'} sent)`);
+        }
+        return r.this.ok && r.other.ok ? 0 : 1;
+      }
       const status = args.includes('--status');
       /* phase 2 may wait on the phone's sheet (2 min) and the press (25 s): longer than a plain read */
       const r = await ask('sync', { status }, { timeoutMs: status ? 120000 : 240000 });

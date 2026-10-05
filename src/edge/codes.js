@@ -156,6 +156,8 @@ const STATUS = Object.freeze({
   0x18: { name: 'sibling-known', text: 'That phone is already paired with this key' },
   0x19: { name: 'siblings-full', text: 'This key already has four paired phones - unpair one first' },
   0x1a: { name: 'no-such-sibling', text: 'This key has no paired phone at that index' },
+  /* R30 anchors (P2c, CHOSEN number) */
+  0x1b: { name: 'bad-checkpoint', text: 'That checkpoint is not signed by the paired key - nothing anchored' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

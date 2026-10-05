@@ -265,6 +265,22 @@ function siblingSubject(key, deviceId) {
  * phone got the OTHER's real key. The person compares them before pressing.
  * -> "123 456"
  */
+/*
+ * R30 ANCHOR subject (firmware.md): SHA256("OKEDGE-ANCHOR-v1" || the sibling's
+ * device id || its seq (u32 LE) || its head || its checkpoint signature) - the
+ * signed checkpoint this key says it has seen the sibling's chain up to.
+ */
+function anchorSubject({ deviceId, seq, head, signature }) {
+  const id = Uint8Array.from(deviceId);
+  const h = Uint8Array.from(head);
+  const sig = Uint8Array.from(signature);
+  if (id.length !== 16 || h.length !== 32 || sig.length !== 64 || !Number.isInteger(seq) || seq < 0 || seq > 0xffffffff) {
+    throw new TypeError('anchorSubject needs the device id (16), seq (u32), head (32) and signature (64)');
+  }
+  const s4 = Uint8Array.of(seq & 0xff, (seq >>> 8) & 0xff, (seq >>> 16) & 0xff, (seq >>> 24) & 0xff);
+  return H('OKEDGE-ANCHOR-v1', id, s4, h, sig);
+}
+
 function siblingCode(a, b) {
   const one = (x) => Uint8Array.from([...Uint8Array.from(x.publicKey), ...Uint8Array.from(x.deviceId)]);
   const [p, q] = [one(a), one(b)].sort((x, y) => { for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return x[i] - y[i]; return 0; });
@@ -281,7 +297,7 @@ function peerSubject(peerKey) {
 }
 
 module.exports = {
-  agentSubject, peerSubject, siblingSubject, siblingCode,
+  agentSubject, peerSubject, siblingSubject, siblingCode, anchorSubject,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, armToken, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel,

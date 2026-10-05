@@ -307,6 +307,40 @@ async function approveSibling(msg, { edge, seen, ask, onPress, timeoutMs = 30000
 }
 
 /**
+ * R30 (P2c): the sibling's chain, as offered, already passed sync.anchorCheck
+ * (the caller has the copies); this is the consent: the sibling must be on the
+ * KEY's list at `index`, then the sheet, Yes, a PHYSICAL press, and the key
+ * checks the checkpoint itself and writes the anchor link. Only after that link
+ * may the caller keep the sibling's links.
+ * -> {ok: true, seq} | {ok: false, refusal, detail?}
+ */
+async function approveAnchor({ peer, name, index, chain: siblingId, checkpoint, count = 0, edge, ask, onPress, timeoutMs = 30000 }) {
+  const list = await edge.siblings();
+  const sib = list.siblings[index];
+  if (!sib || toHex(sib.deviceId) !== toHex(siblingId)) return refuse('invalid', 'that key is not paired with this one');
+  const answer = await ask({ peer: String(peer).toLowerCase(), place: request.fingerprint(String(peer).toLowerCase()), name, sibling: toHex(sib.publicKey), seq: checkpoint.seq, count });
+  if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
+  if (answer !== 'approve') return refuse('declined');
+  let r;
+  try {
+    r = await edge.anchor(index, checkpoint, { onPress, timeoutMs });
+  } catch (e) {
+    if (e && e.status === 'restoring') return refuse('restoring');
+    if (e && e.status === 'bad-checkpoint') return refuse('invalid', 'the key says that checkpoint is not signed by the paired key');
+    if (e && e.status === 'no-such-sibling') return refuse('invalid', 'the key says that key is not paired');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    throw e;
+  }
+  const [l] = await edge.pickup(r.seq, 1);
+  const f = chain.decodeLink(l.link);
+  if (f.op !== codes.OP.ANCHOR || !(f.flags & codes.FLAG.PRESS_OBSERVED) || f.slot !== index || f.grantId !== checkpoint.seq
+    || toHex(f.subject) !== toHex(grants.anchorSubject({ deviceId: siblingId, ...checkpoint }))) {
+    return refuse('invalid', `the key's link #${r.seq} is not this anchor`);
+  }
+  return { ok: true, seq: r.seq };
+}
+
+/**
  * R15c (2026-10-03): is this agent registered - is its AGENT_ADD link, made at
  * a press, in the app's VERIFIED copy of the chain? The app's own list of
  * agents is a convenience; only the link counts. An agent in storage without
@@ -327,4 +361,4 @@ function agentInCopy(rows, agentHex) {
   return null;
 }
 
-module.exports = { approveRequest, approveRegister, approvePeerAdd, approveSync, approveSibling, agentInCopy };
+module.exports = { approveRequest, approveRegister, approvePeerAdd, approveSync, approveSibling, approveAnchor, agentInCopy };

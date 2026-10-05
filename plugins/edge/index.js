@@ -41,6 +41,8 @@ const SUB = Object.freeze({
   SYNC: 0x39,
   /* R29 siblings (P2b) */
   SIBLING_ADD: 0x35, SIBLING_REMOVE: 0x36, SIBLING_LIST: 0x37,
+  /* R30 anchors (P2c) */
+  ANCHOR: 0x38,
 });
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
@@ -599,6 +601,24 @@ function setup(imports, register) {
     },
 
     /** R29: the key's paired phones, no press. -> {max, siblings: [{index, publicKey (X || Y), deviceId}]} */
+    /**
+     * R30: anchor the sibling at `index` at its SIGNED checkpoint {seq, head,
+     * signature} (the sibling key's own edge.checkpoint()). The key checks the
+     * signature against that sibling's key (EDGE:1B if not), then waits for a
+     * PHYSICAL press and links op 19 (grants.anchorSubject). Only inside a sync
+     * the person approved (spec): the caller's sheet comes first.
+     * Three requests on the wire: {index, seq, head}, r, s. -> {seq, head, tag}
+     */
+    async anchor(index, { seq, head, signature }, { onPress, timeoutMs = 30000 } = {}) {
+      if (!Number.isInteger(index) || index < 0 || index > 255) throw new RangeError(`Edge: no sibling index ${index}`);
+      const sig = Uint8Array.from(signature);
+      const s4 = Uint8Array.of(seq & 0xff, (seq >>> 8) & 0xff, (seq >>> 16) & 0xff, (seq >>> 24) & 0xff);
+      await call(SUB.ANCHOR, concat([Uint8Array.of(0, index), s4, Uint8Array.from(head)]), { text: true });
+      await call(SUB.ANCHOR, concat([Uint8Array.of(1), sig.slice(0, 32)]), { text: true });
+      const [r] = await pressed(SUB.ANCHOR, concat([Uint8Array.of(2), sig.slice(32, 64)]), { timeoutMs }, onPress);
+      return seqHeadTag(r);
+    },
+
     async siblings(opts) {
       const [h, ...slots] = await call(SUB.SIBLING_LIST, null, { ...opts, reports: 1 + PEER_SLOTS });
       return {

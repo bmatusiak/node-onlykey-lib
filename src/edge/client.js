@@ -330,6 +330,53 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     },
 
     /**
+     * R30 (P2c): the phone's own copy of its chain, every record it holds -
+     * GIVE, BATCH at a time. peerSigner: this place (on that key's list).
+     * -> [{link, head, reveal}] ; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
+     */
+    async copyFromPhone(peerSigner, { deviceId }) {
+      const syncLib = require('./sync');
+      const out = [];
+      for (let from = 0, guard = 0; from !== null && guard < 10000; guard += 1) {
+        const a = await channel.send(await syncLib.buildGive({ signer: peerSigner, deviceId, from }));
+        if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this place on the key\'s list (okedge peer add)?');
+        if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone gave no copy - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
+        const { fromHex } = require('../bytes');
+        for (const [l, h, r] of a.links || []) out.push({ link: fromHex(l), head: fromHex(h), reveal: r ? fromHex(r) : null });
+        from = Number.isInteger(a.next) ? a.next : null;
+      }
+      return out;
+    },
+
+    /**
+     * R30 (P2c): bring the phone whose key is `deviceId` its sibling's chain
+     * (`chain`, `records` up to the sibling's signed `checkpoint`) and ask
+     * it to anchor it: HAVE (what it holds of that chain), the LINKS it lacks,
+     * then ANCHOR - one sheet, Yes, a press, the anchor link.
+     * -> {sent, seq} ; rejects EEDGE_REFUSED (declined, timeout, a rollback or
+     * a changed history - with the phone's words) or EEDGE_NO_ANSWER.
+     */
+    async anchorToPhone(peerSigner, { deviceId, chain, records, checkpoint, name }) {
+      const syncLib = require('./sync');
+      const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
+      const { toHex: hex } = require('../bytes');
+      const ask = async (msg, what) => {
+        const a = await channel.send(msg);
+        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to ${what} - is this place on the key's list (okedge peer add)?`);
+        if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the anchor - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
+        return a;
+      };
+      const upTo = records.filter((r) => require('./chain').decodeLink(r.link).seq <= checkpoint.seq);
+      const have = await ask(await syncLib.buildHave({ signer: peerSigner, deviceId, name, chain }), 'the sync');
+      const lacks = syncLib.missing(upTo, have.ranges || []);
+      const sid = hex(randomBytes(8));
+      const linkMsgs = lacks.length ? await syncLib.buildLinks({ signer: peerSigner, deviceId, records: lacks, sid, chain }) : [];
+      for (const m of linkMsgs) await ask(m, `part ${m.payload.part + 1} of ${m.payload.parts}`);
+      const done = await ask(await syncLib.buildAnchor({ signer: peerSigner, deviceId, sid, chain, linkParts: linkMsgs.length, checkpoint, name }), 'the anchor');
+      return { sent: lacks.length, seq: done.seq ?? null };
+    },
+
+    /**
      * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
      * date from `records` (this place's verified copy, [{link, head, reveal}])
      * and merge `keychain` (this place's public Key Chain list, entries) with

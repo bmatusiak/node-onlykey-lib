@@ -191,6 +191,33 @@ export function approveSibling(msg: any, { edge, seen, ask, onPress, timeoutMs }
     already?: undefined;
 }>;
 /**
+ * R30 (P2c): the sibling's chain, as offered, already passed sync.anchorCheck
+ * (the caller has the copies); this is the consent: the sibling must be on the
+ * KEY's list at `index`, then the sheet, Yes, a PHYSICAL press, and the key
+ * checks the checkpoint itself and writes the anchor link. Only after that link
+ * may the caller keep the sibling's links.
+ * -> {ok: true, seq} | {ok: false, refusal, detail?}
+ */
+export function approveAnchor({ peer, name, index, chain: siblingId, checkpoint, count, edge, ask, onPress, timeoutMs }: {
+    peer: any;
+    name: any;
+    index: any;
+    chain: any;
+    checkpoint: any;
+    count?: number | undefined;
+    edge: any;
+    ask: any;
+    onPress: any;
+    timeoutMs?: number | undefined;
+}): Promise<{
+    detail?: any;
+    ok: boolean;
+    refusal: any;
+} | {
+    ok: boolean;
+    seq: any;
+}>;
+/**
  * R15c (2026-10-03): is this agent registered - is its AGENT_ADD link, made at
  * a press, in the app's VERIFIED copy of the chain? The app's own list of
  * agents is a convenience; only the link counts. An agent in storage without

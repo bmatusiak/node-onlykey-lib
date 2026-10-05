@@ -4,6 +4,8 @@ export const KEYCHAIN_TYPE: "EDGE_SYNC_KEYCHAIN";
 export const COMMIT_TYPE: "EDGE_SYNC_COMMIT";
 export const TAKE_TYPE: "EDGE_SYNC_TAKE";
 export const SIBLING_TYPE: "EDGE_SIBLING_ADD";
+export const GIVE_TYPE: "EDGE_SYNC_GIVE";
+export const ANCHOR_TYPE: "EDGE_SYNC_ANCHOR";
 export const BATCH: 40;
 export const NO_SEQ: 4294967295;
 /**
@@ -25,6 +27,81 @@ export function buildSibling({ signer, deviceId, key, id, name }: {
     nonce: string;
     payload: any;
 }>;
+/** R30: the place asks the phone whose key is `deviceId` for its copy of its own chain, from seq `from` (BATCH at a time). */
+export function buildGive({ signer, deviceId, from }: {
+    signer: any;
+    deviceId: any;
+    from?: number | undefined;
+}): Promise<{
+    type: any;
+    v: number;
+    peer: string;
+    nonce: string;
+    payload: any;
+}>;
+/**
+ * R30: "that is the sibling's chain up to its signed checkpoint - anchor it".
+ * chain: the sibling's device id; checkpoint: {seq, head, signature} from the
+ * sibling's key; name: the sibling as the place calls it (shown, never trusted).
+ */
+export function buildAnchor({ signer, deviceId, sid, chain, linkParts, checkpoint, name }: {
+    signer: any;
+    deviceId: any;
+    sid: any;
+    chain: any;
+    linkParts: any;
+    checkpoint: any;
+    name: any;
+}): Promise<{
+    type: any;
+    v: number;
+    peer: string;
+    nonce: string;
+    payload: any;
+}>;
+/**
+ * R30 (P2c): before a phone anchors its sibling, the sibling's chain as offered
+ * must hold up - the phone's side, no I/O.
+ *   records:    the phone's copy of the sibling's chain merged with what came
+ *   publicKey:  the sibling's Edge key (X || Y), from the KEY's sibling list
+ *   checkpoint: {seq, head, signature} the place read from the sibling's key
+ *   anchors:    [{seq, head}] this phone anchored that sibling at before
+ * ALARMS (spec R30: "a sibling anchors a head its own chain doesn't contain:
+ * one device's rollback or tampering is proven by the other"):
+ *   bad-checkpoint - not signed by the sibling's key;
+ *   rollback       - the sibling's head is now older than one already anchored;
+ *   changed        - at a seq already anchored, the sibling's chain now holds another head;
+ *   tampered       - the links do not verify up to the signed checkpoint.
+ * -> {ok: true, verifiedThrough, open} | {ok: false, alarm, seq?, detail?}
+ *
+ * @param {{records: Array<{link: Uint8Array, head: Uint8Array, reveal?: Uint8Array|null}>, publicKey: Uint8Array,
+ *   checkpoint: {seq: number, head: Uint8Array, signature: Uint8Array}, anchors?: Array<{seq: number, head: Uint8Array}>}} o
+ * @returns {{ok: boolean, alarm?: string, seq?: number, detail?: string, verifiedThrough?: number, open?: any[]}}
+ */
+export function anchorCheck({ records, publicKey, checkpoint, anchors }: {
+    records: Array<{
+        link: Uint8Array;
+        head: Uint8Array;
+        reveal?: Uint8Array | null;
+    }>;
+    publicKey: Uint8Array;
+    checkpoint: {
+        seq: number;
+        head: Uint8Array;
+        signature: Uint8Array;
+    };
+    anchors?: Array<{
+        seq: number;
+        head: Uint8Array;
+    }>;
+}): {
+    ok: boolean;
+    alarm?: string;
+    seq?: number;
+    detail?: string;
+    verifiedThrough?: number;
+    open?: any[];
+};
 /** The entries as list.serialize writes them (public key hex), id order, keys sorted, no lastSeen - one text for one list, on any side. */
 export function keychainText(entries: any): string;
 /** SHA256 of the list in id order - the sync link's last field when a list moved. */
@@ -104,10 +181,11 @@ export function body({ type, peer, nonce, payload }: {
     payload: any;
 }): Uint8Array<ArrayBuffer>;
 /** The place's side, first: what does the phone's copy of this chain hold? */
-export function buildHave({ signer, deviceId, name }: {
+export function buildHave({ signer, deviceId, name, chain }: {
     signer: any;
     deviceId: any;
     name: any;
+    chain?: null | undefined;
 }): Promise<{
     type: any;
     v: number;
@@ -119,11 +197,12 @@ export function buildHave({ signer, deviceId, name }: {
  * The place's side: the links the phone lacks, in signed batches of <= BATCH.
  * records: [{link, head, reveal?}] (bytes). -> [message, ...] (one sid for all)
  */
-export function buildLinks({ signer, deviceId, records, sid }: {
+export function buildLinks({ signer, deviceId, records, sid, chain }: {
     signer: any;
     deviceId: any;
     records: any;
     sid?: string | undefined;
+    chain?: null | undefined;
 }): Promise<{
     type: any;
     v: number;

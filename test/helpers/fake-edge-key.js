@@ -37,6 +37,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
   const peers = []; /* R20: X || Y, in index order */
   let peerX = null; /* PEER_ADD part 0, until part 1 */
   const siblings = []; /* R29: X || Y */
+  let anchorParts = null; /* R30: ANCHOR parts 0-1, until part 2 */
   let sibX = null;
   let syncParts = 0; /* SYNC's parts received, in order */
   let syncFields = [];
@@ -210,6 +211,25 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
         if (i >= siblings.length) return emit(status(0x1a));
         append({ op: codes.OP.SIBLING_REMOVE, decision: 1, flags: 1, grantId: 0, subject: grants.siblingSubject(siblings[i], chain.deviceIdOf(siblings[i])) });
         siblings.splice(i, 1);
+        emit(seqHead());
+      } else if (sub === 0x38) {
+        /* R30 ANCHOR: {0, index, seq, head}, {1, r}, {2, s} -> the checkpoint checked under that sibling's key, pressed */
+        if (restoring) { anchorParts = null; return emit(status(0x0e)); }
+        if (arg[0] === 0) {
+          anchorParts = null;
+          if (arg[1] >= siblings.length) return emit(status(0x1a));
+          anchorParts = { index: arg[1], seq: arg[2] | (arg[3] << 8) | (arg[4] << 16) | (arg[5] << 24), head: arg.slice(6, 38) };
+          return emit(status(0x00));
+        }
+        if (arg[0] === 1 && anchorParts && !anchorParts.r) { anchorParts.r = arg.slice(1, 33); return emit(status(0x00)); }
+        if (arg[0] !== 2 || !anchorParts || !anchorParts.r) { anchorParts = null; return emit(status(0x17)); }
+        const a = anchorParts;
+        anchorParts = null;
+        const sib = siblings[a.index];
+        const deviceId = chain.deviceIdOf(sib);
+        const signature = Uint8Array.from([...a.r, ...arg.slice(1, 33)]);
+        if (!chain.verifyCheckpoint({ deviceId, seq: a.seq >>> 0, head: a.head }, signature, sib)) return emit(status(0x1b));
+        append({ op: codes.OP.ANCHOR, decision: 1, flags: 1, slot: a.index, grantId: a.seq >>> 0, subject: grants.anchorSubject({ deviceId, seq: a.seq >>> 0, head: a.head, signature }) });
         emit(seqHead());
       } else if (sub === 0x37) {
         emit(report([siblings.length, 4]));

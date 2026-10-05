@@ -137,6 +137,36 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         index: any;
     }>;
     /**
+     * R30 (P2c): the phone's own copy of its chain, every record it holds -
+     * GIVE, BATCH at a time. peerSigner: this place (on that key's list).
+     * -> [{link, head, reveal}] ; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
+     */
+    copyFromPhone(peerSigner: any, { deviceId }: {
+        deviceId: any;
+    }): Promise<{
+        link: Uint8Array<ArrayBuffer>;
+        head: Uint8Array<ArrayBuffer>;
+        reveal: Uint8Array<ArrayBuffer> | null;
+    }[]>;
+    /**
+     * R30 (P2c): bring the phone whose key is `deviceId` its sibling's chain
+     * (`chain`, `records` up to the sibling's signed `checkpoint`) and ask
+     * it to anchor it: HAVE (what it holds of that chain), the LINKS it lacks,
+     * then ANCHOR - one sheet, Yes, a press, the anchor link.
+     * -> {sent, seq} ; rejects EEDGE_REFUSED (declined, timeout, a rollback or
+     * a changed history - with the phone's words) or EEDGE_NO_ANSWER.
+     */
+    anchorToPhone(peerSigner: any, { deviceId, chain, records, checkpoint, name }: {
+        deviceId: any;
+        chain: any;
+        records: any;
+        checkpoint: any;
+        name: any;
+    }): Promise<{
+        sent: any;
+        seq: any;
+    }>;
+    /**
      * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
      * date from `records` (this place's verified copy, [{link, head, reveal}])
      * and merge `keychain` (this place's public Key Chain list, entries) with

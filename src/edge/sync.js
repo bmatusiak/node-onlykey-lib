@@ -47,7 +47,15 @@ const COMMIT_TYPE = 'EDGE_SYNC_COMMIT';
 const TAKE_TYPE = 'EDGE_SYNC_TAKE';
 /* R29 (P2b): pair the phone's key with another key of yours - the place relays that key */
 const SIBLING_TYPE = 'EDGE_SIBLING_ADD';
-const TYPES = [HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, SIBLING_TYPE];
+/*
+ * R30 (P2c): a sync between siblings. GIVE asks a phone for its own copy of its
+ * chain (read-only, history only - a place on the key's list may keep copies
+ * anyway); HAVE and LINKS carry `chain` = whose links they are (absent: the
+ * phone's own); ANCHOR ends it - one sheet, a press, the anchor link.
+ */
+const GIVE_TYPE = 'EDGE_SYNC_GIVE';
+const ANCHOR_TYPE = 'EDGE_SYNC_ANCHOR';
+const TYPES = [HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, SIBLING_TYPE, GIVE_TYPE, ANCHOR_TYPE];
 /* a Key Chain part: JSON text up to this many characters (the wire carries ~14 KB a message) */
 const KEYCHAIN_PART_CHARS = 8000;
 /* no link moved, only the Key Chain list: the sync link's seq fields (CHOSEN, pending the spec) */
@@ -70,21 +78,21 @@ async function sign(type, signer, payload, nonce = randomBytes(16)) {
 }
 
 /** The place's side, first: what does the phone's copy of this chain hold? */
-function buildHave({ signer, deviceId, name }) {
-  return sign(HAVE_TYPE, signer, { deviceId: toHex(deviceId), name: String(name) });
+function buildHave({ signer, deviceId, name, chain = null }) {
+  return sign(HAVE_TYPE, signer, { deviceId: toHex(deviceId), name: String(name), ...(chain ? { chain: toHex(chain) } : {}) });
 }
 
 /**
  * The place's side: the links the phone lacks, in signed batches of <= BATCH.
  * records: [{link, head, reveal?}] (bytes). -> [message, ...] (one sid for all)
  */
-async function buildLinks({ signer, deviceId, records, sid = toHex(randomBytes(8)) }) {
+async function buildLinks({ signer, deviceId, records, sid = toHex(randomBytes(8)), chain = null }) {
   const parts = Math.max(1, Math.ceil(records.length / BATCH));
   const out = [];
   for (let part = 0; part < parts; part += 1) {
     const links = records.slice(part * BATCH, (part + 1) * BATCH)
       .map((r) => [toHex(r.link), toHex(r.head), r.reveal ? toHex(r.reveal) : null]);
-    out.push(await sign(LINKS_TYPE, signer, { sid, deviceId: toHex(deviceId), part, parts, links }));
+    out.push(await sign(LINKS_TYPE, signer, { sid, deviceId: toHex(deviceId), part, parts, links, ...(chain ? { chain: toHex(chain) } : {}) }));
   }
   return out;
 }
@@ -123,6 +131,16 @@ function verify(msg, { seen } = {}) {
   if (msg.type === COMMIT_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.linkParts) || !Number.isInteger(p.keychainParts)
     || p.linkParts < 0 || p.keychainParts < 0 || p.linkParts > 255 || p.keychainParts > 255)) return { ok: false, reason: 'malformed' };
   if (msg.type === TAKE_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.part) || p.part < 0 || p.part > 255)) return { ok: false, reason: 'malformed' };
+  if (p.chain !== undefined && !isHex(p.chain, 16)) return { ok: false, reason: 'malformed' };
+  if (msg.type === GIVE_TYPE && (!Number.isInteger(p.from) || p.from < 0 || p.from > 0xffffffff)) return { ok: false, reason: 'malformed' };
+  if (msg.type === ANCHOR_TYPE) {
+    const c = p.checkpoint;
+    if (!isHex(p.sid, 8) || !isHex(p.chain, 16) || !Number.isInteger(p.linkParts) || p.linkParts < 0 || p.linkParts > 255
+      || typeof p.name !== 'string' || !p.name.trim() || utf8ToBytes(p.name).length > 0xff
+      || !c || !Number.isInteger(c.seq) || c.seq < 0 || c.seq > 0xffffffff || !isHex(c.head, 32) || !isHex(c.signature, 64)) {
+      return { ok: false, reason: 'malformed' };
+    }
+  }
   if (msg.type === SIBLING_TYPE && (!isHex(p.key, 64) || !isHex(p.id, 16) || typeof p.name !== 'string' || !p.name.trim()
     || utf8ToBytes(p.name).length > 0xff)) return { ok: false, reason: 'malformed' };
   let good = false;
@@ -290,6 +308,61 @@ function buildCommit({ signer, deviceId, sid, linkParts, keychainParts: kcParts 
   return sign(COMMIT_TYPE, signer, { sid, deviceId: toHex(deviceId), linkParts, keychainParts: kcParts });
 }
 
+/** R30: the place asks the phone whose key is `deviceId` for its copy of its own chain, from seq `from` (BATCH at a time). */
+function buildGive({ signer, deviceId, from = 0 }) {
+  return sign(GIVE_TYPE, signer, { deviceId: toHex(deviceId), from });
+}
+
+/**
+ * R30: "that is the sibling's chain up to its signed checkpoint - anchor it".
+ * chain: the sibling's device id; checkpoint: {seq, head, signature} from the
+ * sibling's key; name: the sibling as the place calls it (shown, never trusted).
+ */
+function buildAnchor({ signer, deviceId, sid, chain, linkParts, checkpoint, name }) {
+  return sign(ANCHOR_TYPE, signer, {
+    sid, deviceId: toHex(deviceId), chain: toHex(chain), linkParts, name: String(name),
+    checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature) },
+  });
+}
+
+/**
+ * R30 (P2c): before a phone anchors its sibling, the sibling's chain as offered
+ * must hold up - the phone's side, no I/O.
+ *   records:    the phone's copy of the sibling's chain merged with what came
+ *   publicKey:  the sibling's Edge key (X || Y), from the KEY's sibling list
+ *   checkpoint: {seq, head, signature} the place read from the sibling's key
+ *   anchors:    [{seq, head}] this phone anchored that sibling at before
+ * ALARMS (spec R30: "a sibling anchors a head its own chain doesn't contain:
+ * one device's rollback or tampering is proven by the other"):
+ *   bad-checkpoint - not signed by the sibling's key;
+ *   rollback       - the sibling's head is now older than one already anchored;
+ *   changed        - at a seq already anchored, the sibling's chain now holds another head;
+ *   tampered       - the links do not verify up to the signed checkpoint.
+ * -> {ok: true, verifiedThrough, open} | {ok: false, alarm, seq?, detail?}
+ *
+ * @param {{records: Array<{link: Uint8Array, head: Uint8Array, reveal?: Uint8Array|null}>, publicKey: Uint8Array,
+ *   checkpoint: {seq: number, head: Uint8Array, signature: Uint8Array}, anchors?: Array<{seq: number, head: Uint8Array}>}} o
+ * @returns {{ok: boolean, alarm?: string, seq?: number, detail?: string, verifiedThrough?: number, open?: any[]}}
+ */
+function anchorCheck({ records, publicKey, checkpoint, anchors = [] }) {
+  const chainLib = require('./chain');
+  const copyLib = require('./copy');
+  const deviceId = chainLib.deviceIdOf(publicKey);
+  const cp = { seq: checkpoint.seq, head: Uint8Array.from(checkpoint.head) };
+  if (!chainLib.verifyCheckpoint({ deviceId, ...cp }, checkpoint.signature, publicKey)) return { ok: false, alarm: 'bad-checkpoint', seq: cp.seq };
+  const newest = anchors.reduce((m, a) => (m === null || a.seq > m.seq ? a : m), null);
+  if (newest && cp.seq < newest.seq) return { ok: false, alarm: 'rollback', seq: newest.seq, detail: `its head is #${cp.seq}, older than #${newest.seq} anchored before` };
+  const upTo = records.filter((r) => chainLib.decodeLink(r.link).seq <= cp.seq);
+  const bySeq = new Map(upTo.map((r) => [chainLib.decodeLink(r.link).seq, r]));
+  for (const a of anchors) {
+    const at = a.seq === cp.seq ? cp.head : bySeq.get(a.seq) ? bySeq.get(a.seq).head : null;
+    if (at && toHex(at) !== toHex(a.head)) return { ok: false, alarm: 'changed', seq: a.seq, detail: `#${a.seq} holds another head than the one anchored` };
+  }
+  const v = copyLib.assess({ links: upTo }, { publicKey, head: cp, held: [], checkpoint: { ...cp, signature: checkpoint.signature } });
+  if (v.chain.failure) return { ok: false, alarm: 'tampered', seq: v.chain.failure.seq, detail: v.chain.failure.reason };
+  return { ok: true, verifiedThrough: v.chain.verifiedThrough, open: v.open };
+}
+
 /** The place's side, after the press: one part of the merged list. */
 function buildTake({ signer, deviceId, sid, part }) {
   return sign(TAKE_TYPE, signer, { sid, deviceId: toHex(deviceId), part });
@@ -320,7 +393,7 @@ function checkTaken(placeEntries, taken) {
 }
 
 module.exports = {
-  HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, SIBLING_TYPE, BATCH, NO_SEQ, buildSibling,
+  HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, SIBLING_TYPE, GIVE_TYPE, ANCHOR_TYPE, BATCH, NO_SEQ, buildSibling, buildGive, buildAnchor, anchorCheck,
   keychainText, keychainDigest, keychainParts, keychainEntriesOf, buildKeychain, buildCommit, buildTake, keychainPlan, checkTaken,
   body, buildHave, buildLinks, verify, recordsOf, rangesOf, missing, merge, syncFields, syncSubject,
 };
