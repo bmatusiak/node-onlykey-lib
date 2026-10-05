@@ -169,6 +169,8 @@ test('edge-agent sibling-add: adds this PC to each key\'s list if missing, then 
     return {
       send: async (msg) => {
         const ask = async (v) => { sheets.push({ phone: label, type: msg.type, ...v }); return 'approve'; };
+        /* (b) each phone says its own name when asked what it holds - the default name on the other's sheet */
+        if (msg.type === syncLib.HAVE_TYPE) return { ok: true, ranges: [], deviceName: `${label}-phone` };
         if (msg.type === request.PEER_TYPE) return approve.approvePeerAdd(msg, { edge, seen, ask, timeoutMs: 2000 });
         if (msg.type === syncLib.SIBLING_TYPE) {
           const r = await approve.approveSibling(msg, { edge, seen, ask, timeoutMs: 2000 });
@@ -192,7 +194,8 @@ test('edge-agent sibling-add: adds this PC to each key\'s list if missing, then 
   const sib = sheets.filter((s) => s.type === syncLib.SIBLING_TYPE);
   assert.equal(sib.length, 2);
   assert.equal(sib[0].code, sib[1].code, 'the two phones show the same code');
-  assert.deepEqual(sib.map((s) => [s.phone, s.name]).sort(), [['A', 'Pixel'], ['B', 'A13']]);
+  /* a typed name wins (otherName 'Pixel'); otherwise the phone's own name, not the agent's address-based selfName */
+  assert.deepEqual(sib.map((s) => [s.phone, s.name]).sort(), [['A', 'Pixel'], ['B', 'A-phone']]);
   const la = await h.siblings();
   assert.equal(la.siblings.length, 1);
   assert.equal(la.siblings[0].key, Buffer.from((await b.publicKey()).publicKey).toString('hex'));

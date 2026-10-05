@@ -444,11 +444,14 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         const added = [];
         if (!(await listed(other.edge))) { await other.client.peerAdd(signer, copies); added.push('other'); }
         if (!(await listed(edge))) { await client.peerAdd(signer, copies); added.push('this'); }
+        /* the names each sheet shows: what was typed, else what each phone calls itself (a label - renamable on the phone) */
+        const thisName = name || (await client.phoneName(signer, { deviceId: ka.deviceId }).catch(() => null)) || selfName || 'the other phone';
+        const thatName = otherName || (await other.client.phoneName(signer, { deviceId: kb.deviceId }).catch(() => null)) || address;
         const hex = (b) => Buffer.from(b).toString('hex');
         const one = (p) => p.then((r) => ({ ok: true, ...r }), (e) => ({ ok: false, refusal: e.refusal || null, error: e.message }));
         const [onOther, onThis] = await Promise.all([
-          one(other.client.siblingAdd(signer, { deviceId: kb.deviceId, key: ka.publicKey, name: name || selfName || 'the other phone' })),
-          one(client.siblingAdd(signer, { deviceId: ka.deviceId, key: kb.publicKey, name: otherName || address })),
+          one(other.client.siblingAdd(signer, { deviceId: kb.deviceId, key: ka.publicKey, name: thisName })),
+          one(client.siblingAdd(signer, { deviceId: ka.deviceId, key: kb.publicKey, name: thatName })),
         ]);
         return { peersAdded: added, this: { deviceId: hex(ka.deviceId), ...onThis }, other: { deviceId: hex(kb.deviceId), ...onOther } };
       } finally {
@@ -479,11 +482,13 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         if (!(await paired(edge, kb)) || !(await paired(other.edge, ka))) throw new Error('the two keys are not paired both ways - okedge sibling add first');
         /* the checkpoints first: each phone's copy, read after, reaches at least that far */
         const [cpA, cpB] = [await edge.checkpoint(), await other.edge.checkpoint()];
+        const thisName = name || (await client.phoneName(signer, { deviceId: ka.deviceId }).catch(() => null)) || selfName || 'the other phone';
+        const thatName = otherName || (await other.client.phoneName(signer, { deviceId: kb.deviceId }).catch(() => null)) || address;
         const [recA, recB] = [await client.copyFromPhone(signer, { deviceId: ka.deviceId }), await other.client.copyFromPhone(signer, { deviceId: kb.deviceId })];
         const one = (p) => p.then((r) => ({ ok: true, ...r }), (e) => ({ ok: false, refusal: e.refusal || null, error: e.message }));
         const [onThis, onOther] = await Promise.all([
-          one(client.anchorToPhone(signer, { deviceId: ka.deviceId, chain: kb.deviceId, records: recB, checkpoint: cpB, name: otherName || address })),
-          one(other.client.anchorToPhone(signer, { deviceId: kb.deviceId, chain: ka.deviceId, records: recA, checkpoint: cpA, name: name || selfName || 'the other phone' })),
+          one(client.anchorToPhone(signer, { deviceId: ka.deviceId, chain: kb.deviceId, records: recB, checkpoint: cpB, name: thatName })),
+          one(other.client.anchorToPhone(signer, { deviceId: kb.deviceId, chain: ka.deviceId, records: recA, checkpoint: cpA, name: thisName })),
         ]);
         return {
           this: { deviceId: hex(ka.deviceId), anchored: { seq: cpB.seq }, ...onThis },

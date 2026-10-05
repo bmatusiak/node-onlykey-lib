@@ -137,6 +137,15 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         index: any;
     }>;
     /**
+     * The phone's own name (its Bluetooth / Android device name) as it says it
+     * - asked with a HAVE, so only from a place on the key's list. A label,
+     * never trusted: the person can rename it on each phone. -> string | null
+     */
+    phoneName(peerSigner: any, { deviceId, name }: {
+        deviceId: any;
+        name?: string | undefined;
+    }): Promise<any>;
+    /**
      * R30 (P2c): the phone's own copy of its chain, every record it holds -
      * GIVE, BATCH at a time. peerSigner: this place (on that key's list).
      * -> [{link, head, reveal}] ; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.

@@ -330,6 +330,18 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     },
 
     /**
+     * The phone's own name (its Bluetooth / Android device name) as it says it
+     * - asked with a HAVE, so only from a place on the key's list. A label,
+     * never trusted: the person can rename it on each phone. -> string | null
+     */
+    async phoneName(peerSigner, { deviceId, name = 'this computer' }) {
+      const syncLib = require('./sync');
+      const a = await channel.send(await syncLib.buildHave({ signer: peerSigner, deviceId, name }));
+      const n = a && a.ok && typeof a.deviceName === 'string' ? a.deviceName.trim().slice(0, 64) : '';
+      return n || null;
+    },
+
+    /**
      * R30 (P2c): the phone's own copy of its chain, every record it holds -
      * GIVE, BATCH at a time. peerSigner: this place (on that key's list).
      * -> [{link, head, reveal}] ; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
