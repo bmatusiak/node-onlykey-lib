@@ -58,9 +58,20 @@ function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, lo
    */
   const makeBlePipe = () => {
     const store = require('./btpair-store');
+    /*
+     * ok-rn answers only paired computers (Part T) and refuses everything else
+     * with silence - so without a pairing, say so before a request times out
+     * with nothing but "no reply". Plaintext still works only against a phone
+     * in testing mode with transit switched off.
+     */
+    if (!store.pairingFor(address, pairingHome)) {
+      process.stderr.write(`onlykey-js: this computer user is not paired with ${address || 'the phone'} - ok-rn answers only paired computers. `
+        + `Pair first: onlykey-js --ble${address ? ` --address ${address}` : ''} pair (and ok-rn > Bluetooth > Pair a computer).\n`);
+    }
     return require('./transport-ble').createBlePipe({
       address, loadNoble, loadDbus,
       pairing: store.pairingFor(address, pairingHome),
+      computerName: store.computerName(),
       onPairingRenewed: (record) => store.savePairing(address, record, pairingHome),
     });
   };

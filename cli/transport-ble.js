@@ -836,7 +836,7 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
  *   ONLYKEY_JS_DEBUG is set
  * @returns the pipe contract (start/stop/isRunning/write/on) plus `link`
  */
-function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, onPairingRenewed = null, now = () => Date.now() } = {}) {
+function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, computerName = null, onPairingRenewed = null, now = () => Date.now() } = {}) {
   const btpair = require('../src/btpair');
   /* Part T: the session (null = plaintext, until this user is paired with this phone) and waiters for 0x85 answers */
   let session = null;
@@ -984,7 +984,13 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       session = null;
       /* Part T: a paired user opens an encrypted session first - fresh keys every connection */
       if (pairing) {
-        const h = btpair.cliHello(pairing);
+        /*
+         * The computer's CURRENT name, not the one stored at pairing time: the
+         * phone binds the pairing to name + Bluetooth address and revokes it when
+         * either changes (Brad, 2026-10-04). Sending the stored name would let a
+         * renamed computer keep connecting.
+         */
+        const h = btpair.cliHello(pairing, { name: computerName || pairing.name });
         const answer = await pairExchange(h.msg, limits.helloMs || 8000);
         if (!answer) throw bleError('ESILENT', SILENT_MESSAGE);
         session = btpair.cliOnHelloOk(h.state, answer);

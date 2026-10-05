@@ -174,3 +174,18 @@ test('renewal on day 6 travels inside the session; the CLI saves the new secret;
   await assert.rejects(() => thief.start(), (e) => e.code === 'ESILENT');
   assert.strictEqual(g.lastHello.alarm, record.id, 'the copied pairing raised no alarm');
 });
+
+test('the CLI says its CURRENT computer name: after a rename the phone revokes the pairing', async () => {
+  const home = tmpHome();
+  const g = gate();
+  const p0 = pipeOver(g);
+  await p0.start();
+  await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await p0.stop();
+  const same = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), computerName: 'NITRO16' });
+  assert.strictEqual((await same.start()).encrypted, true);
+  await same.stop();
+  const renamed = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), computerName: 'NITRO16-NEW' });
+  await assert.rejects(() => renamed.start(), (e) => e.code === 'ESILENT');
+  assert.deepStrictEqual({ revoke: g.lastHello.revoke, reason: g.lastHello.reason }, { revoke: g.records[0].id, reason: 'name' });
+});
