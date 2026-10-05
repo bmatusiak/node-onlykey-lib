@@ -47,6 +47,24 @@ async function readyKey() {
   return { transport, edge };
 }
 
+test('a ticket the key took but whose answer was lost: the next ticket clears it from the key word, and work goes on', async () => {
+  const { transport, edge } = await readyKey();
+  const c = client.createEdgeClient({ edge, channel: phone(edge), signer: AGENT });
+  const budget = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: AGENT_ID }], ttlMinutes: 60 });
+  const sign = (bytes) => transport.use(bytes, { slot: 222 });
+  const one = await budget.use(Uint8Array.from([1]), sign);
+  /* the key links the ticket; the client never hears back (the A13, 2026-10-05) */
+  await edge.ticket(one.link.seq, 0, new Uint8Array(32));
+  assert.deepEqual(budget.pending(), [one.link.seq], 'the client still counts it owed');
+  const r = await budget.ticket(one.link, { message: 'pushed' });
+  assert.equal(r.lostAnswer, true);
+  assert.deepEqual(budget.pending(), []);
+  const two = await budget.use(Uint8Array.from([2]), sign);
+  assert.equal(two.link.paid, true, 'the next use is paid - the head the client kept is from the key');
+  /* a seq the client never counted owed is still refused */
+  await assert.rejects(budget.ticket({ seq: 9999 }, { message: 'x' }));
+});
+
 test('L7: request -> use -> ticket -> use -> ticket -> end, each use paid by the budget and checked', async () => {
   const { transport, edge } = await readyKey();
   const views = [];

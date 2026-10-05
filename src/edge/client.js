@@ -182,7 +182,28 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       },
       /** File the ticket for a use; the new head is kept for the next use(). */
       async ticket(link, { code = 'OK', message }) {
-        const r = await edge.ticket(link.seq, codes.ticketCode(code), tickets.messageHash(message));
+        let r;
+        try {
+          /*
+           * One retry after an answer that never came (the A13, 2026-10-05: a ticket's
+           * answer took over 6 s, twice): safe - the key files it now, or says it
+           * already has it (below).
+           */
+          const once = () => edge.ticket(link.seq, codes.ticketCode(code), tickets.messageHash(message));
+          r = await once().catch((e) => { if (/no answer to request/.test(String(e && e.message))) return once(); throw e; });
+        } catch (e) {
+          /*
+           * THE KEY IS THE TRUTH ON WHAT IS OWED. Found on the A13 (2026-10-05):
+           * a ticket's answer came back after the 6 s wait, so the client kept
+           * the use as owed - but the key had linked the ticket, and every
+           * ticket after that answered "owes no ticket" while use() and exec
+           * refused, stuck. When the key says this use owes nothing, the ticket
+           * was filed (its answer lost): clear it and take the key's head.
+           */
+          if (!(e && e.status === 'no-ticket-waiting' && state.owed.includes(link.seq))) throw e;
+          const h = await edge.head();
+          r = { seq: h.seq, head: h.head, lostAnswer: true };
+        }
         state.owed = state.owed.filter((s) => s !== link.seq);
         state.head = r.head;
         await save();
