@@ -19,6 +19,7 @@
     "./device": "./src/device/index.js",
     "./keychain": "./src/keychain/index.js",
     "./edge": "./src/edge/index.js",
+    "./btpair": "./src/btpair/index.js",
     "./config": "./src/config/ini.js",
     "./device/press": "./src/device/press.js",
     "./device/version": "./src/device/version.js",
