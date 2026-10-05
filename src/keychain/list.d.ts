@@ -22,5 +22,9 @@ export function merge(existing: any, incoming: any): {
     added: number;
     kept: number;
 };
+/** The entry in `entries` holding the same derived key as `e` (type + public key), or null. */
+export function findTwin(entries: any, e: any): any;
+/** Two entries of one key -> one: the name over the hash, first seen earliest, last seen latest, everything each one knew. */
+export function combine(a: any, b: any): object;
 /** A short fingerprint to show beside an entry. */
 export function fingerprint(publicKey: any): string;

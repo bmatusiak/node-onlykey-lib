@@ -11,4 +11,5 @@ export declare let generate: typeof import("./generate");
 export declare let artifacts: typeof import("./artifacts");
 export declare let derive: typeof import("./derive");
 export declare let list: typeof import("./list");
+export declare let cert: typeof import("./cert");
 export declare let pgpImport: typeof import("./pgp-import");

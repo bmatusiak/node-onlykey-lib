@@ -13,3 +13,9 @@ src/vendor/node_modules/** -text
 # The generated shims are compared byte-for-byte with what scripts/vendor.js
 # writes (LF), so they must not be rewritten on checkout either.
 src/vendor/exports/** -text
+
+# The generated declarations (scripts/gen-types.js, `npm run types`) are
+# written with LF. With core.autocrlf active, git expected CRLF in the working
+# copy, so every regeneration showed all 60+ .d.ts files as modified with no
+# content change. Declaring them LF makes git and the generator agree.
+src/**/*.d.ts text eol=lf

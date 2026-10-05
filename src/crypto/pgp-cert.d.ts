@@ -1,3 +1,28 @@
+/**
+ * A REVOCATION CERTIFICATE for a derived key (spec session, 2026-10-03:
+ * `keychain cert --revoke`): a key revocation signature (0x20) over the primary
+ * key, made by the device - a physical press, never a budget - and armored as a
+ * public key block, as `gpg --gen-revoke` writes it. Importing it into a keyring
+ * that holds the certificate marks the key revoked. The derived key can always
+ * be re-derived, so a revocation can always be made later, too.
+ *
+ * @param {object} openpgp the fork
+ * @param {{signPublic: Uint8Array, curve: string, created: number, sign: Function, reason?: number, text?: string, when?: Date}} o
+ *   reason: RFC 4880 5.2.3.23 (0 no reason, 1 superseded, 2 compromised, 3 retired); default 0
+ * @returns {Promise<{armored: string, fingerprint: string}>}
+ */
+export function buildRevocation(openpgp: object, { signPublic, curve, created, sign, reason, text, when }: {
+    signPublic: Uint8Array;
+    curve: string;
+    created: number;
+    sign: Function;
+    reason?: number;
+    text?: string;
+    when?: Date;
+}): Promise<{
+    armored: string;
+    fingerprint: string;
+}>;
 export namespace ALGO {
     let ECDH: number;
     let ECDSA: number;

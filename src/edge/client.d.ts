@@ -52,7 +52,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
             message: any;
         }): Promise<any>;
         /** Revoke what is left. */
-        end(): Promise<void>;
+        end: () => Promise<void>;
     }>;
     /**
      * "Continues <budget>": the same scopes, new uses (caps: one per scope, in
@@ -99,7 +99,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
             message: any;
         }): Promise<any>;
         /** Revoke what is left. */
-        end(): Promise<void>;
+        end: () => Promise<void>;
     }>;
     /**
      * Register this agent's key with the app, under `name` - once, with a
@@ -147,6 +147,6 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
             message: any;
         }): Promise<any>;
         /** Revoke what is left. */
-        end(): Promise<void>;
+        end: () => Promise<void>;
     }>;
 };
