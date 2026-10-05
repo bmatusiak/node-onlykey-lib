@@ -299,6 +299,20 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     },
 
     /**
+     * R20: ask the phone to add a place that keeps copies (this PC's copy
+     * store) as a known peer of the key - the person's Yes, then a press.
+     * peerSigner: request.peerSignerFromSecret(the place's own P-256 secret),
+     * not this agent's key. -> {already, seq?, index}; rejects EEDGE_REFUSED or
+     * EEDGE_NO_ANSWER.
+     */
+    async peerAdd(peerSigner, name) {
+      const answer = await channel.send(await request.buildPeerAdd({ signer: peerSigner, name }));
+      if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the app answered nothing - a bad signature or a replayed peer request');
+      if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: adding the peer was refused - ${answer.refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal: answer.refusal });
+      return { already: Boolean(answer.already), seq: answer.seq ?? null, index: answer.index };
+    },
+
+    /**
      * Pick up a budget another process asked for (with the same store). The
      * key's HEAD must still list it; the head to ARM over is read from the key.
      */

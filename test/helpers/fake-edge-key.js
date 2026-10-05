@@ -30,6 +30,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
   const listeners = new Set();
   let head = chain.genesis(DEVICE);
   const held = [];
+  const peers = []; /* R20: X || Y, in index order */
+  let peerX = null; /* PEER_ADD part 0, until part 1 */
   const live = [];
   const onHold = new Set();
   let owed = [];
@@ -166,6 +168,31 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         if (restoring) return emit(status(0x0e));
         append({ op: codes.OP.AGENT_ADD, decision: 1, flags: 1, grantId: 0, subject: grants.agentSubject(arg.slice(0, 32)) });
         emit(seqHead());
+      } else if (sub === 0x30) {
+        /* R20 PEER_ADD: {0, X} staged, then {1, Y} pressed; refused while restoring, full, known or not a point */
+        if (restoring) return emit(status(0x0e));
+        if (arg[0] === 0) { peerX = arg.slice(1, 33); return emit(status(0x00)); }
+        if (arg[0] !== 1 || !peerX) return emit(status(0x15));
+        const xy = Uint8Array.from([...peerX, ...arg.slice(1, 33)]);
+        peerX = null;
+        try { p256.Point.fromBytes(Uint8Array.from([4, ...xy])).assertValidity(); } catch { return emit(status(0x15)); }
+        if (peers.some((p) => same(p, xy))) return emit(status(0x14));
+        if (peers.length >= 4) return emit(status(0x13));
+        append({ op: codes.OP.PEER_ADD, decision: 1, flags: 1, slot: peers.length, grantId: 0, subject: grants.peerSubject(xy) });
+        peers.push(xy);
+        emit(seqHead());
+      } else if (sub === 0x31) {
+        /* R20 PEER_REMOVE {index}, pressed */
+        if (restoring) return emit(status(0x0e));
+        const i = arg[0];
+        if (i >= peers.length) return emit(status(0x16));
+        append({ op: codes.OP.PEER_REMOVE, decision: 1, flags: 1, slot: i, grantId: 0, subject: grants.peerSubject(peers[i]) });
+        peers.splice(i, 1);
+        emit(seqHead());
+      } else if (sub === 0x32) {
+        /* R20 PEER_LIST: header, then one report per slot - X || Y, zeros when empty */
+        emit(report([peers.length, 0, 4]));
+        for (let i = 0; i < 4; i++) emit(report(i < peers.length ? [...peers[i]] : []));
       } else if (sub === 0x05) {
         if (restoring) return emit(status(0x0e));
         emit(seqHead());

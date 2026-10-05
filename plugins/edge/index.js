@@ -25,6 +25,10 @@ const { IFACE } = require('../../src/protocol/msg');
 const { assertTransport } = require('../../src/transport/contract');
 const { concat } = require('../../src/bytes');
 const { codes, chain, tickets, copy: copyCheck } = require('../../src/edge');
+const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
+
+/* a P-256 key as SEC1 bytes: X || Y (64, what the key gives) gets its 04; 65 or 33 pass as they are */
+const sec1Bytes = (k) => (k.length === 64 ? concat([Uint8Array.of(4), k]) : Uint8Array.from(k));
 
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
@@ -32,6 +36,7 @@ const SUB = Object.freeze({
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
   TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, LOSS: 0x34,
   AGENT_ADD: 0x15,
+  PEER_ADD: 0x30, PEER_REMOVE: 0x31, PEER_LIST: 0x32,
 });
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
@@ -51,6 +56,7 @@ const seqHeadTag = (r) => ({ seq: (r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 
 const REPLAY_BYTES = 47;
 const REPLAY_HEAD_BYTES = 8;
 const SEQ_NONE = 0xffffffff;
+const PEER_SLOTS = 4; /* R20: up to 4 peers; PEER_LIST answers one report per slot (okplugin_edge MAX_PEERS) */
 const HELD = 8;
 
 /** A refusal from the key: `code` and `name` from codes.STATUS. */
@@ -494,6 +500,46 @@ function setup(imports, register) {
       const pending = pressed(SUB.AGENT_ADD, agentKey, { timeoutMs }, onPress);
       const [r] = await pending;
       return seqHeadTag(r);
+    },
+
+    /**
+     * R20: add a place that keeps copies (this PC's copy store; the Worker at
+     * E5) - the person's Yes in the app first, then a PHYSICAL press. A sync
+     * goes only to places added this way. The key links op = peer-add, slot =
+     * its index, subject grants.peerSubject(X || Y). peerKey: P-256 as 64 bytes
+     * X || Y, 65 with the 04, or 33 compressed.
+     *
+     * Two requests on the wire: X || Y does not fit beside the header and the
+     * firmware's micro-ecc cannot decompress, so part 0 stages X (no press)
+     * and part 1 brings Y and waits for the press.
+     * Refused: 'peers-full', 'peer-known', 'bad-key', 'restoring'. -> {seq, head, tag}
+     */
+    async peerAdd(peerKey, { onPress, timeoutMs = 30000 } = {}) {
+      const xy = p256.Point.fromBytes(sec1Bytes(peerKey)).toBytes(false).slice(1);
+      await call(SUB.PEER_ADD, concat([Uint8Array.of(0), xy.slice(0, 32)]), { text: true });
+      const [r] = await pressed(SUB.PEER_ADD, concat([Uint8Array.of(1), xy.slice(32)]), { timeoutMs }, onPress);
+      return seqHeadTag(r);
+    },
+
+    /** R20: remove the place at `index` (a press); the later ones move down. -> {seq, head, tag} */
+    async peerRemove(index, { onPress, timeoutMs = 30000 } = {}) {
+      if (!Number.isInteger(index) || index < 0 || index > 255) throw new RangeError(`Edge: no peer index ${index}`);
+      const [r] = await pressed(SUB.PEER_REMOVE, Uint8Array.of(index), { timeoutMs }, onPress);
+      return seqHeadTag(r);
+    },
+
+    /**
+     * R20: the places the key will sync with - no press (public keys only, R8).
+     * The key always sends its header and one report per slot (max), so the
+     * count of reports is known before asking.
+     * -> {k (0 = not set until E5), max, peers: [{index, publicKey (X || Y)}]}
+     * (backed_through comes with E5's receipts)
+     */
+    async peers(opts) {
+      const [h, ...slots] = await call(SUB.PEER_LIST, null, { ...opts, reports: 1 + PEER_SLOTS });
+      const peers = [];
+      slots.slice(0, h[0]).forEach((r, index) => peers.push({ index, publicKey: r.slice(0, 64) }));
+      return { k: h[1], max: h[2], peers };
     },
 
     async loss({ from, to, onPress, timeoutMs = 30000 } = {}) {

@@ -37,6 +37,7 @@
 
 const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
 const { ed25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
+const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
 const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
 const { utf8ToBytes, toHex, fromHex } = require('../bytes');
 const { OP } = require('./codes');
@@ -135,6 +136,58 @@ function verifyRegister(msg, { seen } = {}) {
 /* an Ed25519 signer from a 32-byte secret - the agent service's key, for tests and the CLI */
 function signerFromSecret(secret) {
   return { publicKey: ed25519.getPublicKey(secret), sign: (bytes) => ed25519.sign(bytes, secret) };
+}
+
+/*
+ * R20 (okedge sync phase 2, P2a, Brad 2026-10-05): a place that keeps copies -
+ * this PC's copy store first - asks to be added as a known peer:
+ *
+ *   { type: 'EDGE_PEER_ADD', v: 1, peer, name, nonce, signature }
+ *
+ * peer = its P-256 key, X || Y (hex, 64 bytes) - the KEY's list holds it, and a
+ * sync only goes to places on that list. Signed by that key (ECDSA P-256 over
+ * SHA-256 of the body), so nobody adds a key they do not hold - the place must
+ * later sign receipts with it (R21). The phone shows the sheet; the person says
+ * Yes and presses; the key links it (peer-add). Not tied to a registered agent:
+ * the copy store is not the agent, and the agent cannot vouch for where copies go.
+ */
+const PEER_TYPE = 'EDGE_PEER_ADD';
+const PEER_TAG = 'OKEDGE-PEER-ADD-v1';
+
+function peerBody({ peer, nonce, name }) {
+  const n = utf8ToBytes(String(name));
+  if (n.length > 0xff) throw new RangeError('edge peer add: the name is too long');
+  return concat([utf8ToBytes(PEER_TAG), fromHex(peer), fromHex(nonce), Uint8Array.of(n.length), n]);
+}
+
+/** The place's side: ask the phone to add it, under a name the person reads. signer: peerSignerFromSecret. */
+async function buildPeerAdd({ signer, name, nonce = randomBytes(16) }) {
+  const msg = { type: PEER_TYPE, v: 1, peer: toHex(signer.publicKey), name: String(name), nonce: toHex(nonce) };
+  msg.signature = toHex(await signer.sign(peerBody(msg)));
+  return msg;
+}
+
+/** The app's side: signed by the key it names, and new. -> {ok} or {ok: false, reason} */
+function verifyPeerAdd(msg, { seen } = {}) {
+  if (!msg || msg.type !== PEER_TYPE || msg.v !== 1 || !isHex(msg.peer, 64) || !isHex(msg.nonce, 16) || !isHex(msg.signature, 64)
+    || typeof msg.name !== 'string' || !msg.name.trim() || utf8ToBytes(msg.name).length > 0xff) {
+    return { ok: false, reason: 'malformed' };
+  }
+  let good = false;
+  try {
+    good = p256.verify(fromHex(msg.signature), peerBody(msg), Uint8Array.from([4, ...fromHex(msg.peer)]), { prehash: true });
+  } catch { good = false; }
+  if (!good) return { ok: false, reason: 'bad-signature' };
+  if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
+  return { ok: true };
+}
+
+/* a P-256 signer from a 32-byte secret - the copy store's peer key; publicKey is X || Y, as the key lists it */
+function peerSignerFromSecret(secret) {
+  return {
+    publicKey: p256.getPublicKey(secret, false).slice(1),
+    sign: (bytes) => p256.sign(bytes, secret, { prehash: true }),
+  };
 }
 
 /* the agent key as the sheet and the agent both print it, so the person can compare: first 8 . last 8 hex */
@@ -245,4 +298,5 @@ module.exports = {
   TYPE, REGISTER_TYPE, MAX_REQUEST_USES, MAX_LIFETIME_MINUTES, REFUSALS,
   body, build, signerFromSecret, verify, check, grantScopes, reasonHash, view, sameScopes,
   registerBody, buildRegister, verifyRegister, fingerprint,
+  PEER_TYPE, peerBody, buildPeerAdd, verifyPeerAdd, peerSignerFromSecret,
 };

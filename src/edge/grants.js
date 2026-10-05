@@ -242,8 +242,19 @@ function agentSubject(agentKey) {
   return H('OKEDGE-AGENT-v1', bytes32(agentKey, 'agentKey'));
 }
 
+/*
+ * PEER_ADD / PEER_REMOVE subject (firmware.md R20): SHA256 of the peer's P-256
+ * key as X || Y - the same 64 bytes the key answers PUBKEY with for its own.
+ * No domain tag: R20 names the bare hash.
+ */
+function peerSubject(peerKey) {
+  const k = Uint8Array.from(peerKey);
+  if (k.length !== 64) throw new TypeError('peerSubject needs a 64-byte P-256 key (X || Y)');
+  return sha256(k);
+}
+
 module.exports = {
-  agentSubject,
+  agentSubject, peerSubject,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, armToken, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel,

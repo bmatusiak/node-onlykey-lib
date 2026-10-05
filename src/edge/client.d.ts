@@ -109,6 +109,18 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         already: boolean;
     }>;
     /**
+     * R20: ask the phone to add a place that keeps copies (this PC's copy
+     * store) as a known peer of the key - the person's Yes, then a press.
+     * peerSigner: request.peerSignerFromSecret(the place's own P-256 secret),
+     * not this agent's key. -> {already, seq?, index}; rejects EEDGE_REFUSED or
+     * EEDGE_NO_ANSWER.
+     */
+    peerAdd(peerSigner: any, name: any): Promise<{
+        already: boolean;
+        seq: any;
+        index: any;
+    }>;
+    /**
      * Pick up a budget another process asked for (with the same store). The
      * key's HEAD must still list it; the head to ARM over is read from the key.
      */

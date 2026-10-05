@@ -357,6 +357,30 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       if (!edge) throw new Error('this agent service has no Edge key to sync from');
       return require('./edge-copy').sync(edge, home || require('./edge-control').edgeHome(), { status: !!status });
     },
+    /*
+     * okedge sync phase 2, P2a (R20): add this PC's copy store to the KEY's list
+     * of places that keep copies - the phone's sheet, Yes, a press. The store's
+     * own P-256 key (edge-copy.peerSigner), never this agent's.
+     */
+    'peer-add': async ({ name }) => {
+      const signer = require('./edge-copy').peerSigner(home || require('./edge-control').edgeHome());
+      const key = Buffer.from(signer.publicKey).toString('hex');
+      const r = await client.peerAdd(signer, name || `${require('os').hostname()} copies`);
+      return { ...r, key };
+    },
+    /* the key's list (no press, R8); `thisPc` marks this PC's copy store */
+    peers: async () => {
+      if (!edge) throw new Error('this agent service has no Edge key to read the list from');
+      const mine = Buffer.from(require('./edge-copy').peerSigner(home || require('./edge-control').edgeHome()).publicKey).toString('hex');
+      const l = await edge.peers();
+      return {
+        k: l.k, max: l.max, mine,
+        peers: l.peers.map((p) => {
+          const key = Buffer.from(p.publicKey).toString('hex');
+          return { index: p.index, key, thisPc: key === mine };
+        }),
+      };
+    },
     end: async () => {
       const b = agent.budget();
       if (b) await b.end();

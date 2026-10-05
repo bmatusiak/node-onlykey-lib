@@ -1,4 +1,5 @@
 export function agentSubject(agentKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export function peerSubject(peerKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export const MAX_USES: 1024;
 export function grantGenesis(seed: any, uses: any): any;
 /** The value use `step` reveals, from the seed (for tests and fakes - a host never has the seed). */

@@ -155,6 +155,52 @@ async function approveRegister(msg, { edge, registered = [], seen, ask, onPress,
 }
 
 /**
+ * R20 (okedge sync phase 2, P2a): a place that keeps copies asks to be added
+ * (EDGE_PEER_ADD) - signed by the key it names, new, the person's Yes on the
+ * sheet, then a PHYSICAL press; the key adds it to ITS list and links it
+ * (peer-add, subject grants.peerSubject). The key's list is the truth - a sync
+ * goes only to places on it - so "already" is read from the key, not the app.
+ * -> {ok: true, peer, name, seq, index} | {ok: true, already} | {ok: false, refusal} | {dropped}
+ *
+ * @param {object} msg an EDGE_PEER_ADD
+ * @param {object} o
+ * @param {object} o.edge the Edge device service for THIS app's key
+ * @param {Set<string>} o.seen nonces already taken
+ * @param {(view: {peer: string, name: string, fingerprint: string}) => Promise<'approve'|'decline'|'timeout'>} o.ask the sheet
+ * @param {() => void} [o.onPress] told when the key waits for the press
+ * @param {number} [o.timeoutMs] the press wait
+ * @returns {Promise<any>}
+ */
+async function approvePeerAdd(msg, { edge, seen, ask, onPress, timeoutMs = 30000 }) {
+  const v = request.verifyPeerAdd(msg, { seen });
+  if (!v.ok) return { dropped: v.reason };
+  seen.add(msg.nonce.toLowerCase());
+  const peer = msg.peer.toLowerCase();
+  const list = await edge.peers();
+  const known = list.peers.find((p) => toHex(p.publicKey) === peer);
+  if (known) return { ok: true, peer, name: msg.name, already: true, index: known.index };
+  if (list.peers.length >= list.max) return refuse('invalid', `the key already knows ${list.max} places - remove one on the phone first`);
+  const answer = await ask({ peer, name: msg.name, fingerprint: request.fingerprint(peer) });
+  if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
+  if (answer !== 'approve') return refuse('declined');
+  let r;
+  try {
+    r = await edge.peerAdd(fromHex(peer), { onPress, timeoutMs });
+  } catch (e) {
+    if (e && e.status === 'restoring') return refuse('restoring');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    throw e;
+  }
+  /* the link the press wrote: this peer, pressed */
+  const [l] = await edge.pickup(r.seq, 1);
+  const f = chain.decodeLink(l.link);
+  if (f.op !== codes.OP.PEER_ADD || !(f.flags & codes.FLAG.PRESS_OBSERVED) || toHex(f.subject) !== toHex(grants.peerSubject(fromHex(peer)))) {
+    return refuse('invalid', `the key's link #${r.seq} is not this place's peer-add`);
+  }
+  return { ok: true, peer, name: msg.name, seq: r.seq, index: f.slot };
+}
+
+/**
  * R15c (2026-10-03): is this agent registered - is its AGENT_ADD link, made at
  * a press, in the app's VERIFIED copy of the chain? The app's own list of
  * agents is a convenience; only the link counts. An agent in storage without
@@ -175,4 +221,4 @@ function agentInCopy(rows, agentHex) {
   return null;
 }
 
-module.exports = { approveRequest, approveRegister, agentInCopy };
+module.exports = { approveRequest, approveRegister, approvePeerAdd, agentInCopy };

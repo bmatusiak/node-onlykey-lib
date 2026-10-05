@@ -13,6 +13,9 @@
  *   okedge ticket <seq> [--code OK] --msg "…"                 file the ticket; prints the next head
  *   okedge sync [--status]                                    the PC's own copy of the key's chain: read new links,
  *                                                             verify (R27), keep; --status reports only (no press)
+ *   okedge peer add [--name "…"]                              add this PC's copy store to the key's places that keep
+ *                                                             copies (R20): Yes + a press on the phone
+ *   okedge peer list                                          those places, from the key (no press)
  *   okedge status                                             the budget, its head, tickets owed
  *   okedge end                                                end the budget
  *   okedge watch [--once]                                     follow the key's links live (read-only)
@@ -132,6 +135,30 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const r = await ask('sync', { status });
       for (const l of require('./edge-copy').lines(r, { status })) out(l);
       return r.verdict.kind === 'tampered' ? 1 : 0;
+    }
+    if (cmd === 'peer') {
+      /* sync phase 2, P2a (R20): the places a sync may send copies to - the key's list */
+      const { request } = require('../src/edge');
+      const sub = args[0];
+      if (sub === 'add') {
+        const r0 = await ask('peers');
+        const mine = r0.peers.find((p) => p.thisPc);
+        if (mine) { out(`this PC's copy store is already peer ${mine.index} (${request.fingerprint(mine.key)})`); return 0; }
+        out(`copy store key  ${request.fingerprint(r0.mine)}`);
+        out('Check the phone shows the same key, Add there, then press the key...');
+        const r = await ask('peer-add', { name: opt(args, '--name') || null });
+        out(r.already ? `already peer ${r.index}` : `added as peer ${r.index} (link #${r.seq})`);
+        return 0;
+      }
+      if (sub === 'list' || sub === undefined) {
+        const r = await ask('peers');
+        if (!r.peers.length) out('no places keep copies yet - okedge peer add');
+        for (const p of r.peers) out(`peer ${p.index}  ${request.fingerprint(p.key)}${p.thisPc ? '  (this PC)' : ''}`);
+        out(`${r.peers.length} of ${r.max}; k ${r.k || 'not set (E5)'}`);
+        return 0;
+      }
+      err('okedge peer add [--name "…"] | okedge peer list');
+      return 2;
     }
     if (cmd === 'end') {
       const r = await ask('end');

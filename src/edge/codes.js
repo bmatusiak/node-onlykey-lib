@@ -139,6 +139,11 @@ const STATUS = Object.freeze({
   /* R26 (2026-10-02): replay commits only on the key's own vouch tag */
   0x11: { name: 'not-vouched', text: 'That replay is not vouched by the key - thrown away; everything since the backup is recorded as lost' },
   0x12: { name: 'bad-range', text: 'A loss is #from..#to, at or before the key\'s head' },
+  /* R20 known peers (okedge sync phase 2, 2026-10-05) */
+  0x13: { name: 'peers-full', text: 'The key already knows four places that keep copies - remove one first' },
+  0x14: { name: 'peer-known', text: 'That place is already known to the key' },
+  0x15: { name: 'bad-key', text: 'That is not a P-256 public key' },
+  0x16: { name: 'no-such-peer', text: 'The key has no place at that index' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

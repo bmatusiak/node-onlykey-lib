@@ -115,3 +115,33 @@ export function verifyRegister(msg: any, { seen }?: {}): {
     reason?: undefined;
 };
 export function fingerprint(agentHex: any): string;
+export const PEER_TYPE: "EDGE_PEER_ADD";
+export function peerBody({ peer, nonce, name }: {
+    peer: any;
+    nonce: any;
+    name: any;
+}): Uint8Array<any>;
+/** The place's side: ask the phone to add it, under a name the person reads. signer: peerSignerFromSecret. */
+export function buildPeerAdd({ signer, name, nonce }: {
+    signer: any;
+    name: any;
+    nonce?: (Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>) | undefined;
+}): Promise<{
+    type: string;
+    v: number;
+    peer: string;
+    name: string;
+    nonce: string;
+}>;
+/** The app's side: signed by the key it names, and new. -> {ok} or {ok: false, reason} */
+export function verifyPeerAdd(msg: any, { seen }?: {}): {
+    ok: boolean;
+    reason: string;
+} | {
+    ok: boolean;
+    reason?: undefined;
+};
+export function peerSignerFromSecret(secret: any): {
+    publicKey: Uint8Array<ArrayBuffer>;
+    sign: (bytes: any) => Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+};

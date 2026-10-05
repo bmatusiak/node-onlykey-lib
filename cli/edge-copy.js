@@ -143,4 +143,24 @@ function lines(r, { status = false } = {}) {
   return out;
 }
 
-module.exports = { sync, lines, load, copyFile };
+/*
+ * Phase 2 (R20, P2a): this PC's copy store is a PLACE THAT KEEPS COPIES, with its
+ * own P-256 key: <edge home>/peer.key (made on first use, this user only, like
+ * agent.key). The key adds it as a known peer with the person's Yes and a press;
+ * from then on a sync may send copies here, and at E5 this key signs the store's
+ * receipts. It is not the agent's key: the agent asks for budgets, the store
+ * keeps copies - and the store, being on the agent's own machine, never counts
+ * toward k for this PC's budgets (R20, Brad 2026-10-05).
+ */
+function peerSigner(home) {
+  const { request } = require('../src/edge');
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  const file = path.join(home, 'peer.key');
+  if (!fs.existsSync(file)) {
+    const { p256 } = require('../src/vendor/exports/@noble/curves/nist.js');
+    fs.writeFileSync(file, toHex(p256.utils.randomSecretKey()) + '\n', { mode: 0o600 });
+  }
+  return request.peerSignerFromSecret(fromHex(fs.readFileSync(file, 'utf8').trim()));
+}
+
+module.exports = { sync, lines, load, copyFile, peerSigner };

@@ -75,6 +75,34 @@ export function approveRegister(msg: object, { edge, registered, seen, ask, onPr
     timeoutMs?: number | undefined;
 }): Promise<any>;
 /**
+ * R20 (okedge sync phase 2, P2a): a place that keeps copies asks to be added
+ * (EDGE_PEER_ADD) - signed by the key it names, new, the person's Yes on the
+ * sheet, then a PHYSICAL press; the key adds it to ITS list and links it
+ * (peer-add, subject grants.peerSubject). The key's list is the truth - a sync
+ * goes only to places on it - so "already" is read from the key, not the app.
+ * -> {ok: true, peer, name, seq, index} | {ok: true, already} | {ok: false, refusal} | {dropped}
+ *
+ * @param {object} msg an EDGE_PEER_ADD
+ * @param {object} o
+ * @param {object} o.edge the Edge device service for THIS app's key
+ * @param {Set<string>} o.seen nonces already taken
+ * @param {(view: {peer: string, name: string, fingerprint: string}) => Promise<'approve'|'decline'|'timeout'>} o.ask the sheet
+ * @param {() => void} [o.onPress] told when the key waits for the press
+ * @param {number} [o.timeoutMs] the press wait
+ * @returns {Promise<any>}
+ */
+export function approvePeerAdd(msg: object, { edge, seen, ask, onPress, timeoutMs }: {
+    edge: object;
+    seen: Set<string>;
+    ask: (view: {
+        peer: string;
+        name: string;
+        fingerprint: string;
+    }) => Promise<"approve" | "decline" | "timeout">;
+    onPress?: (() => void) | undefined;
+    timeoutMs?: number | undefined;
+}): Promise<any>;
+/**
  * R15c (2026-10-03): is this agent registered - is its AGENT_ADD link, made at
  * a press, in the app's VERIFIED copy of the chain? The app's own list of
  * agents is a convenience; only the link counts. An agent in storage without

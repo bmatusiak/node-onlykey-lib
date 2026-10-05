@@ -153,6 +153,22 @@ export const STATUS: Readonly<{
         name: string;
         text: string;
     };
+    19: {
+        name: string;
+        text: string;
+    };
+    20: {
+        name: string;
+        text: string;
+    };
+    21: {
+        name: string;
+        text: string;
+    };
+    22: {
+        name: string;
+        text: string;
+    };
 }>;
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */
 export function parseStatus(text: any): {
