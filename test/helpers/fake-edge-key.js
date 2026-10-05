@@ -27,12 +27,17 @@ const report = (bytes) => { const r = new Uint8Array(64); r.set(bytes.slice(0, 6
 const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUpperCase().padStart(2, '0')}`)]);
 
 /* a fake key: a tiny chain, one held link, answers by sub-op */
-function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false } = {}) {
+function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, secret = SECRET } = {}) {
+  /* each fake key its own Edge key (R29 siblings need two) - SECRET by default */
+  const myPub = p256.getPublicKey(secret, false).slice(1);
+  const myDevice = chain.deviceIdOf(myPub);
   const listeners = new Set();
-  let head = chain.genesis(DEVICE);
+  let head = chain.genesis(myDevice);
   const held = [];
   const peers = []; /* R20: X || Y, in index order */
   let peerX = null; /* PEER_ADD part 0, until part 1 */
+  const siblings = []; /* R29: X || Y */
+  let sibX = null;
   let syncParts = 0; /* SYNC's parts received, in order */
   let syncFields = [];
   const live = [];
@@ -54,7 +59,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
   };
   const checkpoint = () => {
     const seq = held.length - 1;
-    const sig = chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET);
+    const sig = chain.signCheckpoint({ deviceId: myDevice, seq, head }, secret);
     emit(report([...u32(seq), ...head]));
     emit(report([...sig]));
   };
@@ -82,7 +87,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
         emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, restoring ? 1 : 0, refusedArms]));
       } else if (sub === 0x04) {
-        emit(report([...PUB]));
+        emit(report([...myPub]));
       } else if (sub === 0x03) {
         checkpoint();
       } else if (sub === 0x02) {
@@ -184,6 +189,31 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         append({ op: codes.OP.PEER_ADD, decision: 1, flags: 1, slot: peers.length, grantId: 0, subject: grants.peerSubject(xy) });
         peers.push(xy);
         emit(seqHead());
+      } else if (sub === 0x35) {
+        /* R29 SIBLING_ADD: {0, X} staged, then {1, Y, id} pressed; refused: itself, a wrong id, known, full */
+        if (restoring) return emit(status(0x0e));
+        if (arg[0] === 0) { sibX = arg.slice(1, 33); return emit(status(0x00)); }
+        if (arg[0] !== 1 || !sibX) return emit(status(0x15));
+        const xy = Uint8Array.from([...sibX, ...arg.slice(1, 33)]);
+        const id = arg.slice(33, 49);
+        sibX = null;
+        try { p256.Point.fromBytes(Uint8Array.from([4, ...xy])).assertValidity(); } catch { return emit(status(0x15)); }
+        if (!same(chain.deviceIdOf(xy), id) || same(xy, myPub)) return emit(status(0x15));
+        if (siblings.some((k) => same(k, xy))) return emit(status(0x18));
+        if (siblings.length >= 4) return emit(status(0x19));
+        append({ op: codes.OP.SIBLING_ADD, decision: 1, flags: 1, grantId: 0, subject: grants.siblingSubject(xy, id) });
+        siblings.push(xy);
+        emit(seqHead());
+      } else if (sub === 0x36) {
+        if (restoring) return emit(status(0x0e));
+        const i = arg[0];
+        if (i >= siblings.length) return emit(status(0x1a));
+        append({ op: codes.OP.SIBLING_REMOVE, decision: 1, flags: 1, grantId: 0, subject: grants.siblingSubject(siblings[i], chain.deviceIdOf(siblings[i])) });
+        siblings.splice(i, 1);
+        emit(seqHead());
+      } else if (sub === 0x37) {
+        emit(report([siblings.length, 4]));
+        for (let i = 0; i < 4; i++) emit(report(i < siblings.length ? [...siblings[i]] : []));
       } else if (sub === 0x39) {
         /*
          * sync phase 2, three parts as okplugin_edge: {0, peerHash, first, last} (a peer

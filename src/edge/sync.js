@@ -45,7 +45,9 @@ const LINKS_TYPE = 'EDGE_SYNC_LINKS';
 const KEYCHAIN_TYPE = 'EDGE_SYNC_KEYCHAIN';
 const COMMIT_TYPE = 'EDGE_SYNC_COMMIT';
 const TAKE_TYPE = 'EDGE_SYNC_TAKE';
-const TYPES = [HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE];
+/* R29 (P2b): pair the phone's key with another key of yours - the place relays that key */
+const SIBLING_TYPE = 'EDGE_SIBLING_ADD';
+const TYPES = [HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, SIBLING_TYPE];
 /* a Key Chain part: JSON text up to this many characters (the wire carries ~14 KB a message) */
 const KEYCHAIN_PART_CHARS = 8000;
 /* no link moved, only the Key Chain list: the sync link's seq fields (CHOSEN, pending the spec) */
@@ -88,6 +90,16 @@ async function buildLinks({ signer, deviceId, records, sid = toHex(randomBytes(8
 }
 
 /**
+ * R29 (P2b): ask the phone whose key is `deviceId` to pair it with another
+ * key of yours (its Edge key X || Y and device id, read from that key by this
+ * place). The place only RELAYS that key - the phone shows a code made from
+ * both keys (grants.siblingCode) that the other phone shows too.
+ */
+function buildSibling({ signer, deviceId, key, id, name }) {
+  return sign(SIBLING_TYPE, signer, { deviceId: toHex(deviceId), key: toHex(key), id: toHex(id), name: String(name) });
+}
+
+/**
  * The phone's side: signed by the key it names, well formed, new. Whether that
  * key is on the KEY's peer list is the caller's check (it needs the device).
  * -> {ok} | {ok: false, reason}
@@ -111,6 +123,8 @@ function verify(msg, { seen } = {}) {
   if (msg.type === COMMIT_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.linkParts) || !Number.isInteger(p.keychainParts)
     || p.linkParts < 0 || p.keychainParts < 0 || p.linkParts > 255 || p.keychainParts > 255)) return { ok: false, reason: 'malformed' };
   if (msg.type === TAKE_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.part) || p.part < 0 || p.part > 255)) return { ok: false, reason: 'malformed' };
+  if (msg.type === SIBLING_TYPE && (!isHex(p.key, 64) || !isHex(p.id, 16) || typeof p.name !== 'string' || !p.name.trim()
+    || utf8ToBytes(p.name).length > 0xff)) return { ok: false, reason: 'malformed' };
   let good = false;
   try {
     good = p256.verify(fromHex(msg.signature), body(msg), Uint8Array.from([4, ...fromHex(msg.peer)]), { prehash: true });
@@ -306,7 +320,7 @@ function checkTaken(placeEntries, taken) {
 }
 
 module.exports = {
-  HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, BATCH, NO_SEQ,
+  HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, SIBLING_TYPE, BATCH, NO_SEQ, buildSibling,
   keychainText, keychainDigest, keychainParts, keychainEntriesOf, buildKeychain, buildCommit, buildTake, keychainPlan, checkTaken,
   body, buildHave, buildLinks, verify, recordsOf, rangesOf, missing, merge, syncFields, syncSubject,
 };

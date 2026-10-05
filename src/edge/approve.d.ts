@@ -147,6 +147,50 @@ export function approveSync({ peer, name, added, head, keychainHash, keychainIn,
     timeoutMs?: number | undefined;
 }): Promise<any>;
 /**
+ * R29 (P2b): a place on the key's list asks to pair this phone's key with
+ * another key of yours. The place relays that key and could swap it, so the
+ * sheet shows a 6-digit code made from BOTH keys and ids (grants.siblingCode):
+ * the other phone, asked the same, shows the same code only when each got the
+ * other's real key. The person checks they match, says Yes, and presses; the
+ * key writes the sibling-add link (it refuses itself, a wrong id, a known one).
+ * -> {ok: true, already?, seq?, index} | {ok: false, refusal, detail?} | {dropped}
+ */
+export function approveSibling(msg: any, { edge, seen, ask, onPress, timeoutMs }: {
+    edge: any;
+    seen: any;
+    ask: any;
+    onPress: any;
+    timeoutMs?: number | undefined;
+}): Promise<{
+    detail?: any;
+    ok: boolean;
+    refusal: any;
+} | {
+    dropped: string | undefined;
+    ok?: undefined;
+    already?: undefined;
+    index?: undefined;
+    seq?: undefined;
+} | {
+    ok: boolean;
+    already: boolean;
+    index: any;
+    dropped?: undefined;
+    seq?: undefined;
+} | {
+    ok: boolean;
+    already: boolean;
+    dropped?: undefined;
+    index?: undefined;
+    seq?: undefined;
+} | {
+    ok: boolean;
+    seq: any;
+    index: any;
+    dropped?: undefined;
+    already?: undefined;
+}>;
+/**
  * R15c (2026-10-03): is this agent registered - is its AGENT_ADD link, made at
  * a press, in the app's VERIFIED copy of the chain? The app's own list of
  * agents is a convenience; only the link counts. An agent in storage without

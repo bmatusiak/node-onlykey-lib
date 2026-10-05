@@ -18,6 +18,10 @@
  *   okedge peer add [--name "…"]                              add this PC's copy store to the key's places that keep
  *                                                             copies (R20): Yes + a press on the phone
  *   okedge peer list                                          those places, from the key (no press)
+ *   okedge sibling add <address> [--name "…"] [--other-name "…"]
+ *                                                             pair this key with the key on the phone at <address>
+ *                                                             (R29): both phones show a code - pair only if they match
+ *   okedge sibling list                                       the keys this key is paired with (no press)
  *   okedge status                                             the budget, its head, tickets owed
  *   okedge end                                                end the budget
  *   okedge watch [--once]                                     follow the key's links live (read-only)
@@ -161,6 +165,31 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         return 0;
       }
       err('okedge peer add [--name "…"] | okedge peer list');
+      return 2;
+    }
+    if (cmd === 'sibling') {
+      /* sync phase 2, P2b (R29): another key of yours, paired with a press on each phone */
+      const { request } = require('../src/edge');
+      const sub = args[0];
+      if (sub === 'add' && args[1] && !args[1].startsWith('--')) {
+        /* each phone may first ask to keep copies (peer), then both show the pairing sheet: minutes, not seconds */
+        const r = await ask('sibling-add', { address: args[1], name: opt(args, '--name') || null, otherName: opt(args, '--other-name') || null },
+          { timeoutMs: 600000, onSent: () => out('Waiting for the phones - each shows a code: pair only if the two codes match') });
+        if (r.peersAdded.length) out(`this PC now keeps copies for: ${r.peersAdded.join(', ')} phone`);
+        for (const [what, x] of [['this phone', r.this], ['the other phone', r.other]]) {
+          if (!x.ok) out(`${what}: not paired - ${x.error}`);
+          else out(`${what}: ${x.already ? 'already paired' : `paired (link #${x.seq})`}`);
+        }
+        return r.this.ok && r.other.ok ? 0 : 1;
+      }
+      if (sub === 'list') {
+        const r = await ask('siblings');
+        if (!r.siblings.length) out('no paired keys - okedge sibling add <address>');
+        for (const s of r.siblings) out(`sibling ${s.index}  ${request.fingerprint(s.key)}  device ${s.deviceId}`);
+        out(`${r.siblings.length} of ${r.max}`);
+        return 0;
+      }
+      err('okedge sibling add <address> [--name "…"] [--other-name "…"] | okedge sibling list');
       return 2;
     }
     if (cmd === 'end') {

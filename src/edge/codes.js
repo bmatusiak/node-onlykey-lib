@@ -148,10 +148,14 @@ const STATUS = Object.freeze({
   /* R20 known peers (okedge sync phase 2, 2026-10-05) */
   0x13: { name: 'peers-full', text: 'The key already knows four places that keep copies - remove one first' },
   0x14: { name: 'peer-known', text: 'That place is already known to the key' },
-  0x15: { name: 'bad-key', text: 'That is not a P-256 public key' },
+  0x15: { name: 'bad-key', text: 'That key cannot be added - not a P-256 public key, or (siblings) this key itself or an id that is not its own' },
   0x16: { name: 'no-such-peer', text: 'The key has no place at that index, or that place is not on its list' },
   /* sync phase 2: SYNC's three parts arrived out of order (CHOSEN number) */
   0x17: { name: 'sync-order', text: 'The sync record arrived out of order - nothing recorded; sync again' },
+  /* R29 siblings (P2b, CHOSEN numbers) */
+  0x18: { name: 'sibling-known', text: 'That phone is already paired with this key' },
+  0x19: { name: 'siblings-full', text: 'This key already has four paired phones - unpair one first' },
+  0x1a: { name: 'no-such-sibling', text: 'This key has no paired phone at that index' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

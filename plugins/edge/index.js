@@ -39,6 +39,8 @@ const SUB = Object.freeze({
   PEER_ADD: 0x30, PEER_REMOVE: 0x31, PEER_LIST: 0x32,
   /* sync phase 2 (Brad, 2026-10-05): the `sync` link; number CHOSEN, pending the spec */
   SYNC: 0x39,
+  /* R29 siblings (P2b) */
+  SIBLING_ADD: 0x35, SIBLING_REMOVE: 0x36, SIBLING_LIST: 0x37,
 });
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
@@ -573,6 +575,38 @@ function setup(imports, register) {
      * (sync.syncSubject: SHA256 of what moved). Owes no ticket. Refused while
      * restoring. -> {seq, head, tag}
      */
+    /**
+     * R29: pair another key that is yours - the person's Yes (with the code
+     * both phones show) first, then a PHYSICAL press; the key links op =
+     * sibling with grants.siblingSubject(key, id). The id is the key's own
+     * (chain.deviceIdOf): the key refuses any other, itself, a known one.
+     * Two requests on the wire (X staged, then Y . id and the press).
+     * -> {seq, head, tag}
+     */
+    async siblingAdd(key, { onPress, timeoutMs = 30000 } = {}) {
+      const xy = p256.Point.fromBytes(sec1Bytes(key)).toBytes(false).slice(1);
+      const id = chain.deviceIdOf(xy);
+      await call(SUB.SIBLING_ADD, concat([Uint8Array.of(0), xy.slice(0, 32)]), { text: true });
+      const [r] = await pressed(SUB.SIBLING_ADD, concat([Uint8Array.of(1), xy.slice(32), id]), { timeoutMs }, onPress);
+      return seqHeadTag(r);
+    },
+
+    /** R29: unpair the sibling at `index` (a press); the later ones move down. -> {seq, head, tag} */
+    async siblingRemove(index, { onPress, timeoutMs = 30000 } = {}) {
+      if (!Number.isInteger(index) || index < 0 || index > 255) throw new RangeError(`Edge: no sibling index ${index}`);
+      const [r] = await pressed(SUB.SIBLING_REMOVE, Uint8Array.of(index), { timeoutMs }, onPress);
+      return seqHeadTag(r);
+    },
+
+    /** R29: the key's paired phones, no press. -> {max, siblings: [{index, publicKey (X || Y), deviceId}]} */
+    async siblings(opts) {
+      const [h, ...slots] = await call(SUB.SIBLING_LIST, null, { ...opts, reports: 1 + PEER_SLOTS });
+      return {
+        max: h[1],
+        siblings: slots.slice(0, h[0]).map((r, index) => ({ index, publicKey: r.slice(0, 64), deviceId: chain.deviceIdOf(r.slice(0, 64)) })),
+      };
+    },
+
     async sync(fields, { onPress, timeoutMs = 30000 } = {}) {
       /*
        * fields: sync.syncFields(...). Three requests (104 bytes do not fit one):

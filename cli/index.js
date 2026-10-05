@@ -1789,6 +1789,22 @@ COMMANDS['edge-agent'] = {
         shimCommand: pathm.resolve(__dirname, 'edge-gpg-shim.js').split(pathm.sep).join('/'),
         log: (l) => io.err(`edge-agent: ${l}`),
         confirm: () => io.err('edge-agent: confirm on the OnlyKey (a press)'),
+        selfName: opts.address || null,
+        /* R29 (okedge sibling add): a second link, to the other phone, for one request */
+        openOther: async (address) => {
+          if (!opts.ble) throw new Error('pairing another phone needs --ble (the other phone is reached over Bluetooth)');
+          const app2 = await io.start(deviceOpts({ ...opts, address }));
+          try {
+            await app2.services.device.connect();
+            let edge2 = null;
+            require('../plugins/edge')({ transport: app2.services.transport }, (err, s) => { if (err) throw err; edge2 = s.edge; });
+            const channel2 = wire.createWireChannel(app2.services.transport, { timeoutMs: (Number(opts.wait) || 180) * 1000 });
+            return { edge: edge2, client: client.createEdgeClient({ edge: edge2, channel: channel2, signer, store }), close: () => app2.destroy() };
+          } catch (e) {
+            await app2.destroy().catch(() => undefined);
+            throw e;
+          }
+        },
       });
       io.out(row('ssh key', svc.sshLine));
       if (svc.fingerprint) io.out(row('gpg key', svc.fingerprint));

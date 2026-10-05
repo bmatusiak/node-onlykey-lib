@@ -309,7 +309,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
  * sign code (221), told apart by label (R11a); sizes come from the request
  * (D4, at most 300 together).
  */
-function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null, home = null }) {
+function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null, home = null, openOther = null, selfName = null }) {
   /*
    * identity: name another identity in the ssh scope (okedge budget --identity) - for
    * rule-10 tests with an identity the phone marks as test. Such a budget cannot
@@ -419,6 +419,48 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         }),
       };
     },
+    /*
+     * R29 (P2b): pair this agent's key with the key on another phone, both
+     * ways. openOther(address) opens a second link to that phone for the
+     * length of this request -> {edge, client, close}. This PC's copy store
+     * must be on both keys' lists first (each phone refuses a place it does
+     * not know): any key missing it gets the peer sheet + a press first.
+     * Then BOTH sibling sheets at once, so the person sees the two codes side
+     * by side; each phone pairs on its own Yes + press. One may pair while the
+     * other is declined - each result is reported.
+     */
+    'sibling-add': async ({ address, name = null, otherName = null }) => {
+      if (!edge) throw new Error('this agent service has no Edge key');
+      if (!openOther) throw new Error('this agent service cannot open a second phone');
+      if (!address) throw new Error('sibling-add needs the other phone\'s Bluetooth address');
+      const signer = require('./edge-copy').peerSigner(home || require('./edge-control').edgeHome());
+      const mine = Buffer.from(signer.publicKey).toString('hex');
+      const other = await openOther(address);
+      try {
+        const [ka, kb] = [await edge.publicKey(), await other.edge.publicKey()];
+        if (Buffer.compare(Buffer.from(ka.publicKey), Buffer.from(kb.publicKey)) === 0) throw new Error('both links reach the same key - give the OTHER phone\'s address');
+        const listed = async (e) => (await e.peers()).peers.some((p) => Buffer.from(p.publicKey).toString('hex') === mine);
+        const copies = `${require('os').hostname()} copies`;
+        const added = [];
+        if (!(await listed(other.edge))) { await other.client.peerAdd(signer, copies); added.push('other'); }
+        if (!(await listed(edge))) { await client.peerAdd(signer, copies); added.push('this'); }
+        const hex = (b) => Buffer.from(b).toString('hex');
+        const one = (p) => p.then((r) => ({ ok: true, ...r }), (e) => ({ ok: false, refusal: e.refusal || null, error: e.message }));
+        const [onOther, onThis] = await Promise.all([
+          one(other.client.siblingAdd(signer, { deviceId: kb.deviceId, key: ka.publicKey, name: name || selfName || 'the other phone' })),
+          one(client.siblingAdd(signer, { deviceId: ka.deviceId, key: kb.publicKey, name: otherName || address })),
+        ]);
+        return { peersAdded: added, this: { deviceId: hex(ka.deviceId), ...onThis }, other: { deviceId: hex(kb.deviceId), ...onOther } };
+      } finally {
+        await other.close().catch(() => undefined);
+      }
+    },
+    /* R29: the keys this agent's key is paired with (no press) */
+    siblings: async () => {
+      if (!edge) throw new Error('this agent service has no Edge key to read the list from');
+      const l = await edge.siblings();
+      return { max: l.max, siblings: l.siblings.map((s) => ({ index: s.index, key: Buffer.from(s.publicKey).toString('hex'), deviceId: Buffer.from(s.deviceId).toString('hex') })) };
+    },
     end: async () => {
       const b = agent.budget();
       if (b) await b.end();
@@ -455,7 +497,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
  * @param {object} o.openpgp the openpgp fork (src/crypto/pgp)
  * @param {string} [o.shimCommand] what git runs as gpg.program
  */
-async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm }) {
+async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null }) {
   const wire = require('./ssh-wire');
   const sshPub = require('../src/crypto/ssh-pub');
   const pgpCert = require('../src/crypto/pgp-cert');
@@ -526,7 +568,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
     }
   }
 
-  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge });
+  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge, openOther, selfName });
   for (const op of ['budget', 'continue', 'end']) {
     const h = handlers[op];
     handlers[op] = async (req) => {

@@ -313,6 +313,23 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     },
 
     /**
+     * R29 (P2b): ask the phone whose key is `deviceId` to pair it with the
+     * key `key` (X || Y; its id is derived) - the code on its sheet, Yes, a
+     * press. peerSigner: this place's own key (on that key's list). The caller
+     * asks the OTHER phone the same, the other way round.
+     * -> {already, seq?, index?}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
+     */
+    async siblingAdd(peerSigner, { deviceId, key, name }) {
+      const syncLib = require('./sync');
+      const xy = Uint8Array.from(key).length === 65 ? Uint8Array.from(key).slice(1) : Uint8Array.from(key);
+      const id = require('./chain').deviceIdOf(xy);
+      const answer = await channel.send(await syncLib.buildSibling({ signer: peerSigner, deviceId, key: xy, id, name }));
+      if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this place on the key\'s list (okedge peer add)?');
+      if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: pairing was refused - ${answer.refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal: answer.refusal });
+      return { already: Boolean(answer.already), seq: answer.seq ?? null, index: answer.index ?? null };
+    },
+
+    /**
      * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
      * date from `records` (this place's verified copy, [{link, head, reveal}])
      * and merge `keychain` (this place's public Key Chain list, entries) with
@@ -338,7 +355,9 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       const lacks = syncLib.missing(records, have.ranges || []);
       const sid = hex(randomBytes(8));
       const linkMsgs = lacks.length ? await syncLib.buildLinks({ signer: peerSigner, deviceId, records: lacks, sid }) : [];
-      const kcMsgs = keychain ? await syncLib.buildKeychain({ signer: peerSigner, deviceId, sid, entries: keychain }) : [];
+      /* the same list on both sides (the phone said its digest): nothing to send - an empty sync no longer carries the list both ways */
+      const same = keychain && have.keychainDigest && hex(syncLib.keychainDigest(keychain)) === String(have.keychainDigest).toLowerCase();
+      const kcMsgs = keychain && !same ? await syncLib.buildKeychain({ signer: peerSigner, deviceId, sid, entries: keychain }) : [];
       if (!linkMsgs.length && !kcMsgs.length) return { sent: 0, seq: null, count: 0, keychainIn: 0, keychainOut: 0, keychain: null };
       for (const m of [...linkMsgs, ...kcMsgs]) await ask(m, `part ${m.payload.part + 1} of ${m.payload.parts}`);
       const done = await ask(await syncLib.buildCommit({ signer: peerSigner, deviceId, sid, linkParts: linkMsgs.length, keychainParts: kcMsgs.length }), 'the commit');

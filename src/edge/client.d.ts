@@ -121,6 +121,22 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         index: any;
     }>;
     /**
+     * R29 (P2b): ask the phone whose key is `deviceId` to pair it with the
+     * key `key` (X || Y; its id is derived) - the code on its sheet, Yes, a
+     * press. peerSigner: this place's own key (on that key's list). The caller
+     * asks the OTHER phone the same, the other way round.
+     * -> {already, seq?, index?}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
+     */
+    siblingAdd(peerSigner: any, { deviceId, key, name }: {
+        deviceId: any;
+        key: any;
+        name: any;
+    }): Promise<{
+        already: boolean;
+        seq: any;
+        index: any;
+    }>;
+    /**
      * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
      * date from `records` (this place's verified copy, [{link, head, reveal}])
      * and merge `keychain` (this place's public Key Chain list, entries) with

@@ -254,6 +254,59 @@ async function approveSync({ peer, name, added, head, keychainHash = null, keych
 }
 
 /**
+ * R29 (P2b): a place on the key's list asks to pair this phone's key with
+ * another key of yours. The place relays that key and could swap it, so the
+ * sheet shows a 6-digit code made from BOTH keys and ids (grants.siblingCode):
+ * the other phone, asked the same, shows the same code only when each got the
+ * other's real key. The person checks they match, says Yes, and presses; the
+ * key writes the sibling-add link (it refuses itself, a wrong id, a known one).
+ * -> {ok: true, already?, seq?, index} | {ok: false, refusal, detail?} | {dropped}
+ */
+async function approveSibling(msg, { edge, seen, ask, onPress, timeoutMs = 30000 }) {
+  const syncLib = require('./sync');
+  if (!msg || msg.type !== syncLib.SIBLING_TYPE) return { dropped: 'malformed' };
+  const v = syncLib.verify(msg, { seen });
+  if (!v.ok) return { dropped: v.reason };
+  seen.add(msg.nonce.toLowerCase());
+  const p = msg.payload;
+  const peer = msg.peer.toLowerCase();
+  const own = await edge.publicKey();
+  if (toHex(own.deviceId) !== p.deviceId.toLowerCase()) return refuse('invalid', 'that request is for another key');
+  const places = await edge.peers();
+  if (!places.peers.some((x) => toHex(x.publicKey) === peer)) return refuse('invalid', 'that place is not on this key\'s list - add it first (okedge peer add)');
+  const key = fromHex(p.key);
+  const id = fromHex(p.id);
+  if (toHex(chain.deviceIdOf(key)) !== toHex(id)) return refuse('invalid', 'the device id is not that key\'s own');
+  if (toHex(key) === toHex(own.publicKey)) return refuse('invalid', 'that is this key itself');
+  const list = await edge.siblings();
+  const known = list.siblings.find((s) => toHex(s.publicKey) === toHex(key));
+  if (known) return { ok: true, already: true, index: known.index };
+  if (list.siblings.length >= list.max) return refuse('invalid', `the key already has ${list.max} paired keys - unpair one first`);
+  const code = grants.siblingCode(own, { publicKey: key, deviceId: id });
+  const answer = await ask({ peer, place: request.fingerprint(peer), name: p.name, sibling: toHex(key), siblingId: toHex(id), code });
+  if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
+  if (answer !== 'approve') return refuse('declined');
+  let r;
+  try {
+    r = await edge.siblingAdd(key, { onPress, timeoutMs });
+  } catch (e) {
+    if (e && e.status === 'restoring') return refuse('restoring');
+    if (e && e.status === 'sibling-known') return { ok: true, already: true };
+    if (e && e.status === 'siblings-full') return refuse('invalid', 'the key already has four paired keys');
+    if (e && e.status === 'bad-key') return refuse('invalid', 'the key refused that key');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    throw e;
+  }
+  /* the link the press wrote: this key and id, pressed */
+  const [l] = await edge.pickup(r.seq, 1);
+  const f = chain.decodeLink(l.link);
+  if (f.op !== codes.OP.SIBLING_ADD || !(f.flags & codes.FLAG.PRESS_OBSERVED) || toHex(f.subject) !== toHex(grants.siblingSubject(key, id))) {
+    return refuse('invalid', `the key's link #${r.seq} is not this key's sibling-add`);
+  }
+  return { ok: true, seq: r.seq, index: list.siblings.length };
+}
+
+/**
  * R15c (2026-10-03): is this agent registered - is its AGENT_ADD link, made at
  * a press, in the app's VERIFIED copy of the chain? The app's own list of
  * agents is a convenience; only the link counts. An agent in storage without
@@ -274,4 +327,4 @@ function agentInCopy(rows, agentHex) {
   return null;
 }
 
-module.exports = { approveRequest, approveRegister, approvePeerAdd, approveSync, agentInCopy };
+module.exports = { approveRequest, approveRegister, approvePeerAdd, approveSync, approveSibling, agentInCopy };

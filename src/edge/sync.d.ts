@@ -3,8 +3,28 @@ export const LINKS_TYPE: "EDGE_SYNC_LINKS";
 export const KEYCHAIN_TYPE: "EDGE_SYNC_KEYCHAIN";
 export const COMMIT_TYPE: "EDGE_SYNC_COMMIT";
 export const TAKE_TYPE: "EDGE_SYNC_TAKE";
+export const SIBLING_TYPE: "EDGE_SIBLING_ADD";
 export const BATCH: 40;
 export const NO_SEQ: 4294967295;
+/**
+ * R29 (P2b): ask the phone whose key is `deviceId` to pair it with another
+ * key of yours (its Edge key X || Y and device id, read from that key by this
+ * place). The place only RELAYS that key - the phone shows a code made from
+ * both keys (grants.siblingCode) that the other phone shows too.
+ */
+export function buildSibling({ signer, deviceId, key, id, name }: {
+    signer: any;
+    deviceId: any;
+    key: any;
+    id: any;
+    name: any;
+}): Promise<{
+    type: any;
+    v: number;
+    peer: string;
+    nonce: string;
+    payload: any;
+}>;
 /** The entries as list.serialize writes them (public key hex), id order, keys sorted, no lastSeen - one text for one list, on any side. */
 export function keychainText(entries: any): string;
 /** SHA256 of the list in id order - the sync link's last field when a list moved. */

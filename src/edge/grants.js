@@ -247,6 +247,33 @@ function agentSubject(agentKey) {
  * key as X || Y - the same 64 bytes the key answers PUBKEY with for its own.
  * No domain tag: R20 names the bare hash.
  */
+/*
+ * SIBLING_ADD / SIBLING_REMOVE subject (firmware.md R29): SHA256("OKEDGE-
+ * SIBLING-v1" || the sibling's Edge key X || Y || its device id).
+ */
+function siblingSubject(key, deviceId) {
+  const k = Uint8Array.from(key);
+  const id = Uint8Array.from(deviceId);
+  if (k.length !== 64 || id.length !== 16) throw new TypeError('siblingSubject needs the 64-byte key X || Y and the 16-byte device id');
+  return H('OKEDGE-SIBLING-v1', k, id);
+}
+
+/*
+ * THE CODE BOTH PHONES SHOW (spec, 2026-10-05: the computer relays each phone's
+ * key and could swap one). Six digits from SHA256("OKEDGE-SIBLING-CODE-v1" ||
+ * the two (key || id) in byte order) - the same on both screens only when each
+ * phone got the OTHER's real key. The person compares them before pressing.
+ * -> "123 456"
+ */
+function siblingCode(a, b) {
+  const one = (x) => Uint8Array.from([...Uint8Array.from(x.publicKey), ...Uint8Array.from(x.deviceId)]);
+  const [p, q] = [one(a), one(b)].sort((x, y) => { for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return x[i] - y[i]; return 0; });
+  const h = H('OKEDGE-SIBLING-CODE-v1', p, q);
+  const n = ((h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3]) >>> 0;
+  const digits = String(n % 1000000).padStart(6, '0');
+  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+}
+
 function peerSubject(peerKey) {
   const k = Uint8Array.from(peerKey);
   if (k.length !== 64) throw new TypeError('peerSubject needs a 64-byte P-256 key (X || Y)');
@@ -254,7 +281,7 @@ function peerSubject(peerKey) {
 }
 
 module.exports = {
-  agentSubject, peerSubject,
+  agentSubject, peerSubject, siblingSubject, siblingCode,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, armToken, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel,
