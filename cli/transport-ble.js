@@ -391,9 +391,19 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
    */
   let req;
   let rsp;
-  const discover = async () => {
+  /*
+   * fresh: the WHOLE table, asked of the phone itself. The quick vendor-only
+   * discovery is served from Windows' cache, and after the phone app was
+   * reinstalled its services sat at other handles - Windows connected every
+   * 35 s and never listed them (the Pixel, 2026-10-05: FIDO moved to handle
+   * 200). The full discovery is uncached in noble's WinRT code, so the retry
+   * uses it: the cache is refreshed from the phone instead of trusted again.
+   */
+  const discover = async (fresh = false) => {
     const found = await within(
-      peripheral.discoverSomeServicesAndCharacteristicsAsync([bare(SERVICE_UUID)], [bare(REQUEST_UUID), bare(RESPONSE_UUID)]),
+      fresh
+        ? peripheral.discoverAllServicesAndCharacteristicsAsync()
+        : peripheral.discoverSomeServicesAndCharacteristicsAsync([bare(SERVICE_UUID)], [bare(REQUEST_UUID), bare(RESPONSE_UUID)]),
       timeouts.resolveMs,
       () => bleError('EDISCOVER', `${name} connected but did not list its services in ${timeouts.resolveMs / 1000} s.`));
     const chars = found.characteristics || [];
@@ -411,7 +421,7 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
      * connect and discover once more. Once only: a phone that is really
      * gone still fails fast, with the first attempt's words.
      */
-    log(`discovery failed (${first && first.message}); reconnecting once`);
+    log(`discovery failed (${first && first.message}); reconnecting once, asking the phone for its whole table`);
     try {
       /* our own disconnect is not the phone dropping the link: unhook that handler around it */
       peripheral.removeListener('disconnect', onDrop);
@@ -419,7 +429,7 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
       await new Promise((r) => setTimeout(r, 1500));
       await within(peripheral.connectAsync(), timeouts.connectMs, () => bleError('ECONNECT', `${name} did not accept the reconnect`));
       peripheral.once('disconnect', onDrop);
-      await discover();
+      await discover(true);
     } catch {
       await giveUp();
       throw first;

@@ -122,21 +122,28 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
     }>;
     /**
      * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
-     * date from `records` (this place's verified copy, [{link, head, reveal}]).
-     * Asks what the phone holds first, then sends only what it lacks, in signed
-     * batches; the phone shows its sheet after the last one, and its answer
-     * comes back here. peerSigner: this place's own key (on the key's list).
-     * -> {sent, seq (the sync link, or null when nothing moved), count}
+     * date from `records` (this place's verified copy, [{link, head, reveal}])
+     * and merge `keychain` (this place's public Key Chain list, entries) with
+     * the phone's. Asks what the phone holds, sends only the links it lacks and
+     * the whole list, in signed parts; COMMIT brings up ONE sheet on the phone;
+     * after its Yes and press, TAKEs the merged list back. peerSigner: this
+     * place's own key (on the key's list).
+     * -> {sent, seq (the sync link, or null when nothing moved), count, keychainIn,
+     *     keychainOut, keychain (the merged list, or null)}
      * rejects EEDGE_REFUSED (declined, timeout, a fork - with the phone's words) or EEDGE_NO_ANSWER.
      */
-    syncToPhone(peerSigner: any, { deviceId, records, name }: {
+    syncToPhone(peerSigner: any, { deviceId, records, name, keychain }: {
         deviceId: any;
         records: any;
         name: any;
+        keychain?: null | undefined;
     }): Promise<{
         sent: any;
         seq: any;
         count: any;
+        keychainIn: any;
+        keychainOut: any;
+        keychain: any;
     }>;
     /**
      * Pick up a budget another process asked for (with the same store). The

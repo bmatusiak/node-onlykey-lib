@@ -213,8 +213,16 @@ function fakeNoble({
         discoverFailsOnce = false;
         throw new Error('Device is unreachable while discovering services');
       }
+      /* staleCache: Windows' cached table is out of date - the quick, cached discovery never answers (the Pixel, 2026-10-05) */
+      if (isPhone && noble.staleCache) return new Promise(() => {});
       if (!isPhone || !vendor) return { services: [], characteristics: [] };
       return { services: [{ uuid: SVC }], characteristics: [req, rsp] };
+    };
+    /* the full, uncached discovery: asks the phone itself, so a stale cache does not matter */
+    p.discoverAllServicesAndCharacteristicsAsync = async () => {
+      log.push(['discoverAll']);
+      if (!isPhone || !vendor) return { services: [], characteristics: [] };
+      return { services: [{ uuid: SVC }, { uuid: 'fffd' }], characteristics: [req, rsp, { uuid: 'f1d0fff1deaaeceeb42fc9ba7ed623bb', properties: ['write'] }] };
     };
     made.set(a.id, p);
     return p;

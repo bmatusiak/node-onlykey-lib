@@ -214,21 +214,23 @@ async function approvePeerAdd(msg, { edge, seen, ask, onPress, timeoutMs = 30000
  * @param {string} o.name the name it gave (shown, never trusted)
  * @param {Array<{link: Uint8Array}>} o.added the links that would be added, in seq order
  * @param {Uint8Array} o.head the phone copy's head after the merge (its newest link's head)
- * @param {Uint8Array|null} [o.keychainHash] SHA256 of the merged Key Chain list, when one moved
+ * @param {Uint8Array|null} [o.keychainHash] SHA256 of the merged Key Chain list, when one moved (sync.keychainDigest)
+ * @param {number} [o.keychainIn] Key Chain entries new to this phone
+ * @param {number} [o.keychainOut] merged entries the place will take back
  * @param {object} o.edge the Edge device service for THIS app's key
  * @param {(view: {peer: string, name: string, fingerprint: string, count: number, ranges: number[][]}) => Promise<'approve'|'decline'|'timeout'>} o.ask
  * @param {() => void} [o.onPress]
  * @param {number} [o.timeoutMs]
  * @returns {Promise<any>}
  */
-async function approveSync({ peer, name, added, head, keychainHash = null, edge, ask, onPress, timeoutMs = 30000 }) {
+async function approveSync({ peer, name, added, head, keychainHash = null, keychainIn = 0, keychainOut = 0, edge, ask, onPress, timeoutMs = 30000 }) {
   const want = String(peer).toLowerCase();
   const list = await edge.peers();
   if (!list.peers.some((p) => toHex(p.publicKey) === want)) return refuse('invalid', 'that place is not on this key\'s list - add it first (okedge peer add)');
-  if (!added.length) return { ok: true, count: 0, seq: null };
+  if (!added.length && !keychainIn && !keychainOut) return { ok: true, count: 0, seq: null };
   const syncLib = require('./sync');
   const ranges = syncLib.rangesOf(added.map((r) => chain.decodeLink(r.link).seq));
-  const answer = await ask({ peer: want, name, fingerprint: request.fingerprint(want), count: added.length, ranges });
+  const answer = await ask({ peer: want, name, fingerprint: request.fingerprint(want), count: added.length, ranges, keychainIn, keychainOut });
   if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
   if (answer !== 'approve') return refuse('declined');
   const fields = syncLib.syncFields({ peer: fromHex(want), added, head, keychainHash });

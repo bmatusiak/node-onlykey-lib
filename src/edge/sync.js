@@ -35,6 +35,21 @@ const { H, u32le } = require('./hash');
 
 const HAVE_TYPE = 'EDGE_SYNC_HAVE';
 const LINKS_TYPE = 'EDGE_SYNC_LINKS';
+/*
+ * The Key Chain public list (Brad / the spec, 2026-10-05: "merged, never marking
+ * anything yours"). The place sends its WHOLE list in parts; COMMIT asks the
+ * phone to merge links and list and show ONE sheet; after the press the place
+ * TAKEs back the merged list, so both hold the same one - the sync link's last
+ * field is its digest.
+ */
+const KEYCHAIN_TYPE = 'EDGE_SYNC_KEYCHAIN';
+const COMMIT_TYPE = 'EDGE_SYNC_COMMIT';
+const TAKE_TYPE = 'EDGE_SYNC_TAKE';
+const TYPES = [HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE];
+/* a Key Chain part: JSON text up to this many characters (the wire carries ~14 KB a message) */
+const KEYCHAIN_PART_CHARS = 8000;
+/* no link moved, only the Key Chain list: the sync link's seq fields (CHOSEN, pending the spec) */
+const NO_SEQ = 0xffffffff;
 const TAG = 'OKEDGE-SYNC-MSG-v1';
 const SUBJECT_TAG = 'OKEDGE-SYNC-v1';
 const BATCH = 40;
@@ -78,7 +93,7 @@ async function buildLinks({ signer, deviceId, records, sid = toHex(randomBytes(8
  * -> {ok} | {ok: false, reason}
  */
 function verify(msg, { seen } = {}) {
-  if (!msg || (msg.type !== HAVE_TYPE && msg.type !== LINKS_TYPE) || msg.v !== 1 || !isHex(msg.peer, 64)
+  if (!msg || !TYPES.includes(msg.type) || msg.v !== 1 || !isHex(msg.peer, 64)
     || !isHex(msg.nonce, 16) || !isHex(msg.signature, 64) || !msg.payload || typeof msg.payload !== 'object' || !isHex(msg.payload.deviceId, 16)) {
     return { ok: false, reason: 'malformed' };
   }
@@ -91,6 +106,11 @@ function verify(msg, { seen } = {}) {
       return { ok: false, reason: 'malformed' };
     }
   }
+  const partOk = () => isHex(p.sid, 8) && Number.isInteger(p.part) && Number.isInteger(p.parts) && p.part >= 0 && p.part < p.parts && p.parts <= 255;
+  if (msg.type === KEYCHAIN_TYPE && (!partOk() || !Array.isArray(p.entries))) return { ok: false, reason: 'malformed' };
+  if (msg.type === COMMIT_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.linkParts) || !Number.isInteger(p.keychainParts)
+    || p.linkParts < 0 || p.keychainParts < 0 || p.linkParts > 255 || p.keychainParts > 255)) return { ok: false, reason: 'malformed' };
+  if (msg.type === TAKE_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.part) || p.part < 0 || p.part > 255)) return { ok: false, reason: 'malformed' };
   let good = false;
   try {
     good = p256.verify(fromHex(msg.signature), body(msg), Uint8Array.from([4, ...fromHex(msg.peer)]), { prehash: true });
@@ -161,8 +181,9 @@ const bytesOf = (b) => (b instanceof Uint8Array ? b : fromHex(b));
  * -> {peerHash, first, last, head, keychain}
  */
 function syncFields({ peer, added, head, keychainHash = null }) {
-  if (!added.length) throw new RangeError('edge sync: nothing moved, nothing to record');
-  const seqs = added.map((r) => chain.decodeLink(r.link).seq);
+  if (!added.length && !keychainHash) throw new RangeError('edge sync: nothing moved, nothing to record');
+  /* only the Key Chain list moved: no link range to name (NO_SEQ) */
+  const seqs = added.length ? added.map((r) => chain.decodeLink(r.link).seq) : [NO_SEQ];
   const h = bytesOf(head);
   if (h.length !== 32) throw new TypeError('edge sync: the copy head is 32 bytes');
   const kc = keychainHash ? bytesOf(keychainHash) : new Uint8Array(32);
@@ -179,7 +200,86 @@ function syncSubject(fields) {
   return H(SUBJECT_TAG, f.peerHash, u32le(f.first), u32le(f.last), f.head, f.keychain);
 }
 
+/* ------------------------------------------------ the Key Chain list */
+
+const list = require('../keychain/list');
+
+/** The entries as list.serialize writes them (public key hex), id order - one text for one list, on any side. */
+function keychainText(entries) {
+  return list.serialize([...entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+}
+
+/** SHA256 of the list in id order - the sync link's last field when a list moved. */
+function keychainDigest(entries) {
+  return sha256(utf8ToBytes(keychainText(entries)));
+}
+
+/** Entries as plain JSON objects (public key hex), split into parts of about KEYCHAIN_PART_CHARS. */
+function keychainParts(entries) {
+  const plain = JSON.parse(keychainText(entries)).entries;
+  const parts = [];
+  let cur = [];
+  let size = 0;
+  for (const e of plain) {
+    const n = JSON.stringify(e).length;
+    if (cur.length && size + n > KEYCHAIN_PART_CHARS) { parts.push(cur); cur = []; size = 0; }
+    cur.push(e);
+    size += n;
+  }
+  parts.push(cur);
+  return parts;
+}
+
+/** Plain entry objects back to entries - every one checked again (list.parse refuses anything private or "yours"). */
+function keychainEntriesOf(plain) {
+  return list.parse(JSON.stringify({ format: list.FORMAT, version: list.VERSION, entries: plain }));
+}
+
+/** The place's side: its whole list, signed parts under the sync's sid. */
+async function buildKeychain({ signer, deviceId, sid, entries }) {
+  const parts = keychainParts(entries);
+  const out = [];
+  for (let part = 0; part < parts.length; part += 1) {
+    out.push(await sign(KEYCHAIN_TYPE, signer, { sid, deviceId: toHex(deviceId), part, parts: parts.length, entries: parts[part] }));
+  }
+  return out;
+}
+
+/** The place's side: "that is everything - merge it and ask". pcIds: the ids its list holds. */
+function buildCommit({ signer, deviceId, sid, linkParts, keychainParts: kcParts }) {
+  return sign(COMMIT_TYPE, signer, { sid, deviceId: toHex(deviceId), linkParts, keychainParts: kcParts });
+}
+
+/** The place's side, after the press: one part of the merged list. */
+function buildTake({ signer, deviceId, sid, part }) {
+  return sign(TAKE_TYPE, signer, { sid, deviceId: toHex(deviceId), part });
+}
+
+/**
+ * The phone's side: its list + the place's. -> {merged, in (entries new to the
+ * phone, or joined with a twin), out (merged entries the place does not hold as
+ * they are)} - out is what TAKE will give back.
+ */
+function keychainPlan(phoneEntries, placeEntries) {
+  const m = list.merge(phoneEntries, placeEntries);
+  const mine = new Map(placeEntries.map((e) => [e.id, keychainText([e])]));
+  const out = m.entries.filter((e) => mine.get(e.id) !== keychainText([e]));
+  return { merged: m.entries, in: m.added + m.paired, out: out.length };
+}
+
+/**
+ * The place's side, after TAKE: the merged list must hold every entry the place
+ * had (by id, or joined into a twin) - a phone that dropped one is refused.
+ * -> {ok, entries} | {ok: false, missing: [id]}
+ */
+function checkTaken(placeEntries, taken) {
+  const ids = new Set(taken.map((e) => e.id));
+  const missing = placeEntries.filter((e) => !ids.has(e.id) && !list.findTwin(taken, e)).map((e) => e.id);
+  return missing.length ? { ok: false, missing } : { ok: true, entries: taken };
+}
+
 module.exports = {
-  HAVE_TYPE, LINKS_TYPE, BATCH,
+  HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, BATCH, NO_SEQ,
+  keychainText, keychainDigest, keychainParts, keychainEntriesOf, buildKeychain, buildCommit, buildTake, keychainPlan, checkTaken,
   body, buildHave, buildLinks, verify, recordsOf, rangesOf, missing, merge, syncFields, syncSubject,
 };

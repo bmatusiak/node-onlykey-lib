@@ -260,7 +260,9 @@ test('win32: a discovery that fails once ("unreachable") reconnects and works; t
   const noble = fakeNoble({ discoverFailsOnce: true });
   const pipe = winPipe(noble);
   await pipe.start();
-  assert.equal(noble.log.filter((l) => l[0] === 'discover').length, 2, 'discovered twice');
+  /* the quick discovery once, then the retry asks for the whole table (uncached) */
+  assert.equal(noble.log.filter((l) => l[0] === 'discover').length, 1, 'the quick discovery once');
+  assert.equal(noble.log.filter((l) => l[0] === 'discoverAll').length, 1, 'then the whole table');
   assert.ok(noble.log.some((l) => l[0] === 'disconnect'), 'let go of the half-made link first');
   assert.equal(pipe.isRunning(), true, 'our own disconnect was not taken as the phone dropping the link');
   await pipe.stop();
@@ -536,4 +538,19 @@ test('--path with --ble, or --address without it, is a usage error', async () =>
   assert.equal(await main(['--ble', '--path', 'x', 'status'], io), 2);
   assert.equal(await main(['--address', 'Pixel 6a', 'status'], io), 2);
   assert.match(err.join('\n'), /use one[\s\S]*add --ble/);
+});
+
+/*
+ * After the phone app was reinstalled its services sat at other handles, and
+ * Windows' cached table never answered the quick discovery (the Pixel,
+ * 2026-10-05): the one retry asks the phone for its WHOLE table, uncached.
+ */
+test('win32: a stale Windows cache - the quick discovery never answers, the retry asks the phone for its whole table and connects', async () => {
+  const noble = fakeNoble({ firmware: fakeFirmware() });
+  noble.staleCache = true;
+  const pipe = winPipe(noble);
+  await pipe.start();
+  assert.ok(noble.log.some((e) => e[0] === 'discoverAll'), 'the retry did not ask for the whole table');
+  await pipe.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
+  await pipe.stop();
 });

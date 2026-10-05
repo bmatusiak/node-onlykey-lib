@@ -1,6 +1,82 @@
 export const HAVE_TYPE: "EDGE_SYNC_HAVE";
 export const LINKS_TYPE: "EDGE_SYNC_LINKS";
+export const KEYCHAIN_TYPE: "EDGE_SYNC_KEYCHAIN";
+export const COMMIT_TYPE: "EDGE_SYNC_COMMIT";
+export const TAKE_TYPE: "EDGE_SYNC_TAKE";
 export const BATCH: 40;
+export const NO_SEQ: 4294967295;
+/** The entries as list.serialize writes them (public key hex), id order - one text for one list, on any side. */
+export function keychainText(entries: any): string;
+/** SHA256 of the list in id order - the sync link's last field when a list moved. */
+export function keychainDigest(entries: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+/** Entries as plain JSON objects (public key hex), split into parts of about KEYCHAIN_PART_CHARS. */
+export function keychainParts(entries: any): any[][];
+/** Plain entry objects back to entries - every one checked again (list.parse refuses anything private or "yours"). */
+export function keychainEntriesOf(plain: any): any;
+/** The place's side: its whole list, signed parts under the sync's sid. */
+export function buildKeychain({ signer, deviceId, sid, entries }: {
+    signer: any;
+    deviceId: any;
+    sid: any;
+    entries: any;
+}): Promise<{
+    type: any;
+    v: number;
+    peer: string;
+    nonce: string;
+    payload: any;
+}[]>;
+/** The place's side: "that is everything - merge it and ask". pcIds: the ids its list holds. */
+export function buildCommit({ signer, deviceId, sid, linkParts, keychainParts: kcParts }: {
+    signer: any;
+    deviceId: any;
+    sid: any;
+    linkParts: any;
+    keychainParts: any;
+}): Promise<{
+    type: any;
+    v: number;
+    peer: string;
+    nonce: string;
+    payload: any;
+}>;
+/** The place's side, after the press: one part of the merged list. */
+export function buildTake({ signer, deviceId, sid, part }: {
+    signer: any;
+    deviceId: any;
+    sid: any;
+    part: any;
+}): Promise<{
+    type: any;
+    v: number;
+    peer: string;
+    nonce: string;
+    payload: any;
+}>;
+/**
+ * The phone's side: its list + the place's. -> {merged, in (entries new to the
+ * phone, or joined with a twin), out (merged entries the place does not hold as
+ * they are)} - out is what TAKE will give back.
+ */
+export function keychainPlan(phoneEntries: any, placeEntries: any): {
+    merged: object[];
+    in: any;
+    out: number;
+};
+/**
+ * The place's side, after TAKE: the merged list must hold every entry the place
+ * had (by id, or joined into a twin) - a phone that dropped one is refused.
+ * -> {ok, entries} | {ok: false, missing: [id]}
+ */
+export function checkTaken(placeEntries: any, taken: any): {
+    ok: boolean;
+    missing: any;
+    entries?: undefined;
+} | {
+    ok: boolean;
+    entries: any;
+    missing?: undefined;
+};
 export function body({ type, peer, nonce, payload }: {
     type: any;
     peer: any;

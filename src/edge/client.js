@@ -314,27 +314,44 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
 
     /**
      * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
-     * date from `records` (this place's verified copy, [{link, head, reveal}]).
-     * Asks what the phone holds first, then sends only what it lacks, in signed
-     * batches; the phone shows its sheet after the last one, and its answer
-     * comes back here. peerSigner: this place's own key (on the key's list).
-     * -> {sent, seq (the sync link, or null when nothing moved), count}
+     * date from `records` (this place's verified copy, [{link, head, reveal}])
+     * and merge `keychain` (this place's public Key Chain list, entries) with
+     * the phone's. Asks what the phone holds, sends only the links it lacks and
+     * the whole list, in signed parts; COMMIT brings up ONE sheet on the phone;
+     * after its Yes and press, TAKEs the merged list back. peerSigner: this
+     * place's own key (on the key's list).
+     * -> {sent, seq (the sync link, or null when nothing moved), count, keychainIn,
+     *     keychainOut, keychain (the merged list, or null)}
      * rejects EEDGE_REFUSED (declined, timeout, a fork - with the phone's words) or EEDGE_NO_ANSWER.
      */
-    async syncToPhone(peerSigner, { deviceId, records, name }) {
+    async syncToPhone(peerSigner, { deviceId, records, name, keychain = null }) {
       const syncLib = require('./sync');
-      const have = await channel.send(await syncLib.buildHave({ signer: peerSigner, deviceId, name }));
-      if (!have) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this place on the key\'s list (okedge peer add)?');
-      if (!have.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the sync - ${have.refusal}${have.detail ? ` (${have.detail})` : ''}`, { refusal: have.refusal });
+      const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
+      const { toHex: hex } = require('../bytes');
+      const ask = async (msg, what) => {
+        const a = await channel.send(msg);
+        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to ${what} - is this place on the key's list (okedge peer add)?`);
+        if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the sync - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
+        return a;
+      };
+      const have = await ask(await syncLib.buildHave({ signer: peerSigner, deviceId, name }), 'the sync');
       const lacks = syncLib.missing(records, have.ranges || []);
-      if (!lacks.length) return { sent: 0, seq: null, count: 0 };
-      let answer = null;
-      for (const msg of await syncLib.buildLinks({ signer: peerSigner, deviceId, records: lacks })) {
-        answer = await channel.send(msg);
-        if (!answer) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to part ${msg.payload.part + 1} of ${msg.payload.parts}`);
-        if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the sync - ${answer.refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal: answer.refusal });
+      const sid = hex(randomBytes(8));
+      const linkMsgs = lacks.length ? await syncLib.buildLinks({ signer: peerSigner, deviceId, records: lacks, sid }) : [];
+      const kcMsgs = keychain ? await syncLib.buildKeychain({ signer: peerSigner, deviceId, sid, entries: keychain }) : [];
+      if (!linkMsgs.length && !kcMsgs.length) return { sent: 0, seq: null, count: 0, keychainIn: 0, keychainOut: 0, keychain: null };
+      for (const m of [...linkMsgs, ...kcMsgs]) await ask(m, `part ${m.payload.part + 1} of ${m.payload.parts}`);
+      const done = await ask(await syncLib.buildCommit({ signer: peerSigner, deviceId, sid, linkParts: linkMsgs.length, keychainParts: kcMsgs.length }), 'the commit');
+      let merged = null;
+      if (done.takeParts) {
+        const plain = [];
+        for (let part = 0; part < done.takeParts; part += 1) {
+          const t = await ask(await syncLib.buildTake({ signer: peerSigner, deviceId, sid, part }), `the merged list, part ${part + 1}`);
+          plain.push(...t.entries);
+        }
+        merged = syncLib.keychainEntriesOf(plain);
       }
-      return { sent: lacks.length, seq: answer.seq ?? null, count: answer.count ?? lacks.length };
+      return { sent: lacks.length, seq: done.seq ?? null, count: done.count ?? 0, keychainIn: done.keychainIn ?? 0, keychainOut: done.keychainOut ?? 0, keychain: merged };
     },
 
     /**

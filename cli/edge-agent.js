@@ -377,8 +377,19 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         return r;
       }
       const c = copy.load(where, Buffer.from(r.deviceId, 'hex'));
+      /* this PC's public Key Chain list goes too, merged on the phone under the same sheet and press */
+      const kcFile = require('./keychain-record');
+      const myList = kcFile.load();
       try {
-        r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: `${require('os').hostname()} copies` });
+        r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: `${require('os').hostname()} copies`, keychain: myList });
+        if (r.phone.keychain) {
+          /* the merged list back: kept only if it still holds every entry this PC had */
+          const check = require('../src/edge').sync.checkTaken(myList, r.phone.keychain);
+          if (check.ok) kcFile.save(check.entries);
+          r.phone.keychainSaved = check.ok;
+          if (!check.ok) r.phone.keychainMissing = check.missing;
+          r.phone.keychain = r.phone.keychain.length;
+        }
       } catch (e) {
         r.phone = { refused: e.message };
       }

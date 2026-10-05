@@ -125,3 +125,59 @@ test('approveSync: a place NOT on the key\'s list never reaches the sheet; Decli
   assert.equal((await edge.head()).seq, mid, 'a declined sync wrote a link');
   assert.ok(mid > before);
 });
+
+/* ------------------------------------------------ the Key Chain list (merged, never "yours") */
+
+const list = require('../src/keychain/list');
+const derived = (label, pub, extra = {}) => list.createEntry({ kind: 'derived', type: 'ed25519', scheme: 'ssh', label, publicKey: pub, created: '2026-10-05T00:00:00.000Z', ...extra });
+const pubOf = (n) => require('../src/vendor/exports/@noble/curves/ed25519.js').ed25519.getPublicKey(new Uint8Array(32).fill(n));
+
+test('the Key Chain digest is one text for one list, whatever the order it was held in', () => {
+  const a = derived('ssh://a@pc', pubOf(1));
+  const b = derived('ssh://b@pc', pubOf(2));
+  assert.equal(hex(sync.keychainDigest([a, b])), hex(sync.keychainDigest([b, a])));
+  assert.notEqual(hex(sync.keychainDigest([a, b])), hex(sync.keychainDigest([a])));
+});
+
+test('the plan: the place\'s entries come in, the phone\'s go out; a phone hash-derive and the place\'s named one become ONE entry', () => {
+  const k = pubOf(3);
+  const phoneHash = derived('hash:' + 'ab'.repeat(32), k);
+  const phoneOnly = derived('ssh://phone@x', pubOf(4));
+  const pcNamed = derived('ssh://agent@nitro16', k);
+  const pcOnly = derived('ssh://pc@x', pubOf(5));
+  const plan = sync.keychainPlan([phoneHash, phoneOnly], [pcNamed, pcOnly]);
+  assert.equal(plan.merged.length, 3, 'the twin was not joined');
+  assert.equal(plan.in, 2, 'the place\'s two entries (one new, one joined) count as in');
+  assert.ok(plan.out >= 1, 'the phone-only entry must go back to the place');
+  /* the place takes the merged list back: nothing of its own is missing, and it now holds what the phone holds */
+  const check = sync.checkTaken([pcNamed, pcOnly], plan.merged);
+  assert.equal(check.ok, true);
+  assert.equal(hex(sync.keychainDigest(check.entries)), hex(sync.keychainDigest(plan.merged)));
+  /* a phone that dropped one of the place's entries is refused */
+  assert.deepEqual(sync.checkTaken([pcNamed, pcOnly], plan.merged.filter((e) => e.id !== pcOnly.id)).missing, [pcOnly.id]);
+});
+
+test('Key Chain parts are signed, re-checked on arrival, and never carry "yours"', async () => {
+  const s = signer();
+  const entries = Array.from({ length: 30 }, (_, i) => derived(`ssh://u${i}@pc`, pubOf(10 + i), { pgp: undefined }));
+  const msgs = await sync.buildKeychain({ signer: s, deviceId: DEVICE, sid: '01'.repeat(8), entries });
+  assert.ok(msgs.length >= 2, 'a long list did not split into parts');
+  assert.ok(msgs.every((m) => sync.verify(m).ok));
+  const back = sync.keychainEntriesOf(msgs.flatMap((m) => m.payload.entries));
+  assert.equal(back.length, 30);
+  /* a "yours" mark slipped into a part is dropped on arrival - list.parse refuses or strips it */
+  const marked = sync.keychainEntriesOf([{ ...msgs[0].payload.entries[0], yours: true }]);
+  assert.equal(marked[0].yours, undefined);
+  const commit = await sync.buildCommit({ signer: s, deviceId: DEVICE, sid: '01'.repeat(8), linkParts: 0, keychainParts: msgs.length });
+  assert.deepEqual(sync.verify(commit), { ok: true });
+  assert.deepEqual(sync.verify(await sync.buildTake({ signer: s, deviceId: DEVICE, sid: '01'.repeat(8), part: 0 })), { ok: true });
+});
+
+test('only the Key Chain moved: the sync fields name no seq range (0xFFFFFFFF), and carry the list digest', () => {
+  const digest = sync.keychainDigest([derived('ssh://a@pc', pubOf(1))]);
+  const f = sync.syncFields({ peer: VECTOR.peer, added: [], head: VECTOR.head, keychainHash: digest });
+  assert.equal(f.first, sync.NO_SEQ);
+  assert.equal(f.last, sync.NO_SEQ);
+  assert.equal(hex(f.keychain), hex(digest));
+  assert.throws(() => sync.syncFields({ peer: VECTOR.peer, added: [], head: VECTOR.head }), /nothing moved/);
+});

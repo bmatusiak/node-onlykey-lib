@@ -116,14 +116,16 @@ export function approvePeerAdd(msg: object, { edge, seen, ask, onPress, timeoutM
  * @param {string} o.name the name it gave (shown, never trusted)
  * @param {Array<{link: Uint8Array}>} o.added the links that would be added, in seq order
  * @param {Uint8Array} o.head the phone copy's head after the merge (its newest link's head)
- * @param {Uint8Array|null} [o.keychainHash] SHA256 of the merged Key Chain list, when one moved
+ * @param {Uint8Array|null} [o.keychainHash] SHA256 of the merged Key Chain list, when one moved (sync.keychainDigest)
+ * @param {number} [o.keychainIn] Key Chain entries new to this phone
+ * @param {number} [o.keychainOut] merged entries the place will take back
  * @param {object} o.edge the Edge device service for THIS app's key
  * @param {(view: {peer: string, name: string, fingerprint: string, count: number, ranges: number[][]}) => Promise<'approve'|'decline'|'timeout'>} o.ask
  * @param {() => void} [o.onPress]
  * @param {number} [o.timeoutMs]
  * @returns {Promise<any>}
  */
-export function approveSync({ peer, name, added, head, keychainHash, edge, ask, onPress, timeoutMs }: {
+export function approveSync({ peer, name, added, head, keychainHash, keychainIn, keychainOut, edge, ask, onPress, timeoutMs }: {
     peer: string;
     name: string;
     added: Array<{
@@ -131,6 +133,8 @@ export function approveSync({ peer, name, added, head, keychainHash, edge, ask, 
     }>;
     head: Uint8Array;
     keychainHash?: Uint8Array<ArrayBufferLike> | null | undefined;
+    keychainIn?: number | undefined;
+    keychainOut?: number | undefined;
     edge: object;
     ask: (view: {
         peer: string;

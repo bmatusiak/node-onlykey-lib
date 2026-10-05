@@ -144,8 +144,12 @@ function lines(r, { status = false } = {}) {
   const p = r.phone;
   if (p && p.skipped) out.push(`phone: not offered - ${p.skipped}`);
   else if (p && p.refused) out.push(`phone: ${p.refused}`);
-  else if (p && p.sent === 0) out.push('phone: lacks nothing this PC holds');
-  else if (p) out.push(`phone: took ${p.count} link(s) - the key recorded the sync as #${p.seq}`);
+  else if (p && p.seq === null) out.push('phone: lacks nothing this PC holds, and the Key Chain lists already match');
+  else if (p) {
+    out.push(`phone: took ${p.count} link(s) and ${p.keychainIn || 0} Key Chain entr${p.keychainIn === 1 ? 'y' : 'ies'} - the key recorded the sync as #${p.seq}`);
+    if (p.keychainSaved === false) out.push(`Key Chain: the merged list dropped ${p.keychainMissing.length} of this PC's entries - NOT saved (${p.keychainMissing.join(', ')})`);
+    else if (p.keychainOut) out.push(`Key Chain: this PC took ${p.keychainOut} entr${p.keychainOut === 1 ? 'y' : 'ies'} - ${p.keychain} in the list now`);
+  }
   return out;
 }
 
