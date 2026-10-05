@@ -29,9 +29,7 @@ function fileOf(home = os.homedir()) {
 
 /*
  * How the phone lists this pairing: the computer's name ("NITRO16"). The phone's
- * list is paired COMPUTERS; the keys still live in this one user's home, and any
- * other user or app on the computer is treated as an attacker (spec rule 1) - it
- * has no pairing and gets silence. There is no multi-user feature.
+ * list is paired computers; the keys live in this user's owner-only home.
  */
 function computerName() {
   return os.hostname();

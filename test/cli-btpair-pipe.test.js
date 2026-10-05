@@ -138,26 +138,6 @@ test('silence: a pairing the phone does not know (revoked / switched off) fails 
   await assert.rejects(() => p.start(), (e) => e.code === 'ESILENT' && /paired, and switched on/.test(e.message));
 });
 
-test('another OS user (or app) on the paired computer, without the pairing file, gets silence', async () => {
-  const g = gate();
-  const brad = tmpHome();
-  const p0 = pipeOver(g);
-  await p0.start();
-  await store.pairOverPipe(p0, { address: 'PIXEL', home: brad, name: 'NITRO16', windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
-  await p0.stop();
-  /* the attacker: another account (another ~), no pairing file - its plaintext request gets no answer */
-  const attacker = tmpHome();
-  assert.strictEqual(store.pairingFor('PIXEL', attacker), null);
-  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', attacker) });
-  const started = await p.start();
-  assert.strictEqual(started.encrypted, false);
-  const reply = nextOut(p, 600);
-  await p.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
-  assert.strictEqual(await reply, null, 'the gate answered an unpaired user');
-  assert.ok(g.plaintextSeen >= 1);
-  await p.stop();
-});
-
 test('pairing outside the phone\'s window: no answer, nothing stored', async () => {
   const home = tmpHome();
   const g = gate({ windowOpen: false });

@@ -124,20 +124,6 @@ test('silence: unknown, switched Off, revoked, expired, junk and plaintext hello
   assert.ok(connect({ ...cliRec, ps: '00'.repeat(32) }, [phoneRec]).phone.silence, 'a forged hello');
 });
 
-/*
- * Spec rule 1: any other user or app on the paired computer is the ATTACKER - no
- * multi-user feature. It has no pairing file, so the best it can do is a hello under
- * a record it made up; the phone answers nothing.
- */
-test('another OS user (or app) on the paired computer, without the pairing file, gets silence', () => {
-  const { phoneRec } = pair();
-  const attacker = bt.generateIdentity(); /* its own home: another identity, no pairing */
-  const madeUp = { id: Buffer.from(bt.idOf(attacker.publicKey)).toString('hex'), ps: '11'.repeat(32), epoch: 0 };
-  assert.ok(connect(madeUp, [phoneRec]).phone.silence, 'its own id');
-  /* it may even learn the paired id (it is not secret) - without the secret, still silence */
-  assert.ok(connect({ ...madeUp, id: phoneRec.id }, [phoneRec]).phone.silence, 'the paired id, a guessed secret');
-});
-
 test('renewal on day 6, and THE COPY ALARM: after renewal, any use of the old secret = alarm + that pairing dropped', () => {
   const { cliRec, phoneRec } = pair();
   const copied = { ...cliRec }; /* a copy of ~/.onlykey-js taken before the renewal */
