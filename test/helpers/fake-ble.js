@@ -167,7 +167,9 @@ function fakeNoble({
       log.push(['write', Buffer.from(data).toString('hex'), withoutResponse]);
       if (p.state !== 'connected') throw new Error('not connected');
       /* the A13 on 2026-10-05: one write refused (WinRT "status: 3") in the middle of a session */
-      if (noble.failNextWrite) {
+      /* failSkip: let that many writes through first - a request refused PARTWAY */
+      if (noble.failNextWrite && noble.failSkip > 0) noble.failSkip -= 1;
+      else if (noble.failNextWrite) {
         const why = noble.failNextWrite;
         noble.failNextWrite = null;
         throw new Error(why);

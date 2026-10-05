@@ -219,3 +219,32 @@ test('a short command still answers a renewal: stop() waits for it (the Pixel, 2
   assert.ok(g.renewed, 'the link closed before the CLI answered the renewal');
   assert.strictEqual(store.pairingFor('PIXEL', home).next.epoch, 1);
 });
+
+/*
+ * THE DEADLOCK (reproduced on the Pixel, 2026-10-05): a PAIRED link dropped, and
+ * the reconnect ran inside the queued write that found it down - its hello was
+ * queued behind that same write, never left the PC, timed out, and read as the
+ * phone's silence. Only a fresh process got through. The hello now skips the
+ * queue while connect() runs it: the next request reconnects ENCRYPTED and is
+ * answered.
+ */
+test('a paired link that drops reconnects inside the next write - the hello is not stuck behind it, the answer comes sealed', async () => {
+  const home = tmpHome();
+  const g = gate();
+  const p0 = pipeOver(g);
+  await p0.start();
+  await store.pairOverPipe(p0, { address: 'PIXEL', home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await p0.stop();
+  const said = [];
+  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), onLink: (l) => said.push(l) });
+  assert.strictEqual((await p.start()).encrypted, true);
+  g.noble.peripheral(g.noble.phoneId || '24293486eaaf').emit('disconnect', 'the phone app restarted');
+  assert.strictEqual(p.isRunning(), false);
+  const reply = nextOut(p, 4000);
+  await p.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
+  const r = await reply;
+  assert.ok(r, `no answer after the reconnect: ${said.join(' | ')}`);
+  assert.strictEqual(p.encrypted, true, 'the reconnect came back without its session');
+  assert.ok(said.some((l) => /^reconnected \(encrypted\)/.test(l)), said.join(' | '));
+  await p.stop();
+});

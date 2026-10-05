@@ -283,25 +283,48 @@ test('win32: with reconnect off, the phone dropping the link stops the pipe, and
  * fails and says so, the link is dropped, the next request reconnects - and
  * each step is reported.
  */
-test('win32 stack: one write killed mid-session - that request fails, the link is reported down, the next request reconnects and is answered', async () => {
+test('win32 stack: the FIRST fragment refused (a phone app restart) - the link is dropped, reconnected, and the request sent once more and answered', async () => {
   const noble = fakeNoble({ firmware: fakeFirmware({ labels: ['GitHub'] }) });
   const said = [];
   const pipe = winPipe(noble, { onLink: (line) => said.push(line) });
   const app = await stackOver(pipe);
   try {
     assert.equal((await app.services.device.connect()).status, 'UNLOCKEDv3.0.4-prodc');
+    /* the old link takes a while to close (WinRT does) - the reconnect must wait for it (the A13, 2026-10-05) */
+    const p = noble.peripheral('24293486eaaf');
+    const disconnect = p.disconnectAsync.bind(p);
+    p.disconnectAsync = async () => { await new Promise((r) => setTimeout(r, 150)); await disconnect(); noble.log.push(['closed']); };
     noble.failNextWrite = 'status: 3';
-    await assert.rejects(() => app.services.device.connect(),
-      (err) => /status: 3/.test(err.message), 'the killed write did not fail its own request');
-    assert.equal(pipe.isRunning(), false, 'a link that refused a write was kept');
-    assert.ok(said.some((l) => /a write failed .*status: 3.* link dropped/.test(l)), `not reported: ${said.join(' | ')}`);
-    /* the next request: reconnect, then answered - the process (this test) is still here */
+    /* nothing of it reached the phone, so it is sent once more on the new link - the person sees it work */
     assert.equal((await app.services.device.connect()).status, 'UNLOCKEDv3.0.4-prodc');
-    assert.ok(said.some((l) => /reconnecting/.test(l)) && said.some((l) => /^reconnected/.test(l)), `reconnect not reported: ${said.join(' | ')}`);
+    assert.ok(said.some((l) => /a write failed .*status: 3.* link dropped/.test(l)), `not reported: ${said.join(' | ')}`);
+    assert.ok(said.some((l) => /sending it once more/.test(l)), `the resend was not reported: ${said.join(' | ')}`);
+    assert.ok(said.some((l) => /^reconnected/.test(l)), `reconnect not reported: ${said.join(' | ')}`);
     const { labels } = await app.services.device.readLabels({ timeoutMs: 3000 });
     assert.equal(labels[0], 'GitHub');
-    /* the killed write was not sent again on its own: one refused write, then only the new requests */
     assert.equal(noble.log.filter((e) => e[0] === 'connect').length, 2, 'one connect at start, one reconnect');
+    const closedAt = noble.log.findIndex((e) => e[0] === 'closed');
+    const reconnectAt = noble.log.map((e) => e[0]).lastIndexOf('connect');
+    assert.ok(closedAt >= 0 && closedAt < reconnectAt, 'the reconnect began before the old link had closed');
+  } finally {
+    await app.destroy();
+  }
+});
+
+test('win32 stack: a request refused PARTWAY fails and is never sent again on its own; the next one reconnects', async () => {
+  /* the 20-byte floor: one report is four fragments, so the phone can hold part of it */
+  const noble = fakeNoble({ firmware: fakeFirmware(), mtu: 23, phoneFragment: 20 });
+  const said = [];
+  const pipe = winPipe(noble, { onLink: (line) => said.push(line) });
+  const app = await stackOver(pipe);
+  try {
+    assert.equal((await app.services.device.connect()).status, 'UNLOCKEDv3.0.4-prodc');
+    noble.failSkip = 1;
+    noble.failNextWrite = 'status: 3';
+    await assert.rejects(() => app.services.device.connect(), (err) => /status: 3/.test(err.message), 'a part-sent request did not fail');
+    assert.ok(!said.some((l) => /once more/.test(l)), 'a part-sent request was sent again');
+    assert.equal(pipe.isRunning(), false, 'a link that refused a write was kept');
+    assert.equal((await app.services.device.connect()).status, 'UNLOCKEDv3.0.4-prodc');
   } finally {
     await app.destroy();
   }

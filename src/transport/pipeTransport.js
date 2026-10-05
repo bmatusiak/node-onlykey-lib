@@ -177,10 +177,22 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
     },
     async requestNow({ iface, data, timeoutMs = 3000, match = null }) {
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          off();
-          reject(new Error(`no reply on interface ${iface} within ${timeoutMs}ms`));
-        }, timeoutMs);
+        /*
+         * The reply clock starts once the write has gone out. A Bluetooth pipe
+         * may reconnect inside a write (a dropped link, a phone app restart:
+         * about 4 s on the Pixel, 2026-10-05) - a clock started before it ran
+         * out while the request had not left yet. Listening starts first all
+         * the same: a reply can beat the write's acknowledgement.
+         */
+        let timer = null;
+        let listening = true;
+        const arm = () => {
+          if (!listening) return; /* answered already */
+          timer = setTimeout(() => {
+            off();
+            reject(new Error(`no reply on interface ${iface} within ${timeoutMs}ms`));
+          }, timeoutMs);
+        };
 
         const onReport = (event) => {
           /*
@@ -200,11 +212,11 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
           off();
           resolve(event.data);
         };
-        const off = () => events.removeListener('report', onReport);
+        const off = () => { listening = false; events.removeListener('report', onReport); };
 
         /* Subscribed before the write - the whole reason request() exists. */
         events.on('report', onReport);
-        transport.write(iface, data).catch((err) => {
+        transport.write(iface, data).then(arm, (err) => {
           clearTimeout(timer);
           off();
           reject(err);

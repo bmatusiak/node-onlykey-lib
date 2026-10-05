@@ -949,6 +949,15 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         await link.write(piece);
       }
     };
+    /*
+     * DURING A CONNECT, STRAIGHT TO THE LINK. A reconnect runs inside a queued
+     * write (the one that found the link down), so a hello put behind it in the
+     * queue waited for the very write that was waiting for the hello - nothing
+     * left the PC, the hello timed out, and that read as the phone's silence.
+     * Reproduced on the Pixel (2026-10-05): after an app restart the phone saw
+     * no write at all from the agent, while a fresh process got straight in.
+     */
+    if (handshaking) return run();
     const result = queue.then(run, run);
     queue = result.catch(() => {});
     return result;
@@ -969,7 +978,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     lastError = new Error(`the phone dropped the Bluetooth link${reason ? ` (${reason})` : ''}`);
     const was = link;
     link = null;
-    if (was) Promise.resolve(was.close()).catch(() => {});
+    if (was) closing = Promise.resolve(was.close()).catch(() => {});
   }
 
   async function openLink() {
@@ -993,6 +1002,8 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
    */
   let starting = null;
   let started = false;
+  let closing = null; /* a dropped link still closing - a reconnect waits for it */
+  let handshaking = false; /* connect() is sending its own hello: those writes skip the queue (sendRaw) */
   function startLink() {
     if (link) return Promise.resolve({ started: true, address: link.describe, encrypted: !!session });
     if (!starting) starting = connect().finally(() => { starting = null; });
@@ -1000,6 +1011,14 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   }
 
   async function connect() {
+    /*
+     * The old link CLOSED first. Found on the A13 (2026-10-05): a reconnect
+     * opened the new Windows Bluetooth session while the dropped one was still
+     * shutting down; the old one's teardown took the new one's writes with it -
+     * the phone never saw the hello, and answered nothing. A fresh process (one
+     * session) worked every time, which is what gave it away.
+     */
+    if (closing) { await closing; closing = null; }
     {
       if (link) return { started: true, address: link.describe };
       assembler = createAssembler();
@@ -1010,6 +1029,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       lastError = null;
       session = null;
       /* Part T: a paired user opens an encrypted session first - fresh keys every connection */
+      handshaking = true;
       try {
       if (pairing) {
         /*
@@ -1043,8 +1063,8 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       } catch (e) {
         /*
          * No session: CLOSE the link we just opened. Found on the A13 (2026-10-05):
-         * a reconnect whose hello met silence (the key was still locked) left the
-         * link open - Windows kept the connection, the phone showed "connected" and
+         * a reconnect whose hello got no answer (it was stuck in the write queue -
+         * see sendRaw) left the link open - Windows kept the connection, the phone showed "connected" and
          * stopped advertising, and the next write went out unencrypted, dropped.
          * A short command never saw it (its process ended); a service did.
          */
@@ -1053,6 +1073,8 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         session = null;
         if (was) await Promise.resolve(was.close()).catch(() => {});
         throw e;
+      } finally {
+        handshaking = false;
       }
       return { started: true, address: link.describe, encrypted: !!session };
     }
@@ -1101,7 +1123,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         return Promise.reject(bleError('EFIRMWARE',
           'Firmware update is refused over Bluetooth. Update a key over USB.'));
       }
-      const run = async () => {
+      const run = async (mayRetry = true) => {
         if (refused) {
           const err = refused;
           refused = null;
@@ -1135,10 +1157,12 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         if (!wrote) trace(`first write: ${pieces.length} fragment(s) of <= ${size} bytes at mtu ${link.mtu}`);
         wrote = true;
         writing = true;
+        let sent = 0;
         try {
           for (const piece of pieces) {
             if (!link) throw bleError('ENOTOPEN', lastError ? lastError.message : 'the phone is not connected');
             await link.write(piece);
+            sent += 1;
           }
         } catch (err) {
           writing = false;
@@ -1156,8 +1180,19 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
             const was = link;
             link = null;
             lastError = failed;
-            Promise.resolve(was.close()).catch(() => {});
+            closing = Promise.resolve(was.close()).catch(() => {});
             say(`a write failed (${failed.message}) - link dropped; the next request reconnects`);
+          }
+          /*
+           * ONCE MORE, ONLY IF NOTHING OF IT ARRIVED: the FIRST fragment was
+           * refused, so the phone holds no part of this request - after a phone
+           * app restart the old link always refuses that way (status 3, the A13
+           * and the Pixel, 2026-10-05), and the person saw "nothing on screen"
+           * every first time. A request that failed partway is never sent again.
+           */
+          if (sent === 0 && mayRetry && started && reconnect && failed.code === 'EWRITE') {
+            say('nothing of that request reached the phone - reconnecting and sending it once more');
+            return run(false);
           }
           throw failed;
         }
