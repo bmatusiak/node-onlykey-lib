@@ -85,6 +85,20 @@ const RESPONSE_UUID = '0c0ffab2-9f1e-4b1d-9c6a-0f0e1d2c3b4a';
 const FIDO_UUID = '0000fffd-0000-1000-8000-00805f9b34fb';
 
 const CMD_REPORT = 0x83;
+/*
+ * PART T (onlykey-edge features/BLUETOOTH-PAIRING-SPEC.md): once this computer USER
+ * is paired with the phone, every report travels sealed (0x84) after a handshake
+ * (0x85, also used to pair). Bluetooth's own encryption is per DEVICE - any user or
+ * app on a bonded computer can use it - so the phone answers only a paired user.
+ * Each sealed message starts with a kind byte: a key report, or a control message
+ * (the weekly renewal) that never reaches the key.
+ */
+const CMD_SEALED = 0x84;
+const CMD_PAIR = 0x85;
+const KIND_REPORT = 0x01;
+const KIND_CONTROL = 0x02;
+const SILENT_MESSAGE = 'no answer from ok-rn - is this computer user paired, and switched on, in ok-rn\'s Bluetooth tab? '
+  + '(pair with: onlykey-js --ble pair)';
 
 /**
  * The PHONE's refusal, never a key's reply.
@@ -142,10 +156,10 @@ const looksLikeAddress = (s) => /^[0-9a-f]{12}$/i.test(addrKey(s));
  * Split one report into CTAP-over-BLE fragments of at most `size` bytes.
  * python's _fragment(), byte for byte.
  */
-function fragment(payload, size = SMALL_FRAGMENT) {
+function fragment(payload, size = SMALL_FRAGMENT, cmd = CMD_REPORT) {
   const p = Uint8Array.from(payload);
   const first = new Uint8Array(Math.min(size, p.length + 3));
-  first.set([CMD_REPORT, (p.length >> 8) & 0xff, p.length & 0xff]);
+  first.set([cmd, (p.length >> 8) & 0xff, p.length & 0xff]);
   first.set(p.subarray(0, size - 3), 3);
   const out = [first];
   for (let off = size - 3, seq = 0; off < p.length; off += size - 1, seq += 1) {
@@ -822,7 +836,12 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
  *   ONLYKEY_JS_DEBUG is set
  * @returns the pipe contract (start/stop/isRunning/write/on) plus `link`
  */
-function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log } = {}) {
+function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, onPairingRenewed = null, now = () => Date.now() } = {}) {
+  const btpair = require('../src/btpair');
+  /* Part T: the session (null = plaintext, until this user is paired with this phone) and waiters for 0x85 answers */
+  let session = null;
+  let pairWaiters = [];
+  let renewing = null;
   const listeners = new Set();
   const limits = { ...TIMEOUTS, ...timeouts };
   const trace = log || (process.env.ONLYKEY_JS_DEBUG
@@ -855,6 +874,27 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   function onData(data) {
     const message = assembler.push(data);
     if (!message) return;
+    if (message.command === CMD_PAIR) {
+      const w = pairWaiters.shift();
+      if (w) w(Uint8Array.from(message));
+      return;
+    }
+    if (message.command === CMD_SEALED) {
+      if (!session) return; /* nothing sealed is expected before a handshake */
+      let plain;
+      try { plain = btpair.open(session, Uint8Array.from(message)); } catch (e) {
+        trace(`dropped a sealed frame: ${e.code || e.message}`);
+        return;
+      }
+      if (plain[0] === KIND_CONTROL) { onControl(plain.slice(1)); return; }
+      if (plain[0] !== KIND_REPORT) return;
+      const sealedEvent = { iface: IFACE.VENDOR, dir: DIR.OUT, bytes: plain.slice(1) };
+      if (writing) held.push(sealedEvent);
+      else emit(sealedEvent);
+      return;
+    }
+    /* once sealed, a plaintext report from "the phone" is not the phone's: dropped */
+    if (session && message.command === CMD_REPORT) { trace('dropped a plaintext report inside a sealed session'); return; }
     if (message.command === CMD_ERROR) {
       /*
        * Not a report: nothing is emitted, so no caller mistakes it for the
@@ -870,6 +910,47 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     const event = { iface: IFACE.VENDOR, dir: DIR.OUT, bytes: message };
     if (writing) held.push(event);
     else emit(event);
+  }
+
+  /* the phone's renewal offer (day 6 of 7), inside the session: accept, save the new secret, answer sealed */
+  function onControl(payload) {
+    if (payload[0] !== btpair.T.RENEW_OFFER || !pairing || renewing) return;
+    renewing = (async () => {
+      const acc = btpair.cliRenewAccept(pairing, payload, now());
+      /* saved BEFORE answering: a crash after the answer must not leave only the old (now alarm-raising) secret */
+      if (onPairingRenewed) await onPairingRenewed(acc.record);
+      pairing = acc.record;
+      await sendRaw(CMD_SEALED, btpair.seal(session, concat2(Uint8Array.of(KIND_CONTROL), acc.payload)));
+      trace(`pairing renewed to epoch ${acc.record.epoch}`);
+    })().catch((e) => trace(`renewal failed: ${e.message}`)).finally(() => { renewing = null; });
+  }
+
+  function concat2(a, b) { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; }
+
+  /* one message on the link (any command), fragmented to the MTU; serialised with every other write */
+  function sendRaw(cmd, payload) {
+    const run = async () => {
+      if (!link) throw bleError('ENOTOPEN', lastError ? lastError.message : 'the phone is not connected');
+      const size = link.mtu - 3 >= WHOLE_REPORT ? Math.min(link.mtu - 3, 512) : SMALL_FRAGMENT;
+      for (const piece of fragment(payload, size, cmd)) {
+        if (!link) throw bleError('ENOTOPEN', lastError ? lastError.message : 'the phone is not connected');
+        await link.write(piece);
+      }
+    };
+    const result = queue.then(run, run);
+    queue = result.catch(() => {});
+    return result;
+  }
+
+  /* a 0x85 request and its answer; null after timeoutMs - the phone's silence */
+  function pairExchange(bytes, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const waiter = (m) => { if (!done) { done = true; clearTimeout(t); resolve(m); } };
+      const t = setTimeout(() => { if (!done) { done = true; pairWaiters = pairWaiters.filter((w) => w !== waiter); resolve(null); } }, timeoutMs);
+      pairWaiters.push(waiter);
+      sendRaw(CMD_PAIR, bytes).catch((e) => { if (!done) { done = true; clearTimeout(t); reject(e); } });
+    });
   }
 
   function onDisconnect(reason) {
@@ -900,8 +981,23 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       wrote = false;
       link = await openLink();
       lastError = null;
-      return { started: true, address: link.describe };
+      session = null;
+      /* Part T: a paired user opens an encrypted session first - fresh keys every connection */
+      if (pairing) {
+        const h = btpair.cliHello(pairing);
+        const answer = await pairExchange(h.msg, limits.helloMs || 8000);
+        if (!answer) throw bleError('ESILENT', SILENT_MESSAGE);
+        session = btpair.cliOnHelloOk(h.state, answer);
+        trace('encrypted session open (Part T)');
+      }
+      return { started: true, address: link.describe, encrypted: !!session };
     },
+
+    /** Part T pairing: one 0x85 message out, its answer back (null = silence). */
+    pairExchange,
+
+    /** Whether reports travel sealed on this link. */
+    get encrypted() { return !!session; },
 
     async stop() {
       const was = link;
@@ -936,8 +1032,11 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
             lastError ? lastError.message : 'the phone is not connected');
         }
         /* One write when the MTU carries the whole report (the phone's 517 does); else the 20-byte floor. */
-        const size = link.mtu - 3 >= WHOLE_REPORT ? WHOLE_REPORT : SMALL_FRAGMENT;
-        const pieces = fragment(frame, size);
+        const size = link.mtu - 3 >= WHOLE_REPORT ? Math.min(link.mtu - 3, 512) : SMALL_FRAGMENT;
+        /* Part T: sealed when paired - the echo below stays the plaintext report, as every pipe promises */
+        const pieces = session
+          ? fragment(btpair.seal(session, concat2(Uint8Array.of(KIND_REPORT), frame)), size, CMD_SEALED)
+          : fragment(frame, size);
         if (!wrote) trace(`first write: ${pieces.length} fragment(s) of <= ${size} bytes at mtu ${link.mtu}`);
         wrote = true;
         writing = true;
@@ -979,6 +1078,6 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
 
 module.exports = {
   createBlePipe, fragment, createAssembler, loadNoble, loadDbus, pickBluezDevice, findVendor, refusal,
-  CMD_ERROR,
+  CMD_ERROR, CMD_REPORT, CMD_SEALED, CMD_PAIR, KIND_REPORT, KIND_CONTROL,
   SERVICE_UUID, REQUEST_UUID, RESPONSE_UUID, FIDO_UUID, TIMEOUTS,
 };

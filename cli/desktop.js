@@ -45,16 +45,26 @@
  */
 'use strict';
 
-function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, loadDbus, config = {} } = {}) {
+function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, loadDbus, config = {}, pairingHome } = {}) {
   const Rectify = require('@bmatusiak/rectify');
   /*
    * The pipe is built lazily per bus: a --ble run must not touch hidapi (it
    * would enumerate, and on a machine with a hard key plugged in that is the
    * wrong key's business), and a USB run must not load a Bluetooth stack.
+   *
+   * Part T: over Bluetooth, when THIS user is paired with that phone, the pipe
+   * opens an encrypted session first (cli/btpair-store.js); a renewal on day 6
+   * of 7 is saved back to the same owner-only file.
    */
-  const makePipe = () => (ble
-    ? require('./transport-ble').createBlePipe({ address, loadNoble, loadDbus })
-    : require('./transport-hid').createHidPipe({ path, loadHid }));
+  const makeBlePipe = () => {
+    const store = require('./btpair-store');
+    return require('./transport-ble').createBlePipe({
+      address, loadNoble, loadDbus,
+      pairing: store.pairingFor(address, pairingHome),
+      onPairingRenewed: (record) => store.savePairing(address, record, pairingHome),
+    });
+  };
+  const makePipe = () => (ble ? makeBlePipe() : require('./transport-hid').createHidPipe({ path, loadHid }));
   const plugins = [
     require('../plugins/host'),
     ble ? require('../plugins/transport/ble') : require('../plugins/transport/usb'),

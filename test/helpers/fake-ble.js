@@ -31,16 +31,17 @@ const dashed = (u) => `${u.slice(0, 8)}-${u.slice(8, 12)}-${u.slice(12, 16)}-${u
  * @param {object} firmware  a pipe (fake-firmware) standing for the phone's key
  * @param {(frag: Buffer) => void} notify  deliver one notification to the host
  */
-function fakePhone({ firmware, phoneFragment = 67 }) {
+function fakePhone({ firmware, phoneFragment = 67, onMessage = null }) {
   let buf = null;
   let want = 0;
+  let cmd = 0x83;
   const received = [];      // every whole report the host sent
   const fragments = [];     // every raw fragment written
   let notify = () => {};
   let off = null;
 
-  function frame(report) {
-    const out = [Buffer.concat([Buffer.from([0x83, report.length >> 8, report.length & 0xff]),
+  function frame(report, command = 0x83) {
+    const out = [Buffer.concat([Buffer.from([command, report.length >> 8, report.length & 0xff]),
       Buffer.from(report.subarray(0, phoneFragment - 3))])];
     for (let o = phoneFragment - 3, seq = 0; o < report.length; o += phoneFragment - 1, seq += 1) {
       out.push(Buffer.concat([Buffer.from([seq]), Buffer.from(report.subarray(o, o + phoneFragment - 1))]));
@@ -70,6 +71,7 @@ function fakePhone({ firmware, phoneFragment = 67 }) {
       const d = Buffer.from(frag);
       fragments.push(d);
       if (d[0] & 0x80) {
+        cmd = d[0];
         want = (d[1] << 8) | d[2];
         buf = d.subarray(3);
       } else {
@@ -79,9 +81,21 @@ function fakePhone({ firmware, phoneFragment = 67 }) {
         const report = Uint8Array.from(buf.subarray(0, want));
         received.push(report);
         buf = null;
+        /*
+         * Part T: a test standing in for ok-rn's gate sees every whole message with its
+         * command byte and answers with [{cmd, bytes}] (or nothing: silence).
+         */
+        if (onMessage) {
+          const toKey = (bytes) => firmware && firmware.write(IFACE.VENDOR, bytes);
+          const replies = onMessage(cmd, report, toKey) || [];
+          for (const r of replies) for (const f of frame(Uint8Array.from(r.bytes), r.cmd)) notify(f);
+          return;
+        }
         if (firmware) firmware.write(IFACE.VENDOR, report);
       }
     },
+    /** Part T: send one whole message to the host with this command byte (a test's gate answering). */
+    send(command, bytes) { for (const f of frame(Uint8Array.from(bytes), command)) notify(f); },
     /** Notify raw bytes the host did not ask for (a test's own fragments). */
     raw(frag) { notify(Buffer.from(frag)); },
   };
@@ -104,9 +118,10 @@ function fakeNoble({
   phoneFragment = 67, notifyBeforeWriteResolves = false, connectHangs = false,
   /* WinRT right after another command's link: the first discovery fails, the next works */
   discoverFailsOnce = false,
+  onMessage = null,
 } = {}) {
   const noble = new EventEmitter();
-  const phone = fakePhone({ firmware, phoneFragment });
+  const phone = fakePhone({ firmware, phoneFragment, onMessage });
   const list = adverts || [{ id: '24293486eaaf', address: '24:29:34:86:ea:af', localName: 'Pixel 6a', serviceUuids: ['fffd'] }];
   const log = [];
   noble.state = state;

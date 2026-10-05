@@ -51,7 +51,7 @@ const PAIR_WINDOW = 2 * 60 * 1000; /* "Pair a computer" is open about 2 minutes 
 const NAME_MAX = 64;
 
 const T = Object.freeze({
-  COMMIT: 0x01, KEYS: 0x02, REVEAL: 0x03, DONE: 0x04, CONFIRM: 0x05,
+  COMMIT: 0x01, KEYS: 0x02, REVEAL: 0x03, DONE: 0x04, CONFIRM: 0x05, PAIRED: 0x06,
   HELLO: 0x10, HELLO_OK: 0x11,
   RENEW_OFFER: 0x20, RENEW_ACCEPT: 0x21,
 });
@@ -77,6 +77,8 @@ function same(a, b) {
   return d === 0;
 }
 const toHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+/* a Bluetooth address as one form: "aa:bb:cc:dd:ee:ff" / "AABBCCDDEEFF" -> "AABBCCDDEEFF"; null if none */
+const normMac = (a) => { const s = String(a || '').toUpperCase().replace(/[^0-9A-F]/g, ''); return s.length === 12 ? s : null; };
 const fromHex = (h) => Uint8Array.from(h.match(/../g) || [], (x) => parseInt(x, 16));
 
 function fail(code, message) {
@@ -176,12 +178,18 @@ function pairingSecret(st, ctPhone, ssPhone) {
  * -> PAIR_DONE {ct to the CLI, MAC} and a PENDING record, stored only once the
  * CLI's PAIR_CONFIRM proves it derived the same secret.
  */
-function phonePairApprove(state, now) {
+function phonePairApprove(state, now, { peerAddress } = {}) {
   const { cipherText, sharedSecret } = xwing.encapsulate(state.cliPub);
   const st = { ...state, phonePub: state.identity.publicKey, phoneNonce: state.nonce };
   const ps = pairingSecret({ ...st, cliNonce: state.cliNonce }, cipherText, sharedSecret);
+  /*
+   * BOUND TO THE COMPUTER'S NAME AND ITS BLUETOOTH MAC (Brad, 2026-10-04: "pairing
+   * uses both NAME and MAC - if one changes = revoke"). The keys alone could be
+   * copied to another machine or kept across a rename; a pairing used from another
+   * name or another Bluetooth address is revoked (phoneOnHello).
+   */
   const record = {
-    id: toHex(idOf(state.cliPub)), name: state.name, cliPub: toHex(state.cliPub), ps: toHex(ps),
+    id: toHex(idOf(state.cliPub)), name: state.name, mac: normMac(peerAddress), cliPub: toHex(state.cliPub), ps: toHex(ps),
     epoch: 0, renewedAt: now, on: true, lastUsed: null, oldPs: [], code: state.code,
   };
   return { pending: record, msg: concat(header(T.DONE), cipherText, mac(ps, 'okt/pair/phone-confirm')) };
@@ -205,19 +213,32 @@ function phonePairOnConfirm(pending, msg) {
   return !!m && same(m.slice(2), mac(fromHex(pending.ps), 'okt/pair/cli-confirm'));
 }
 
+/*
+ * Phone step 5, after storing the record: PAIRED {MAC}. The CLI stores ITS side
+ * only on this, so the two never disagree about whether a pairing exists.
+ */
+function phonePairAck(record) {
+  return concat(header(T.PAIRED), mac(fromHex(record.ps), 'okt/pair/stored'));
+}
+function cliPairOnAck(record, msg) {
+  const m = parse(msg, T.PAIRED, 2 + N);
+  return !!m && same(m.slice(2), mac(fromHex(record.ps), 'okt/pair/stored'));
+}
+
 /* ------------------------------------------------------------ connections */
 
 function sessionKeys(ps, ss, transcript) {
   const k = hkdf(sha256, concat(ps, ss), transcript, ascii('okt/session/v1'), 2 * N);
   return { c2p: k.slice(0, N), p2c: k.slice(N) };
 }
-const helloBody = (id, epoch, ephPub) => concat(id, u32(epoch), ephPub);
+const helloBody = (id, epoch, nameBytes, ephPub) => concat(id, u32(epoch), Uint8Array.of(nameBytes.length), nameBytes, ephPub);
 
-/** CLI: HELLO {pairing id, epoch, ephemeral pub, MAC(PS)}; keep `state` for HELLO_OK. */
-function cliHello(record) {
+/** CLI: HELLO {pairing id, epoch, computer name, ephemeral pub, MAC(PS)}; keep `state` for HELLO_OK. */
+function cliHello(record, { name } = {}) {
   const eph = xwing.keygen();
   const ps = fromHex(record.ps);
-  const body = helloBody(fromHex(record.id), record.epoch, eph.publicKey);
+  const nameBytes = ascii(String(name ?? record.name ?? '').slice(0, NAME_MAX));
+  const body = helloBody(fromHex(record.id), record.epoch, nameBytes, eph.publicKey);
   return { state: { record, eph, body }, msg: concat(header(T.HELLO), body, mac(ps, 'okt/hello/v1', body)) };
 }
 
@@ -227,16 +248,27 @@ function cliHello(record) {
  *   {alarm: id}                           the MAC verifies under an OLD secret of
  *                                         that pairing: someone copied it - the
  *                                         caller raises the alarm and DROPS it
+ *   {revoke: id, reason: 'name'|'mac'}    the right secret, but from another computer
+ *                                         name or another Bluetooth address: the
+ *                                         caller DELETES the pairing (Brad: "if one
+ *                                         changes = revoke")
  *   {session, msg: HELLO_OK, record}      a live session (record: lastUsed set)
+ *
+ * `peerAddress`: the Bluetooth address the HELLO arrived from (the phone knows it).
+ * Only a hello whose MAC verifies can revoke - a forger without the secret gets
+ * silence and can't make anyone else's pairing disappear.
  */
-function phoneOnHello(records, msg, now) {
-  const m = parse(msg, T.HELLO, 2 + ID + 4 + PUB + N);
-  if (!m) return { silence: true };
-  const body = m.slice(2, 2 + ID + 4 + PUB);
-  const tag = m.slice(2 + ID + 4 + PUB);
+function phoneOnHello(records, msg, now, { peerAddress } = {}) {
+  const fixed = 2 + ID + 4 + 1 + PUB + N;
+  const m = parse(msg, T.HELLO);
+  if (!m || m.length < fixed || m.length !== fixed + m[2 + ID + 4]) return { silence: true };
+  const nameLen = m[2 + ID + 4];
+  const body = m.slice(2, 2 + ID + 4 + 1 + nameLen + PUB);
+  const tag = m.slice(2 + ID + 4 + 1 + nameLen + PUB);
   const id = toHex(body.slice(0, ID));
   const epoch = rd32(body, ID);
-  const ephPub = body.slice(ID + 4);
+  const name = td.decode(body.slice(ID + 5, ID + 5 + nameLen));
+  const ephPub = body.slice(ID + 5 + nameLen);
   const rec = (records || []).find((r) => r.id === id);
   if (!rec) return { silence: true };
   /* a copied pairing: an old secret still in use after the renewal replaced it */
@@ -244,6 +276,13 @@ function phoneOnHello(records, msg, now) {
     if (same(tag, mac(fromHex(old.ps), 'okt/hello/v1', body))) return { alarm: id };
   }
   if (!same(tag, mac(fromHex(rec.ps), 'okt/hello/v1', body)) || epoch !== rec.epoch) return { silence: true };
+  /* the pairing is bound to the computer's name and its Bluetooth address: either changed -> revoked */
+  if (name !== rec.name) return { revoke: id, reason: 'name' };
+  if (rec.mac) {
+    const from = normMac(peerAddress);
+    if (!from) return { silence: true }; /* the caller did not say where it came from: can't check, so no */
+    if (from !== rec.mac) return { revoke: id, reason: 'mac' };
+  }
   if (!rec.on) return { silence: true };
   if (now - rec.renewedAt > EXPIRES_AFTER) return { silence: true, expired: id };
   const { cipherText, sharedSecret } = xwing.encapsulate(ephPub);
@@ -329,7 +368,7 @@ function phoneRenewFinish(record, state, payload, now) {
 module.exports = {
   VERSION, T, PAIR_WINDOW, RENEW_AFTER, EXPIRES_AFTER,
   generateIdentity, idOf, codeOf,
-  cliPairStart, phonePairOnCommit, cliPairOnKeys, phonePairOnReveal, phonePairApprove, cliPairOnDone, phonePairOnConfirm,
+  cliPairStart, phonePairOnCommit, cliPairOnKeys, phonePairOnReveal, phonePairApprove, cliPairOnDone, phonePairOnConfirm, phonePairAck, cliPairOnAck,
   cliHello, phoneOnHello, cliOnHelloOk,
   seal, open,
   renewDue, phoneRenewOffer, cliRenewAccept, phoneRenewFinish,

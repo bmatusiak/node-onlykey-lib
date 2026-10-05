@@ -1680,6 +1680,63 @@ COMMANDS.edge = {
  * use. See cli/edge-agent.js for the rules (one-shot endpoints per exec, the
  * shared endpoint never pays, session-bind pins).
  */
+/*
+ * PART T (onlykey-edge features/BLUETOOTH-PAIRING-SPEC.md): pair THIS computer
+ * user with ok-rn over Bluetooth. Brad opens "Pair a computer" in ok-rn's
+ * Bluetooth tab (a ~2-minute window); both sides show the same 6-digit code; he
+ * checks it and approves on the phone. Commit-then-reveal: this side commits to
+ * its key before it sees the phone's (src/btpair). The pairing is kept in this
+ * user's owner-only ~/.onlykey-js/bt-pairing.json - another account on this
+ * computer has none and gets silence until it pairs on its own.
+ */
+COMMANDS.pair = {
+  mirrors: '(new)',
+  usage: '[--name <computer>]   (with --ble [--address <phone>])',
+  summary: 'Part T: pair this computer with ok-rn over Bluetooth (keys in this user\'s home) - the phone shows the same 6-digit code',
+  device: false,
+  options: { name: { type: 'string' } },
+  async run(io, opts) {
+    if (!opts.ble) throw usage('pair works over Bluetooth only: onlykey-js --ble [--address <phone>] pair');
+    const store = require('./btpair-store');
+    const pipe = require('./transport-ble').createBlePipe({ address: opts.address }); /* no pairing yet: the pairing messages themselves */
+    await pipe.start();
+    try {
+      const name = opts.name || store.computerName();
+      io.out(`pairing ${name}: on the phone open ok-rn > Bluetooth > Pair a computer (it stays open about 2 minutes)`);
+      let result;
+      try {
+        result = await store.pairOverPipe(pipe, { address: opts.address, name, out: (l) => io.out(l) });
+      } catch (e) {
+        throw new CliError(e.message);
+      }
+      io.out(`paired: ${name} with the phone (pairing ${result.record.id.slice(0, 8)}...); from now on this user's Bluetooth commands are encrypted`);
+    } finally {
+      await pipe.stop();
+    }
+  },
+};
+
+COMMANDS.pairing = {
+  mirrors: '(new)',
+  usage: '[--forget]   (with --ble --address <phone> to forget that one)',
+  summary: 'Part T: this computer user\'s Bluetooth pairings (owner-only ~/.onlykey-js/bt-pairing.json)',
+  device: false,
+  options: { forget: { type: 'boolean' } },
+  async run(io, opts) {
+    const store = require('./btpair-store');
+    if (opts.forget) {
+      store.removePairing(opts.address);
+      io.out(`forgot the pairing for ${opts.address || 'the default phone'} (revoke it on the phone too)`);
+      return;
+    }
+    const all = store.list();
+    if (!all.length) { io.out(`no pairings for this user on ${store.computerName()} (onlykey-js --ble pair)`); return; }
+    for (const r of all) {
+      io.out(`${r.name || store.computerName()}  phone ${r.address || '(default)'}  pairing ${String(r.id).slice(0, 8)}...  epoch ${r.epoch}  renewed ${new Date(r.renewedAt).toISOString().slice(0, 10)}`);
+    }
+  },
+};
+
 COMMANDS['edge-agent'] = {
   mirrors: '(new)',
   usage: '[--ssh ssh://user@host --gpg "Name <email>" --committer-name N --committer-email E --expires 1y|<n>d|never]',
