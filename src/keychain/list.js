@@ -111,16 +111,28 @@ function parse(text) {
 }
 
 /**
- * Add `incoming` to `existing`: an entry with an id already present is kept as
- * it was (the same key from the same place), everything else is added.
- * @returns {{entries: object[], added: number, kept: number}}
+ * Add `incoming` to `existing`. An entry with an id already present gets the
+ * fields only the incoming copy has (`joined`) - nothing either side knew is
+ * dropped. Keeping the existing copy as it was lost the computer's PGP
+ * certificate on every okedge sync, and the next agent start put it back, so
+ * every sync "moved" it again and asked for a press (the A13, 2026-10-05).
+ * A twin (the same derived key under a hash and a name) becomes one entry.
+ * @returns {{entries: object[], added: number, paired: number, joined: number, kept: number}}
  */
 function merge(existing, incoming) {
   const byId = new Map(existing.map((e) => [e.id, e]));
   let added = 0;
   let paired = 0;
+  let joined = 0;
   for (const e of incoming) {
-    if (byId.has(e.id)) continue;
+    if (byId.has(e.id)) {
+      const cur = byId.get(e.id);
+      const one = combine(cur, e);
+      if (sameEntry(one, cur)) continue;
+      byId.set(one.id, one);
+      joined += 1;
+      continue;
+    }
     const twin = findTwin([...byId.values()], e);
     if (twin) {
       const one = combine(twin, e);
@@ -132,7 +144,7 @@ function merge(existing, incoming) {
     byId.set(e.id, e);
     added += 1;
   }
-  return { entries: [...byId.values()], added, paired, kept: incoming.length - added - paired };
+  return { entries: [...byId.values()], added, paired, joined, kept: incoming.length - added - paired - joined };
 }
 
 /*
@@ -142,6 +154,17 @@ function merge(existing, incoming) {
  * and the same public key = the same key: they become one entry under the name.
  */
 const bytesEqual = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/* the same entry, ignoring when it was last used (that moves by itself) */
+function canonical(v) {
+  if (Array.isArray(v)) return v.map(canonical);
+  if (v && typeof v === 'object') return Object.keys(v).sort().reduce((o, k) => { o[k] = canonical(v[k]); return o; }, {});
+  return v;
+}
+function sameEntry(a, b) {
+  const text = (e) => { const o = JSON.parse(serialize([e])).entries[0]; delete o.lastSeen; return JSON.stringify(canonical(o)); };
+  return text(a) === text(b);
+}
 
 /** The entry in `entries` holding the same derived key as `e` (type + public key), or null. */
 function findTwin(entries, e) {
@@ -160,7 +183,9 @@ function combine(a, b) {
   const times = (k, pick) => [a[k], b[k]].filter(Boolean).sort()[pick === 'min' ? 0 : 1] || a[k] || b[k];
   if (a.firstSeen || b.firstSeen) one.firstSeen = times('firstSeen', 'min');
   if (a.lastSeen || b.lastSeen) one.lastSeen = [a.lastSeen, b.lastSeen].filter(Boolean).sort().pop();
-  one.tools = [...new Set([...(a.tools || []), ...(b.tools || [])])];
+  const tools = [...new Set([...(a.tools || []), ...(b.tools || [])])];
+  /* no tools on either side: none here either - an empty list would read as a change */
+  if (tools.length) one.tools = tools; else delete one.tools;
   for (const k of ['pgp', 'pgpFingerprint', 'certCreated', 'certExpires', 'revocation', 'transport', 'rpIdHash', 'rpId', 'code']) {
     if (one[k] === undefined) one[k] = a[k] !== undefined ? a[k] : b[k];
   }

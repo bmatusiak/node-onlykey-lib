@@ -5,7 +5,7 @@ export const COMMIT_TYPE: "EDGE_SYNC_COMMIT";
 export const TAKE_TYPE: "EDGE_SYNC_TAKE";
 export const BATCH: 40;
 export const NO_SEQ: 4294967295;
-/** The entries as list.serialize writes them (public key hex), id order - one text for one list, on any side. */
+/** The entries as list.serialize writes them (public key hex), id order, keys sorted, no lastSeen - one text for one list, on any side. */
 export function keychainText(entries: any): string;
 /** SHA256 of the list in id order - the sync link's last field when a list moved. */
 export function keychainDigest(entries: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
@@ -60,7 +60,7 @@ export function buildTake({ signer, deviceId, sid, part }: {
  */
 export function keychainPlan(phoneEntries: any, placeEntries: any): {
     merged: object[];
-    in: any;
+    in: number;
     out: number;
 };
 /**

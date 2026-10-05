@@ -204,9 +204,34 @@ function syncSubject(fields) {
 
 const list = require('../keychain/list');
 
-/** The entries as list.serialize writes them (public key hex), id order - one text for one list, on any side. */
+/*
+ * CANONICAL: keys sorted at every level. The same entry built two ways (the
+ * phone joining twins, the computer parsing what it took back) had its keys in
+ * a different order - identical content, different text - so every sync counted
+ * the same entries as new to the computer and asked for a press again (the A13,
+ * 2026-10-05), and the two sides' digests of one list could differ.
+ */
+function canon(v) {
+  if (Array.isArray(v)) return v.map(canon);
+  if (v && typeof v === 'object') return Object.keys(v).sort().reduce((o, k) => { o[k] = canon(v[k]); return o; }, {});
+  return v;
+}
+
+/*
+ * What a list IS, for comparing and for the digest - not when each key was last
+ * used. lastSeen moves by itself: the agent derives its identities on every
+ * start, the soft key records it, and every sync after counted that as new and
+ * asked for a press (the A13, 2026-10-05: 2 entries, every time). It still
+ * travels with a sync that moves something real; it never makes one.
+ */
+const VOLATILE = ['lastSeen'];
+
+/** The entries as list.serialize writes them (public key hex), id order, keys sorted, no lastSeen - one text for one list, on any side. */
 function keychainText(entries) {
-  return list.serialize([...entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+  const sorted = [...entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const doc = JSON.parse(list.serialize(sorted));
+  doc.entries = doc.entries.map((e) => { const o = { ...e }; for (const k of VOLATILE) delete o[k]; return o; });
+  return JSON.stringify(canon(doc));
 }
 
 /** SHA256 of the list in id order - the sync link's last field when a list moved. */
@@ -216,7 +241,8 @@ function keychainDigest(entries) {
 
 /** Entries as plain JSON objects (public key hex), split into parts of about KEYCHAIN_PART_CHARS. */
 function keychainParts(entries) {
-  const plain = JSON.parse(keychainText(entries)).entries;
+  /* the full entries, lastSeen included - only the comparison leaves it out */
+  const plain = JSON.parse(list.serialize([...entries].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)))).entries;
   const parts = [];
   let cur = [];
   let size = 0;
@@ -264,7 +290,8 @@ function keychainPlan(phoneEntries, placeEntries) {
   const m = list.merge(phoneEntries, placeEntries);
   const mine = new Map(placeEntries.map((e) => [e.id, keychainText([e])]));
   const out = m.entries.filter((e) => mine.get(e.id) !== keychainText([e]));
-  return { merged: m.entries, in: m.added + m.paired, out: out.length };
+  /* in: new to the phone, joined with a twin, or given fields it lacked */
+  return { merged: m.entries, in: m.added + m.paired + m.joined, out: out.length };
 }
 
 /**

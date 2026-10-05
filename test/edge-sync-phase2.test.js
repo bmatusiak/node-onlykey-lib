@@ -181,3 +181,23 @@ test('only the Key Chain moved: the sync fields name no seq range (0xFFFFFFFF), 
   assert.equal(hex(f.keychain), hex(digest));
   assert.throws(() => sync.syncFields({ peer: VECTOR.peer, added: [], head: VECTOR.head }), /nothing moved/);
 });
+
+test('the same entries built in a different key order are the same list: same text, same digest, nothing to move', () => {
+  const a = derived('ssh://a@pc', pubOf(1));
+  const reordered = list.createEntry(Object.fromEntries(Object.entries(JSON.parse(list.serialize([a])).entries[0]).reverse()));
+  assert.equal(sync.keychainText([a]), sync.keychainText([reordered]));
+  assert.equal(hex(sync.keychainDigest([a])), hex(sync.keychainDigest([reordered])));
+  const plan = sync.keychainPlan([a], [reordered]);
+  assert.deepEqual([plan.in, plan.out], [0, 0], 'a re-ordered copy of the same entry was counted as moving');
+});
+
+test('lastSeen alone is not a change: two lists that differ only in when a key was last used need no sync - and it still travels when something real moves', async () => {
+  const a = derived('ssh://agent@nitro16', pubOf(1), { lastSeen: '2026-10-05T10:00:00.000Z' });
+  const later = derived('ssh://agent@nitro16', pubOf(1), { lastSeen: '2026-10-05T17:08:12.036Z' });
+  assert.equal(hex(sync.keychainDigest([a])), hex(sync.keychainDigest([later])));
+  assert.deepEqual([sync.keychainPlan([later], [a]).in, sync.keychainPlan([later], [a]).out], [0, 0], 'a lastSeen bump asked for a sync');
+  const s = signer();
+  const msgs = await sync.buildKeychain({ signer: s, deviceId: DEVICE, sid: '02'.repeat(8), entries: [later, derived('ssh://x@y', pubOf(2))] });
+  const back = sync.keychainEntriesOf(msgs.flatMap((m) => m.payload.entries));
+  assert.equal(back.find((e) => e.label === 'ssh://agent@nitro16').lastSeen, '2026-10-05T17:08:12.036Z', 'lastSeen did not travel');
+});
