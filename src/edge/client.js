@@ -313,6 +313,31 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     },
 
     /**
+     * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
+     * date from `records` (this place's verified copy, [{link, head, reveal}]).
+     * Asks what the phone holds first, then sends only what it lacks, in signed
+     * batches; the phone shows its sheet after the last one, and its answer
+     * comes back here. peerSigner: this place's own key (on the key's list).
+     * -> {sent, seq (the sync link, or null when nothing moved), count}
+     * rejects EEDGE_REFUSED (declined, timeout, a fork - with the phone's words) or EEDGE_NO_ANSWER.
+     */
+    async syncToPhone(peerSigner, { deviceId, records, name }) {
+      const syncLib = require('./sync');
+      const have = await channel.send(await syncLib.buildHave({ signer: peerSigner, deviceId, name }));
+      if (!have) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this place on the key\'s list (okedge peer add)?');
+      if (!have.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the sync - ${have.refusal}${have.detail ? ` (${have.detail})` : ''}`, { refusal: have.refusal });
+      const lacks = syncLib.missing(records, have.ranges || []);
+      if (!lacks.length) return { sent: 0, seq: null, count: 0 };
+      let answer = null;
+      for (const msg of await syncLib.buildLinks({ signer: peerSigner, deviceId, records: lacks })) {
+        answer = await channel.send(msg);
+        if (!answer) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to part ${msg.payload.part + 1} of ${msg.payload.parts}`);
+        if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the sync - ${answer.refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal: answer.refusal });
+      }
+      return { sent: lacks.length, seq: answer.seq ?? null, count: answer.count ?? lacks.length };
+    },
+
+    /**
      * Pick up a budget another process asked for (with the same store). The
      * key's HEAD must still list it; the head to ARM over is read from the key.
      */

@@ -103,6 +103,46 @@ export function approvePeerAdd(msg: object, { edge, seen, ask, onPress, timeoutM
     timeoutMs?: number | undefined;
 }): Promise<any>;
 /**
+ * okedge sync phase 2 (Brad, 2026-10-05): links a place that keeps copies
+ * offers for THIS phone's copy. The caller has already merged them and checked
+ * the merged copy verifies (R27 - it needs the copy store); this is the consent:
+ * the place must be on the KEY's peer list, then the sheet, Yes, a PHYSICAL
+ * press, and the key writes the `sync` link (subject sync.syncSubject). Only
+ * after that link may the caller keep the merged copy.
+ * -> {ok: true, seq, count} | {ok: false, refusal, detail?}
+ *
+ * @param {object} o
+ * @param {string} o.peer the place's key, X || Y hex
+ * @param {string} o.name the name it gave (shown, never trusted)
+ * @param {Array<{link: Uint8Array}>} o.added the links that would be added, in seq order
+ * @param {Uint8Array} o.head the phone copy's head after the merge (its newest link's head)
+ * @param {Uint8Array|null} [o.keychainHash] SHA256 of the merged Key Chain list, when one moved
+ * @param {object} o.edge the Edge device service for THIS app's key
+ * @param {(view: {peer: string, name: string, fingerprint: string, count: number, ranges: number[][]}) => Promise<'approve'|'decline'|'timeout'>} o.ask
+ * @param {() => void} [o.onPress]
+ * @param {number} [o.timeoutMs]
+ * @returns {Promise<any>}
+ */
+export function approveSync({ peer, name, added, head, keychainHash, edge, ask, onPress, timeoutMs }: {
+    peer: string;
+    name: string;
+    added: Array<{
+        link: Uint8Array;
+    }>;
+    head: Uint8Array;
+    keychainHash?: Uint8Array<ArrayBufferLike> | null | undefined;
+    edge: object;
+    ask: (view: {
+        peer: string;
+        name: string;
+        fingerprint: string;
+        count: number;
+        ranges: number[][];
+    }) => Promise<"approve" | "decline" | "timeout">;
+    onPress?: (() => void) | undefined;
+    timeoutMs?: number | undefined;
+}): Promise<any>;
+/**
  * R15c (2026-10-03): is this agent registered - is its AGENT_ADD link, made at
  * a press, in the app's VERIFIED copy of the chain? The app's own list of
  * agents is a convenience; only the link counts. An agent in storage without

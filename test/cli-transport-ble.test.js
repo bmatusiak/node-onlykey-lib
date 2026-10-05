@@ -266,14 +266,67 @@ test('win32: a discovery that fails once ("unreachable") reconnects and works; t
   await pipe.stop();
 });
 
-test('win32: the phone dropping the link stops the pipe, and the next write says why', async () => {
+test('win32: with reconnect off, the phone dropping the link stops the pipe, and the next write says why', async () => {
   const noble = fakeNoble({ firmware: fakeFirmware() });
-  const pipe = winPipe(noble);
+  const pipe = winPipe(noble, { reconnect: false });
   await pipe.start();
   noble.peripheral('24293486eaaf').emit('disconnect', 'timeout');
   assert.equal(pipe.isRunning(), false);
   await assert.rejects(() => pipe.write(IFACE.VENDOR, report(MSG.OKCONNECT)),
     (err) => err.code === 'ENOTOPEN' && /dropped the Bluetooth link \(timeout\)/.test(err.message));
+});
+
+/*
+ * BUG 1 (2026-10-05): one write the A13 refused ("status: 3") ended the
+ * edge-agent, and every request after it went nowhere while the phone showed
+ * nothing. A long-running service must survive a failed write: THAT request
+ * fails and says so, the link is dropped, the next request reconnects - and
+ * each step is reported.
+ */
+test('win32 stack: one write killed mid-session - that request fails, the link is reported down, the next request reconnects and is answered', async () => {
+  const noble = fakeNoble({ firmware: fakeFirmware({ labels: ['GitHub'] }) });
+  const said = [];
+  const pipe = winPipe(noble, { onLink: (line) => said.push(line) });
+  const app = await stackOver(pipe);
+  try {
+    assert.equal((await app.services.device.connect()).status, 'UNLOCKEDv3.0.4-prodc');
+    noble.failNextWrite = 'status: 3';
+    await assert.rejects(() => app.services.device.connect(),
+      (err) => /status: 3/.test(err.message), 'the killed write did not fail its own request');
+    assert.equal(pipe.isRunning(), false, 'a link that refused a write was kept');
+    assert.ok(said.some((l) => /a write failed .*status: 3.* link dropped/.test(l)), `not reported: ${said.join(' | ')}`);
+    /* the next request: reconnect, then answered - the process (this test) is still here */
+    assert.equal((await app.services.device.connect()).status, 'UNLOCKEDv3.0.4-prodc');
+    assert.ok(said.some((l) => /reconnecting/.test(l)) && said.some((l) => /^reconnected/.test(l)), `reconnect not reported: ${said.join(' | ')}`);
+    const { labels } = await app.services.device.readLabels({ timeoutMs: 3000 });
+    assert.equal(labels[0], 'GitHub');
+    /* the killed write was not sent again on its own: one refused write, then only the new requests */
+    assert.equal(noble.log.filter((e) => e[0] === 'connect').length, 2, 'one connect at start, one reconnect');
+  } finally {
+    await app.destroy();
+  }
+});
+
+test('win32: the phone dropping the link - the next write reconnects and goes through', async () => {
+  const noble = fakeNoble({ firmware: fakeFirmware() });
+  const said = [];
+  const pipe = winPipe(noble, { onLink: (line) => said.push(line) });
+  await pipe.start();
+  noble.peripheral('24293486eaaf').emit('disconnect', 'timeout');
+  assert.equal(pipe.isRunning(), false);
+  await pipe.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
+  assert.equal(pipe.isRunning(), true);
+  assert.ok(said.some((l) => /link is down \(the phone dropped the Bluetooth link \(timeout\)\) - reconnecting/.test(l)), said.join(' | '));
+  await pipe.stop();
+});
+
+test('win32: after stop() a write never reconnects - a deliberate stop stays stopped', async () => {
+  const noble = fakeNoble({ firmware: fakeFirmware() });
+  const pipe = winPipe(noble);
+  await pipe.start();
+  await pipe.stop();
+  await assert.rejects(() => pipe.write(IFACE.VENDOR, report(MSG.OKCONNECT)), (err) => err.code === 'ENOTOPEN');
+  assert.equal(noble.log.filter((e) => e[0] === 'connect').length, 1);
 });
 
 /* ------------------------------------------------------------ Linux: BlueZ over D-Bus */

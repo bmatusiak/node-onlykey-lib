@@ -50,6 +50,12 @@ const OP = Object.freeze({
   SIBLING_ADD: 17,
   SIBLING_REMOVE: 18,
   ANCHOR: 19,
+  /*
+   * Brad, 2026-10-05: every approved sync writes a `sync` link - subject = SHA256 of
+   * what moved (sync.syncSubject), the press flag, no ticket owed. Wire sub-op 0x39
+   * (CHOSEN, pending the spec).
+   */
+  SYNC: 20,
 });
 
 /* R3 `decision` (for op = ticket the byte is the ticket code instead). CHOSEN: 1-based. */
@@ -143,7 +149,9 @@ const STATUS = Object.freeze({
   0x13: { name: 'peers-full', text: 'The key already knows four places that keep copies - remove one first' },
   0x14: { name: 'peer-known', text: 'That place is already known to the key' },
   0x15: { name: 'bad-key', text: 'That is not a P-256 public key' },
-  0x16: { name: 'no-such-peer', text: 'The key has no place at that index' },
+  0x16: { name: 'no-such-peer', text: 'The key has no place at that index, or that place is not on its list' },
+  /* sync phase 2: SYNC's three parts arrived out of order (CHOSEN number) */
+  0x17: { name: 'sync-order', text: 'The sync record arrived out of order - nothing recorded; sync again' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

@@ -140,6 +140,12 @@ function lines(r, { status = false } = {}) {
   else if (v.kind === 'gap') out.push(`gap: ${v.gaps.map((g) => (g.from === g.to ? `#${g.from}` : `#${g.from}-#${g.to}`)).join(', ')} - links no copy here holds (repairs are the phone's)`);
   else out.push(`DOES NOT VERIFY at #${v.seq}: ${v.reason} - reported, nothing kept (repairs are the phone's)`);
   if (r.stoppedAt !== null && r.stoppedAt !== undefined) out.push(`stopped at #${r.stoppedAt}: a reply that does not weld onto the copy`);
+  /* phase 2: what the phone took (the sheet, Yes, a press, its sync link) */
+  const p = r.phone;
+  if (p && p.skipped) out.push(`phone: not offered - ${p.skipped}`);
+  else if (p && p.refused) out.push(`phone: ${p.refused}`);
+  else if (p && p.sent === 0) out.push('phone: lacks nothing this PC holds');
+  else if (p) out.push(`phone: took ${p.count} link(s) - the key recorded the sync as #${p.seq}`);
   return out;
 }
 

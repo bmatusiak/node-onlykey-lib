@@ -13,6 +13,7 @@
  */
 const { chain, codes, grants, tickets } = require('../../src/edge');
 const { H } = require('../../src/edge/hash');
+const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 const { IFACE } = require('../../src/protocol/msg');
 const setup = require('../../plugins/edge');
@@ -32,6 +33,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
   const held = [];
   const peers = []; /* R20: X || Y, in index order */
   let peerX = null; /* PEER_ADD part 0, until part 1 */
+  let syncParts = 0; /* SYNC's parts received, in order */
+  let syncFields = [];
   const live = [];
   const onHold = new Set();
   let owed = [];
@@ -180,6 +183,28 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false }
         if (peers.length >= 4) return emit(status(0x13));
         append({ op: codes.OP.PEER_ADD, decision: 1, flags: 1, slot: peers.length, grantId: 0, subject: grants.peerSubject(xy) });
         peers.push(xy);
+        emit(seqHead());
+      } else if (sub === 0x39) {
+        /*
+         * sync phase 2, three parts as okplugin_edge: {0, peerHash, first, last} (a peer
+         * on the list), {1, head}, {2, keychain}, then pressed; the KEY hashes the subject
+         */
+        if (restoring) { syncParts = 0; return emit(status(0x0e)); }
+        const part = arg[0];
+        if (part === 0) {
+          syncParts = 0;
+          if (!peers.some((p) => same(sha256(p), arg.slice(1, 33)))) return emit(status(0x16));
+          const u = (o) => (arg[o] | (arg[o + 1] << 8) | (arg[o + 2] << 16) | (arg[o + 3] << 24)) >>> 0;
+          if (u(33) > u(37)) return emit(status(0x12));
+          syncFields = [arg.slice(1, 41)];
+          syncParts = 1;
+          return emit(status(0x00));
+        }
+        if (part === 1 && syncParts === 1) { syncFields.push(arg.slice(1, 33)); syncParts = 2; return emit(status(0x00)); }
+        if (part !== 2 || syncParts !== 2) { syncParts = 0; return emit(status(0x17)); }
+        syncParts = 0;
+        const subject = H('OKEDGE-SYNC-v1', ...syncFields, arg.slice(1, 33));
+        append({ op: codes.OP.SYNC, decision: 1, flags: 1, grantId: 0, subject });
         emit(seqHead());
       } else if (sub === 0x31) {
         /* R20 PEER_REMOVE {index}, pressed */

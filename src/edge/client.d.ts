@@ -121,6 +121,24 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         index: any;
     }>;
     /**
+     * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
+     * date from `records` (this place's verified copy, [{link, head, reveal}]).
+     * Asks what the phone holds first, then sends only what it lacks, in signed
+     * batches; the phone shows its sheet after the last one, and its answer
+     * comes back here. peerSigner: this place's own key (on the key's list).
+     * -> {sent, seq (the sync link, or null when nothing moved), count}
+     * rejects EEDGE_REFUSED (declined, timeout, a fork - with the phone's words) or EEDGE_NO_ANSWER.
+     */
+    syncToPhone(peerSigner: any, { deviceId, records, name }: {
+        deviceId: any;
+        records: any;
+        name: any;
+    }): Promise<{
+        sent: any;
+        seq: any;
+        count: any;
+    }>;
+    /**
      * Pick up a budget another process asked for (with the same store). The
      * key's HEAD must still list it; the head to ARM over is read from the key.
      */

@@ -137,6 +137,13 @@ test('silence: a pairing the phone does not know (revoked / switched off) fails 
   const stale = { id: '00'.repeat(16), ps: '11'.repeat(32), epoch: 0, renewedAt: Date.now() };
   const p = pipeOver(g, { pairing: stale });
   await assert.rejects(() => p.start(), (e) => e.code === 'ESILENT' && /paired, and switched on/.test(e.message));
+  /*
+   * ...and the link it opened is CLOSED (the A13, 2026-10-05: a silent hello on a
+   * reconnect left it open - the phone showed "connected", stopped advertising,
+   * and every later write went out unencrypted and was dropped).
+   */
+  assert.equal(p.isRunning(), false, 'a pipe with no session reports itself running');
+  assert.ok(g.noble.log.some((e) => e[0] === 'disconnect'), 'the link a silent hello met was left open');
 });
 
 test('pairing outside the phone\'s window: no answer, nothing stored', async () => {

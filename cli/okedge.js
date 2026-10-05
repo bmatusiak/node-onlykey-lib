@@ -12,7 +12,9 @@
  *   okedge exec --head H --reason "…" -- <command…>           run one command; its signature is paid by the budget
  *   okedge ticket <seq> [--code OK] --msg "…"                 file the ticket; prints the next head
  *   okedge sync [--status]                                    the PC's own copy of the key's chain: read new links,
- *                                                             verify (R27), keep; --status reports only (no press)
+ *                                                             verify (R27), keep; then offer it to the phone, which
+ *                                                             asks Yes + a press when it lacks links (a sync link);
+ *                                                             --status reports only (no press)
  *   okedge peer add [--name "…"]                              add this PC's copy store to the key's places that keep
  *                                                             copies (R20): Yes + a press on the phone
  *   okedge peer list                                          those places, from the key (no press)
@@ -35,6 +37,7 @@ const { codes, live } = require('../src/edge');
 const OP_NAME = {
   1: 'sign', 2: 'decrypt', 3: 'fido register', 4: 'fido sign', 5: 'hmac', 6: 'budget opened', 7: 'budget ended',
   8: 'ticket', 9: 'peer added', 10: 'peer removed', 11: 'LOSS', 12: 'wipe', 13: 'hold', 14: 'resume', 15: 'agent registered',
+  16: 'continue', 17: 'sibling added', 18: 'sibling removed', 19: 'anchor', 20: 'sync',
 };
 /* reasons and ticket messages are the agent's own untrusted text: one plain line, never interpreted */
 const plain = (t) => String(t).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
@@ -103,8 +106,8 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const ttl = Number(opt(args, '--ttl'));
       const uses = { ssh: Number(opt(args, '--ssh') || 0), gpg: Number(opt(args, '--gpg') || 0), identity: opt(args, '--identity') || null };
       if (!reason || !Number.isInteger(ttl)) { err('okedge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES'); return 2; }
-      out('Waiting for the phone - read the request there, then press…');
-      const r = await ask('budget', { reason, uses, ttl }, { timeoutMs: 200000 });
+      /* said only once the agent has the request (bug 2): with no agent, the error comes at once instead */
+      const r = await ask('budget', { reason, uses, ttl }, { timeoutMs: 200000, onSent: () => out('Waiting for the phone - read the request there, then press…') });
       out(`budget ${r.budget}: ${r.uses} uses`);
       out(`head = ${r.head}`);
       return 0;
@@ -113,8 +116,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const ttl = Number(opt(args, '--ttl'));
       const caps = opt(args, '--caps') ? opt(args, '--caps').split(',').map(Number) : null;
       if (!Number.isInteger(ttl)) { err('okedge continue --ttl MINUTES [--caps n,n]'); return 2; }
-      out('Waiting for the phone - read the request there, then press…');
-      const r = await ask('continue', { ttl, caps }, { timeoutMs: 200000 });
+      const r = await ask('continue', { ttl, caps }, { timeoutMs: 200000, onSent: () => out('Waiting for the phone - read the request there, then press…') });
       out(`budget ${r.budget}: ${r.uses} uses (continues the last one)`);
       out(`head = ${r.head}`);
       return 0;
@@ -129,10 +131,11 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       return 0;
     }
     if (cmd === 'sync') {
-      /* phase 1 (mcp-service.md 4.2b): PC <-> this key only; --with worker comes with E5 */
-      if (args.includes('--with')) { err('okedge sync --with: other copies (the Worker, another device) come later - phase 1 is this PC and the key'); return 2; }
+      /* mcp-service.md 4.2b: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone (its sheet + press). --with worker comes with E5 */
+      if (args.includes('--with')) { err('okedge sync --with: other copies (the Worker, another device) come later - today it is this PC, the key and its phone'); return 2; }
       const status = args.includes('--status');
-      const r = await ask('sync', { status });
+      /* phase 2 may wait on the phone's sheet (2 min) and the press (25 s): longer than a plain read */
+      const r = await ask('sync', { status }, { timeoutMs: status ? 120000 : 240000 });
       for (const l of require('./edge-copy').lines(r, { status })) out(l);
       return r.verdict.kind === 'tampered' ? 1 : 0;
     }

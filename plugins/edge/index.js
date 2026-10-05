@@ -37,6 +37,8 @@ const SUB = Object.freeze({
   TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, LOSS: 0x34,
   AGENT_ADD: 0x15,
   PEER_ADD: 0x30, PEER_REMOVE: 0x31, PEER_LIST: 0x32,
+  /* sync phase 2 (Brad, 2026-10-05): the `sync` link; number CHOSEN, pending the spec */
+  SYNC: 0x39,
 });
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
@@ -188,11 +190,23 @@ function setup(imports, register) {
     return new Promise((resolve, reject) => {
       const got = [];
       let off = null;
-      const timer = setTimeout(() => {
-        off();
-        reject(Object.assign(new Error(`Edge: no answer to request ${sub} within ${timeoutMs} ms`), { code: 'ETIMEDOUT' }));
-      }, timeoutMs);
-      off = transport.on('report', (event) => {
+      /*
+       * The answer clock starts when the write has gone out, not before it: a
+       * write on a dropped Bluetooth link reconnects first (scan, connect, Part T
+       * hello - over 10 s on the A13, 2026-10-05), and a clock started earlier ran
+       * out while the request had not even left. The listener is on before the
+       * write all the same - a reply can come before the write is acknowledged.
+       */
+      let timer = null;
+      let listening = true;
+      const arm = () => {
+        if (!listening) return; /* answered already */
+        timer = setTimeout(() => {
+          off();
+          reject(Object.assign(new Error(`Edge: no answer to request ${sub} within ${timeoutMs} ms`), { code: 'ETIMEDOUT' }));
+        }, timeoutMs);
+      };
+      const unsubscribe = transport.on('report', (event) => {
         if (event.iface !== IFACE.VENDOR) return;
         const bytes = event.data instanceof Uint8Array ? event.data : Uint8Array.from(event.data);
         const status = codes.parseStatus(okmsg.text(bytes));
@@ -227,12 +241,23 @@ function setup(imports, register) {
           resolve(got);
         }
       });
-      try {
-        transport.write(IFACE.VENDOR, okmsg.build({ msg: OKEDGE, slot: sub, payload: args || [] }));
-      } catch (e) {
+      off = () => { listening = false; unsubscribe(); };
+      /*
+       * The write is a PROMISE on a pipe (Bluetooth, USB): a plain try/catch
+       * caught only a synchronous throw, so a write the phone refused rejected
+       * with nobody listening - an unhandled rejection, which ends a Node
+       * process. That is how one failed Bluetooth write took the whole
+       * edge-agent down (twice, 2026-10-05): the request fails, the agent lives.
+       */
+      const failed = (e) => {
         clearTimeout(timer);
         off();
         reject(e);
+      };
+      try {
+        Promise.resolve(transport.write(IFACE.VENDOR, okmsg.build({ msg: OKEDGE, slot: sub, payload: args || [] }))).then(arm, failed);
+      } catch (e) {
+        failed(e);
       }
     });
   }
@@ -540,6 +565,27 @@ function setup(imports, register) {
       const peers = [];
       slots.slice(0, h[0]).forEach((r, index) => peers.push({ index, publicKey: r.slice(0, 64) }));
       return { k: h[1], max: h[2], peers };
+    },
+
+    /**
+     * Sync phase 2: record an approved sync - the person's Yes on the sheet
+     * first, then a PHYSICAL press; the key links op = sync with `subject`
+     * (sync.syncSubject: SHA256 of what moved). Owes no ticket. Refused while
+     * restoring. -> {seq, head, tag}
+     */
+    async sync(fields, { onPress, timeoutMs = 30000 } = {}) {
+      /*
+       * fields: sync.syncFields(...). Three requests (104 bytes do not fit one):
+       * the key checks the peer hash is one of its peers, then computes the
+       * subject itself and waits for the press. Refused: 'no-such-peer',
+       * 'bad-range', 'sync-order', 'restoring'.
+       */
+      const { peerHash, first, last, head, keychain } = fields || {};
+      if (![peerHash, head, keychain].every((b) => b instanceof Uint8Array && b.length === 32)) throw new TypeError('Edge: sync fields are sync.syncFields(...)');
+      await call(SUB.SYNC, concat([Uint8Array.of(0), peerHash, u32(first), u32(last)]), { text: true });
+      await call(SUB.SYNC, concat([Uint8Array.of(1), head]), { text: true });
+      const [r] = await pressed(SUB.SYNC, concat([Uint8Array.of(2), keychain]), { timeoutMs }, onPress);
+      return seqHeadTag(r);
     },
 
     async loss({ from, to, onPress, timeoutMs = 30000 } = {}) {

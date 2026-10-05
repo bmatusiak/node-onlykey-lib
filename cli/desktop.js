@@ -73,6 +73,8 @@ function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, lo
       pairing: store.pairingFor(address, pairingHome),
       computerName: store.computerName(),
       onPairingRenewed: (record) => store.savePairing(address, record, pairingHome),
+      /* the link going down and coming back, said where a long-running edge-agent's log shows it */
+      onLink: (line) => process.stderr.write(`onlykey-js ble: ${line}\n`),
     });
   };
   const makePipe = () => (ble ? makeBlePipe() : require('./transport-hid').createHidPipe({ path, loadHid }));

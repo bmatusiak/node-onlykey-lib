@@ -31,6 +31,7 @@ export const OP: Readonly<{
     SIBLING_ADD: 17;
     SIBLING_REMOVE: 18;
     ANCHOR: 19;
+    SYNC: 20;
 }>;
 export const DECISION: Readonly<{
     APPROVE: 1;
@@ -166,6 +167,10 @@ export const STATUS: Readonly<{
         text: string;
     };
     22: {
+        name: string;
+        text: string;
+    };
+    23: {
         name: string;
         text: string;
     };

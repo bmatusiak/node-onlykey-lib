@@ -166,6 +166,12 @@ function fakeNoble({
     req.writeAsync = async (data, withoutResponse) => {
       log.push(['write', Buffer.from(data).toString('hex'), withoutResponse]);
       if (p.state !== 'connected') throw new Error('not connected');
+      /* the A13 on 2026-10-05: one write refused (WinRT "status: 3") in the middle of a session */
+      if (noble.failNextWrite) {
+        const why = noble.failNextWrite;
+        noble.failNextWrite = null;
+        throw new Error(why);
+      }
       if (notifyBeforeWriteResolves) {
         phone.write(data);
         /* The reply has been notified; the ack comes a turn later. */

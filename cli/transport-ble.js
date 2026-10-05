@@ -836,7 +836,7 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
  *   ONLYKEY_JS_DEBUG is set
  * @returns the pipe contract (start/stop/isRunning/write/on) plus `link`
  */
-function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, computerName = null, onPairingRenewed = null, now = () => Date.now() } = {}) {
+function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, computerName = null, onPairingRenewed = null, now = () => Date.now(), reconnect = true, onLink = null } = {}) {
   const btpair = require('../src/btpair');
   /* Part T: the session (null = plaintext, until this user is paired with this phone) and waiters for 0x85 answers */
   let session = null;
@@ -846,6 +846,13 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   const limits = { ...TIMEOUTS, ...timeouts };
   const trace = log || (process.env.ONLYKEY_JS_DEBUG
     ? (line) => process.stderr.write(`onlykey-js ble: ${line}\n`) : () => {});
+  /* the link's own news (down, reconnecting, back): always to onLink - a long-running service shows it - and to the trace */
+  const say = (line) => {
+    trace(line);
+    if (onLink) {
+      try { onLink(line); } catch { /* a reporter never breaks the link */ }
+    }
+  };
   let link = null;
   let lastError = null;
   /* A refusal from the phone; the next write fails with it. See CMD_ERROR. */
@@ -977,8 +984,23 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       `--ble is built and tested on Windows and Linux; this is ${platform}.`);
   }
 
-  return {
-    async start() {
+  /*
+   * ONE connect, shared by start() and by a write that finds the link gone
+   * (bug 1, 2026-10-05: one refused write ended the edge-agent, and every
+   * request after it went nowhere). `started` says the caller wants the link
+   * up - set by start(), cleared by stop() - so a deliberate stop is never
+   * undone by a reconnect.
+   */
+  let starting = null;
+  let started = false;
+  function startLink() {
+    if (link) return Promise.resolve({ started: true, address: link.describe, encrypted: !!session });
+    if (!starting) starting = connect().finally(() => { starting = null; });
+    return starting;
+  }
+
+  async function connect() {
+    {
       if (link) return { started: true, address: link.describe };
       assembler = createAssembler();
       held = [];
@@ -988,6 +1010,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       lastError = null;
       session = null;
       /* Part T: a paired user opens an encrypted session first - fresh keys every connection */
+      try {
       if (pairing) {
         /*
          * The computer's CURRENT name, not the one stored at pairing time: the
@@ -1017,7 +1040,29 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         if (!session) throw bleError('ESILENT', SILENT_MESSAGE);
         trace('encrypted session open (Part T)');
       }
+      } catch (e) {
+        /*
+         * No session: CLOSE the link we just opened. Found on the A13 (2026-10-05):
+         * a reconnect whose hello met silence (the key was still locked) left the
+         * link open - Windows kept the connection, the phone showed "connected" and
+         * stopped advertising, and the next write went out unencrypted, dropped.
+         * A short command never saw it (its process ended); a service did.
+         */
+        const was = link;
+        link = null;
+        session = null;
+        if (was) await Promise.resolve(was.close()).catch(() => {});
+        throw e;
+      }
       return { started: true, address: link.describe, encrypted: !!session };
+    }
+  }
+
+  return {
+    async start() {
+      const r = await startLink();
+      started = true;
+      return r;
     },
 
     /** Part T pairing: one 0x85 message out, its answer back (null = silence). */
@@ -1034,6 +1079,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
        * only for short commands could never renew and would expire on day 7.
        */
       if (renewing) await Promise.race([renewing, new Promise((r) => setTimeout(r, 5000))]);
+      started = false; /* a deliberate stop: no write reconnects after it */
       const was = link;
       link = null;
       if (was) await was.close();
@@ -1061,6 +1107,21 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
           refused = null;
           throw err;
         }
+        if (!link && started && reconnect) {
+          /*
+           * The link went down after start() (the phone dropped it, or a write
+           * failed below): connect again - Part T's hello included - and say so.
+           * Only THIS write waits for it; the one that failed was not retried.
+           */
+          say(`the Bluetooth link is down (${lastError ? lastError.message : 'closed'}) - reconnecting`);
+          try {
+            await startLink();
+          } catch (e) {
+            say(`reconnect failed: ${e && e.message}`);
+            throw bleError('ENOTOPEN', `the phone is not connected, and reconnecting failed: ${e && e.message}`, e);
+          }
+          say(`reconnected${session ? ' (encrypted)' : ''}`);
+        }
         if (!link) {
           throw bleError('ENOTOPEN',
             lastError ? lastError.message : 'the phone is not connected');
@@ -1084,7 +1145,21 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
           const replies = held;
           held = [];
           for (const e of replies) emit(e);
-          throw err.code ? err : bleError('EWRITE', `the phone did not take the write: ${err && err.message}`, err);
+          const failed = err.code ? err : bleError('EWRITE', `the phone did not take the write: ${err && err.message}`, err);
+          /*
+           * A link that refused a write is not trusted with the next one (on
+           * 2026-10-05 the A13 refused with status 3, then nothing more got
+           * through): drop it, so the next request reconnects. This request
+           * fails - a half-sent request is never sent again on its own.
+           */
+          if (link) {
+            const was = link;
+            link = null;
+            lastError = failed;
+            Promise.resolve(was.close()).catch(() => {});
+            say(`a write failed (${failed.message}) - link dropped; the next request reconnects`);
+          }
+          throw failed;
         }
         writing = false;
         /* Echo first (dir IN, as every pipe does), then anything that beat it. */

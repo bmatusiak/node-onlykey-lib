@@ -353,9 +353,36 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
     },
     ticket: async ({ seq, code, message }) => ({ head: await agent.ticket(seq, { code: code || 'OK', message }) }),
     /* okedge sync, phase 1: the PC's own copy - reads only (R8), no press; --status changes nothing */
-    sync: async ({ status }) => {
+    sync: async ({ status, phone = true }) => {
       if (!edge) throw new Error('this agent service has no Edge key to sync from');
-      return require('./edge-copy').sync(edge, home || require('./edge-control').edgeHome(), { status: !!status });
+      const where = home || require('./edge-control').edgeHome();
+      const copy = require('./edge-copy');
+      const r = await copy.sync(edge, where, { status: !!status });
+      if (status || !phone) return r;
+      /*
+       * Phase 2 (Brad, 2026-10-05): this PC's copy fills the phone's - only a copy
+       * that verifies (R27), only from a place on the key's list (R20). The phone
+       * shows its sheet only when it lacks something; Yes and a press write the
+       * `sync` link there. Never repairs: a fork on the phone stops it, reported.
+       */
+      if (r.verdict.kind !== 'verified' && r.verdict.kind !== 'gap') {
+        r.phone = { skipped: `this PC's copy does not verify (${r.verdict.kind}) - nothing is offered` };
+        return r;
+      }
+      const signer = copy.peerSigner(where);
+      const mine = Buffer.from(signer.publicKey).toString('hex');
+      const list = await edge.peers();
+      if (!list.peers.some((p) => Buffer.from(p.publicKey).toString('hex') === mine)) {
+        r.phone = { skipped: 'this PC is not on the key\'s list of places that keep copies - okedge peer add' };
+        return r;
+      }
+      const c = copy.load(where, Buffer.from(r.deviceId, 'hex'));
+      try {
+        r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: `${require('os').hostname()} copies` });
+      } catch (e) {
+        r.phone = { refused: e.message };
+      }
+      return r;
     },
     /*
      * okedge sync phase 2, P2a (R20): add this PC's copy store to the KEY's list

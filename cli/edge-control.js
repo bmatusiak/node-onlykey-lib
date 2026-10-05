@@ -107,26 +107,52 @@ async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOW
 }
 
 /** One request to the agent service. -> its answer; throws on {ok: false} with the service's words. */
-function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeoutMs = 120000 } = {}) {
-  const key = controlKey({ home });
+/*
+ * BUG 2 (2026-10-05): with no live agent, okedge must say so AT ONCE. Two ways
+ * there is none: nothing listens (the connect fails - always said at once), or
+ * the agent DIES while handling the request (both of the day's crashes): the
+ * socket closes with no answer, and with no handler for that, okedge printed
+ * "Waiting for the phone" and sat out its 200 s while the phone showed nothing.
+ * Now the close without an answer is an answer: the agent stopped.
+ *
+ * onSent: called once the agent has the request - "waiting for the phone" is
+ * said only when something is actually waiting.
+ */
+function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeoutMs = 120000, onSent = null } = {}) {
+  let key;
+  try {
+    key = controlKey({ home });
+  } catch (e) {
+    return Promise.reject(Object.assign(new Error('no edge-agent is running (it was never set up here) - start `onlykey-js --ble --address <phone> edge-agent`'), { code: 'EEDGE_NO_AGENT' }));
+  }
   return new Promise((resolve, reject) => {
     const sock = net.connect(controlPath({ home, windows }));
     let buf = '';
-    const timer = setTimeout(() => { sock.destroy(); reject(Object.assign(new Error(`the agent service did not answer "${op}" in ${timeoutMs / 1000} s`), { code: 'EEDGE_AGENT_TIMEOUT' })); }, timeoutMs);
+    let done = false;
+    const finish = (fn, v) => { if (done) return; done = true; clearTimeout(timer); fn(v); };
+    const timer = setTimeout(() => { sock.destroy(); finish(reject, Object.assign(new Error(`the agent service did not answer "${op}" in ${timeoutMs / 1000} s`), { code: 'EEDGE_AGENT_TIMEOUT' })); }, timeoutMs);
+    let connected = false;
     sock.once('error', (e) => {
-      clearTimeout(timer);
-      reject(Object.assign(new Error(`the agent service is not running (${e.code || e.message}) - start \`onlykey-js edge-agent\``), { code: 'EEDGE_NO_AGENT' }));
+      finish(reject, connected
+        ? Object.assign(new Error(`the edge-agent stopped while handling "${op}" (${e.code || e.message}) - see its log, then start it again`), { code: 'EEDGE_AGENT_GONE' })
+        : Object.assign(new Error(`no edge-agent is running (${e.code || e.message}) - start \`onlykey-js --ble --address <phone> edge-agent\``), { code: 'EEDGE_NO_AGENT' }));
     });
-    sock.on('connect', () => sock.write(JSON.stringify({ op, auth: key, ...fields }) + '\n'));
+    sock.on('connect', () => {
+      connected = true;
+      sock.write(JSON.stringify({ op, auth: key, ...fields }) + '\n');
+      if (onSent) onSent();
+    });
     sock.on('data', (c) => {
       buf += c.toString('utf8');
       const nl = buf.indexOf('\n');
       if (nl < 0) return;
-      clearTimeout(timer);
       sock.destroy();
       const answer = JSON.parse(buf.slice(0, nl));
-      if (answer.ok) resolve(answer);
-      else reject(Object.assign(new Error(answer.error), { code: answer.code || 'EEDGE_AGENT' }));
+      if (answer.ok) finish(resolve, answer);
+      else finish(reject, Object.assign(new Error(answer.error), { code: answer.code || 'EEDGE_AGENT' }));
+    });
+    sock.on('close', () => {
+      finish(reject, Object.assign(new Error(`the edge-agent stopped before answering "${op}" - it may have crashed; see its log, then start it again`), { code: 'EEDGE_AGENT_GONE' }));
     });
   });
 }

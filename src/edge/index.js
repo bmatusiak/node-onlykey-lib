@@ -22,4 +22,6 @@ module.exports = {
   client: require('./client'),
   /* step 2: EDGE_REQUEST over the Bluetooth vendor channel (OKEDGE_REQUEST 0xF7, kept by the phone for the app) */
   wire: require('./wire'),
+  /* okedge sync phase 2 (2026-10-05): a place that keeps copies fills the phone's copy; the `sync` link */
+  sync: require('./sync'),
 };

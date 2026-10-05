@@ -201,6 +201,57 @@ async function approvePeerAdd(msg, { edge, seen, ask, onPress, timeoutMs = 30000
 }
 
 /**
+ * okedge sync phase 2 (Brad, 2026-10-05): links a place that keeps copies
+ * offers for THIS phone's copy. The caller has already merged them and checked
+ * the merged copy verifies (R27 - it needs the copy store); this is the consent:
+ * the place must be on the KEY's peer list, then the sheet, Yes, a PHYSICAL
+ * press, and the key writes the `sync` link (subject sync.syncSubject). Only
+ * after that link may the caller keep the merged copy.
+ * -> {ok: true, seq, count} | {ok: false, refusal, detail?}
+ *
+ * @param {object} o
+ * @param {string} o.peer the place's key, X || Y hex
+ * @param {string} o.name the name it gave (shown, never trusted)
+ * @param {Array<{link: Uint8Array}>} o.added the links that would be added, in seq order
+ * @param {Uint8Array} o.head the phone copy's head after the merge (its newest link's head)
+ * @param {Uint8Array|null} [o.keychainHash] SHA256 of the merged Key Chain list, when one moved
+ * @param {object} o.edge the Edge device service for THIS app's key
+ * @param {(view: {peer: string, name: string, fingerprint: string, count: number, ranges: number[][]}) => Promise<'approve'|'decline'|'timeout'>} o.ask
+ * @param {() => void} [o.onPress]
+ * @param {number} [o.timeoutMs]
+ * @returns {Promise<any>}
+ */
+async function approveSync({ peer, name, added, head, keychainHash = null, edge, ask, onPress, timeoutMs = 30000 }) {
+  const want = String(peer).toLowerCase();
+  const list = await edge.peers();
+  if (!list.peers.some((p) => toHex(p.publicKey) === want)) return refuse('invalid', 'that place is not on this key\'s list - add it first (okedge peer add)');
+  if (!added.length) return { ok: true, count: 0, seq: null };
+  const syncLib = require('./sync');
+  const ranges = syncLib.rangesOf(added.map((r) => chain.decodeLink(r.link).seq));
+  const answer = await ask({ peer: want, name, fingerprint: request.fingerprint(want), count: added.length, ranges });
+  if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
+  if (answer !== 'approve') return refuse('declined');
+  const fields = syncLib.syncFields({ peer: fromHex(want), added, head, keychainHash });
+  const subject = syncLib.syncSubject(fields);
+  let r;
+  try {
+    r = await edge.sync(fields, { onPress, timeoutMs });
+  } catch (e) {
+    if (e && e.status === 'restoring') return refuse('restoring');
+    if (e && e.status === 'no-such-peer') return refuse('invalid', 'the key says that place is not on its list');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    throw e;
+  }
+  /* the key computed the subject itself: it must be the one the phone computed */
+  const [l] = await edge.pickup(r.seq, 1);
+  const f = chain.decodeLink(l.link);
+  if (f.op !== codes.OP.SYNC || !(f.flags & codes.FLAG.PRESS_OBSERVED) || toHex(f.subject) !== toHex(subject)) {
+    return refuse('invalid', `the key's link #${r.seq} is not this sync's record`);
+  }
+  return { ok: true, seq: r.seq, count: added.length };
+}
+
+/**
  * R15c (2026-10-03): is this agent registered - is its AGENT_ADD link, made at
  * a press, in the app's VERIFIED copy of the chain? The app's own list of
  * agents is a convenience; only the link counts. An agent in storage without
@@ -221,4 +272,4 @@ function agentInCopy(rows, agentHex) {
   return null;
 }
 
-module.exports = { approveRequest, approveRegister, approvePeerAdd, agentInCopy };
+module.exports = { approveRequest, approveRegister, approvePeerAdd, approveSync, agentInCopy };
