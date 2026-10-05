@@ -1027,6 +1027,13 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     get encrypted() { return !!session; },
 
     async stop() {
+      /*
+       * A renewal the phone offered during this connection is answered before
+       * the link closes (up to 5 s). Found on the Pixel (2026-10-04): a short
+       * command (status) closed the link first, every time, so a pairing used
+       * only for short commands could never renew and would expire on day 7.
+       */
+      if (renewing) await Promise.race([renewing, new Promise((r) => setTimeout(r, 5000))]);
       const was = link;
       link = null;
       if (was) await was.close();

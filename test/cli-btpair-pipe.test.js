@@ -194,3 +194,21 @@ test('the CLI says its CURRENT computer name: after a rename the phone revokes t
   await assert.rejects(() => renamed.start(), (e) => e.code === 'ESILENT');
   assert.deepStrictEqual({ revoke: g.lastHello.revoke, reason: g.lastHello.reason }, { revoke: g.records[0].id, reason: 'name' });
 });
+
+test('a short command still answers a renewal: stop() waits for it (the Pixel, 2026-10-04: status closed the link first, every time)', async () => {
+  const home = tmpHome();
+  const g = gate();
+  const p0 = pipeOver(g);
+  await p0.start();
+  await store.pairOverPipe(p0, { address: 'PIXEL', home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await p0.stop();
+  /* a slow save (a real disk) keeps the renewal in flight when the command ends */
+  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), onPairingRenewed: async (rec) => { await new Promise((r) => setTimeout(r, 200)); store.savePairing('PIXEL', rec, home); } });
+  await p.start();
+  g.offerRenewal();
+  await new Promise((r) => setTimeout(r, 30)); /* the offer is in; the command is already done */
+  await p.stop();
+  await new Promise((r) => setTimeout(r, 50)); /* the fake phone handles a write on a later tick */
+  assert.ok(g.renewed, 'the link closed before the CLI answered the renewal');
+  assert.strictEqual(store.pairingFor('PIXEL', home).next.epoch, 1);
+});
