@@ -36,7 +36,9 @@
  * amber), never "verified" - and never "tampered" either, unless a check that
  * could be made failed.
  */
-const { OP, TAG } = require('./codes');
+const { OP, TAG, DECISION } = require('./codes');
+/* R3: the newest link format this library reads (byte 63) */
+const LINK_VERSION = 1;
 const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
 const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
 const { concat } = require('../bytes');
@@ -67,6 +69,13 @@ function encodeLink(f) {
   b[44] = step & 0xff;
   b[45] = step >>> 8;
   if (f.reserved) b.set(f.reserved.subarray(0, 18), 46);
+  /* R3 (2026-10-06): byte 63 = the link format's version (0 = before versions) */
+  if (f.version !== undefined) b[63] = f.version;
+  /* R13b: a sign/decrypt link's intent, bytes 47-62 */
+  if (f.intent) {
+    if (!(f.intent instanceof Uint8Array) || f.intent.length !== 16) throw new TypeError('edge: intent must be 16 bytes');
+    b.set(f.intent, 47);
+  }
   /* R3 (2026-10-03): byte 46 = which of the budget's scopes paid, 1-based, on a budget-spending link; 0 elsewhere */
   if (f.scope !== undefined) {
     if (!Number.isInteger(f.scope) || f.scope < 0 || f.scope > 0xff) throw new RangeError(`edge: scope not a byte: ${f.scope}`);
@@ -92,7 +101,15 @@ function decodeLink(b) {
     ...(isTicket ? { code: b[5], refSeq: u32(40) } : {}),
     /* R3: the scope that paid (1-based) on a link that spends a budget; 0 on every other link and on links before R3 */
     scope: b[46],
-    reservedZero: b.subarray(47).every((x) => x === 0),
+    /*
+     * R13b: a sign/decrypt link carries the agent's intent in 47-62, self-pressed or
+     * pressed (zeros: none - every link before R13b). Every other link keeps 47-62 zero.
+     * R3: byte 63 = the format's version - 0 (before versions) and 1 are known.
+     */
+    intent: (b[4] === OP.SIGN || b[4] === OP.DECRYPT) && b.subarray(47, 63).some((x) => x !== 0) ? b.slice(47, 63) : null,
+    version: b[63],
+    versionKnown: b[63] <= LINK_VERSION,
+    reservedZero: (b[4] === OP.SIGN || b[4] === OP.DECRYPT || b.subarray(47, 63).every((x) => x === 0)) && b[63] <= LINK_VERSION,
   };
 }
 
@@ -302,6 +319,7 @@ function signCheckpoint(fields, secretKey) {
 }
 
 module.exports = {
+  LINK_VERSION,
   LINK_BYTES, REASONS, encodeLink, decodeLink, genesis, continueSubject, chainStart, weld, heads, verify,
   deviceIdOf, checkpointMessage, checkpointDigest, verifyCheckpoint, signCheckpoint,
 };

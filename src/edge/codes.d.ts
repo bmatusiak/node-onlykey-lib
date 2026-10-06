@@ -58,6 +58,8 @@ export const TAG: Readonly<{
     RECEIPT: "OKEDGE-RCPT-v1";
     WAIVE: "OKEDGE-WAIVE-v1";
     ARM: "OKEDGE-ARM-v1";
+    ARM_V2: "OKEDGE-ARM-v2";
+    INTENT: "OKEDGE-INTENT-v1";
 }>;
 export const TICKET: Readonly<{
     0: "OK";

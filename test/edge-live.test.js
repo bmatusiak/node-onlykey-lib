@@ -14,6 +14,8 @@ test('each decision and flag mix gives one kind, and only the two R16 cases are 
     [use(DECISION.APPROVE), 'press', null],
     [use(DECISION.APPROVE, FLAG.PRESS_OBSERVED | FLAG.OWES_TICKET), 'press-under-budget', live.ALARM['press-under-budget']],
     [use(DECISION.APPROVE, FLAG.ARMED | FLAG.OWES_TICKET | FLAG.PRESS_OBSERVED), 'mismatched-arm', live.ALARM['mismatched-arm']],
+    /* R13b: the key copies the intent only when the ARM matched - ARMED + intent is the agent's own pressed request */
+    [{ ...use(DECISION.APPROVE, FLAG.ARMED | FLAG.OWES_TICKET | FLAG.PRESS_OBSERVED), intent: new Uint8Array(16).fill(7) }, 'armed-press', null],
     [use(DECISION.DENY), 'denied', null],
     [use(DECISION.TIMEOUT), 'timed-out', null],
     [use(DECISION.APPROVE, 0, OP.DECRYPT), 'press', null],

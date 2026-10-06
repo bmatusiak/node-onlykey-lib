@@ -34,7 +34,7 @@ test('a timeout with nothing on the line says nothing arrived', async () => {
 
 test('a timeout names the broadcast and the report that was not this request\'s', async () => {
   const notHead = report([0xde, 0xad, 0xbe, 0xef]);
-  notHead[61] = 1; /* fails the HEAD shape check */
+  notHead[61] = 2; /* fails the HEAD shape check: an unknown capability bit (bit 0 is R13b) */
   const edge = edgeOver(strayKey(() => [report([...Buffer.from('UNLOCKEDv3.1.0-testc')]), notHead]));
   await assert.rejects(edge.head({ timeoutMs: 150 }), (e) => {
     assert.equal(e.code, 'ETIMEDOUT');

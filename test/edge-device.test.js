@@ -181,7 +181,8 @@ test('edge: a restoring key fails the copy check; REPLAY is tentative and REPLAY
   assert.equal(await edge.replay(next, chain.weld(h0.head, next)), true);
   const far = chain.encodeLink({ seq: 5, op: 1, decision: 2, subject: new Uint8Array(32) });
   await assert.rejects(edge.replay(far, chain.weld(h0.head, far)), (e) => e.status === 'replay-mismatch');
-  await assert.rejects(edge.replay(chain.encodeLink({ seq: 2, op: 1, decision: 2, subject: new Uint8Array(32), reserved: new Uint8Array(18).fill(1) }), new Uint8Array(32)),
+  /* R13b: only a sign/decrypt link may carry bytes 47-62 (its intent) - on any other link they are no key's */
+  await assert.rejects(edge.replay(chain.encodeLink({ seq: 2, op: codes.OP.TICKET, decision: 0, subject: new Uint8Array(32), reserved: new Uint8Array(18).fill(1) }), new Uint8Array(32)),
     (e) => e.code === 'EDGE_NOT_A_KEY_LINK');
   /* the replay is tentative: HEAD still shows the restored head */
   assert.equal((await edge.head()).seq, 0, 'a replay moved the real head before it was vouched');

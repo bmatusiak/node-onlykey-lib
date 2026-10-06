@@ -93,6 +93,9 @@ const TAG = Object.freeze({
   WAIVE: 'OKEDGE-WAIVE-v1',
   /* firmware.md R13a (2026-10-02): an ARM is bound to the head AND the exact request */
   ARM: 'OKEDGE-ARM-v1',
+  /* firmware.md R13b (2026-10-06): the arm also carries what the use is for; the intent is welded into the link */
+  ARM_V2: 'OKEDGE-ARM-v2',
+  INTENT: 'OKEDGE-INTENT-v1',
 });
 
 /*

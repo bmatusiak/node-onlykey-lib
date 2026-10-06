@@ -9,7 +9,9 @@
  *
  *   okedge budget --reason "…" --ssh N [--gpg N] --ttl MIN    ask for the work budget (Yes + a press on the phone)
  *   okedge continue --ttl MIN [--caps n,n]                    continue it after a lock (ends the old one first)
- *   okedge exec --head H --reason "…" -- <command…>           run one command; its signature is paid by the budget
+ *   okedge exec --head H --intent "…" -- <command…>           run one command; its signature is paid by the budget,
+ *   okedge exec --press --intent "…" -- <command…>             the same, pressed by a person (no budget); the phone shows the intent
+ *                                                             its intent welded into the link (R13b; --reason too)
  *   okedge ticket <seq> [--code OK] --msg "…"                 file the ticket; prints the next head
  *   okedge sync [--status]                                    the PC's own copy of the key's chain: read new links,
  *                                                             verify (R27), keep; then offer it to the phone, which
@@ -39,7 +41,7 @@
 
 const { spawn } = require('child_process');
 const { ask } = require('./edge-control');
-const { codes, live } = require('../src/edge');
+const { codes, live, grants } = require('../src/edge');
 
 /* okedge watch: what each link's op is called */
 const OP_NAME = {
@@ -76,8 +78,19 @@ function watchLines(feed, { color = false, time = new Date() } = {}) {
       const { kind, alarm } = live.classifyUse(l);
       const how = kind === live.KIND.SELF_PRESS ? `self-press · budget ${l.grantId}, use ${l.grantStep}`
         : kind === live.KIND.DENIED ? 'denied' : kind === live.KIND.TIMED_OUT ? 'timed out' : 'pressed';
-      const line = `#${l.seq} ${at} ${OP_NAME[l.op]} slot ${l.slot} · ${how}${n.reason ? ` · "${plain(n.reason)}"` : ''}`;
-      lines.push(alarm ? red(`${line}  ⚠ ${alarm}`) : line);
+      /*
+       * R13b: the intent welded into the link against the text the agent noted -
+       * the text shows only when it hashes to the link's 16 bytes. "no intent" =
+       * a link from before R13b (or a use that gave none).
+       */
+      let what = n.reason ? ` · "${plain(n.reason)}"` : '';
+      let mismatch = false;
+      if (l.intent) {
+        if (!n.reason) what = ' · intent unknown';
+        else if (Buffer.from(grants.intentOf(String(n.reason))).toString('hex') !== l.intent) { mismatch = true; what = ` · "${plain(n.reason)}" - intent does not match`; }
+      } else what = ` · no intent${n.reason ? ` (noted: "${plain(n.reason)}")` : ''}`;
+      const line = `#${l.seq} ${at} ${OP_NAME[l.op]} slot ${l.slot} · ${how}${what}`;
+      lines.push(alarm || mismatch ? red(`${line}  ⚠ ${alarm || 'intent does not match its text'}`) : line);
       continue;
     }
     const line = `#${l.seq} ${at} ${OP_NAME[l.op] || `op ${l.op}`}${l.grantId ? ` ${l.grantId}` : ''}`;
@@ -216,10 +229,13 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     if (cmd === 'exec') {
       const dd = args.indexOf('--');
       const head = opt(args, '--head');
-      const reason = opt(args, '--reason');
-      if (dd < 0 || !head || !reason || dd === args.length - 1) { err('okedge exec --head H --reason "…" -- <command…>'); return 2; }
+      /* R13b: what this use is for - welded into its link before the signature exists (--reason, the older name) */
+      const reason = opt(args, '--intent') || opt(args, '--reason');
+      /* --press (Brad, 2026-10-06): a pressed use that says what it is for - no budget, no --head; a person presses */
+      const press = args.slice(0, dd < 0 ? args.length : dd).includes('--press');
+      if (dd < 0 || (!head && !press) || !reason || dd === args.length - 1) { err('okedge exec --head H --intent "…" -- <command…>   or   okedge exec --press --intent "…" -- <command…>'); return 2; }
       const command = args.slice(dd + 1);
-      const ex = await ask('exec-open', { head, reason });
+      const ex = await ask('exec-open', { head, reason, press }, press ? { timeoutMs: 200000 } : undefined);
       const gitEntries = Object.entries(ex.git || {});
       const childEnv = {
         ...env,

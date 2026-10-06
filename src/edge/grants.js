@@ -1,5 +1,7 @@
 'use strict';
 
+const { utf8ToBytes } = require('../bytes');
+
 /**
  * Edge budgets ("grants", spec L2): checking a self-press.
  *
@@ -206,8 +208,23 @@ function requestSubject(bytes) {
   return sha256(bytes);
 }
 
-function armToken({ head, subject }) {
+/*
+ * R13b: with an intent (16 bytes, intentOf), the v2 token - the key checks it
+ * against the same intent and writes the intent into the self-press link.
+ * Without one, the v1 token (a key that predates R13b, or no reason given).
+ */
+function armToken({ head, subject, intent = null }) {
+  if (intent) {
+    if (!(intent instanceof Uint8Array) || intent.length !== 16) throw new TypeError('edge: intent must be 16 bytes (intentOf)');
+    return H(TAG.ARM_V2, bytes32(head, 'head'), bytes32(subject, 'subject'), intent);
+  }
   return H(TAG.ARM, bytes32(head, 'head'), bytes32(subject, 'subject'));
+}
+
+/** R13b: what a use is for, as the 16 bytes a self-press link carries in 47-62 */
+function intentOf(text) {
+  if (typeof text !== 'string' || !text.length) throw new TypeError('edge: an intent is non-empty text');
+  return H(TAG.INTENT, utf8ToBytes(text)).slice(0, 16); /* the text as UTF-8 */
 }
 
 /**
@@ -299,6 +316,6 @@ function peerSubject(peerKey) {
 module.exports = {
   agentSubject, peerSubject, siblingSubject, siblingCode, anchorSubject,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
-  encodeScopes, grantSubject, requestSubject, armToken, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
+  encodeScopes, grantSubject, requestSubject, armToken, intentOf, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel,
 };

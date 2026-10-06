@@ -22,7 +22,7 @@ process.env.OKEDGE_HOME = HOME;
 
 const openpgp = require('../src/vendor/openpgp/openpgp.js');
 const pgpCert = require('../src/crypto/pgp-cert.js');
-const { request, approve, client, codes, chain } = require('../src/edge');
+const { request, approve, client, codes, chain, grants } = require('../src/edge');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 const agentProto = require('../src/protocol/agent');
 const { createEdgeAgent, controlHandlers } = require('../cli/edge-agent');
@@ -51,8 +51,10 @@ async function stack() {
     },
   };
   const seen = new Set();
+  const notes = []; /* what the agent told the phone (EDGE_NOTE) */
   const channel = {
     async send(msg) {
+      if (msg.type === require('../src/edge').note.TYPE) { notes.push(msg); return { ok: true }; }
       const r = await approve.approveRequest(msg, {
         edge, registered: [hex(AGENT.publicKey)], seen, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
@@ -72,11 +74,11 @@ async function stack() {
     userId: gpgIdentity.gpg, curve: 'ed25519', created, signPublic: gpgRaw, ecdhPublic: new Uint8Array(ecdh),
     sign: async (d) => new Uint8Array(crypto.sign(null, Buffer.from(d), keyOf(gpgIdentity).privateKey)),
   });
-  const agent = createEdgeAgent({ device, edge, ssh: { identity: sshIdentity, name: 'ssh://claude@test', comment: 'claude@test', curve: 'ed25519', raw: sshRaw } });
+  const agent = createEdgeAgent({ device, edge, client: c, ssh: { identity: sshIdentity, name: 'ssh://claude@test', comment: 'claude@test', curve: 'ed25519', raw: sshRaw } });
   const gpg = { identity: gpgIdentity, name: 'gpg://Claude (agent) <claude@test>', raw: gpgRaw, created, fingerprint: cert.fingerprint, committer: { name: 'Claude (agent)', email: 'claude@test' } };
   const control = await serveControl({ handlers: controlHandlers({ agent, client: c, ssh: { name: 'ssh://claude@test' }, gpg, openpgp, shimCommand: SHIM }) });
   const lastLink = async () => { const hd = await edge.head(); return chain.decodeLink((await edge.pickup(hd.seq, 1))[0].link); };
-  return { agent, control, cert, lastLink };
+  return { agent, control, cert, lastLink, edge, notes };
 }
 
 function capture() {
@@ -193,6 +195,38 @@ test('okedge watch --once: one line per use with its reason, its ticket under it
     assert.match(text, /pressed .*⚠ a press asked for under a live budget/);
   } finally {
     await s.agent.closeAll();
+    await s.control.close();
+  }
+});
+
+test('okedge exec --press --intent: no budget, a person presses, the intent is in the link, and its ticket is owed (Brad, 2026-10-06)', async () => {
+  const s = await stack();
+  try {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-press-'));
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Claude (agent)']);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'claude@test']);
+    let cap = capture();
+    const code = await okedge.main(['exec', '--press', '--intent', 'commit: pressed, says why', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'p'], cap.io);
+    assert.equal(code, 0, cap.lines.join(' | '));
+    const line = cap.lines.find((l) => l.startsWith('signed:'));
+    assert.match(line, /not paid by the budget - ticket owed/);
+    const f = await s.lastLink();
+    assert.equal(f.decision, codes.DECISION.APPROVE, 'pressed, not paid');
+    /* the phone and okedge watch must not call this the mismatch alarm (seen live on the Pixel, #431) */
+    assert.deepEqual(require('../src/edge').live.classifyUse(f), { kind: 'armed-press', alarm: null });
+    assert.deepEqual(Buffer.from(f.intent), Buffer.from(grants.intentOf('commit: pressed, says why')));
+    /* while that ticket is owed, a second --press is refused */
+    cap = capture();
+    assert.notEqual(await okedge.main(['exec', '--press', '--intent', 'again', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'q'], cap.io), 0);
+    assert.match(cap.lines.join(' | '), /owe/);
+    /* no budget pays for it, so the ticket goes straight to the key - and its head prints as hex */
+    cap = capture();
+    assert.equal(await okedge.main(['ticket', String(f.seq), '--msg', 'pressed p'], cap.io), 0, cap.lines.join(' | '));
+    assert.match(cap.lines.join(' | '), /head = [0-9a-f]{64}/);
+    /* and the phone gets its message (it showed "No message synced" on the Pixel, #432) */
+    assert.ok(s.notes.some((n) => n.seq === f.seq && n.ticketMsg === 'pressed p'), 'the ticket message reaches the phone');
+  } finally {
     await s.control.close();
   }
 });

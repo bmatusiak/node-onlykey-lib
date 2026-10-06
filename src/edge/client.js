@@ -136,7 +136,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
        * op(bytes), and return the link it caused.
        * -> {result, link: {seq, paid, step, reveal}}
        */
-      async use(bytes, op, { reason } = {}) {
+      async use(bytes, op, { reason, intent = reason } = {}) {
         if (state.ended) throw fail('EEDGE_ARM', 'edge: this budget has ended', { reason: 'ended' });
         if (state.owed.length) throw fail('EEDGE_ARM', `edge: a ticket is owed for #${state.owed[0]} - ticket it first`, { reason: 'ticket-owed' });
         const data = Uint8Array.from(bytes);
@@ -152,12 +152,21 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
          */
         const before = await edge.head();
         state.head = before.head;
+        /* R13b: the text exactly as the note carries it - the phone hashes what it receives */
+        const said = intent !== undefined && intent !== null ? clip(String(intent), note.MAX_REASON) : null;
         try {
-          await edge.arm(state.head, subject);
+          /* R13b: the reason goes into the link itself, before the signature exists - when the key can take it */
+          await edge.arm(state.head, subject, before.canIntent && said ? { intent: grants.intentOf(said) } : {});
         } catch (e) {
           await sendNote({ seq: (await edge.head().catch(() => ({ seq: 0 }))).seq ?? 0, armRefused: String(e.status || e.message || 'refused').slice(0, note.MAX_ARM_REFUSED) });
           throw fail('EEDGE_ARM', `edge: the key refused the ARM (${e.status || e.message})`, { reason: e.status || 'refused' });
         }
+        /*
+         * R13b: the text BEFORE the sign, for the link it is about to make - the
+         * phone shows it with the press prompt ("the agent says:") when its hash
+         * matches the armed intent, and beside the link afterwards.
+         */
+        if (said) await sendNote({ seq: before.seq === null ? 0 : before.seq + 1, reason: said });
         const result = await op(data);
         /*
          * THIS USE'S LINK, WITHOUT A THIRD HEAD READ (Brad, 2026-10-06: each key
@@ -190,7 +199,8 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
          * continue left live) may pay instead of this one (seen 2026-10-03).
          */
         const paidBy = f.decision === codes.DECISION.SELF_PRESS ? f.grantId : null;
-        if (reason !== undefined && reason !== null) await sendNote({ seq: f.seq, reason: clip(String(reason), note.MAX_REASON) });
+        /* the note went before the sign (R13b); again only if another link landed in between and took its seq */
+        if (said && f.seq !== (before.seq === null ? 0 : before.seq + 1)) await sendNote({ seq: f.seq, reason: said });
         return { result, purpose: reason, link: { seq: f.seq, paid, paidBy, step: paid ? f.grantStep : null, reveal: paid ? l.reveal : null } };
       },
       /** File the ticket for a use; the new head is kept for the next use(). */
@@ -339,6 +349,38 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       /* the receipt (Brad): the verdict back to the phone, one-way - both logs end with it */
       await channel.send({ type: pingLib.RECEIPT_TYPE, re: msg.id, exact: c.ok, why: c.why || null, ms, parts }, { oneWay: true }).catch(() => {});
       return { exact: c.ok, why: c.why, ms, bytes: n, wire, parts };
+    },
+    /*
+     * okedge exec --press (Brad, 2026-10-06; R13b): a PRESSED use that says what
+     * it is for. No budget pays: the key waits for a person's press, and the
+     * phone's prompt shows the agent's text when it hashes to the armed intent.
+     * Refused while the key owes a ticket (R13a). The link owes its ticket (it
+     * was armed, R16). -> {result, link: {seq, paid: false}}
+     */
+    async pressedUse(bytes, op, { intent } = {}) {
+      const data = Uint8Array.from(bytes);
+      const subject = grants.requestSubject(data);
+      const before = await edge.head();
+      if (before.owed) throw fail('EEDGE_TICKET_OWED', 'edge: the key owes a ticket - file it first (R13a)');
+      const said = intent !== undefined && intent !== null ? clip(String(intent), note.MAX_REASON) : null;
+      const next = before.seq === null ? 0 : before.seq + 1;
+      if (said && before.canIntent) {
+        try {
+          await edge.arm(before.head, subject, { intent: grants.intentOf(said) });
+        } catch (e) {
+          throw fail('EEDGE_ARM', `edge: the key refused the ARM (${e.status || e.message})`, { reason: e.status || 'refused' });
+        }
+      }
+      if (said) await sendNote({ seq: next, reason: said });
+      const result = await op(data);
+      let l = await edge.pickup(next, 1).then((r) => r[0], () => null);
+      if (!l || !same(chain.decodeLink(l.link).subject, subject)) {
+        const h = await edge.head();
+        [l] = await edge.pickup(h.seq, 1);
+      }
+      const f = chain.decodeLink(l.link);
+      if (!same(f.subject, subject)) throw fail('EEDGE_LINK', `edge: the key's newest link (#${f.seq}) is not this use`);
+      return { result, link: { seq: f.seq, paid: false, paidBy: null, step: null, reveal: null } };
     },
     /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
     ticketOwed,

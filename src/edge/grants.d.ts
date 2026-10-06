@@ -68,10 +68,13 @@ export function grantSubject({ scopes, reasonHash, genesis, lifetime }: {
     lifetime?: number | undefined;
 }): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export function requestSubject(bytes: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-export function armToken({ head, subject }: {
+export function armToken({ head, subject, intent }: {
     head: any;
     subject: any;
+    intent?: null | undefined;
 }): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+/** R13b: what a use is for, as the 16 bytes a self-press link carries in 47-62 */
+export function intentOf(text: any): Uint8Array<ArrayBuffer>;
 /**
  * Check a budget's opening as one standalone proof:
  *   {deviceId, publicKey, link (its grant-create link), prevHead (the head

@@ -1,8 +1,12 @@
+export const LINK_VERSION: 1;
 export const LINK_BYTES: 64;
 export const REASONS: readonly string[];
 export function encodeLink(f: any): Uint8Array<ArrayBuffer>;
 export function decodeLink(b: any): {
     scope: number;
+    intent: Uint8Array<ArrayBuffer> | null;
+    version: number;
+    versionKnown: boolean;
     reservedZero: boolean;
     code?: number | undefined;
     refSeq?: number | undefined;

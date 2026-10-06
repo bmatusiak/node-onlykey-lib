@@ -418,3 +418,49 @@ test('kept: an opening record changed is a full check', () => {
   assert.equal(r.why, 'openings changed');
   assert.equal(r.result.ok, false);
 });
+
+/* R3 (Brad, 2026-10-06): the version byte (63) */
+function relinked(s, edit) {
+  /* the story's links, re-welded from genesis with `edit` applied to each link's fields */
+  let head = chain.genesis(DEVICE);
+  const out = [];
+  const openings = { ...s.openings };
+  for (const e of s.links) {
+    const f = { ...chain.decodeLink(e.link) };
+    const link = chain.encodeLink(edit(f));
+    head = chain.weld(head, link);
+    out.push({ link, head, reveal: e.reveal });
+    /* an opening's signature is a checkpoint over its grant-create link's head: signed again */
+    if (f.op === codes.OP.GRANT_CREATE && openings[f.grantId]) openings[f.grantId] = { ...openings[f.grantId], signature: chain.signCheckpoint({ deviceId: DEVICE, seq: f.seq, head }, SECRET) };
+  }
+  const seq = out.length - 1;
+  const key = { ...s.key, head: { ...s.key.head, seq, head }, checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) } };
+  return { links: out, key, openings };
+}
+
+test('version: a version-0 link after a version-1 link is red; all version 0 (before versions) or all 1 verifies', () => {
+  const s = story();
+  const v1 = relinked(s, (f) => ({ ...f, version: 1 }));
+  const rv1 = copy.verifyCopy({ links: v1.links, openings: v1.openings }, v1.key);
+  assert.equal(rv1.ok, true, 'all version 1: ' + JSON.stringify({ reason: rv1.reason, seq: rv1.seq, detail: rv1.detail }));
+  assert.equal(copy.verifyCopy({ links: s.links, openings: s.openings }, s.key).ok, true, 'all version 0 (the links before versions)');
+  const mixed = relinked(s, (f) => ({ ...f, version: f.seq < 3 ? 0 : (f.seq === 4 ? 0 : 1) }));
+  const r = copy.verifyCopy({ links: mixed.links, openings: mixed.openings }, mixed.key);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'version');
+  assert.equal(r.seq, 4, 'the version-0 link after #3 (version 1)');
+  const up = relinked(s, (f) => ({ ...f, version: 2 }));
+  assert.equal(copy.verifyCopy({ links: up.links, openings: up.openings }, up.key).reason, 'version', 'an unknown version is red');
+});
+
+test('version: the byte is inside the welded 64 bytes - changing it breaks the weld', () => {
+  const s = story();
+  const v1 = relinked(s, (f) => ({ ...f, version: 1 }));
+  const links = v1.links.map((e) => ({ ...e }));
+  const flipped = Uint8Array.from(links[2].link);
+  flipped[63] = 0; /* "downgraded" in place, head left as the key welded it */
+  links[2] = { ...links[2], link: flipped };
+  const r = copy.verifyCopy({ links, openings: v1.openings }, v1.key);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'chain', 'the stored head no longer welds from the edited link');
+});

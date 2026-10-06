@@ -27,7 +27,7 @@ const report = (bytes) => { const r = new Uint8Array(64); r.set(bytes.slice(0, 6
 const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUpperCase().padStart(2, '0')}`)]);
 
 /* a fake key: a tiny chain, one held link, answers by sub-op */
-function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, secret = SECRET } = {}) {
+function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, secret = SECRET, intentCap = true } = {}) {
   /* each fake key its own Edge key (R29 siblings need two) - SECRET by default */
   const myPub = p256.getPublicKey(secret, false).slice(1);
   const myDevice = chain.deviceIdOf(myPub);
@@ -45,6 +45,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
   const onHold = new Set();
   let owed = [];
   let armed = false;
+  let armedIntent = null; /* R13b: the intent a v2 arm carried */
+  let replayIntent = null; /* R13b: staged by REPLAY_INTENT for the next REPLAY */
   let refusedArms = 0; /* B7 stage 2: HEAD byte 60, as the firmware counts them */
   const writes = [];
   const emit = (r) => setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: r })), delay);
@@ -52,7 +54,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
   const same = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
   const append = (fields, reveal = null) => {
     const seq = held.length;
-    const link = chain.encodeLink({ seq, ...fields });
+    /* R3: every link this key writes is version 1 (unless a test builds an old one) */
+    const link = chain.encodeLink({ seq, version: 1, ...fields });
     head = chain.weld(head, link);
     held.push({ link, head, reveal });
     armed = false; /* R13a: any link clears the arm */
@@ -86,7 +89,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, restoring ? 1 : 0, refusedArms]));
+        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, restoring ? 1 : 0, refusedArms, intentCap ? 1 : 0]));
       } else if (sub === 0x04) {
         emit(report([...myPub]));
       } else if (sub === 0x03) {
@@ -110,8 +113,12 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
         /* R13a: a token over head + the request's subject; the fake keeps it (a real key checks it at the sign) */
         if (owed.length) { refusedArms = Math.min(255, refusedArms + 1); return emit(status(0x0c)); }
         /* as the firmware's any_budget_payable: live, off hold, with uses left */
-        if (!live.some((id) => !onHold.has(id) && (!budgets.has(id) || budgets.get(id).used < budgets.get(id).uses))) { refusedArms = Math.min(255, refusedArms + 1); return emit(status(0x0d)); }
+        /* R13b: an ARM with an intent is taken even when no budget can pay (the next sign is pressed and records it) */
+        const withIntent = arg.slice(32, 48).some((x) => x);
+        if (!withIntent && !live.some((id) => !onHold.has(id) && (!budgets.has(id) || budgets.get(id).used < budgets.get(id).uses))) { refusedArms = Math.min(255, refusedArms + 1); return emit(status(0x0d)); }
         armed = arg.slice(0, 32);
+        /* R13b: a v2 arm carries its intent; zeros = v1 */
+        armedIntent = arg.slice(32, 48).some((x) => x) ? arg.slice(32, 48) : null;
         emit(status(0x00));
       } else if (sub === 0x13 || sub === 0x14) {
         const id = arg[0] | (arg[1] << 8);
@@ -271,12 +278,21 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
       } else if (sub === 0x05) {
         if (restoring) return emit(status(0x0e));
         emit(seqHead());
+      } else if (sub === 0x25) {
+        /* R13b + R26: stage the next REPLAY's intent */
+        if (!restoring) return emit(status(0x10));
+        replayIntent = arg.slice(0, 16);
+        emit(status(0x00));
       } else if (sub === 0x23) {
         /* R26: 47 bytes (R3: through the scope byte), zero-filled to a link; the next seq, welding onto the TENTATIVE head */
         if (!restoring) return emit(status(0x10));
         tent ??= { head, links: [] };
         const link = new Uint8Array(64);
         link.set(arg.slice(0, 47));
+        /* R13b: the intent REPLAY_INTENT staged, for a sign/decrypt link; R3: the version byte after the head check */
+        if (replayIntent && (link[4] === codes.OP.SIGN || link[4] === codes.OP.DECRYPT)) link.set(replayIntent, 47);
+        replayIntent = null;
+        link[63] = arg[55];
         const f = chain.decodeLink(link);
         if (f.seq !== held.length + tent.links.length) return emit(status(0x0f));
         const h2 = chain.weld(tent.head, link);
@@ -312,7 +328,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
   transport.use = (bytes, { slot = 2 } = {}) => {
     const subject = grants.requestSubject(Uint8Array.from(bytes));
     const wasArmed = Boolean(armed);
-    const match = wasArmed && same(armed, grants.armToken({ head, subject }));
+    const intent = armedIntent;
+    const match = wasArmed && same(armed, grants.armToken({ head, subject, intent }));
     const id = match && !owed.length ? live.find((i) => !onHold.has(i) && budgets.get(i).used < budgets.get(i).uses) : null;
     if (id) {
       const b = budgets.get(id);
@@ -328,14 +345,15 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
       b.scopeUsed[si] += 1;
       const F = codes.FLAG;
       const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.SELF_PRESS, slot, flags: F.BUDGET_SPENT | F.OWES_TICKET | F.ARMED,
-        subject, grantId: id, grantStep: b.used, scope: scopes.length ? si + 1 : 0 }, grants.reveal(b.seed, b.uses, b.used));
+        subject, grantId: id, grantStep: b.used, scope: scopes.length ? si + 1 : 0, ...(intent ? { intent } : {}) }, grants.reveal(b.seed, b.uses, b.used));
       owed.push(seq);
       return { seq, paid: true };
     }
     const F = codes.FLAG;
     const covered = live.some((i) => (budgets.get(i).scopes || []).some((sc) => sc.op === codes.OP.SIGN && sc.slot === slot));
     const owes = wasArmed || covered;
-    const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot, subject,
+    /* R13b: a pressed use records the intent its (matching) arm carried */
+    const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot, subject, ...(wasArmed && same(armed || new Uint8Array(32), grants.armToken({ head, subject, intent })) && intent ? { intent } : {}),
       flags: F.PRESS_OBSERVED | (owes ? F.OWES_TICKET : 0) | (wasArmed ? F.ARMED : 0) });
     if (owes) owed.push(seq);
     return { seq, paid: false };

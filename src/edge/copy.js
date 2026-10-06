@@ -391,6 +391,17 @@ function verifyCore(copy, key, prev, out) {
 
   /* budgets: each opening, then its self-presses in step order */
   const fields = raw.map((l) => chain.decodeLink(l)).filter((f) => f.seq > (prev ? prev.lastSeq : lastGapEnd));
+  /*
+   * R3 (Brad, 2026-10-06): once the chain has a version-1 link, any LATER
+   * version-0 link is red - the key never writes 0 on a new link, and replayed
+   * old links keep their old, lower seqs. Over every link the copy holds on a
+   * full check (a gap must not hide it), over the new ones from a kept state.
+   */
+  let firstV1 = prev ? prev.firstV1 : null;
+  for (const f of prev ? fields : raw.map((l) => chain.decodeLink(l)).sort((a, b) => a.seq - b.seq)) {
+    if (f.version >= 1) { if (firstV1 === null || f.seq < firstV1) firstV1 = f.seq; }
+    else if (firstV1 !== null && f.seq > firstV1) return fail('version', { seq: f.seq, detail: { version: 0, reason: 'after-version-1', since: firstV1 } });
+  }
   const openings = copy.openings || {};
   /* the budgets verified so far carry over from a previous state; only the ones new links touch are checked again */
   const spends = new Map(prev ? [...prev.spends].map(([g, l]) => [g, l.slice()]) : []);
@@ -402,6 +413,7 @@ function verifyCore(copy, key, prev, out) {
     const spend = (f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS;
     /* R3: the opening carries its scope count (0 on an older one); a spend names its scope; nothing else carries one */
     if (f.scope !== 0 && !spend && f.op !== OP.GRANT_CREATE) return fail('scope', { seq: f.seq, detail: { scope: f.scope, reason: 'not-a-spend' } });
+    if (!f.versionKnown) return fail('version', { seq: f.seq, detail: { version: f.version } }); /* R3: a format this library does not know - red */
     if (!f.reservedZero) return fail('reserved', { seq: f.seq });
     if (f.op === OP.GRANT_CREATE) {
       const o = openings[f.grantId];
@@ -493,7 +505,7 @@ function verifyCore(copy, key, prev, out) {
   if (last && lastHead) {
     out.state = {
       keyHead: { seq: h.seq, head: h.head, owed: h.owed || 0, overflow: Boolean(h.overflow), restoring: Boolean(h.restoring) },
-      count: entries.length, lastSeq, lastHead, lastGapEnd, spends, openingScopes,
+      count: entries.length, lastSeq, lastHead, lastGapEnd, spends, openingScopes, firstV1,
       grants: [...spends.keys()], openingsHash: openingsHash(openings, [...spends.keys()]), result,
     };
   }

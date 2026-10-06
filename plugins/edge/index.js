@@ -34,7 +34,7 @@ const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, VOUCH: 0x05,
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
-  TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, LOSS: 0x34,
+  TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, REPLAY_INTENT: 0x25, LOSS: 0x34,
   AGENT_ADD: 0x15,
   PEER_ADD: 0x30, PEER_REMOVE: 0x31, PEER_LIST: 0x32,
   /* sync phase 2 (Brad, 2026-10-05): the `sync` link; number CHOSEN, pending the spec */
@@ -94,7 +94,8 @@ function hexHead(bytes) {
  * refused-ARM counter since B7 stage 2; older firmware sends 0 there.)
  */
 function isHeadReply(r) {
-  if (r.length < 64 || r[61] | r[62] | r[63]) return false;
+  /* byte 61 = capabilities (R13b: bit 0, intent) - no other bit is known; 62-63 zero */
+  if (r.length < 64 || (r[61] & ~1) | r[62] | r[63]) return false;
   return r[56] < 16 && r[57] <= tickets.OWED_MAX && r[58] <= 1 && r[59] <= 1;
 }
 
@@ -366,6 +367,8 @@ function setup(imports, register) {
         overflow: Boolean(r[58]),
         restoring: Boolean(r[59]),
         refusedArms: r[60],
+        /* R13b: this build takes ARM {token, intent} (HEAD byte 61, bit 0) */
+        canIntent: Boolean(r[61] & 1),
       };
     },
 
@@ -482,9 +485,12 @@ function setup(imports, register) {
      * owed, no live budget off hold and unexpired could pay, or a restore is
      * unfinished. A stale head shows at the sign (as a press), not here.
      */
-    async arm(head, subject, opts) {
+    /** R13a + R13b: ARM {token} - or {token, intent} when opts.intent (16 bytes, grants.intentOf) is given */
+    async arm(head, subject, opts = {}) {
       const { grants } = require('../../src/edge');
-      await call(SUB.ARM, grants.armToken({ head, subject }), { ...opts, text: true });
+      const intent = opts.intent || null;
+      const token = grants.armToken({ head, subject, intent });
+      await call(SUB.ARM, intent ? concat([token, intent]) : token, { ...opts, text: true });
       return true;
     },
 
@@ -531,7 +537,10 @@ function setup(imports, register) {
       if (!chain.decodeLink(link).reservedZero) {
         throw Object.assign(new Error('Edge: this link has non-zero reserved bytes - no key wrote it'), { code: 'EDGE_NOT_A_KEY_LINK' });
       }
-      await call(SUB.REPLAY, concat([link.subarray(0, REPLAY_BYTES), storedHead.subarray(0, REPLAY_HEAD_BYTES)]), { ...opts, text: true });
+      /* R13b: a link with an intent sends it first (the key welds it in at the REPLAY); R3: the version byte rides after the head */
+      const intent = link.subarray(47, 63);
+      if (intent.some((x) => x)) await call(SUB.REPLAY_INTENT, intent, { ...opts, text: true });
+      await call(SUB.REPLAY, concat([link.subarray(0, REPLAY_BYTES), storedHead.subarray(0, REPLAY_HEAD_BYTES), Uint8Array.of(link[63])]), { ...opts, text: true });
       return true;
     },
 

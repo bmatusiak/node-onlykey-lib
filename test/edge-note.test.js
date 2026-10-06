@@ -65,9 +65,12 @@ test('the edge client sends a note for a use (its reason), its ticket (the messa
   await b.ticket(used.link, { message: 'pushed' });
   assert.deepEqual(notes[1].ticketMsg, 'pushed');
   assert.equal(notes[1].seq, used.link.seq);
-  /* a refused ARM at the KEY: the budget on hold (a used-up one now ends at its last ticket and never reaches the key) */
+  /* a refused ARM at the KEY: the budget on hold and NO intent (a used-up one now ends at its last ticket and never reaches the key) */
   await edge.hold(b.grantId);
-  await assert.rejects(b.use(Uint8Array.from([3]), (x) => transport.use(x, { slot: 222 }), { reason: 'again' }), { code: 'EEDGE_ARM' });
+  await assert.rejects(b.use(Uint8Array.from([3]), (x) => transport.use(x, { slot: 222 }), {}), { code: 'EEDGE_ARM' });
   assert.ok(notes[2].armRefused, 'the refused ARM is reported in the agent\'s own note');
+  /* R13b: WITH an intent the ARM is taken although nothing can pay - the use is pressed, not paid, and records the intent */
+  const pressed = await b.use(Uint8Array.from([4]), (x) => transport.use(x, { slot: 222 }), { reason: 'again, pressed' });
+  assert.equal(pressed.link.paid, false);
 });
 
