@@ -269,7 +269,8 @@ function verifyCopy(copy, key) {
  *     debts recounted (a linear pass);
  *   anything else - an earlier link or opening changed, the result was not ok,
  *     the new part not clean: the full check.
- * -> {result (verifyCopy's), state (for the next call, or null), path: 'skipped' | 'new-links' | 'full'}
+ * -> {result (verifyCopy's), state (for the next call, or null), path: 'skipped' | 'new-links' | 'full',
+ *     why (on 'full': which condition sent it there)}
  */
 function verifyCopyKept(copy, key, prev = null) {
   const entries = (copy.links || []).map((e) => (e instanceof Uint8Array ? { link: e } : e));
@@ -277,15 +278,23 @@ function verifyCopyKept(copy, key, prev = null) {
   const hash = entriesHash(entries, entries.length);
   const okPrev = prev && prev.result && prev.result.ok && prev.openingsHash === openingsHash(copy.openings, prev.grants);
   if (okPrev && sameKeyHead(prev.keyHead, kh) && prev.hash === hash) return { result: prev.result, state: prev, path: 'skipped' };
+  let why = null;
+  const whyNot = () => !prev ? 'first check' : !(prev.result && prev.result.ok) ? 'last result not ok' : !okPrev ? 'openings changed' :
+    kh.restoring ? 'key restoring' : kh.seq === null ? 'no key head' : !(prev.count > 0) ? 'nothing verified before' :
+    prev.count > entries.length ? 'copy shrank' : !(entries.length > prev.count || kh.seq > prev.keyHead.seq) ? 'key head changed, no new links' :
+    entriesHash(entries, prev.count) !== prev.prefixHash ? 'an older link changed' : 'unknown';
   if (okPrev && !kh.restoring && kh.seq !== null && prev.count > 0 && prev.count <= entries.length &&
       (entries.length > prev.count || kh.seq > prev.keyHead.seq) && entriesHash(entries, prev.count) === prev.prefixHash) {
     const out = {};
     const r = verifyCore(copy, key, prev, out);
     if (r && r.ok) return { result: r, state: { ...out.state, hash, prefixHash: hash }, path: 'new-links' };
+    why = out.why || (r ? 'new part: ' + (r.reason || 'not ok') : 'new part not clean');
   }
+  /* why the short path was not taken - logged by the app as "full: <why>" */
+  if (!why) why = whyNot();
   const out = {};
   const r = verifyCore(copy, key, null, out);
-  return { result: r, state: r.ok && out.state ? { ...out.state, hash, prefixHash: hash } : null, path: 'full' };
+  return { result: r, state: r.ok && out.state ? { ...out.state, hash, prefixHash: hash } : null, path: 'full', why };
 }
 
 function sameKeyHead(a, b) {
@@ -333,7 +342,10 @@ function verifyCore(copy, key, prev, out) {
     ? assess({ ...copy, links: entries }, key, { from: { seq: prev.lastSeq, head: prev.lastHead } })
     : assess({ ...copy, links: entries }, key);
   const v = a.chain;
-  if (prev && (!v.ok || v.gaps.length || a.open.length || a.missing.length)) return null;
+  if (prev && (!v.ok || v.gaps.length || a.open.length || a.missing.length)) {
+    out.why = !v.ok ? 'new part: ' + (v.reason || 'not ok') : v.gaps.length ? 'new part has a gap' : a.open.length ? 'new part has an open link' : 'new part has missing links';
+    return null;
+  }
   if (!v.ok) return fail('chain', { seq: v.failure.seq, detail: v.failure });
   if (a.open.length) return fail('gap', { seq: a.open[0].from, detail: { gaps: a.open } });
   /*
@@ -345,7 +357,7 @@ function verifyCore(copy, key, prev, out) {
   const lossEnd = lossesIn(entries).reduce((m, l) => Math.max(m, l.to), -1);
   const lastGapEnd = Math.max(a.missing.reduce((m, g) => Math.max(m, g.to), -1), lossEnd, prev ? prev.lastGapEnd : -1);
   /* a new LOSS moves where the checks start: that is the full check's job */
-  if (prev && lastGapEnd !== prev.lastGapEnd) return null;
+  if (prev && lastGapEnd !== prev.lastGapEnd) { out.why = 'a new loss or gap'; return null; }
 
   /*
    * Every link outside a covered gap is now verified, and so is the head the

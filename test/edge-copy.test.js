@@ -400,8 +400,10 @@ test('kept: an earlier link edited is a full check, and it fails', () => {
   const bad = Uint8Array.from(links[1].link);
   bad[20] ^= 1;
   links[1] = { ...links[1], link: bad };
+  assert.equal(one.why, 'first check');
   const r = copy.verifyCopyKept({ links, openings: s.openings }, s.key, one.state);
   assert.equal(r.path, 'full');
+  assert.equal(r.why, 'an older link changed');
   assert.equal(r.result.ok, false);
   assert.equal(r.state, null);
 });
@@ -413,5 +415,6 @@ test('kept: an opening record changed is a full check', () => {
   const openings = { [s.grantId]: { ...s.openings[s.grantId], uses: s.openings[s.grantId].uses + 1 } };
   const r = copy.verifyCopyKept({ links: s.links, openings }, s.key, one.state);
   assert.equal(r.path, 'full');
+  assert.equal(r.why, 'openings changed');
   assert.equal(r.result.ok, false);
 });

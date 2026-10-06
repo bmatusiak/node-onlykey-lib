@@ -596,13 +596,14 @@ function setup(imports, register) {
         if (r.path === 'full' && head.seq !== null && head.oldest !== null && (same || grew)) {
           const ring = await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
           checkpoint = await edge.checkpoint();
-          r = copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held: ring }, null);
+          const why = r.why;
+          r = { ...copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held: ring }, null), why };
         }
         keptCheck = r.state ? { ...r.state, checkpoint: r.state === st ? st.checkpoint : checkpoint } : null;
-        edge.grants.lastPath = r.path;
+        edge.grants.lastPath = r.path === 'full' && r.why ? `full: ${r.why}` : r.path;
         return r.result;
       },
-      /** how the last check ran: 'skipped' | 'new-links' | 'full' (for the log) */
+      /** how the last check ran: 'skipped' | 'new-links' | 'full: <why>' (for the log) */
       lastPath: null,
       /** the next check is a full one, from the root (the app's Sync button; a restart does it anyway) */
       forget() {
