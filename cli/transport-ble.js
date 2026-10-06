@@ -875,6 +875,9 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   let phoneBatch = false;
   /* sealed messages that beat hello() to the session (see onData) */
   let early = [];
+  /* how links come and go (Brad, 2026-10-06: count the failed reconnects) */
+  const stats = { connects: 0, reconnects: 0, reconnectsFailed: 0, lastUpMs: null };
+  let firstAfterConnect = false;
   let pairWaiters = [];
   let renewing = null;
   const listeners = new Set();
@@ -883,7 +886,8 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     ? (line) => process.stderr.write(`onlykey-js ble: ${line}\n`) : () => {});
   /* the link's own news (down, reconnecting, back): always to onLink - a long-running service shows it - and to the trace */
   const say = (line) => {
-    trace(line);
+    /* once: with a reporter (a service) the default stderr trace would print the same line again */
+    if (!onLink || log) trace(line);
     if (onLink) {
       try { onLink(line); } catch { /* a reporter never breaks the link */ }
     }
@@ -1074,11 +1078,13 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     if (closing) { await closing; closing = null; }
     {
       if (link) return { started: true, address: link.describe };
+      const tUp = Date.now();
       assembler = createAssembler();
       held = [];
       writing = false;
       wrote = false;
       link = await openLink();
+      const tOpen = Date.now();
       lastError = null;
       session = null;
       phoneBatch = false;
@@ -1114,6 +1120,10 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         }
         if (!session) throw bleError('ESILENT', SILENT_MESSAGE);
         trace('encrypted session open (Part T)');
+        stats.connects += 1;
+        stats.lastUpMs = Date.now() - tUp;
+        firstAfterConnect = true;
+        say(`link up in ${stats.lastUpMs} ms (open ${tOpen - tUp}, hello ${Date.now() - tOpen})`);
         const waiting = early;
         early = [];
         for (const m of waiting) onSealed(m);
@@ -1168,9 +1178,11 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         try {
           await startLink();
         } catch (e) {
-          say(`reconnect failed: ${e && e.message}`);
+          stats.reconnectsFailed += 1;
+          say(`reconnect failed (${stats.reconnectsFailed} of ${stats.reconnects + stats.reconnectsFailed} so far; the request was not sent): ${e && e.message}`);
           throw bleError('ENOTOPEN', `the phone is not connected, and reconnecting failed: ${e && e.message}`, e);
         }
+        stats.reconnects += 1;
         say(`reconnected${session ? ' (encrypted)' : ''}`);
       }
       if (!link) {
@@ -1197,6 +1209,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       if (!wrote) trace(`first write: ${pieces.length} fragment(s) of <= ${size} bytes at mtu ${link.mtu}`);
       wrote = true;
       writing = true;
+      const tw = Date.now();
       let sent = 0;
       try {
         for (const piece of pieces) {
@@ -1237,6 +1250,10 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         throw failed;
       }
       writing = false;
+      if (firstAfterConnect) {
+        firstAfterConnect = false;
+        say(`first request after connecting: ${pieces.length} write(s) in ${Date.now() - tw} ms`);
+      }
       /* Echo first (dir IN, as every pipe does, one per report), then anything that beat it. */
       for (const frame of frames) emit({ iface, dir: DIR.IN, bytes: frame });
       const replies = held;
@@ -1261,6 +1278,9 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
 
     /** Whether reports travel sealed on this link. */
     get encrypted() { return !!session; },
+
+    /** How links came and went: connects, reconnects, reconnects that failed, the last link-up time. */
+    get linkStats() { return { ...stats }; },
 
     /** This computer's Part T pairing id with the phone (the Edge wire's dev), or null. */
     get pairingId() { return pairing && pairing.id ? String(pairing.id) : null; },

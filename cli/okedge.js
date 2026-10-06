@@ -107,6 +107,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
           for (const q of keyOwed) out(`  #${q}: ${s.owed.includes(q) ? "this budget's use" : "a pressed sign with the agent's key (R16)"} - okedge ticket ${q} --msg "…"`);
         } else if (s.owed.length) out(`ticket owed for #${s.owed.join(', #')}`);
       }
+      if (s.link) out(`bluetooth: ${s.link.connects} connect(s), ${s.link.reconnects} reconnect(s), ${s.link.reconnectsFailed} failed${s.link.lastUpMs !== null ? `; last link up in ${s.link.lastUpMs} ms` : ''}`);
       return 0;
     }
     if (cmd === 'budget') {

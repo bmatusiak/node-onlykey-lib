@@ -321,3 +321,29 @@ test('release(): the link is let go, the next write connects fresh and says hell
   assert.strictEqual(seen, g.noble);
   await p.stop();
 });
+
+test('link counts: connects and reconnects are counted, and a failed reconnect is counted and sends nothing (Brad, 2026-10-06)', async () => {
+  const home = tmpHome();
+  const g = gate();
+  const p0 = pipeOver(g);
+  await p0.start();
+  await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await p0.stop();
+  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+  await p.start();
+  await p.release('idle');
+  let r = nextOut(p);
+  await p.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
+  assert.ok(await r);
+  assert.deepStrictEqual({ connects: p.linkStats.connects, reconnects: p.linkStats.reconnects, failed: p.linkStats.reconnectsFailed }, { connects: 2, reconnects: 1, failed: 0 });
+  assert.ok(typeof p.linkStats.lastUpMs === 'number');
+  /* the phone is gone: the reconnect fails, is counted, and the request never goes out */
+  await p.release('idle');
+  const before = g.noble.phone.received.length;
+  g.noble.state = 'poweredOff';
+  await assert.rejects(p.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0])), /reconnecting failed/);
+  assert.strictEqual(p.linkStats.reconnectsFailed, 1);
+  assert.strictEqual(g.noble.phone.received.length, before, 'nothing went out');
+  g.noble.state = 'poweredOn';
+  await p.stop();
+});

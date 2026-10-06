@@ -190,6 +190,10 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
     urgentWaiting() {
       return laneOf(transport).urgentWaiting();
     },
+    /** the pipe's link counts (Bluetooth), or null */
+    linkStats() {
+      return pipe.linkStats || null;
+    },
     /** this computer's id on the Edge wire: the pipe's Part T pairing id, when it has one */
     deviceId() {
       return pipe.pairingId || null;

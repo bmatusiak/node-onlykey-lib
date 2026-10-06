@@ -198,12 +198,20 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
         let r;
         try {
           /*
-           * One retry after an answer that never came (the A13, 2026-10-05: a ticket's
-           * answer took over 6 s, twice): safe - the key files it now, or says it
-           * already has it (below).
+           * AN ANSWER THAT NEVER CAME (the A13, 2026-10-05: a ticket's answer took
+           * over 6 s, twice). A TICKET changes the key, so it is NEVER sent twice
+           * (Brad, 2026-10-06): the key is asked instead - its newest link. If that
+           * is this use's ticket, it was filed and only the answer was lost;
+           * otherwise the error stands and the caller decides.
            */
-          const once = () => edge.ticket(link.seq, codes.ticketCode(code), tickets.messageHash(message));
-          r = await once().catch((e) => { if (/no answer to request/.test(String(e && e.message))) return once(); throw e; });
+          r = await edge.ticket(link.seq, codes.ticketCode(code), tickets.messageHash(message)).catch(async (e) => {
+            if (!/no answer to request/.test(String(e && e.message))) throw e;
+            const h = await edge.head();
+            const [newest] = h.seq === null ? [] : await edge.pickup(h.seq, 1);
+            const f = newest && chain.decodeLink(newest.link);
+            if (f && f.op === codes.OP.TICKET && f.grantId === link.seq) return { seq: h.seq, head: h.head, lostAnswer: true };
+            throw e;
+          });
         } catch (e) {
           /*
            * THE KEY IS THE TRUTH ON WHAT IS OWED. Found on the A13 (2026-10-05):

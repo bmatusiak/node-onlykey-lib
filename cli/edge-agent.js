@@ -554,7 +554,7 @@ function isSilence(e) {
   return false;
 }
 
-async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null, onSilence = null }) {
+async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null, onSilence = null, linkStats = null }) {
   const wire = require('./ssh-wire');
   const sshPub = require('../src/crypto/ssh-pub');
   const pgpCert = require('../src/crypto/pgp-cert');
@@ -626,6 +626,9 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
   }
 
   const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge, openOther, selfName });
+  /* okedge status also says how the Bluetooth link has been: connects, reconnects, failures */
+  const plainStatus = handlers.status;
+  handlers.status = async (req) => ({ ...(await plainStatus(req)), link: linkStats ? linkStats() : null });
   for (const op of ['budget', 'continue', 'end']) {
     const h = handlers[op];
     handlers[op] = async (req) => {

@@ -243,3 +243,27 @@ test('an owed ticket is filed after the budget ended - no budget, no waive', asy
   await c.ticketOwed(one.link.seq, { message: 'pushed before the lock' });
   assert.equal((await edge.head()).owed, 0, 'filed without the budget');
 });
+
+test('a ticket whose answer never came is NEVER sent twice: the key is asked instead (Brad, 2026-10-06)', async () => {
+  const { transport, edge } = await readyKey();
+  const sign = (bytes) => transport.use(bytes, { slot: 222 });
+  const lost = () => Object.assign(new Error('Edge: no answer to request 32 within 6000 ms; nothing arrived'), { code: 'ETIMEDOUT' });
+  /* the key files it, the answer is lost */
+  let sent = 0;
+  const filed = { ...edge, ticket: async (...a) => { sent += 1; await edge.ticket(...a); throw lost(); } };
+  const c = client.createEdgeClient({ edge: filed, channel: phone(edge), signer: AGENT });
+  const budget = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: AGENT_ID }], ttlMinutes: 60 });
+  const one = await budget.use(Uint8Array.from([1]), sign);
+  const r = await budget.ticket(one.link, { message: 'pushed' });
+  assert.equal(r.lostAnswer, true, 'the key\'s newest link is this ticket');
+  assert.equal(sent, 1, 'the TICKET went out once');
+  assert.deepEqual(budget.pending(), []);
+  /* the request never reached the key: the error stands - and still went out once */
+  let sent2 = 0;
+  const never = { ...edge, ticket: async () => { sent2 += 1; throw lost(); } };
+  const c2 = client.createEdgeClient({ edge: never, channel: phone(edge), signer: AGENT });
+  const b2 = await c2.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: AGENT_ID }], ttlMinutes: 60 });
+  const two = await b2.use(Uint8Array.from([2]), sign);
+  await assert.rejects(b2.ticket(two.link, { message: 'pushed' }), /no answer/);
+  assert.equal(sent2, 1, 'no resend');
+});

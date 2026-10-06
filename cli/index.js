@@ -1812,6 +1812,7 @@ COMMANDS['edge-agent'] = {
         log: (l) => io.err(`edge-agent: ${l}`),
         confirm: () => io.err('edge-agent: confirm on the OnlyKey (a press)'),
         selfName: opts.address || null,
+        linkStats: () => (typeof transport.linkStats === 'function' ? transport.linkStats() : null),
         /* a request nobody answered: let the Bluetooth link go (the next one connects fresh, hello first) */
         onSilence: opts.ble ? async () => { await transport.release('nobody answered').catch(() => {}); } : null,
         /* R29 (okedge sibling add): a second link, to the other phone, for one request */
@@ -1859,7 +1860,8 @@ COMMANDS['edge-agent'] = {
        * hello first, so a link the phone no longer holds a session for never
        * outlives one burst.
        */
-      const IDLE_MS = Number(process.env.OKEDGE_IDLE_MS) || 10000;
+      /* 60 s (Brad, 2026-10-06: both ends recover on their own now, so a working session stays connected) */
+      const IDLE_MS = Number(process.env.OKEDGE_IDLE_MS) || 60000;
       const idleTick = opts.ble && typeof transport.laneState === 'function'
         ? setInterval(() => {
           const st = transport.laneState();
