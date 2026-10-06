@@ -76,6 +76,7 @@ function gate({ windowOpen = true, approve = true, batch = false, mtu } = {}) {
           g.packed += 1;
           for (let i = 1; i < pt.length; i += 64) { g.toKey.push(pt.slice(i, i + 64)); firmware.write(IFACE.VENDOR, pt.slice(i, i + 64)); }
         }
+        if (pt[0] === 0x02 && pt[1] === 0x31) g.bye = (g.bye || 0) + 1; /* the computer's goodbye */
         if (pt[0] === 0x02 && renewState) {
           const rec = g.records[0];
           g.renewed = bt.phoneRenewFinish(rec, renewState, pt.slice(1), Date.now());
@@ -291,4 +292,32 @@ test('several reports in one write: 9 reports in 2 writes to a phone that reads 
   const small = await run({ batch: true, mtu: 150 });
   assert.strictEqual(small.g.packed, 0, 'at MTU 150 two reports do not fit one write: one report per write');
   assert.deepStrictEqual(small.g.toKey.map((r) => r[5]), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+});
+
+test('release(): the link is let go, the next write connects fresh and says hello first, and is answered (Brad, 2026-10-06)', async () => {
+  const home = tmpHome();
+  const g = gate();
+  const p0 = pipeOver(g);
+  await p0.start();
+  await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await p0.stop();
+  const seen = g.noble;
+  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+  await p.start();
+  const firstSession = g.session;
+  let r = nextOut(p);
+  await p.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
+  assert.ok(await r, 'answered before the release');
+  await p.release('idle');
+  assert.strictEqual(p.isRunning(), false, 'the link is let go');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.strictEqual(g.bye, 1, 'the phone was told goodbye, sealed, before the link closed');
+  /* the phone loses its session meanwhile (the app's screen re-created) - a fresh hello must not need it */
+  g.session = null;
+  r = nextOut(p);
+  await p.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
+  assert.ok(await r, 'answered after the release - a new connection, hello first');
+  assert.ok(g.session && g.session !== firstSession, 'a new session from a new hello');
+  assert.strictEqual(seen, g.noble);
+  await p.stop();
 });

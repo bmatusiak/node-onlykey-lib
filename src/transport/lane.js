@@ -44,9 +44,10 @@ function laneOf(transport) {
   if (!lane) {
     const waiting = []; /* {fn, urgent, resolve, reject} not yet started */
     let running = false;
+    let lastEnd = Date.now(); /* when the lane last went idle (ms) */
     const next = () => {
       const item = waiting.shift();
-      if (!item) { running = false; return; }
+      if (!item) { running = false; lastEnd = Date.now(); return; }
       start(item);
     };
     const start = (item) => {
@@ -77,6 +78,8 @@ function laneOf(transport) {
       }
     });
     lane.urgentWaiting = () => waiting.some((x) => x.urgent);
+    /* idle: nothing running, nothing waiting - and since when (an agent lets its Bluetooth link go after a quiet spell) */
+    lane.state = () => ({ idle: !running && waiting.length === 0, since: lastEnd });
     lanes.set(transport, lane);
   }
   return lane;

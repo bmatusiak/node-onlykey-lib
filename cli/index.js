@@ -1807,6 +1807,8 @@ COMMANDS['edge-agent'] = {
         log: (l) => io.err(`edge-agent: ${l}`),
         confirm: () => io.err('edge-agent: confirm on the OnlyKey (a press)'),
         selfName: opts.address || null,
+        /* a request nobody answered: let the Bluetooth link go (the next one connects fresh, hello first) */
+        onSilence: opts.ble ? async () => { await transport.release('nobody answered').catch(() => {}); } : null,
         /* R29 (okedge sibling add): a second link, to the other phone, for one request */
         openOther: async (address) => {
           if (!opts.ble) throw new Error('pairing another phone needs --ble (the other phone is reached over Bluetooth)');
@@ -1844,6 +1846,22 @@ COMMANDS['edge-agent'] = {
       io.out(row('ssh agent', `${svc.sharedPath}  (shared: every sign here asks for a press)`));
       io.out(row('control', svc.controlPath));
       io.out('ready - okedge budget / exec / ticket; Ctrl-C to stop');
+      /*
+       * RELEASE WHEN IDLE (Brad, 2026-10-06): the link is let go once the key's
+       * lane has been quiet this long - nothing running, nothing waiting (a press
+       * wait and a budget sheet both sit in the lane, so neither is cut). The
+       * phone goes back to advertising; the next request connects fresh and says
+       * hello first, so a link the phone no longer holds a session for never
+       * outlives one burst.
+       */
+      const IDLE_MS = Number(process.env.OKEDGE_IDLE_MS) || 10000;
+      const idleTick = opts.ble && typeof transport.laneState === 'function'
+        ? setInterval(() => {
+          const st = transport.laneState();
+          if (st.idle && Date.now() - st.since >= IDLE_MS && transport.isOpen()) void transport.release('idle').catch(() => {});
+        }, 1000)
+        : null;
+      if (idleTick && idleTick.unref) idleTick.unref();
       await new Promise((resolve) => {
         process.once('SIGINT', resolve);
         process.once('SIGTERM', resolve);

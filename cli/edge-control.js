@@ -61,7 +61,7 @@ const same = (a, b) => {
  * Serve the control endpoint. handlers: {[op]: async (request) => answer}.
  * A request without the right `auth` gets {ok: false, error: 'unauthorised'}.
  */
-async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOWS, log = () => {} }) {
+async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOWS, log = () => {}, onError = null }) {
   const key = controlKey({ home, create: true });
   const where = controlPath({ home, windows });
   if (!windows) {
@@ -89,6 +89,7 @@ async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOW
             return { ok: true, ...(await h(req)) };
           } catch (e) {
             log(`control ${req.op}: ${e.message}`);
+            if (onError) { try { await onError(e, req); } catch { /* the answer still goes back */ } }
             return { ok: false, error: e.message, code: e.code };
           }
         })().then((answer) => { if (!sock.destroyed) sock.write(JSON.stringify(answer) + '\n'); });

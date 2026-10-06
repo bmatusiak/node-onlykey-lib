@@ -41,3 +41,20 @@ test('lane: a conversation that throws does not stop the ones behind it', async 
   await y;
   assert.deepStrictEqual(order, ['y']);
 });
+
+test('lane: state() says idle, and since when - busy while a conversation runs or waits', async () => {
+  const lane = laneOf({});
+  const t0 = Date.now();
+  assert.strictEqual(lane.state().idle, true);
+  let release;
+  const a = lane(() => new Promise((r) => { release = r; }));
+  const b = lane(async () => {});
+  assert.strictEqual(lane.state().idle, false);
+  release();
+  await a;
+  await b;
+  await new Promise((r) => setImmediate(r));
+  const st = lane.state();
+  assert.strictEqual(st.idle, true);
+  assert.ok(st.since >= t0, 'idle since the last conversation ended');
+});

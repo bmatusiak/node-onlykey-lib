@@ -89,6 +89,7 @@ export let protocol: {
 };
 export let transport: {
     usb: typeof import("./transport/usbDescriptors");
+    lane: typeof import("./transport/lane");
     IFACE: {
         KEYBOARD: 0;
         FIDO: 1;

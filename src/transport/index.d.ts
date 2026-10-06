@@ -1,5 +1,6 @@
 declare const _exports: {
     usb: typeof import("./usbDescriptors");
+    lane: typeof import("./lane");
     IFACE: {
         KEYBOARD: 0;
         FIDO: 1;

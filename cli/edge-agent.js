@@ -540,7 +540,19 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
  * @param {object} o.openpgp the openpgp fork (src/crypto/pgp)
  * @param {string} [o.shimCommand] what git runs as gpg.program
  */
-async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null }) {
+/*
+ * Silence: the key or the phone sent nothing at all back - not a refusal, not
+ * a press that ran out (the key spoke then), not a reply cut short.
+ */
+function isSilence(e) {
+  for (let x = e; x; x = x.cause) {
+    if (x.code === 'EEDGE_UNSUPPORTED') return true;
+    if (x.code === 'ETIMEDOUT' && !x.pressTimeout && !x.pressRefused && !x.partial) return true;
+  }
+  return false;
+}
+
+async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null, onSilence = null }) {
   const wire = require('./ssh-wire');
   const sshPub = require('../src/crypto/ssh-pub');
   const pgpCert = require('../src/crypto/pgp-cert');
@@ -622,7 +634,14 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
     };
   }
   const shared = await agentSrv.serveAgent({ handler: agent.sharedHandler, where: agentSrv.defaultAgentPath(), log });
-  const control = await serveControl({ handlers, log });
+  /*
+   * NOBODY ANSWERED (Brad, 2026-10-06): a request that ended in silence - no
+   * report at all from the key or the phone - means this link may be one the
+   * phone no longer holds a session for (it drops sealed requests in silence).
+   * onSilence lets the link go; the next request connects fresh, hello first.
+   * The request is not sent again.
+   */
+  const control = await serveControl({ handlers, log, onError: async (e) => { if (onSilence && isSilence(e)) await onSilence(e); } });
 
   return {
     agent,
@@ -635,4 +654,5 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
   };
 }
 
-module.exports = { createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS };
+module.exports = {
+  isSilence, createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS };

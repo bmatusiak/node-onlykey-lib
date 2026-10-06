@@ -109,6 +109,8 @@ const KIND_CONTROL = 0x02;
  */
 const KIND_REPORTS = 0x03;
 const CTRL_BATCH = 0x30;
+/* the computer is done for now: the phone ends this session and lets the link go (release()) */
+const CTRL_BYE = 0x31;
 const REPORT = 64;
 /* a sealed message: 3-byte BLE header + 4-byte counter + 16-byte tag + the kind byte */
 const PACK_OVERHEAD = 3 + 4 + 16 + 1;
@@ -1278,6 +1280,42 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       return link !== null;
     },
 
+    /*
+     * LET THE LINK GO, STAY READY (Brad, 2026-10-06): an agent that kept one
+     * link open for its life left the A13 "connected" for good after the phone
+     * lost its session (the app's screen re-created, 09:46): the phone dropped
+     * every sealed request in silence, and nothing ever dropped the link. Now
+     * the agent releases it after a quiet spell (or a request nobody answered),
+     * the phone goes back to advertising, and the next write connects fresh -
+     * hello first (startLink). Nothing is resent.
+     */
+    async release(why = 'idle') {
+      if (!link) return;
+      if (writing || handshaking) return; /* mid-write or mid-hello: not now */
+      if (renewing) await Promise.race([renewing, new Promise((r) => setTimeout(r, 5000))]);
+      /*
+       * GOODBYE FIRST: closing on this side does not always end the link - on the
+       * Pixel it shares the keyboard's classic connection, which Windows keeps.
+       * So the phone is told, sealed, and lets the link go itself (ok-rn
+       * btTransit: the session ends, the computer is disconnected). Best effort:
+       * a link already dead just closes.
+       */
+      if (session) {
+        await Promise.race([
+          sendRaw(CMD_SEALED, btpair.seal(session, Uint8Array.of(KIND_CONTROL, CTRL_BYE))).catch(() => {}),
+          new Promise((r) => setTimeout(r, 1500)),
+        ]);
+      }
+      const was = link;
+      link = null;
+      session = null;
+      phoneBatch = false;
+      lastError = new Error(`released (${why})`);
+      say(`released the Bluetooth link (${why}) - the next request connects again`);
+      closing = Promise.resolve(was.close()).catch(() => {});
+      await closing;
+    },
+
     write(iface, bytes) {
       return sendFrames(iface, [bytes]).then((n) => n);
     },
@@ -1312,6 +1350,6 @@ function concatAll(list) {
 
 module.exports = {
   createBlePipe, fragment, createAssembler, loadNoble, loadDbus, pickBluezDevice, findVendor, refusal,
-  CMD_ERROR, CMD_REPORT, CMD_SEALED, CMD_PAIR, KIND_REPORT, KIND_CONTROL, KIND_REPORTS, CTRL_BATCH, reportsPerWrite,
+  CMD_ERROR, CMD_REPORT, CMD_SEALED, CMD_PAIR, KIND_REPORT, KIND_CONTROL, KIND_REPORTS, CTRL_BATCH, CTRL_BYE, reportsPerWrite,
   SERVICE_UUID, REQUEST_UUID, RESPONSE_UUID, FIDO_UUID, TIMEOUTS,
 };

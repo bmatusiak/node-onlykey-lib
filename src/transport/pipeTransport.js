@@ -190,6 +190,17 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
     urgentWaiting() {
       return laneOf(transport).urgentWaiting();
     },
+    /** the lane: idle (nothing running or waiting), and since when */
+    laneState() {
+      return laneOf(transport).state();
+    },
+    /**
+     * Let the link go and stay ready: the next write connects again (the
+     * Bluetooth pipe says hello first). A pipe that cannot does nothing.
+     */
+    async release(why) {
+      if (typeof pipe.release === 'function') await pipe.release(why);
+    },
     request(opts) {
       return laneOf(transport)(() => transport.requestNow(opts));
     },
