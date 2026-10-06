@@ -29,34 +29,54 @@ const lanes = new WeakMap();
 /**
  * The lane of `transport`: exclusive(fn) runs fn after every conversation
  * queued before it has settled, and returns fn's result.
+ *
+ * URGENT (rule 8, Brad 2026-10-06): a Hold or Revoke the person taps must not
+ * wait behind an agent's conversation. exclusive(fn, {urgent: true}) goes to
+ * the FRONT of what is waiting (behind earlier urgent ones) - never into the
+ * conversation already running: one conversation at a time still holds. The
+ * phone's bridge ends a computer's hold at its next request boundary when one
+ * waits (urgentWaiting).
  * @param {object} transport
- * @returns {(fn: () => Promise<any>) => Promise<any>}
+ * @returns {(fn: () => Promise<any>, opts?: {urgent?: boolean}) => Promise<any>}
  */
 function laneOf(transport) {
   let lane = lanes.get(transport);
   if (!lane) {
-    let tail = null; /* the last queued conversation's settling, or null when the lane is idle */
-    lane = (fn) => {
+    const waiting = []; /* {fn, urgent, resolve, reject} not yet started */
+    let running = false;
+    const next = () => {
+      const item = waiting.shift();
+      if (!item) { running = false; return; }
+      start(item);
+    };
+    const start = (item) => {
+      running = true;
+      let run;
+      try {
+        run = Promise.resolve(item.fn());
+      } catch (e) {
+        run = Promise.reject(e);
+      }
+      run.then(item.resolve, item.reject);
+      run.then(next, next);
+    };
+    lane = (fn, opts = {}) => new Promise((resolve, reject) => {
+      const item = { fn, urgent: Boolean(opts && opts.urgent), resolve, reject };
       /*
        * An IDLE lane runs fn at once, in this same tick: a conversation that
        * subscribes and writes synchronously (transport.request) behaves
        * exactly as it did before there was a lane. Only a busy lane queues.
        */
-      let run;
-      if (tail === null) {
-        try {
-          run = Promise.resolve(fn());
-        } catch (e) {
-          run = Promise.reject(e);
-        }
+      if (!running) { start(item); return; }
+      if (item.urgent) {
+        let at = 0;
+        while (at < waiting.length && waiting[at].urgent) at += 1;
+        waiting.splice(at, 0, item);
       } else {
-        run = tail.then(fn, fn);
+        waiting.push(item);
       }
-      const settled = run.then(() => {}, () => {});
-      tail = settled;
-      settled.then(() => { if (tail === settled) tail = null; });
-      return run;
-    };
+    });
+    lane.urgentWaiting = () => waiting.some((x) => x.urgent);
     lanes.set(transport, lane);
   }
   return lane;
@@ -68,8 +88,15 @@ function laneOf(transport) {
  * written to the older contract (a host's own, a test's fake) still gets
  * one conversation at a time.
  */
-function inLane(transport, fn) {
-  return typeof transport.exclusive === 'function' ? transport.exclusive(fn) : laneOf(transport)(fn);
+function inLane(transport, fn, opts) {
+  return typeof transport.exclusive === 'function' ? transport.exclusive(fn, opts) : laneOf(transport)(fn, opts);
 }
 
-module.exports = { laneOf, inLane };
+/** An urgent conversation (a Hold, a Revoke) is waiting for `transport`'s lane. */
+function urgentWaiting(transport) {
+  if (typeof transport.urgentWaiting === 'function') return transport.urgentWaiting();
+  const lane = lanes.get(transport);
+  return Boolean(lane && lane.urgentWaiting());
+}
+
+module.exports = { laneOf, inLane, urgentWaiting };

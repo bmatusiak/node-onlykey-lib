@@ -183,8 +183,12 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
      * request, for use INSIDE exclusive() - request() there would wait for
      * the conversation it is part of.
      */
-    exclusive(fn) {
-      return laneOf(transport)(fn);
+    exclusive(fn, opts) {
+      return laneOf(transport)(fn, opts);
+    },
+    /** an urgent conversation (a Hold, a Revoke - rule 8) waits for the lane */
+    urgentWaiting() {
+      return laneOf(transport).urgentWaiting();
     },
     request(opts) {
       return laneOf(transport)(() => transport.requestNow(opts));

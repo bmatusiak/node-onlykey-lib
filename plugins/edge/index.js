@@ -163,15 +163,16 @@ function setup(imports, register) {
    * pressed ones for their whole wait - runs after the one before it settles.
    */
   /* the KEY's lane, shared with every other plugin (src/transport/lane.js) - not one of Edge's own */
-  function exclusive(fn) {
-    return inLane(transport, fn);
+  function exclusive(fn, laneOpts) {
+    return inLane(transport, fn, laneOpts);
   }
 
+  /* opts.urgent: to the front of the key's lane (rule 8 - a Hold or Revoke the person tapped) */
   function call(sub, args, opts = {}) {
     return exclusive(async () => {
       await busQuiet();
       return callNow(sub, args, opts);
-    });
+    }, opts.urgent ? { urgent: true } : undefined);
   }
 
   /*

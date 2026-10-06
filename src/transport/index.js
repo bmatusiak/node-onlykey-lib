@@ -20,4 +20,11 @@ module.exports = {
    * touches USB should not find `parseUsage` beside `assertTransport`.
    */
   usb: require('./usbDescriptors'),
+
+  /*
+   * The key's lane (one conversation at a time; urgent goes to the front -
+   * rule 8). Exported for a host that relays another computer's requests to
+   * the key (ok-rn's Bluetooth bridge) and its tests.
+   */
+  lane: require('./lane'),
 };
