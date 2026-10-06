@@ -284,6 +284,23 @@ function setup(imports, register) {
           reject(Object.assign(new Error(`Edge: the key stopped waiting for the press (request ${sub})`), { code: 'ETIMEDOUT', pressTimeout: true }));
           return;
         }
+        /*
+         * The firmware refuses a press in a sentence too. MEASURED ON THE PIXEL
+         * (2026-10-05, the firmware console): the core closes every wait at
+         * 20 s and clears what it waited for; a press after that, while the
+         * plugin's own 25 s still ran, got "Error button press was not
+         * accepted" - and the registration read "Erro" as a seq, found no link
+         * there and answered "invalid" (the A13's 2026-10-04 registration). A
+         * refused press is a timeout to the caller: no press counted.
+         */
+        const said = okmsg.text(bytes);
+        if (/^Error [ -~]+$/.test(said)) {
+          clearTimeout(timer);
+          off();
+          const press = /press|confirmation|challenge/i.test(said);
+          reject(Object.assign(new Error(`Edge: the key said "${said}" (request ${sub})`), { code: press ? 'ETIMEDOUT' : 'EKEYREFUSED', keyText: said, pressRefused: press }));
+          return;
+        }
         if (text) { pass('not-status', bytes); return; }
         if (accept && !accept(bytes, got)) { pass('not-ours', bytes); return; }
         got.push(bytes);

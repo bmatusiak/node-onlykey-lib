@@ -55,3 +55,27 @@ test('a late HEAD answer during the press wait is passed over too', async () => 
   const r = await edge.agentAdd(new Uint8Array(32).fill(9), { timeoutMs: 2000 });
   assert.equal(r.seq, h.seq + 1);
 });
+
+test('a press the key refuses ("Error button press was not accepted") ends the request as a timeout, never as a seq', async () => {
+  /* the core closed its 20 s wait; the press after it was refused in a sentence (Pixel, 2026-10-05) */
+  const t = lateAnswerKey(0x15);
+  const edge = edgeOver(t);
+  t.setStale(report([...Buffer.from('Error button press was not accepted')]));
+  await assert.rejects(edge.agentAdd(new Uint8Array(32).fill(5), { timeoutMs: 2000 }), (e) => {
+    assert.equal(e.code, 'ETIMEDOUT');
+    assert.equal(e.keyText, 'Error button press was not accepted');
+    return true;
+  });
+});
+
+test('a registration whose press the key refused says so - not "invalid", not "nobody pressed"', async () => {
+  const { request, approve } = require('../src/edge');
+  const t = lateAnswerKey(0x15);
+  const edge = edgeOver(t);
+  t.setStale(report([...Buffer.from('Error button press was not accepted')]));
+  const signer = request.signerFromSecret(new Uint8Array(32).fill(33));
+  const msg = await request.buildRegister({ signer, name: 'late presser' });
+  const r = await approve.approveRegister(msg, { edge, seen: new Set(), ask: async () => 'approve', timeoutMs: 2000 });
+  assert.equal(r.refusal, 'timeout');
+  assert.match(r.detail || r.reason || JSON.stringify(r), /refused the press .*20 s/);
+});

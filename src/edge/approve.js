@@ -96,7 +96,7 @@ async function approveRequest(msg, { edge, registered, seen, ownIdentities = [],
     if (e && e.status === 'ticket-owed') return refuse('ticket_owed');
     if (e && e.status === 'restoring') return refuse('restoring');
     if (e && e.status === 'stale-head') return refuse('copy_unverified', 'the chain moved since the copy was checked');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
     throw e;
   }
   return {
@@ -110,6 +110,16 @@ async function approveRequest(msg, { edge, registered, seen, ownIdentities = [],
       checkpoint: { seq: g.checkpoint.seq, head: toHex(g.checkpoint.head), signature: toHex(g.checkpoint.signature) },
     },
   };
+}
+
+/*
+ * Why no press counted. The key closes its wait at 20 s (the core's own
+ * timeout) and refuses a press after that in a sentence ("Error button press
+ * was not accepted", Pixel 2026-10-05): say so, or the person who DID press
+ * is told nobody pressed.
+ */
+function noPress(e) {
+  return e && e.pressRefused ? `the key refused the press (${e.keyText}) - its 20 s wait had ended` : 'no press on the key';
 }
 
 /**
@@ -142,7 +152,7 @@ async function approveRegister(msg, { edge, registered = [], seen, ask, onPress,
     r = await edge.agentAdd(fromHex(agent), { onPress, timeoutMs });
   } catch (e) {
     if (e && e.status === 'restoring') return refuse('restoring');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
     throw e;
   }
   /* the link the press wrote: this agent, pressed */
@@ -188,7 +198,7 @@ async function approvePeerAdd(msg, { edge, seen, ask, onPress, timeoutMs = 30000
     r = await edge.peerAdd(fromHex(peer), { onPress, timeoutMs });
   } catch (e) {
     if (e && e.status === 'restoring') return refuse('restoring');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
     throw e;
   }
   /* the link the press wrote: this peer, pressed */
@@ -241,7 +251,7 @@ async function approveSync({ peer, name, added, head, keychainHash = null, keych
   } catch (e) {
     if (e && e.status === 'restoring') return refuse('restoring');
     if (e && e.status === 'no-such-peer') return refuse('invalid', 'the key says that place is not on its list');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
     throw e;
   }
   /* the key computed the subject itself: it must be the one the phone computed */
@@ -294,7 +304,7 @@ async function approveSibling(msg, { edge, seen, ask, onPress, timeoutMs = 30000
     if (e && e.status === 'sibling-known') return { ok: true, already: true };
     if (e && e.status === 'siblings-full') return refuse('invalid', 'the key already has four paired keys');
     if (e && e.status === 'bad-key') return refuse('invalid', 'the key refused that key');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
     throw e;
   }
   /* the link the press wrote: this key and id, pressed */
@@ -328,7 +338,7 @@ async function approveAnchor({ peer, name, index, chain: siblingId, checkpoint, 
     if (e && e.status === 'restoring') return refuse('restoring');
     if (e && e.status === 'bad-checkpoint') return refuse('invalid', 'the key says that checkpoint is not signed by the paired key');
     if (e && e.status === 'no-such-sibling') return refuse('invalid', 'the key says that key is not paired');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', 'no press on the key');
+    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
     throw e;
   }
   const [l] = await edge.pickup(r.seq, 1);
