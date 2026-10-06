@@ -109,7 +109,10 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2 } = {}) {
          */
         if (timer && typeof timer.unref === 'function') timer.unref();
         (async () => {
-          for (const frame of encode(KIND.REQUEST, message)) await transport.write(iface, frame);
+          /* one request's frames together: the Bluetooth pipe puts several in one write (cli/transport-ble.js KIND_REPORTS) */
+          const frames = encode(KIND.REQUEST, message);
+          if (typeof transport.writeMany === 'function') await transport.writeMany(iface, frames);
+          else for (const frame of frames) await transport.write(iface, frame);
         })().catch((e) => { clearTimeout(timer); off(); reject(e); });
       }));
     },

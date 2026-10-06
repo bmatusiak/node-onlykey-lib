@@ -97,6 +97,25 @@ const CMD_SEALED = 0x84;
 const CMD_PAIR = 0x85;
 const KIND_REPORT = 0x01;
 const KIND_CONTROL = 0x02;
+/*
+ * SEVERAL REPORTS IN ONE WRITE (Brad, 2026-10-06): every write is acknowledged
+ * by the phone (~0.3 s each on Windows), so a 6-report Edge note cost ~2 s in
+ * writes alone. KIND_REPORTS carries whole 64-byte reports back to back in ONE
+ * sealed message that fits ONE write at the negotiated MTU (7 at 517); the
+ * phone opens it and hands each report on, in order, through the same checks a
+ * single one gets. Only to a phone that said it reads them (CTRL_BATCH, a
+ * sealed control message after the hello - an older phone never sends it and
+ * keeps getting one report per write), and only when at least two fit.
+ */
+const KIND_REPORTS = 0x03;
+const CTRL_BATCH = 0x30;
+const REPORT = 64;
+/* a sealed message: 3-byte BLE header + 4-byte counter + 16-byte tag + the kind byte */
+const PACK_OVERHEAD = 3 + 4 + 16 + 1;
+/** How many whole reports one write carries at this fragment size (0 or 1 = do not pack). */
+function reportsPerWrite(size) {
+  return Math.max(0, Math.floor((size - PACK_OVERHEAD) / REPORT));
+}
 const SILENT_MESSAGE = 'no answer from ok-rn - is this computer user paired, and switched on, in ok-rn\'s Bluetooth tab? '
   + '(pair with: onlykey-js --ble pair)';
 
@@ -850,6 +869,10 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   const btpair = require('../src/btpair');
   /* Part T: the session (null = plaintext, until this user is paired with this phone) and waiters for 0x85 answers */
   let session = null;
+  /* the phone said it reads KIND_REPORTS (CTRL_BATCH) - this session only */
+  let phoneBatch = false;
+  /* sealed messages that beat hello() to the session (see onData) */
+  let early = [];
   let pairWaiters = [];
   let renewing = null;
   const listeners = new Set();
@@ -888,6 +911,19 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     for (const listener of [...listeners]) listener(event);
   }
 
+  function onSealed(message) {
+    let plain;
+    try { plain = btpair.open(session, Uint8Array.from(message)); } catch (e) {
+      trace(`dropped a sealed frame: ${e.code || e.message}`);
+      return;
+    }
+    if (plain[0] === KIND_CONTROL) { onControl(plain.slice(1)); return; }
+    if (plain[0] !== KIND_REPORT) return;
+    const sealedEvent = { iface: IFACE.VENDOR, dir: DIR.OUT, bytes: plain.slice(1) };
+    if (writing) held.push(sealedEvent);
+    else emit(sealedEvent);
+  }
+
   function onData(data) {
     const message = assembler.push(data);
     if (!message) return;
@@ -897,17 +933,17 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       return;
     }
     if (message.command === CMD_SEALED) {
-      if (!session) return; /* nothing sealed is expected before a handshake */
-      let plain;
-      try { plain = btpair.open(session, Uint8Array.from(message)); } catch (e) {
-        trace(`dropped a sealed frame: ${e.code || e.message}`);
+      if (!session) {
+        /*
+         * The phone's first sealed message (CTRL_BATCH) follows its HELLO_OK at
+         * once and can land before hello() has set the session: held, and
+         * opened as soon as the session exists (a few at most). Nothing sealed
+         * is expected before a handshake otherwise.
+         */
+        if (handshaking && early.length < 4) early.push(Uint8Array.from(message));
         return;
       }
-      if (plain[0] === KIND_CONTROL) { onControl(plain.slice(1)); return; }
-      if (plain[0] !== KIND_REPORT) return;
-      const sealedEvent = { iface: IFACE.VENDOR, dir: DIR.OUT, bytes: plain.slice(1) };
-      if (writing) held.push(sealedEvent);
-      else emit(sealedEvent);
+      onSealed(message);
       return;
     }
     /* once sealed, a plaintext report from "the phone" is not the phone's: dropped */
@@ -931,6 +967,11 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
 
   /* the phone's renewal offer (day 6 of 7), inside the session: accept, save the new secret, answer sealed */
   function onControl(payload) {
+    if (payload[0] === CTRL_BATCH) {
+      phoneBatch = payload.length >= 2 && payload[1] >= 1;
+      trace(`the phone reads several reports per write: ${phoneBatch}`);
+      return;
+    }
     if (payload[0] !== btpair.T.RENEW_OFFER || !pairing || renewing) return;
     renewing = (async () => {
       const acc = btpair.cliRenewAccept(pairing, payload, now());
@@ -1038,6 +1079,8 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       link = await openLink();
       lastError = null;
       session = null;
+      phoneBatch = false;
+      early = [];
       /* Part T: a paired user opens an encrypted session first - fresh keys every connection */
       handshaking = true;
       try {
@@ -1069,6 +1112,9 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         }
         if (!session) throw bleError('ESILENT', SILENT_MESSAGE);
         trace('encrypted session open (Part T)');
+        const waiting = early;
+        early = [];
+        for (const m of waiting) onSealed(m);
       }
       } catch (e) {
         /*
@@ -1088,6 +1134,117 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       }
       return { started: true, address: link.describe, encrypted: !!session };
     }
+  }
+
+  function sendFrames(iface, list) {
+    if (iface !== IFACE.VENDOR) {
+      return Promise.reject(new Error(
+        `the Bluetooth pipe carries only the vendor interface (${IFACE.VENDOR}); `
+        + `interface ${iface} is not on this link`));
+    }
+    const frames = Array.from(list, (b) => Uint8Array.from(b));
+    for (const frame of frames) {
+      if (frame.length > 4 && frame[0] === 0xff && frame[1] === 0xff && frame[2] === 0xff
+        && frame[3] === 0xff && frame[4] === MSG.OKFWUPDATE) {
+        return Promise.reject(bleError('EFIRMWARE',
+          'Firmware update is refused over Bluetooth. Update a key over USB.'));
+      }
+    }
+    const run = async (mayRetry = true) => {
+      if (refused) {
+        const err = refused;
+        refused = null;
+        throw err;
+      }
+      if (!link && started && reconnect) {
+        /*
+         * The link went down after start() (the phone dropped it, or a write
+         * failed below): connect again - Part T's hello included - and say so.
+         * Only THIS write waits for it; the one that failed was not retried.
+         */
+        say(`the Bluetooth link is down (${lastError ? lastError.message : 'closed'}) - reconnecting`);
+        try {
+          await startLink();
+        } catch (e) {
+          say(`reconnect failed: ${e && e.message}`);
+          throw bleError('ENOTOPEN', `the phone is not connected, and reconnecting failed: ${e && e.message}`, e);
+        }
+        say(`reconnected${session ? ' (encrypted)' : ''}`);
+      }
+      if (!link) {
+        throw bleError('ENOTOPEN',
+          lastError ? lastError.message : 'the phone is not connected');
+      }
+      /* One write when the MTU carries the whole report (the phone's 517 does); else the 20-byte floor. */
+      const size = link.mtu - 3 >= WHOLE_REPORT ? Math.min(link.mtu - 3, 512) : SMALL_FRAGMENT;
+      /* Part T: sealed when paired - the echo below stays the plaintext report, as every pipe promises */
+      const per = session && phoneBatch && size === Math.min(link.mtu - 3, 512) ? reportsPerWrite(size) : 0;
+      const packs = [];
+      if (per >= 2 && frames.length > 1 && frames.every((x) => x.length === REPORT)) {
+        for (let i = 0; i < frames.length; i += per) {
+          const group = frames.slice(i, i + per);
+          packs.push(group.length === 1 ? concat2(Uint8Array.of(KIND_REPORT), group[0]) : concat2(Uint8Array.of(KIND_REPORTS), concatAll(group)));
+        }
+      }
+      const pieces = [];
+      if (packs.length) for (const p of packs) pieces.push(...fragment(btpair.seal(session, p), size, CMD_SEALED));
+      else for (const frame of frames) pieces.push(...(session
+        ? fragment(btpair.seal(session, concat2(Uint8Array.of(KIND_REPORT), frame)), size, CMD_SEALED)
+        : fragment(frame, size)));
+      if (packs.length) trace(`${frames.length} reports in ${pieces.length} write(s) at mtu ${link.mtu}`);
+      if (!wrote) trace(`first write: ${pieces.length} fragment(s) of <= ${size} bytes at mtu ${link.mtu}`);
+      wrote = true;
+      writing = true;
+      let sent = 0;
+      try {
+        for (const piece of pieces) {
+          if (!link) throw bleError('ENOTOPEN', lastError ? lastError.message : 'the phone is not connected');
+          await link.write(piece);
+          sent += 1;
+        }
+      } catch (err) {
+        writing = false;
+        const replies = held;
+        held = [];
+        for (const e of replies) emit(e);
+        const failed = err.code ? err : bleError('EWRITE', `the phone did not take the write: ${err && err.message}`, err);
+        /*
+         * A link that refused a write is not trusted with the next one (on
+         * 2026-10-05 the A13 refused with status 3, then nothing more got
+         * through): drop it, so the next request reconnects. This request
+         * fails - a half-sent request is never sent again on its own.
+         */
+        if (link) {
+          const was = link;
+          link = null;
+          lastError = failed;
+          closing = Promise.resolve(was.close()).catch(() => {});
+          say(`a write failed (${failed.message}) - link dropped; the next request reconnects`);
+        }
+        /*
+         * ONCE MORE, ONLY IF NOTHING OF IT ARRIVED: the FIRST fragment was
+         * refused, so the phone holds no part of this request - after a phone
+         * app restart the old link always refuses that way (status 3, the A13
+         * and the Pixel, 2026-10-05), and the person saw "nothing on screen"
+         * every first time. A request that failed partway is never sent again.
+         */
+        if (sent === 0 && mayRetry && started && reconnect && failed.code === 'EWRITE') {
+          say('nothing of that request reached the phone - reconnecting and sending it once more');
+          return run(false);
+        }
+        throw failed;
+      }
+      writing = false;
+      /* Echo first (dir IN, as every pipe does, one per report), then anything that beat it. */
+      for (const frame of frames) emit({ iface, dir: DIR.IN, bytes: frame });
+      const replies = held;
+      held = [];
+      for (const e of replies) emit(e);
+      return frames.reduce((n, x) => n + x.length, 0);
+    };
+    const result = queue.then(run, run);
+    queue = result.catch(() => {});
+    return result;
   }
 
   return {
@@ -1122,101 +1279,17 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     },
 
     write(iface, bytes) {
-      if (iface !== IFACE.VENDOR) {
-        return Promise.reject(new Error(
-          `the Bluetooth pipe carries only the vendor interface (${IFACE.VENDOR}); `
-          + `interface ${iface} is not on this link`));
-      }
-      const frame = Uint8Array.from(bytes);
-      if (frame.length > 4 && frame[0] === 0xff && frame[1] === 0xff && frame[2] === 0xff
-        && frame[3] === 0xff && frame[4] === MSG.OKFWUPDATE) {
-        return Promise.reject(bleError('EFIRMWARE',
-          'Firmware update is refused over Bluetooth. Update a key over USB.'));
-      }
-      const run = async (mayRetry = true) => {
-        if (refused) {
-          const err = refused;
-          refused = null;
-          throw err;
-        }
-        if (!link && started && reconnect) {
-          /*
-           * The link went down after start() (the phone dropped it, or a write
-           * failed below): connect again - Part T's hello included - and say so.
-           * Only THIS write waits for it; the one that failed was not retried.
-           */
-          say(`the Bluetooth link is down (${lastError ? lastError.message : 'closed'}) - reconnecting`);
-          try {
-            await startLink();
-          } catch (e) {
-            say(`reconnect failed: ${e && e.message}`);
-            throw bleError('ENOTOPEN', `the phone is not connected, and reconnecting failed: ${e && e.message}`, e);
-          }
-          say(`reconnected${session ? ' (encrypted)' : ''}`);
-        }
-        if (!link) {
-          throw bleError('ENOTOPEN',
-            lastError ? lastError.message : 'the phone is not connected');
-        }
-        /* One write when the MTU carries the whole report (the phone's 517 does); else the 20-byte floor. */
-        const size = link.mtu - 3 >= WHOLE_REPORT ? Math.min(link.mtu - 3, 512) : SMALL_FRAGMENT;
-        /* Part T: sealed when paired - the echo below stays the plaintext report, as every pipe promises */
-        const pieces = session
-          ? fragment(btpair.seal(session, concat2(Uint8Array.of(KIND_REPORT), frame)), size, CMD_SEALED)
-          : fragment(frame, size);
-        if (!wrote) trace(`first write: ${pieces.length} fragment(s) of <= ${size} bytes at mtu ${link.mtu}`);
-        wrote = true;
-        writing = true;
-        let sent = 0;
-        try {
-          for (const piece of pieces) {
-            if (!link) throw bleError('ENOTOPEN', lastError ? lastError.message : 'the phone is not connected');
-            await link.write(piece);
-            sent += 1;
-          }
-        } catch (err) {
-          writing = false;
-          const replies = held;
-          held = [];
-          for (const e of replies) emit(e);
-          const failed = err.code ? err : bleError('EWRITE', `the phone did not take the write: ${err && err.message}`, err);
-          /*
-           * A link that refused a write is not trusted with the next one (on
-           * 2026-10-05 the A13 refused with status 3, then nothing more got
-           * through): drop it, so the next request reconnects. This request
-           * fails - a half-sent request is never sent again on its own.
-           */
-          if (link) {
-            const was = link;
-            link = null;
-            lastError = failed;
-            closing = Promise.resolve(was.close()).catch(() => {});
-            say(`a write failed (${failed.message}) - link dropped; the next request reconnects`);
-          }
-          /*
-           * ONCE MORE, ONLY IF NOTHING OF IT ARRIVED: the FIRST fragment was
-           * refused, so the phone holds no part of this request - after a phone
-           * app restart the old link always refuses that way (status 3, the A13
-           * and the Pixel, 2026-10-05), and the person saw "nothing on screen"
-           * every first time. A request that failed partway is never sent again.
-           */
-          if (sent === 0 && mayRetry && started && reconnect && failed.code === 'EWRITE') {
-            say('nothing of that request reached the phone - reconnecting and sending it once more');
-            return run(false);
-          }
-          throw failed;
-        }
-        writing = false;
-        /* Echo first (dir IN, as every pipe does), then anything that beat it. */
-        emit({ iface, dir: DIR.IN, bytes: frame });
-        const replies = held;
-        held = [];
-        for (const e of replies) emit(e);
-        return frame.length;
-      };
-      const result = queue.then(run, run);
-      queue = result.catch(() => {});
-      return result;
+      return sendFrames(iface, [bytes]).then((n) => n);
+    },
+
+    /**
+     * Several reports, in order, as few writes as the link allows (see
+     * KIND_REPORTS): one call = one request's reports. Echoed one by one (dir
+     * IN), like write(); the same refusals; the same once-more rule when
+     * nothing of it reached the phone.
+     */
+    writeMany(iface, list) {
+      return sendFrames(iface, list);
     },
 
     on(event, listener) {
@@ -1230,8 +1303,15 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   };
 }
 
+function concatAll(list) {
+  const out = new Uint8Array(list.reduce((n, x) => n + x.length, 0));
+  let at = 0;
+  for (const x of list) { out.set(x, at); at += x.length; }
+  return out;
+}
+
 module.exports = {
   createBlePipe, fragment, createAssembler, loadNoble, loadDbus, pickBluezDevice, findVendor, refusal,
-  CMD_ERROR, CMD_REPORT, CMD_SEALED, CMD_PAIR, KIND_REPORT, KIND_CONTROL,
+  CMD_ERROR, CMD_REPORT, CMD_SEALED, CMD_PAIR, KIND_REPORT, KIND_CONTROL, KIND_REPORTS, CTRL_BATCH, reportsPerWrite,
   SERVICE_UUID, REQUEST_UUID, RESPONSE_UUID, FIDO_UUID, TIMEOUTS,
 };

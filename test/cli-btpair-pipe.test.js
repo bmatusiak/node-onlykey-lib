@@ -24,12 +24,13 @@ const report = (msg, payload = []) => { const r = new Uint8Array(64); r.set([0xf
 const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okt-btpair-'));
 
 /* ok-rn's gate, as T3 will build it: pairing only inside the window, then sealed traffic only */
-function gate({ windowOpen = true, approve = true } = {}) {
-  const g = { windowOpen, approve, records: [], session: null, code: null, renewed: null, plaintextSeen: 0, peer: 'aa:bb:cc:00:11:22' };
+function gate({ windowOpen = true, approve = true, batch = false, mtu } = {}) {
+  const g = { windowOpen, approve, records: [], session: null, code: null, renewed: null, plaintextSeen: 0, peer: 'aa:bb:cc:00:11:22', toKey: [], packed: 0 };
   const phone = bt.generateIdentity();
   const firmware = fakeFirmware();
   let pairState = null, pending = null, renewState = null;
   const noble = fakeNoble({
+    ...(mtu ? { mtu } : {}),
     onMessage(cmd, msg) {
       const now = Date.now();
       if (cmd === 0x85) {
@@ -62,13 +63,19 @@ function gate({ windowOpen = true, approve = true } = {}) {
           if (!r.session) return [];
           g.session = r.session;
           g.records = g.records.map((x) => (x.id === r.record.id ? r.record : x)); /* a promoted renewal sticks */
+          /* a phone that reads several reports per write says so, sealed, right after the hello */
+          if (batch) return [{ cmd: 0x85, bytes: r.msg }, { cmd: 0x84, bytes: bt.seal(r.session, Uint8Array.of(0x02, 0x30, 1)) }];
           return [{ cmd: 0x85, bytes: r.msg }];
         }
         return [];
       }
       if (cmd === 0x84 && g.session) {
         const pt = bt.open(g.session, msg);
-        if (pt[0] === 0x01) firmware.write(IFACE.VENDOR, pt.slice(1));
+        if (pt[0] === 0x01) { g.toKey.push(pt.slice(1)); firmware.write(IFACE.VENDOR, pt.slice(1)); }
+        if (pt[0] === 0x03 && batch) {
+          g.packed += 1;
+          for (let i = 1; i < pt.length; i += 64) { g.toKey.push(pt.slice(i, i + 64)); firmware.write(IFACE.VENDOR, pt.slice(i, i + 64)); }
+        }
         if (pt[0] === 0x02 && renewState) {
           const rec = g.records[0];
           g.renewed = bt.phoneRenewFinish(rec, renewState, pt.slice(1), Date.now());
@@ -247,4 +254,41 @@ test('a paired link that drops reconnects inside the next write - the hello is n
   assert.strictEqual(p.encrypted, true, 'the reconnect came back without its session');
   assert.ok(said.some((l) => /^reconnected \(encrypted\)/.test(l)), said.join(' | '));
   await p.stop();
+});
+
+test('several reports in one write: 9 reports in 2 writes to a phone that reads them; one per write to one that does not, or when the MTU fits fewer than two (Brad, 2026-10-06)', async () => {
+  const home = tmpHome();
+  const reports = Array.from({ length: 9 }, (_, i) => report(0xe4, [i]));
+  async function run(opts) {
+    const g = gate(opts);
+    const p0 = pipeOver(g);
+    await p0.start();
+    await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+    await p0.stop();
+    const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+    assert.strictEqual((await p.start()).encrypted, true);
+    await new Promise((r) => setTimeout(r, 50)); /* the phone's announcement lands */
+    const echoes = [];
+    const off = p.on('stream', (e) => { if (e.dir === DIR.IN) echoes.push(e.bytes); });
+    const before = g.noble.phone.fragments.length;
+    await p.writeMany(IFACE.VENDOR, reports);
+    await new Promise((r) => setTimeout(r, 50)); /* the fake phone acts on a write a turn after acking it */
+    off();
+    const writes = g.noble.phone.fragments.length - before;
+    await p.stop();
+    return { g, writes, echoes };
+  }
+  const packed = await run({ batch: true });
+  assert.strictEqual(packed.writes, 2, '9 reports at 7 per write');
+  assert.strictEqual(packed.g.packed, 2);
+  assert.deepStrictEqual(packed.g.toKey.map((r) => r[5]), [0, 1, 2, 3, 4, 5, 6, 7, 8], 'every report reached the key, in order');
+  assert.deepStrictEqual(packed.echoes.map((r) => r[5]), [0, 1, 2, 3, 4, 5, 6, 7, 8], 'echoed one by one, in order');
+
+  const old = await run({ batch: false });
+  assert.strictEqual(old.writes, 9, 'a phone that never said so: one report per write');
+  assert.strictEqual(old.g.packed, 0);
+
+  const small = await run({ batch: true, mtu: 150 });
+  assert.strictEqual(small.g.packed, 0, 'at MTU 150 two reports do not fit one write: one report per write');
+  assert.deepStrictEqual(small.g.toKey.map((r) => r[5]), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
 });

@@ -162,6 +162,20 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
       return pipe.write(iface, frame);
     },
 
+    /**
+     * One request's reports, in order. A pipe that can put several in one write
+     * (the Bluetooth pipe, cli/transport-ble.js KIND_REPORTS) gets them all at
+     * once; any other pipe gets them one write each, exactly as write() would.
+     * Each one is padded and length-checked by toReport() on its own.
+     */
+    async writeMany(iface, list) {
+      const frames = Array.from(list, (d) => (iface === IFACE.SEREMU ? Uint8Array.from(d) : toReport(Uint8Array.from(d))));
+      if (typeof pipe.writeMany === 'function' && iface !== IFACE.SEREMU) return pipe.writeMany(iface, frames);
+      let n = 0;
+      for (const frame of frames) n += await pipe.write(iface, frame);
+      return n;
+    },
+
     /*
      * ONE CONVERSATION AT A TIME (src/transport/lane.js): request() waits its
      * turn in the key's lane; exclusive(fn) holds the lane for a whole
