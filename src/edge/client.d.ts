@@ -5,6 +5,11 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
     store?: null | undefined;
     noteTimeoutMs?: number | undefined;
 }): {
+    /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
+    ticketOwed: (seq: any, { code, message }: {
+        code?: string | undefined;
+        message: any;
+    }) => Promise<any>;
     /**
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]
      * (identity on a derived code, R11a). ttlMinutes: 1..1440.
@@ -51,8 +56,12 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
             code?: string | undefined;
             message: any;
         }): Promise<any>;
-        /** Revoke what is left. */
-        end: () => Promise<void>;
+        /**
+         * Revoke what is left - only once every use is ticketed (R16: the client
+         * tickets first, then ends). Ending with a ticket owed left budget 351's
+         * card waiting on a ticket after its end (Brad, 2026-10-06).
+         */
+        end(): Promise<void>;
     }>;
     /**
      * "Continues <budget>": the same scopes, new uses (caps: one per scope, in
@@ -98,8 +107,12 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
             code?: string | undefined;
             message: any;
         }): Promise<any>;
-        /** Revoke what is left. */
-        end: () => Promise<void>;
+        /**
+         * Revoke what is left - only once every use is ticketed (R16: the client
+         * tickets first, then ends). Ending with a ticket owed left budget 351's
+         * card waiting on a ticket after its end (Brad, 2026-10-06).
+         */
+        end(): Promise<void>;
     }>;
     /**
      * Register this agent's key with the app, under `name` - once, with a
@@ -238,7 +251,11 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
             code?: string | undefined;
             message: any;
         }): Promise<any>;
-        /** Revoke what is left. */
-        end: () => Promise<void>;
+        /**
+         * Revoke what is left - only once every use is ticketed (R16: the client
+         * tickets first, then ends). Ending with a ticket owed left budget 351's
+         * card waiting on a ticket after its end (Brad, 2026-10-06).
+         */
+        end(): Promise<void>;
     }>;
 };

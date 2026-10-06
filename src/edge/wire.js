@@ -102,6 +102,12 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2 } = {}) {
           resolve(got.message);
         });
         timer = setTimeout(() => { off(); resolve(null); }, timeoutMs);
+        /*
+         * A wait nobody is still awaiting must not keep the process alive: a ticket's
+         * note gives up after 4 s (client sendNote), and `onlykey-js edge ticket` then
+         * sat until this 120 s timer ran out (Pixel, 2026-10-06).
+         */
+        if (timer && typeof timer.unref === 'function') timer.unref();
         (async () => {
           for (const frame of encode(KIND.REQUEST, message)) await transport.write(iface, frame);
         })().catch((e) => { clearTimeout(timer); off(); reject(e); });

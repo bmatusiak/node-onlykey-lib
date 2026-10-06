@@ -70,7 +70,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     try {
       const msg = await note.build({ signer, ...fields });
       let t = null;
-      await Promise.race([channel.send(msg), new Promise((r) => { t = setTimeout(r, noteTimeoutMs); })]).finally(() => clearTimeout(t));
+      await Promise.race([channel.send(msg), new Promise((r) => { t = setTimeout(r, noteTimeoutMs); if (t && t.unref) t.unref(); })]).finally(() => clearTimeout(t));
     } catch { /* a note is never worth a failed use */ }
   }
   async function deviceIdentity() {
@@ -221,8 +221,15 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
         }
         return r;
       },
-      /** Revoke what is left. */
-      end,
+      /**
+       * Revoke what is left - only once every use is ticketed (R16: the client
+       * tickets first, then ends). Ending with a ticket owed left budget 351's
+       * card waiting on a ticket after its end (Brad, 2026-10-06).
+       */
+      async end() {
+        if (state.owed.length) throw fail('EEDGE_OWED', `edge: a ticket is owed for #${state.owed.join(', #')} - ticket it first, then end`);
+        return end();
+      },
     };
     /* revoke what is left (a grant-end link); also called by ticket() once the last use is ticketed */
     async function end() {
@@ -234,6 +241,19 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       state.ended = true;
       await save();
     }
+  }
+
+  /*
+   * AN OWED TICKET IS ALWAYS FILEABLE (spec okrn-edge-tab.md, Budgets, 2026-10-06):
+   * after the budget ended - a lock, a reboot, its lifetime, or the client's own
+   * end - the key still owes the use's ticket and checks only that the seq is
+   * owed (R16). So it is filed straight to the key, no budget needed, and the
+   * person never has to waive what the agent can answer.
+   */
+  async function ticketOwed(seq, { code = 'OK', message }) {
+    const r = await edge.ticket(seq, codes.ticketCode(code), tickets.messageHash(message));
+    if (message !== undefined && message !== null) await sendNote({ seq, ticketMsg: String(message) });
+    return r;
   }
 
   async function open({ reason, scopes, ttlMinutes, continueOf = null }) {
@@ -266,6 +286,8 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
   }
 
   return {
+    /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
+    ticketOwed,
     /**
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]
      * (identity on a derived code, R11a). ttlMinutes: 1..1440.

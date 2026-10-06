@@ -366,3 +366,52 @@ test('copy: a checkpoint past the verified head that does not verify is a failur
   assert.equal(a.chain.ok, false);
   assert.equal(a.chain.failure.reason, 'bad-checkpoint');
 });
+
+/*
+ * verifyCopyKept (Brad, 2026-10-06): the state of the last check, kept in
+ * memory by the caller - same key head and copy = skipped; grown = only the new
+ * links; anything else = the full check.
+ */
+function keyAt(s, seq) {
+  const head = s.links[seq].head;
+  return { ...s.key, head: { seq, head, owed: 0, overflow: false, restoring: false }, checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) }, held: [] };
+}
+
+test('kept: full first, then skipped, then only the new links - and the same answer as the full check', () => {
+  const s = story();
+  const early = { links: s.links.slice(0, 5), openings: s.openings };
+  const k4 = keyAt(s, 4);
+  const one = copy.verifyCopyKept(early, k4, null);
+  assert.equal(one.path, 'full');
+  assert.equal(one.result.ok, true);
+  const two = copy.verifyCopyKept(early, k4, one.state);
+  assert.equal(two.path, 'skipped');
+  const all = { links: s.links, openings: s.openings };
+  const three = copy.verifyCopyKept(all, s.key, two.state);
+  assert.equal(three.path, 'new-links');
+  assert.deepEqual(three.result, copy.verifyCopy(all, s.key));
+});
+
+test('kept: an earlier link edited is a full check, and it fails', () => {
+  const s = story();
+  const k4 = keyAt(s, 4);
+  const one = copy.verifyCopyKept({ links: s.links.slice(0, 5), openings: s.openings }, k4, null);
+  const links = s.links.map((e) => ({ ...e }));
+  const bad = Uint8Array.from(links[1].link);
+  bad[20] ^= 1;
+  links[1] = { ...links[1], link: bad };
+  const r = copy.verifyCopyKept({ links, openings: s.openings }, s.key, one.state);
+  assert.equal(r.path, 'full');
+  assert.equal(r.result.ok, false);
+  assert.equal(r.state, null);
+});
+
+test('kept: an opening record changed is a full check', () => {
+  const s = story();
+  const all = { links: s.links, openings: s.openings };
+  const one = copy.verifyCopyKept(all, s.key, null);
+  const openings = { [s.grantId]: { ...s.openings[s.grantId], uses: s.openings[s.grantId].uses + 1 } };
+  const r = copy.verifyCopyKept({ links: s.links, openings }, s.key, one.state);
+  assert.equal(r.path, 'full');
+  assert.equal(r.result.ok, false);
+});

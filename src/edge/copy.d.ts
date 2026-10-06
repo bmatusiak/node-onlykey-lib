@@ -19,6 +19,22 @@ export function verifyCopy(copy: any, key: any): {
     ok: boolean;
     verifiedThrough: any;
     head: any;
+} | null;
+export function verifyCopyKept(copy: any, key: any, prev?: null): {
+    result: any;
+    state: never;
+    path: string;
+} | {
+    result: {
+        ok: boolean;
+        reason: any;
+    } | {
+        ok: boolean;
+        verifiedThrough: any;
+        head: any;
+    } | null;
+    state: any;
+    path: string;
 };
 /**
  * The one answer to "what does this copy prove" (R27), for the banner and

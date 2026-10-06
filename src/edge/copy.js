@@ -54,6 +54,7 @@ const chain = require('./chain');
 const grants = require('./grants');
 const { keyDebts } = require('./tickets');
 const { H, hmacSha256, same } = require('./hash');
+const { toHex, utf8ToBytes } = require('../bytes');
 
 const SEQ_NONE = 0xffffffff;
 
@@ -253,6 +254,66 @@ function assessFrom(copy, key, opts) {
  * -> {ok: true, verifiedThrough, head} or {ok: false, reason, seq?, detail?}
  */
 function verifyCopy(copy, key) {
+  return verifyCore(copy, key, null, {});
+}
+
+/*
+ * ONLY WHAT IS NEW (Brad, 2026-10-06: every press re-verified the copy from
+ * genesis - every weld, two P-256 checks per budget ever opened, every spend
+ * walk). The caller keeps the last verified state IN MEMORY ONLY and hands it
+ * back; it is never stored, so a restart checks in full.
+ *   same key head, same copy (and openings): the result again;
+ *   the head moved or the copy grew, older part unchanged: the chain from the
+ *     last verified link, the key's checkpoint, and only the new links' fields,
+ *     openings and spends (spends re-checked only for budgets that grew);
+ *     debts recounted (a linear pass);
+ *   anything else - an earlier link or opening changed, the result was not ok,
+ *     the new part not clean: the full check.
+ * -> {result (verifyCopy's), state (for the next call, or null), path: 'skipped' | 'new-links' | 'full'}
+ */
+function verifyCopyKept(copy, key, prev = null) {
+  const entries = (copy.links || []).map((e) => (e instanceof Uint8Array ? { link: e } : e));
+  const kh = key.head;
+  const hash = entriesHash(entries, entries.length);
+  const okPrev = prev && prev.result && prev.result.ok && prev.openingsHash === openingsHash(copy.openings, prev.grants);
+  if (okPrev && sameKeyHead(prev.keyHead, kh) && prev.hash === hash) return { result: prev.result, state: prev, path: 'skipped' };
+  if (okPrev && !kh.restoring && kh.seq !== null && prev.count > 0 && prev.count <= entries.length &&
+      (entries.length > prev.count || kh.seq > prev.keyHead.seq) && entriesHash(entries, prev.count) === prev.prefixHash) {
+    const out = {};
+    const r = verifyCore(copy, key, prev, out);
+    if (r && r.ok) return { result: r, state: { ...out.state, hash, prefixHash: hash }, path: 'new-links' };
+  }
+  const out = {};
+  const r = verifyCore(copy, key, null, out);
+  return { result: r, state: r.ok && out.state ? { ...out.state, hash, prefixHash: hash } : null, path: 'full' };
+}
+
+function sameKeyHead(a, b) {
+  return a && b && a.seq === b.seq && same(a.head, b.head) && (a.owed || 0) === (b.owed || 0) && Boolean(a.overflow) === Boolean(b.overflow) && Boolean(a.restoring) === Boolean(b.restoring);
+}
+/* what the state was verified over: every stored link with its head and reveal, in order */
+function entriesHash(entries, count) {
+  const parts = [];
+  for (let i = 0; i < count; i++) {
+    const e = entries[i];
+    parts.push(e.link, e.head || new Uint8Array(0), e.reveal || new Uint8Array(0), Uint8Array.of(e.head ? 1 : 0, e.reveal ? 1 : 0));
+  }
+  return toHex(H('OKEDGE-COPYHASH-v1', ...parts));
+}
+/* the openings the state relied on - the host's own records, as untrusted as the links */
+function openingsHash(openings, grantIds) {
+  const o = openings || {};
+  const parts = [];
+  for (const g of [...(grantIds || [])].sort((x, y) => x - y)) {
+    const r = o[g];
+    parts.push(Uint8Array.of(g & 0xff, (g >>> 8) & 0xff, (g >>> 16) & 0xff, (g >>> 24) & 0xff));
+    if (!r) { parts.push(Uint8Array.of(0)); continue; }
+    parts.push(r.signature, r.genesis, r.reasonHash, utf8ToBytes(JSON.stringify([r.uses, r.lifetime || 0, r.scopes])));
+  }
+  return toHex(H('OKEDGE-OPENINGS-v1', ...parts));
+}
+
+function verifyCore(copy, key, prev, out) {
   const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
   const h = key.head;
   if (h.restoring) return fail('restoring');
@@ -267,8 +328,12 @@ function verifyCopy(copy, key) {
     return { ok: true, verifiedThrough: -1, head: h.head };
   }
 
-  const a = assess({ ...copy, links: entries }, key);
+  /* from a previous state: the chain only from the last verified link - anything short of clean goes back to the full check */
+  const a = prev
+    ? assess({ ...copy, links: entries }, key, { from: { seq: prev.lastSeq, head: prev.lastHead } })
+    : assess({ ...copy, links: entries }, key);
   const v = a.chain;
+  if (prev && (!v.ok || v.gaps.length || a.open.length || a.missing.length)) return null;
   if (!v.ok) return fail('chain', { seq: v.failure.seq, detail: v.failure });
   if (a.open.length) return fail('gap', { seq: a.open[0].from, detail: { gaps: a.open } });
   /*
@@ -278,7 +343,9 @@ function verifyCopy(copy, key) {
    * and the copy is then checked after them, not stuck on them).
    */
   const lossEnd = lossesIn(entries).reduce((m, l) => Math.max(m, l.to), -1);
-  const lastGapEnd = Math.max(a.missing.reduce((m, g) => Math.max(m, g.to), -1), lossEnd);
+  const lastGapEnd = Math.max(a.missing.reduce((m, g) => Math.max(m, g.to), -1), lossEnd, prev ? prev.lastGapEnd : -1);
+  /* a new LOSS moves where the checks start: that is the full check's job */
+  if (prev && lastGapEnd !== prev.lastGapEnd) return null;
 
   /*
    * Every link outside a covered gap is now verified, and so is the head the
@@ -291,6 +358,7 @@ function verifyCopy(copy, key) {
   const heldHead = new Map((key.held || []).map((k) => [chain.decodeLink(k.link).seq, k.head]));
   const start = chain.chainStart(entries, deviceId);
   const memo = new Map([[start.fromSeq - 1, start.fromHead]]);
+  if (prev) memo.set(prev.lastSeq, prev.lastHead);
   const headAt = (seq) => {
     if (memo.has(seq)) return memo.get(seq);
     const e = bySeq.get(seq);
@@ -310,11 +378,13 @@ function verifyCopy(copy, key) {
   }
 
   /* budgets: each opening, then its self-presses in step order */
-  const fields = raw.map((l) => chain.decodeLink(l)).filter((f) => f.seq > lastGapEnd);
+  const fields = raw.map((l) => chain.decodeLink(l)).filter((f) => f.seq > (prev ? prev.lastSeq : lastGapEnd));
   const openings = copy.openings || {};
-  const spends = new Map();
+  /* the budgets verified so far carry over from a previous state; only the ones new links touch are checked again */
+  const spends = new Map(prev ? [...prev.spends].map(([g, l]) => [g, l.slice()]) : []);
   /* R3: what each opening in this copy says its scope count is (0 = an older budget) */
-  const openingScopes = new Map();
+  const openingScopes = new Map(prev ? prev.openingScopes : []);
+  const touched = new Set();
   for (const f of fields) {
     /* R3: a scope only on a link that spends a budget; bytes 47-63 always zero */
     const spend = (f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS;
@@ -351,6 +421,7 @@ function verifyCopy(copy, key) {
       }
       openingScopes.set(f.grantId, f.scope);
       spends.set(f.grantId, []);
+      touched.add(f.grantId);
     } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS) {
       const list = spends.get(f.grantId);
       if (!list) return fail('budget-opening-missing', { seq: f.seq, detail: { grantId: f.grantId } });
@@ -369,9 +440,11 @@ function verifyCopy(copy, key) {
       const value = bySeq.get(f.seq).reveal;
       if (!value || !value.some((x) => x)) return fail('reveal-missing', { seq: f.seq });
       list.push({ seq: f.seq, step: f.grantStep, scope: f.scope, value, subject: f.subject, mac: hmacSha256(value, f.subject) });
+      touched.add(f.grantId);
     }
   }
   for (const [grantId, list] of spends) {
+    if (prev && !touched.has(grantId)) continue;
     const o = openings[grantId];
     /*
      * R3, exact: the opening says N -> every spend names 1..N (range checked in
@@ -401,7 +474,18 @@ function verifyCopy(copy, key) {
   if (d.owed.length !== h.owed || d.overflow !== Boolean(h.overflow)) {
     return fail('debts', { detail: { copy: { owed: d.owed, overflow: d.overflow }, key: { owed: h.owed, overflow: Boolean(h.overflow) } } });
   }
-  return { ok: true, verifiedThrough: h.seq, head: h.head };
+  const result = { ok: true, verifiedThrough: h.seq, head: h.head };
+  const last = entries.length ? entries[entries.length - 1] : null;
+  const lastSeq = last ? chain.decodeLink(last.link).seq : -1;
+  const lastHead = last ? headAt(lastSeq) : null;
+  if (last && lastHead) {
+    out.state = {
+      keyHead: { seq: h.seq, head: h.head, owed: h.owed || 0, overflow: Boolean(h.overflow), restoring: Boolean(h.restoring) },
+      count: entries.length, lastSeq, lastHead, lastGapEnd, spends, openingScopes,
+      grants: [...spends.keys()], openingsHash: openingsHash(openings, [...spends.keys()]), result,
+    };
+  }
+  return result;
 }
 
 /*
@@ -437,4 +521,4 @@ function checkContinue(link, oldCopy) {
   return { ok: false, reason: fromStart ? 'subject-mismatch' : 'unverifiable', oldSeq };
 }
 
-module.exports = { verifyCopy, assess, lossesIn, uncoveredGaps, missingGaps, checkContinue };
+module.exports = { verifyCopy, verifyCopyKept, assess, lossesIn, uncoveredGaps, missingGaps, checkContinue };

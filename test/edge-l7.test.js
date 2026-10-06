@@ -215,3 +215,31 @@ test('L7: the request body binds every field', async () => {
   }
   void codes; void chain;
 });
+
+/*
+ * R16, the client's side (spec okrn-edge-tab.md, Budgets, 2026-10-06): it
+ * tickets first, then ends - and an owed ticket is always fileable, even after
+ * the budget ended (a lock, its lifetime), with no budget and no waive.
+ */
+test('end is refused while a use owes its ticket', async () => {
+  const { transport, edge } = await readyKey();
+  const c = client.createEdgeClient({ edge, channel: phone(edge), signer: AGENT });
+  const budget = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: AGENT_ID }], ttlMinutes: 60 });
+  const one = await budget.use(Uint8Array.from([1]), (bytes) => transport.use(bytes, { slot: 222 }));
+  await assert.rejects(budget.end(), { code: 'EEDGE_OWED' });
+  await budget.ticket(one.link, { message: 'pushed' });
+  await budget.end();
+  assert.equal((await edge.head()).live.includes(budget.grantId), false, 'ended once the ticket was in');
+});
+
+test('an owed ticket is filed after the budget ended - no budget, no waive', async () => {
+  const { transport, edge } = await readyKey();
+  const c = client.createEdgeClient({ edge, channel: phone(edge), signer: AGENT });
+  const budget = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: AGENT_ID }], ttlMinutes: 60 });
+  const one = await budget.use(Uint8Array.from([1]), (bytes) => transport.use(bytes, { slot: 222 }));
+  transport.restart(); /* a lock or reboot: live budgets are gone, the debt is not */
+  assert.equal((await edge.head()).live.includes(budget.grantId), false);
+  assert.equal((await edge.head()).owed, 1, 'the key still owes it');
+  await c.ticketOwed(one.link.seq, { message: 'pushed before the lock' });
+  assert.equal((await edge.head()).owed, 0, 'filed without the budget');
+});

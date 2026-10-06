@@ -565,14 +565,43 @@ function setup(imports, register) {
         const h = await verifiedHeadOf(copy);
         return edge.resume(grantId, { verifiedHead: h, onPress, timeoutMs });
       },
-      /** The check alone, for a UI that shows why Yes is off: the verdict from src/edge/copy.js. */
+      /**
+       * The check alone, for a UI that shows why Yes is off: the verdict from
+       * src/edge/copy.js - against the key's LIVE head, every time.
+       *
+       * ONLY WHAT IS NEW (Brad, 2026-10-06): the last verified state is kept HERE,
+       * in this session's memory only (copy.verifyCopyKept) - never stored, so a
+       * restart checks in full. The same head and copy reuse it; a copy that grew
+       * is checked from its last verified link. The key is read for what that
+       * needs: its head always, its public key once a session, its checkpoint when
+       * the head moved, its ring only before a full check.
+       */
       async check(copy) {
-        const { publicKey } = await edge.publicKey();
+        const c = copy || {};
+        if (!publicKeyNow) publicKeyNow = (await edge.publicKey()).publicKey;
         const head = await edge.head();
-        const checkpoint = head.seq === null ? null : await edge.checkpoint();
-        /* the key's own ring, this session: its links are trusted as they are (copy.missingGaps) */
-        const held = head.seq === null || head.oldest === null ? [] : await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
-        return copyCheck.verifyCopy(copy, { publicKey, head, checkpoint, held });
+        const st = keptCheck;
+        const same = st && st.keyHead.seq === head.seq && st.keyHead.owed === (head.owed || 0) && head.head && st.keyHead.head && st.keyHead.head.every((x, i) => x === head.head[i]);
+        const grew = st && (c.links || []).length > st.count;
+        let checkpoint = head.seq === null || same ? (same ? st.checkpoint : null) : await edge.checkpoint();
+        /* the key's own ring, this session: its links are trusted as they are (copy.missingGaps) - needed by the full check */
+        const held = same || grew || head.seq === null || head.oldest === null ? [] : await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
+        let r = copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held }, st);
+        /* a full check after all (the copy changed under the same head): with the ring and a fresh checkpoint, as before */
+        if (r.path === 'full' && head.seq !== null && head.oldest !== null && (same || grew)) {
+          const ring = await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
+          checkpoint = await edge.checkpoint();
+          r = copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held: ring }, null);
+        }
+        keptCheck = r.state ? { ...r.state, checkpoint: r.state === st ? st.checkpoint : checkpoint } : null;
+        edge.grants.lastPath = r.path;
+        return r.result;
+      },
+      /** how the last check ran: 'skipped' | 'new-links' | 'full' (for the log) */
+      lastPath: null,
+      /** the next check is a full one, from the root (the app's Sync button; a restart does it anyway) */
+      forget() {
+        keptCheck = null;
       },
     },
 
@@ -736,6 +765,10 @@ function setup(imports, register) {
       }
     },
   };
+
+  /* the last verified copy state - this session's memory only (grants.check) */
+  let keptCheck = null;
+  let publicKeyNow = null;
 
   async function verifiedHeadOf(copy) {
     const verdict = await edge.grants.check(copy || {});

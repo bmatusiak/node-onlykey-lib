@@ -1644,8 +1644,11 @@ COMMANDS.edge = {
           return 0;
         }
         if (sub === 'ticket') {
-          const b = await c.resume(Number(rest[0]));
-          const r = await b.ticket({ seq: Number(rest[1]) }, { code: 'OK', message: rest[2] });
+          /* the budget ended (a lock, its lifetime, its end) but the key still owes the ticket: file it without one */
+          const b = await c.resume(Number(rest[0])).catch((e) => { if (e && e.code === 'EEDGE_GONE') return null; throw e; });
+          const r = b
+            ? await b.ticket({ seq: Number(rest[1]) }, { code: 'OK', message: rest[2] })
+            : await c.ticketOwed(Number(rest[1]), { code: 'OK', message: rest[2] });
           io.out(row('ticket', `filed for #${rest[1]} (the key's head is now #${r.seq})`));
           return 0;
         }
