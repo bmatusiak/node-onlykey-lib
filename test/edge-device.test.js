@@ -286,3 +286,44 @@ test('edge: R11a - a derived-code scope without an identity is refused before an
   assert.ok(g.grantId, 'a stored slot (ECC2) is its own key - no label');
   await edge.revoke(g.grantId);
 });
+
+test('edge: grants.check with the key one link ahead of the copy takes the short path and keeps its state (A13, 2026-10-06)', async () => {
+  const transport = fakeKey();
+  const edge = edgeOver(transport);
+  await edge.waive();
+  const first = await copyOf(edge);
+  assert.equal((await edge.grants.check(first, { keyTail: true })).ok, true);
+  assert.equal(edge.grants.lastPath, 'full: first check');
+  /* a link lands on the key after the copy was read (an agent's ticket, between the sync and this check) */
+  await edge.waive();
+  const behind = { links: (await copyOf(edge)).links.slice(0, -1), openings: {} };
+  assert.equal((await edge.grants.check(behind, { keyTail: true })).ok, true, 'for a display, the key\'s newest link is checked from the key, not called a gap');
+  assert.equal(edge.grants.lastPath, 'new-links');
+  /* the sync then stores it: the same head, the same links - nothing to check again */
+  assert.equal((await edge.grants.check(await copyOf(edge), { keyTail: true })).ok, true);
+  assert.equal(edge.grants.lastPath, 'skipped');
+  /* R27 stays strict: a budget is never created or resumed from a copy short of the key */
+  assert.equal((await edge.grants.check(behind)).reason, 'gap');
+});
+
+test('edge: grants.check reads one moment of the key - a link landing mid-check is checked again, not kept as a failure (Pixel, 2026-10-06)', async () => {
+  const transport = fakeKey();
+  const edge = edgeOver(transport);
+  await edge.waive();
+  assert.equal((await edge.grants.check(await copyOf(edge), { keyTail: true })).ok, true);
+  await edge.waive();
+  const copy = await copyOf(edge);
+  /* an agent's ticket lands between the head read and the checkpoint read, once */
+  const checkpoint = edge.checkpoint.bind(edge);
+  let raced = false;
+  edge.checkpoint = async () => {
+    if (!raced) { raced = true; await edge.waive(); }
+    return checkpoint();
+  };
+  assert.equal((await edge.grants.check(copy, { keyTail: true })).ok, true, 'checked again over the new head');
+  assert.ok(raced);
+  assert.doesNotMatch(edge.grants.lastPath, /full|moving/);
+  /* the state was kept: the stored copy catching up is nothing new to check */
+  assert.equal((await edge.grants.check(await copyOf(edge), { keyTail: true })).ok, true);
+  assert.equal(edge.grants.lastPath, 'skipped');
+});

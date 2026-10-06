@@ -581,27 +581,25 @@ function setup(imports, register) {
        * needs: its head always, its public key once a session, its checkpoint when
        * the head moved, its ring only before a full check.
        */
-      async check(copy) {
-        const c = copy || {};
+      async check(copy, opts = {}) {
         if (!publicKeyNow) publicKeyNow = (await edge.publicKey()).publicKey;
-        const head = await edge.head();
-        const st = keptCheck;
-        const same = st && st.keyHead.seq === head.seq && st.keyHead.owed === (head.owed || 0) && head.head && st.keyHead.head && st.keyHead.head.every((x, i) => x === head.head[i]);
-        const grew = st && (c.links || []).length > st.count;
-        let checkpoint = head.seq === null || same ? (same ? st.checkpoint : null) : await edge.checkpoint();
-        /* the key's own ring, this session: its links are trusted as they are (copy.missingGaps) - needed by the full check */
-        const held = same || grew || head.seq === null || head.oldest === null ? [] : await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
-        let r = copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held }, st);
-        /* a full check after all (the copy changed under the same head): with the ring and a fresh checkpoint, as before */
-        if (r.path === 'full' && head.seq !== null && head.oldest !== null && (same || grew)) {
-          const ring = await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
-          checkpoint = await edge.checkpoint();
-          const why = r.why;
-          r = { ...copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held: ring }, null), why };
+        /*
+         * ONE MOMENT OF THE KEY (Pixel, 2026-10-06): the head, its newest links,
+         * the checkpoint and the ring are separate reads; an agent's link (its
+         * ticket) landing between them gave a checkpoint for a newer head than
+         * the one checked - "full: new part: checkpoint", no state kept, and the
+         * next checks from scratch. So the head is read again after the others:
+         * if it moved, the check is done again (3 tries), and only a check the
+         * key stood still for is kept.
+         */
+        for (let tries = 1; ; tries++) {
+          const run = await checkOnce(copy || {}, opts);
+          const moved = run.readMore && !sameHead(run.head, await edge.head());
+          if (moved && tries < 3) continue;
+          keptCheck = !moved && run.r.state ? { ...run.r.state, checkpoint: run.r.state === run.st ? run.st.checkpoint : run.checkpoint } : null;
+          edge.grants.lastPath = (run.r.path === 'full' && run.r.why ? `full: ${run.r.why}` : run.r.path) + (moved ? ' (the key kept moving)' : '');
+          return run.r.result;
         }
-        keptCheck = r.state ? { ...r.state, checkpoint: r.state === st ? st.checkpoint : checkpoint } : null;
-        edge.grants.lastPath = r.path === 'full' && r.why ? `full: ${r.why}` : r.path;
-        return r.result;
       },
       /** how the last check ran: 'skipped' | 'new-links' | 'full: <why>' (for the log) */
       lastPath: null,
@@ -774,6 +772,54 @@ function setup(imports, register) {
 
   /* the last verified copy state - this session's memory only (grants.check) */
   let keptCheck = null;
+  function sameHead(a, b) {
+    return a.seq === b.seq && (a.owed || 0) === (b.owed || 0) && (a.head === b.head || (a.head && b.head && a.head.every((x, i) => x === b.head[i])));
+  }
+  /* one pass of grants.check over one set of key reads; readMore: it read more than the head */
+  async function checkOnce(copy, opts) {
+    let c = copy;
+    const head = await edge.head();
+    let readMore = false;
+    /*
+     * THE KEY AHEAD OF THE COPY (A13, 2026-10-06): an agent's link (its
+     * ticket) lands on the key between the phone's sync and this check, so
+     * the stored copy ends one link short of the live head. Both the short
+     * path and the full check called that link a gap - the full check failed,
+     * kept no state, and every later check started from scratch (13-16 s on
+     * the A13, the app frozen meanwhile). The key's newest links are read
+     * here and checked IN MEMORY after the copy (never stored - the sync
+     * stores them); the chain still has to weld onto the copy's last link.
+     * ONLY FOR A DISPLAY (opts.keyTail): R27 stays strict - a budget is
+     * created or resumed only from a copy verified up to the key's own head,
+     * so grants.create/resume and an approval never pass it.
+     */
+    const links = c.links || [];
+    const last = links.length ? links[links.length - 1] : null;
+    const lastIn = last ? chain.decodeLink(last instanceof Uint8Array ? last : last.link).seq : null;
+    if (opts.keyTail && lastIn !== null && head.seq !== null && head.seq > lastIn && head.seq - lastIn <= HELD && (head.oldest === null || head.oldest <= lastIn + 1)) {
+      const tail = await edge.pickup(lastIn + 1, head.seq - lastIn).catch(() => []);
+      readMore = true;
+      if (tail.length === head.seq - lastIn) c = { ...c, links: [...links, ...tail] };
+    }
+    const st = keptCheck;
+    const same = st && st.keyHead.seq === head.seq && st.keyHead.owed === (head.owed || 0) && head.head && st.keyHead.head && st.keyHead.head.every((x, i) => x === head.head[i]);
+    const grew = st && (c.links || []).length > st.count;
+    let checkpoint = head.seq === null || same ? (same ? st.checkpoint : null) : await edge.checkpoint();
+    if (!same && head.seq !== null) readMore = true;
+    /* the key's own ring, this session: its links are trusted as they are (copy.missingGaps) - needed by the full check */
+    const held = same || grew || head.seq === null || head.oldest === null ? [] : await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
+    let r = copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held }, st);
+    /* a full check after all (the copy changed under the same head): with the ring and a fresh checkpoint, as before */
+    if (r.path === 'full' && head.seq !== null && head.oldest !== null && (same || grew)) {
+      const ring = await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
+      checkpoint = await edge.checkpoint();
+      readMore = true;
+      const why = r.why;
+      r = { ...copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held: ring }, null), why };
+    }
+    return { r, st, head, checkpoint, readMore };
+  }
+
   let publicKeyNow = null;
 
   async function verifiedHeadOf(copy) {
