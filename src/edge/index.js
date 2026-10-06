@@ -24,4 +24,6 @@ module.exports = {
   wire: require('./wire'),
   /* okedge sync phase 2 (2026-10-05): a place that keeps copies fills the phone's copy; the `sync` link */
   sync: require('./sync'),
+  /* a pure Bluetooth link test: the phone echoes, testing mode only (okedge ping) */
+  ping: require('./ping'),
 };

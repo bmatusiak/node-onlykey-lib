@@ -1785,7 +1785,12 @@ COMMANDS['edge-agent'] = {
       let edge = null;
       require('../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
       /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */
-      const wired = wire.createWireChannel(transport, { timeoutMs: (Number(opts.wait) || 180) * 1000 });
+      /* the envelope's dev: this computer's Part T pairing id (stable); stale answers are logged */
+      const wired = wire.createWireChannel(transport, {
+        timeoutMs: (Number(opts.wait) || 180) * 1000,
+        device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
+        log: (l) => io.err(`edge-agent: ${l}`),
+      });
       /*
        * OKEDGE_TIMES=1: every key request, sign and message to the phone, with how
        * long it took (Brad, 2026-10-06: where a signed commit's 7 s go). Times and
@@ -1795,7 +1800,7 @@ COMMANDS['edge-agent'] = {
       const SUBNAMES = Object.fromEntries(Object.entries(edge.SUB || {}).map(([k, v]) => [v, k]));
       if (times) edge.onTiming = (sub, ms, ok) => io.err(`edge-agent: time key ${SUBNAMES[sub] || sub} ${ms} ms${ok ? '' : ' (failed)'}`);
       const channel = times
-        ? { send: async (m) => { const t = Date.now(); try { return await wired.send(m); } finally { io.err(`edge-agent: time phone ${(m && m.type) || 'message'} ${Date.now() - t} ms`); } } }
+        ? { send: async (m, o) => { const t = Date.now(); try { return await wired.send(m, o); } finally { io.err(`edge-agent: time phone ${(m && m.type) || 'message'} ${Date.now() - t} ms`); } } }
         : wired;
       const timedCrypto = times
         ? { ...okcrypto, agent: { ...okcrypto.agent, sign: async (...a) => { const t = Date.now(); try { return await okcrypto.agent.sign(...a); } finally { io.err(`edge-agent: time key SIGN ${Date.now() - t} ms`); } } } }

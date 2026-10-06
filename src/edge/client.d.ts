@@ -5,6 +5,31 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
     store?: null | undefined;
     noteTimeoutMs?: number | undefined;
 }): {
+    ping({ size, timeoutMs }?: {
+        size?: number | undefined;
+        timeoutMs?: number | undefined;
+    }): Promise<{
+        exact: boolean;
+        ms: number;
+        bytes: number;
+        wire: number;
+        why: string;
+        parts?: undefined;
+    } | {
+        exact: boolean;
+        why: string | undefined;
+        ms: number;
+        bytes: number;
+        wire: number;
+        parts: {
+            queue: number | null;
+            pcWrite: number | null;
+            phoneIn: number | null;
+            phoneHold: number | null;
+            phoneTotal: number | null;
+            pcIn: number | null;
+        };
+    }>;
     /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
     ticketOwed: (seq: any, { code, message }: {
         code?: string | undefined;

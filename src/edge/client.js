@@ -40,6 +40,7 @@ const tickets = require('./tickets');
 const chain = require('./chain');
 const codes = require('./codes');
 const note = require('./note');
+const pingLib = require('./ping');
 const { utf8ToBytes } = require('../bytes');
 
 /* at most `max` UTF-8 bytes, cut on a character (a note's reason is capped, not refused) */
@@ -298,6 +299,39 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
   }
 
   return {
+    /*
+     * okedge ping (Brad, 2026-10-06): a pure link test - size random bytes out,
+     * named by their SHA-256; the phone sends them straight back (testing mode,
+     * encrypted session only) and the answer is checked byte for byte. Touches
+     * no key and no budget. -> {exact, ms, bytes, wire, why?} (exact, not ok: the
+     * control endpoint's answers carry their own ok)
+     */
+    async ping({ size = 1024, timeoutMs = 10000 } = {}) {
+      if (!channel) throw fail('EEDGE_NO_CHANNEL', 'edge: no channel to the phone');
+      const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
+      const n = Math.max(1, Math.min(pingLib.PING_MAX, Math.floor(Number(size) || 0)));
+      const msg = pingLib.buildPing(randomBytes(n));
+      const wire = JSON.stringify(msg).length;
+      const times = {};
+      const t0 = Date.now();
+      const answer = await channel.send(msg, { timeoutMs, times });
+      const ms = Date.now() - t0;
+      if (answer === null || answer === undefined) return { exact: false, ms, bytes: n, wire, why: 'no answer (the phone is not in testing mode, the session is not encrypted, or an older app)' };
+      const c = pingLib.checkPong(msg, answer);
+      /* each interval on ONE clock (the PC's or the phone's): the clocks differ, so nothing crosses them */
+      const d = (a, b) => (typeof a === 'number' && typeof b === 'number' ? b - a : null);
+      const parts = {
+        queue: d(times.start, times.lane),
+        pcWrite: d(times.lane, times.written),
+        phoneIn: d(answer.firstAt, answer.rxAt),
+        phoneHold: d(answer.rxAt, answer.txAt),
+        phoneTotal: d(answer.firstAt, answer.txAt),
+        pcIn: d(times.firstIn, times.done),
+      };
+      /* the receipt (Brad): the verdict back to the phone, one-way - both logs end with it */
+      await channel.send({ type: pingLib.RECEIPT_TYPE, re: msg.id, exact: c.ok, why: c.why || null, ms, parts }, { oneWay: true }).catch(() => {});
+      return { exact: c.ok, why: c.why, ms, bytes: n, wire, parts };
+    },
     /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
     ticketOwed,
     /**

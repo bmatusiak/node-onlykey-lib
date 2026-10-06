@@ -190,6 +190,10 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
     urgentWaiting() {
       return laneOf(transport).urgentWaiting();
     },
+    /** this computer's id on the Edge wire: the pipe's Part T pairing id, when it has one */
+    deviceId() {
+      return pipe.pairingId || null;
+    },
     /** the lane: idle (nothing running or waiting), and since when */
     laneState() {
       return laneOf(transport).state();

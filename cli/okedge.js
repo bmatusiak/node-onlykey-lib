@@ -28,6 +28,7 @@
  *   okedge status                                             the budget, its head, tickets owed
  *   okedge end                                                end the budget
  *   okedge watch [--once]                                     follow the key's links live (read-only)
+ *   okedge ping [--size 1024] [--count 1] [--gap ms] [--wait s] link test: bytes to the phone and back, checked (testing mode)
  *
  * exec: the command runs with ITS OWN endpoint - SSH_AUTH_SOCK on a fresh
  * owner-only socket, the gpg shim's one-time token, git's gpg.program and
@@ -244,6 +245,30 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         if (!closed.links.length) out('signed: nothing under the budget');
       }
       return code;
+    }
+    if (cmd === 'ping') {
+      /*
+       * A pure Bluetooth link test (Brad, 2026-10-06): random bytes to the phone
+       * and back, checked by their SHA-256 - testing mode, encrypted session
+       * only. No key, no budget, nothing signed or written.
+       */
+      const count = Math.max(1, Math.min(100, Number(opt(args, '--count')) || 1));
+      const gap = Math.max(0, Number(opt(args, '--gap')) || 0);
+      const size = Number(opt(args, '--size')) || 1024;
+      const wait = Number(opt(args, '--wait')) || 0; /* seconds for each echo (default 10) */
+      const t0 = Date.now();
+      let ok = 0;
+      for (let i = 1; i <= count; i++) {
+        const r = await ask('ping', { size, wait }, { timeoutMs: (wait || 10) * 1000 + 30000 });
+        if (r.exact) ok += 1;
+        const p = r.parts || {};
+        const part = (label, v) => (v === null || v === undefined ? '' : ` ${label} ${v}`);
+        out(`#${i} ${r.bytes} bytes (${r.wire} on the wire) ${r.ms} ms ${r.exact ? 'OK - came back exact' : `FAILED - ${r.why}`}`
+          + (r.exact ? ` |${part('queue', p.queue)}${part('pc write', p.pcWrite)}${part('phone in', p.phoneIn)}${part('phone hold', p.phoneHold)}${part('phone total', p.phoneTotal)}${part('pc in', p.pcIn)} ms` : ''));
+        if (gap && i < count) await new Promise((res) => setTimeout(res, gap));
+      }
+      out(`${ok} of ${count} came back exact in ${Date.now() - t0} ms`);
+      return ok === count ? 0 : 1;
     }
     if (cmd === 'watch') {
       /* read-only: it cannot approve, hold or waive - that stays on the phone */

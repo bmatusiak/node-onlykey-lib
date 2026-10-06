@@ -324,6 +324,8 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
     status: async () => agent.status(),
     /* okedge watch: read-only */
     feed: async ({ from = null, since = 0 }) => agent.feed({ from, since }),
+    /* okedge ping: a pure link test - the phone echoes (testing mode, encrypted only); no key, no budget */
+    ping: async ({ size, wait }) => client.ping({ size, ...(wait ? { timeoutMs: Math.min(120, Number(wait)) * 1000 } : {}) }),
     budget: async ({ reason, uses, ttl }) => {
       const b = await client.request({ reason, scopes: scopes(uses || {}), ttlMinutes: ttl });
       agent.setBudget(b);

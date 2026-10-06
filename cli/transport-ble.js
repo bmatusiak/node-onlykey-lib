@@ -1262,6 +1262,9 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     /** Whether reports travel sealed on this link. */
     get encrypted() { return !!session; },
 
+    /** This computer's Part T pairing id with the phone (the Edge wire's dev), or null. */
+    get pairingId() { return pairing && pairing.id ? String(pairing.id) : null; },
+
     async stop() {
       /*
        * A renewal the phone offered during this connection is answered before

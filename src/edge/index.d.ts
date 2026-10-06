@@ -10,3 +10,4 @@ export let approve: typeof import("./approve");
 export let client: typeof import("./client");
 export let wire: typeof import("./wire");
 export let sync: typeof import("./sync");
+export let ping: typeof import("./ping");
