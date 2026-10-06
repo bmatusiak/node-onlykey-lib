@@ -191,6 +191,7 @@ function checkpointAnchors(entries, copy, key) {
  *    losses: the verified LOSS links; open: missing ranges none of them covers.
  */
 function assess(copy, key, opts = {}) {
+  if (opts.from) return assessFrom(copy, key, opts);
   const entries = (copy.links || []).map((e) => (e instanceof Uint8Array ? { link: e } : e));
   const deviceId = key.publicKey ? chain.deviceIdOf(key.publicKey) : key.deviceId;
   const anchors = checkpointAnchors(entries, copy, key);
@@ -203,6 +204,38 @@ function assess(copy, key, opts = {}) {
   const missing = missingGaps(entries, v.gaps, key.held);
   const losses = verifiedLosses(entries, v.gaps, key.held);
   return { chain: v, anchors, missing, losses, open: uncoveredGaps(entries, v.gaps, key.held) };
+}
+
+/*
+ * ONLY THE NEW LINKS (Brad, 2026-10-05): opts.from = {seq, head} is a head the
+ * CALLER verified in full earlier and still holds in memory - never one read
+ * from storage, which anything on the phone can edit. A chain only grows, so
+ * what is below it needs no second look: the links after it must weld onto it
+ * and reach the key's live head, and a checkpoint the key gives past it must
+ * verify (a bad one is a failure here, not just one anchor fewer). A gap among
+ * the new links is reported as usual; the caller then checks in full.
+ */
+function assessFrom(copy, key, opts) {
+  const from = opts.from;
+  const entries = (copy.links || [])
+    .map((e) => (e instanceof Uint8Array ? { link: e } : e))
+    .filter((e) => chain.decodeLink(e.link).seq > from.seq);
+  const deviceId = key.publicKey ? chain.deviceIdOf(key.publicKey) : key.deviceId;
+  const cp = key.checkpoint;
+  if (cp && cp.seq > from.seq && key.publicKey && !chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, key.publicKey)) {
+    return {
+      chain: { ok: false, verifiedThrough: from.seq, gaps: [], failure: { seq: cp.seq, reason: 'bad-checkpoint' } },
+      anchors: [], missing: [], losses: [], open: [],
+    };
+  }
+  const anchors = checkpointAnchors(entries, copy, key).filter((a) => a.seq > from.seq);
+  const held = (key.held || []).filter((e) => chain.decodeLink(e.link || e).seq > from.seq);
+  const v = chain.verify(entries, {
+    fromSeq: from.seq + 1, fromHead: from.head,
+    deviceId, expectHead: { seq: key.head.seq, head: key.head.head }, anchors,
+    ...(opts.ringFrom !== undefined ? { ringFrom: Math.max(opts.ringFrom, from.seq + 1) } : {}),
+  });
+  return { chain: v, anchors, missing: missingGaps(entries, v.gaps, held), losses: verifiedLosses(entries, v.gaps, held), open: uncoveredGaps(entries, v.gaps, held) };
 }
 
 /**

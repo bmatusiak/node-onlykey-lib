@@ -328,3 +328,41 @@ test('a LOSS over links the copy still holds sets them aside: a budget that fail
   const v = copy.verifyCopy({ links: s.links, openings: s.openings }, s.key);
   assert.equal(v.ok, true, JSON.stringify(v));
 });
+
+/*
+ * ONLY THE NEW LINKS (Brad, 2026-10-05): opts.from = a head the caller verified
+ * in full earlier and holds in memory. Links after it weld onto it and reach
+ * the live head; a checkpoint the key gives past it must verify.
+ */
+test('copy: from a verified head, only the new links are checked - and they verify', () => {
+  const s = story();
+  const mid = 3;
+  const a = copy.assess({ links: s.links, openings: s.openings }, s.key, { from: { seq: mid, head: s.links[mid].head } });
+  assert.equal(a.chain.ok, true);
+  assert.equal(a.chain.verifiedThrough, s.key.head.seq);
+  assert.deepEqual(a.open, []);
+});
+
+test('copy: from a head that is not the one the links weld onto, the new links fail', () => {
+  const s = story();
+  const a = copy.assess({ links: s.links, openings: s.openings }, s.key, { from: { seq: 3, head: new Uint8Array(32).fill(0xaa) } });
+  assert.equal(a.chain.ok, false);
+});
+
+test('copy: an edited new link fails the from-check', () => {
+  const s = story();
+  const links = s.links.map((e) => ({ ...e }));
+  const bad = Uint8Array.from(links[5].link);
+  bad[20] ^= 1;
+  links[5] = { ...links[5], link: bad };
+  const a = copy.assess({ links, openings: s.openings }, s.key, { from: { seq: 3, head: s.links[3].head } });
+  assert.equal(a.chain.ok, false);
+});
+
+test('copy: a checkpoint past the verified head that does not verify is a failure, not one anchor fewer', () => {
+  const s = story();
+  const key = { ...s.key, checkpoint: { ...s.key.checkpoint, signature: chain.signCheckpoint({ deviceId: DEVICE, seq: s.key.checkpoint.seq, head: s.key.checkpoint.head }, OTHER_SECRET) } };
+  const a = copy.assess({ links: s.links, openings: s.openings }, key, { from: { seq: 3, head: s.links[3].head } });
+  assert.equal(a.chain.ok, false);
+  assert.equal(a.chain.failure.reason, 'bad-checkpoint');
+});

@@ -35,6 +35,20 @@ export function verifyCopy(copy: any, key: any): {
 export function assess(copy: any, key: any, opts?: {}): {
     chain: {
         ok: boolean;
+        verifiedThrough: any;
+        gaps: never[];
+        failure: {
+            seq: any;
+            reason: string;
+        };
+    };
+    anchors: never[];
+    missing: never[];
+    losses: never[];
+    open: never[];
+} | {
+    chain: {
+        ok: boolean;
         verifiedThrough: number;
         gaps: never[];
         failure: {
