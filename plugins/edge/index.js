@@ -223,7 +223,12 @@ function setup(imports, register) {
    * or late.
    */
   function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null } = {}) {
-    return new Promise((resolve, reject) => {
+    /* how long each key request takes, for a caller that asks (edge.onTiming; the agent's OKEDGE_TIMES) */
+    const began = Date.now();
+    const timed = (p) => (edge && typeof edge.onTiming === 'function'
+      ? p.then((v) => { edge.onTiming(sub, Date.now() - began, true); return v; }, (e) => { edge.onTiming(sub, Date.now() - began, false); throw e; })
+      : p);
+    return timed(new Promise((resolve, reject) => {
       const got = [];
       let off = null;
       /*
@@ -328,7 +333,7 @@ function setup(imports, register) {
       } catch (e) {
         failed(e);
       }
-    });
+    }));
   }
 
   const edge = {

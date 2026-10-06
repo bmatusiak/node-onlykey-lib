@@ -149,7 +149,8 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
          * process signing during an exec). "Did the agent see its last
          * ticket?" is asked separately (okedge exec --head vs head()).
          */
-        state.head = (await edge.head()).head;
+        const before = await edge.head();
+        state.head = before.head;
         try {
           await edge.arm(state.head, subject);
         } catch (e) {
@@ -157,8 +158,19 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
           throw fail('EEDGE_ARM', `edge: the key refused the ARM (${e.status || e.message})`, { reason: e.status || 'refused' });
         }
         const result = await op(data);
-        const h = await edge.head();
-        const [l] = await edge.pickup(h.seq, 1);
+        /*
+         * THIS USE'S LINK, WITHOUT A THIRD HEAD READ (Brad, 2026-10-06: each key
+         * request is ~0.3-0.5 s over Bluetooth). It is the link after the head the
+         * ARM was made over - picked up directly and checked by its subject (this
+         * use's bytes). Anything else there (another link landed in between, or the
+         * key refused the read) falls back to the newest link, as before.
+         */
+        const next = before.seq === null ? 0 : before.seq + 1;
+        let l = await edge.pickup(next, 1).then((r) => r[0], () => null);
+        if (!l || !same(chain.decodeLink(l.link).subject, subject)) {
+          const h = await edge.head();
+          [l] = await edge.pickup(h.seq, 1);
+        }
         const f = chain.decodeLink(l.link);
         if (!same(f.subject, subject)) throw fail('EEDGE_LINK', `edge: the key's newest link (#${f.seq}) is not this use`);
         const paid = f.decision === codes.DECISION.SELF_PRESS && f.grantId === record.grantId;
@@ -169,7 +181,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
         }
         if (f.flags & codes.FLAG.OWES_TICKET) state.owed.push(f.seq);
         if (paid) state.spent = Math.max(state.spent, f.grantStep);
-        state.head = h.head;
+        state.head = l.head;
         await save();
         /*
          * paidBy: the budget the KEY spent - it pays from the first live budget

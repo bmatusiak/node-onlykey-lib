@@ -1785,10 +1785,24 @@ COMMANDS['edge-agent'] = {
       let edge = null;
       require('../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
       /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */
-      const channel = wire.createWireChannel(transport, { timeoutMs: (Number(opts.wait) || 180) * 1000 });
+      const wired = wire.createWireChannel(transport, { timeoutMs: (Number(opts.wait) || 180) * 1000 });
+      /*
+       * OKEDGE_TIMES=1: every key request, sign and message to the phone, with how
+       * long it took (Brad, 2026-10-06: where a signed commit's 7 s go). Times and
+       * request names only.
+       */
+      const times = process.env.OKEDGE_TIMES === '1';
+      const SUBNAMES = Object.fromEntries(Object.entries(edge.SUB || {}).map(([k, v]) => [v, k]));
+      if (times) edge.onTiming = (sub, ms, ok) => io.err(`edge-agent: time key ${SUBNAMES[sub] || sub} ${ms} ms${ok ? '' : ' (failed)'}`);
+      const channel = times
+        ? { send: async (m) => { const t = Date.now(); try { return await wired.send(m); } finally { io.err(`edge-agent: time phone ${(m && m.type) || 'message'} ${Date.now() - t} ms`); } } }
+        : wired;
+      const timedCrypto = times
+        ? { ...okcrypto, agent: { ...okcrypto.agent, sign: async (...a) => { const t = Date.now(); try { return await okcrypto.agent.sign(...a); } finally { io.err(`edge-agent: time key SIGN ${Date.now() - t} ms`); } } } }
+        : okcrypto;
       const c = client.createEdgeClient({ edge, channel, signer, store });
       const svc = await startEdgeAgent({
-        okcrypto, client: c, edge, config, saveConfig, openpgp: require('../src/crypto/pgp'),
+        okcrypto: timedCrypto, client: c, edge, config, saveConfig, openpgp: require('../src/crypto/pgp'),
         shimCommand: pathm.resolve(__dirname, 'edge-gpg-shim.js').split(pathm.sep).join('/'),
         log: (l) => io.err(`edge-agent: ${l}`),
         confirm: () => io.err('edge-agent: confirm on the OnlyKey (a press)'),
