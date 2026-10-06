@@ -590,6 +590,26 @@ function isSilence(e) {
   return false;
 }
 
+/*
+ * Opening the phone at the agent's start (Brad, 2026-10-06): an agent restarted
+ * right after the old one quit met a phone still tearing the old link down -
+ * discovery found no vendor service (ENOVENDOR) and the agent quit; the next
+ * start worked. So that one error gets one more try after ~5 s. Anything else,
+ * or a second ENOVENDOR, is thrown as it was: a phone that really has no
+ * soft key still fails, just 5 s later.
+ * open() -> app (with destroy()) whose device is connected.
+ */
+async function openWithOneRetry(open, { waitMs = 5000, log = () => {} } = {}) {
+  try {
+    return await open();
+  } catch (e) {
+    if (!e || e.code !== 'ENOVENDOR') throw e;
+    log(`${String(e.message).split('. ')[0]} - the phone may still be dropping the last link; trying once more in ${Math.round(waitMs / 1000)} s`);
+    await new Promise((r) => setTimeout(r, waitMs));
+    return open();
+  }
+}
+
 async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null, onSilence = null, linkStats = null }) {
   const wire = require('./ssh-wire');
   const sshPub = require('../src/crypto/ssh-pub');
@@ -696,4 +716,4 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
 }
 
 module.exports = {
-  isSilence, createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS };
+  isSilence, openWithOneRetry, createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS };

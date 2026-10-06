@@ -431,9 +431,21 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
     req = chars.find((c) => c.uuid === bare(REQUEST_UUID));
     rsp = chars.find((c) => c.uuid === bare(RESPONSE_UUID));
   };
+  let first = null;
   try {
     await discover();
-  } catch (first) {
+  } catch (e) {
+    first = e;
+  }
+  /*
+   * A table WITHOUT our service gets the same retry (Brad, 2026-10-06: an agent
+   * restarted right after the old one was killed listed no vendor service, twice
+   * 5 s apart, while the phone saw no new connection at all - Windows answered
+   * from its cache over the dead process's link). The fresh discovery asks the
+   * phone itself; a FIDO device that really has no vendor service still ends in
+   * ENOVENDOR below.
+   */
+  if (first || !req || !rsp) {
     /*
      * ONE RETRY (owner, 2026-10-03: pushes now go through the phone, and the
      * third push in a row failed "Device is unreachable while discovering
@@ -442,7 +454,7 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
      * connect and discover once more. Once only: a phone that is really
      * gone still fails fast, with the first attempt's words.
      */
-    log(`discovery failed (${first && first.message}); reconnecting once, asking the phone for its whole table`);
+    log(`discovery ${first ? `failed (${first.message})` : 'listed no vendor service'}; reconnecting once, asking the phone for its whole table`);
     try {
       /* our own disconnect is not the phone dropping the link: unhook that handler around it */
       peripheral.removeListener('disconnect', onDrop);
@@ -452,8 +464,8 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
       peripheral.once('disconnect', onDrop);
       await discover(true);
     } catch {
-      await giveUp();
-      throw first;
+      /* a failed discovery keeps the first attempt's words; a table without our service ends in ENOVENDOR below */
+      if (first) { await giveUp(); throw first; }
     }
   }
   if (!req || !rsp) {

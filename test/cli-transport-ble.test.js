@@ -244,6 +244,15 @@ test('win32: Bluetooth off, a FIDO device without the vendor service, a connect 
   await assert.rejects(() => winPipe(noVendor).start(),
     (err) => err.code === 'ENOVENDOR' && /--address/.test(err.message));
   assert.ok(noVendor.log.some((l) => l[0] === 'disconnect'), 'let go of the wrong device');
+  /* Brad, 2026-10-06: Windows' cached table lacked our service (a killed agent's link) - the fresh discovery asks the phone and finds it */
+  const cached = fakeNoble({ firmware: fakeFirmware() });
+  cached.cacheMissesVendor = true;
+  const p = winPipe(cached);
+  await p.start();
+  assert.ok(cached.log.some((l) => l[0] === 'discoverAll'), 'asked the phone for its whole table');
+  await p.stop();
+  /* a FIDO device that really has none: still ENOVENDOR after the fresh look */
+  assert.ok(noVendor.log.some((l) => l[0] === 'discoverAll'), 'looked again before giving up');
   const hangs = fakeNoble({ connectHangs: true });
   await assert.rejects(() => winPipe(hangs).start(),
     (err) => err.code === 'ECONNECT' && /one computer at a time/.test(err.message));

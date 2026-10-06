@@ -1778,10 +1778,14 @@ COMMANDS['edge-agent'] = {
     saveConfig(config);
     const { signer, store } = edgeAgent(opts);
 
-    const app = await io.start(deviceOpts(opts));
+    /* ENOVENDOR at start: one more try after ~5 s (edge-agent.js openWithOneRetry) */
+    const app = await require('./edge-agent').openWithOneRetry(async () => {
+      const a = await io.start(deviceOpts(opts));
+      try { await a.services.device.connect(); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
+      return a;
+    }, { log: (l) => io.err(`edge-agent: ${l}`) });
     try {
       const { transport, device, okcrypto } = app.services;
-      await device.connect();
       let edge = null;
       require('../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
       /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */

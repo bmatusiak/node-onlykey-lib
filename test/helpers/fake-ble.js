@@ -215,6 +215,8 @@ function fakeNoble({
       }
       /* staleCache: Windows' cached table is out of date - the quick, cached discovery never answers (the Pixel, 2026-10-05) */
       if (isPhone && noble.staleCache) return new Promise(() => {});
+      /* cacheMissesVendor: the cached table answers, but without our service (a killed agent's link, 2026-10-06) */
+      if (isPhone && noble.cacheMissesVendor) return { services: [{ uuid: 'fffd' }], characteristics: [] };
       if (!isPhone || !vendor) return { services: [], characteristics: [] };
       return { services: [{ uuid: SVC }], characteristics: [req, rsp] };
     };
