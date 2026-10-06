@@ -23,7 +23,7 @@ const { inLane } = require('../../src/transport/lane');
 const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
 const { assertTransport } = require('../../src/transport/contract');
-const { concat } = require('../../src/bytes');
+const { concat, toHex } = require('../../src/bytes');
 const { codes, chain, tickets, copy: copyCheck } = require('../../src/edge');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 
@@ -79,6 +79,13 @@ const u32 = (n) => Uint8Array.of(n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, 
 const get32 = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
 const get16 = (b, o) => b[o] | (b[o + 1] << 8);
 const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/* a report's first 12 bytes in hex, and its text when it reads as one - enough to name it in a log */
+function hexHead(bytes) {
+  const t = okmsg.text(bytes);
+  if (/^[ -~]{4,}/.test(t)) return JSON.stringify(t.slice(0, 40));
+  return toHex(bytes.subarray(0, 12));
+}
 
 /*
  * Is this report a HEAD answer? The key pads its 61 bytes with zeros and its
@@ -167,10 +174,35 @@ function setup(imports, register) {
     });
   }
 
+  /*
+   * A pressed request that writes a link answers seq . head . tag - and only a
+   * seq ABOVE the key's seq before the request can be that answer.
+   *
+   * MEASURED ON THE A13 (2026-10-04): an agent registration waited on a slow
+   * press, took some other report as its answer, read a seq from it, and the
+   * link there was not the registration ("invalid"; the key HAD written it).
+   * A press wait is up to 30 s, and the A13's slow answers mean a late reply to
+   * an earlier request can land inside it. A late answer (a HEAD, a PICKUP's
+   * link, an older seq . head) can only carry a seq at or below the one read
+   * here; the real one is padded with zeros past its 52 bytes (reply()).
+   */
+  function aboveSeq(before) {
+    return (bytes) => {
+      if (bytes.length < 64 || !bytes.subarray(52, 64).every((x) => x === 0)) return false;
+      const seq = get32(bytes, 0);
+      return seq !== SEQ_NONE && (before === null || seq > before);
+    };
+  }
+
   /* a request the key answers only after a physical press: onPress once it is written */
   function pressed(sub, args, opts, onPress) {
     return exclusive(async () => {
       await busQuiet();
+      if (opts && opts.newLink) {
+        const [h] = await callNow(SUB.HEAD, null, { accept: isHeadReply });
+        const before = get32(h, 0);
+        opts = { ...opts, accept: aboveSeq(before === SEQ_NONE ? null : before) };
+      }
       const pending = callNow(sub, args, opts); /* written synchronously */
       if (onPress) onPress(); /* the request is on the key: now ask for the press */
       return pending;
@@ -203,11 +235,27 @@ function setup(imports, register) {
        */
       let timer = null;
       let listening = true;
+      /*
+       * WHAT CAME INSTEAD. "No answer" alone could not tell the A13's slow
+       * answers apart (2026-10-05): nothing at all arrived, another request's
+       * answer did, or the phone's own traffic did. Every vendor report this
+       * request passed over is kept (first bytes only) and named in the
+       * timeout, so the log says which.
+       */
+      const passed = [];
+      let passedMore = 0;
+      const pass = (why, bytes) => {
+        if (passed.length < 8) passed.push(`${why} ${hexHead(bytes)}`);
+        else passedMore += 1;
+      };
       const arm = () => {
         if (!listening) return; /* answered already */
         timer = setTimeout(() => {
           off();
-          reject(Object.assign(new Error(`Edge: no answer to request ${sub} within ${timeoutMs} ms`), { code: 'ETIMEDOUT' }));
+          const more = passedMore ? ` +${passedMore} more` : '';
+          const seen = passed.length ? `; meanwhile: ${passed.join(', ')}${more}` : '; nothing arrived';
+          const part = got.length ? ` (${got.length} of ${reports} reports)` : '';
+          reject(Object.assign(new Error(`Edge: no answer to request ${sub} within ${timeoutMs} ms${part}${seen}`), { code: 'ETIMEDOUT', passed: passed.slice(), partial: got.length }));
         }, timeoutMs);
       };
       const unsubscribe = transport.on('report', (event) => {
@@ -222,7 +270,7 @@ function setup(imports, register) {
           else reject(new EdgeError(status));
           return;
         }
-        if (/^(UNLOCKED|INITIALIZED)/.test(okmsg.text(bytes))) return; /* a status broadcast, not ours */
+        if (/^(UNLOCKED|INITIALIZED)/.test(okmsg.text(bytes))) { pass('broadcast', bytes); return; } /* a status broadcast, not ours */
         /*
          * The key gave up waiting for the press: the firmware says so in a
          * sentence ("Timeout occured while waiting for confirmation on
@@ -236,8 +284,8 @@ function setup(imports, register) {
           reject(Object.assign(new Error(`Edge: the key stopped waiting for the press (request ${sub})`), { code: 'ETIMEDOUT', pressTimeout: true }));
           return;
         }
-        if (text) return;
-        if (accept && !accept(bytes, got)) return;
+        if (text) { pass('not-status', bytes); return; }
+        if (accept && !accept(bytes, got)) { pass('not-ours', bytes); return; }
         got.push(bytes);
         if (got.length >= reports) {
           clearTimeout(timer);
@@ -441,7 +489,7 @@ function setup(imports, register) {
      * (tickets.waiveSubject). -> {seq, head, tag} after the waive link.
      */
     async waive({ onPress, timeoutMs = 30000 } = {}) {
-      const pending = pressed(SUB.WAIVE, null, { timeoutMs }, onPress);
+      const pending = pressed(SUB.WAIVE, null, { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
       return seqHeadTag(r);
     },
@@ -526,7 +574,7 @@ function setup(imports, register) {
      */
     async agentAdd(agentKey, { onPress, timeoutMs = 30000 } = {}) {
       if (!(agentKey instanceof Uint8Array) || agentKey.length !== 32) throw new TypeError('Edge: agentAdd needs a 32-byte Ed25519 key');
-      const pending = pressed(SUB.AGENT_ADD, agentKey, { timeoutMs }, onPress);
+      const pending = pressed(SUB.AGENT_ADD, agentKey, { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
       return seqHeadTag(r);
     },
@@ -546,14 +594,14 @@ function setup(imports, register) {
     async peerAdd(peerKey, { onPress, timeoutMs = 30000 } = {}) {
       const xy = p256.Point.fromBytes(sec1Bytes(peerKey)).toBytes(false).slice(1);
       await call(SUB.PEER_ADD, concat([Uint8Array.of(0), xy.slice(0, 32)]), { text: true });
-      const [r] = await pressed(SUB.PEER_ADD, concat([Uint8Array.of(1), xy.slice(32)]), { timeoutMs }, onPress);
+      const [r] = await pressed(SUB.PEER_ADD, concat([Uint8Array.of(1), xy.slice(32)]), { timeoutMs, newLink: true }, onPress);
       return seqHeadTag(r);
     },
 
     /** R20: remove the place at `index` (a press); the later ones move down. -> {seq, head, tag} */
     async peerRemove(index, { onPress, timeoutMs = 30000 } = {}) {
       if (!Number.isInteger(index) || index < 0 || index > 255) throw new RangeError(`Edge: no peer index ${index}`);
-      const [r] = await pressed(SUB.PEER_REMOVE, Uint8Array.of(index), { timeoutMs }, onPress);
+      const [r] = await pressed(SUB.PEER_REMOVE, Uint8Array.of(index), { timeoutMs, newLink: true }, onPress);
       return seqHeadTag(r);
     },
 
@@ -589,14 +637,14 @@ function setup(imports, register) {
       const xy = p256.Point.fromBytes(sec1Bytes(key)).toBytes(false).slice(1);
       const id = chain.deviceIdOf(xy);
       await call(SUB.SIBLING_ADD, concat([Uint8Array.of(0), xy.slice(0, 32)]), { text: true });
-      const [r] = await pressed(SUB.SIBLING_ADD, concat([Uint8Array.of(1), xy.slice(32), id]), { timeoutMs }, onPress);
+      const [r] = await pressed(SUB.SIBLING_ADD, concat([Uint8Array.of(1), xy.slice(32), id]), { timeoutMs, newLink: true }, onPress);
       return seqHeadTag(r);
     },
 
     /** R29: unpair the sibling at `index` (a press); the later ones move down. -> {seq, head, tag} */
     async siblingRemove(index, { onPress, timeoutMs = 30000 } = {}) {
       if (!Number.isInteger(index) || index < 0 || index > 255) throw new RangeError(`Edge: no sibling index ${index}`);
-      const [r] = await pressed(SUB.SIBLING_REMOVE, Uint8Array.of(index), { timeoutMs }, onPress);
+      const [r] = await pressed(SUB.SIBLING_REMOVE, Uint8Array.of(index), { timeoutMs, newLink: true }, onPress);
       return seqHeadTag(r);
     },
 
@@ -615,7 +663,7 @@ function setup(imports, register) {
       const s4 = Uint8Array.of(seq & 0xff, (seq >>> 8) & 0xff, (seq >>> 16) & 0xff, (seq >>> 24) & 0xff);
       await call(SUB.ANCHOR, concat([Uint8Array.of(0, index), s4, Uint8Array.from(head)]), { text: true });
       await call(SUB.ANCHOR, concat([Uint8Array.of(1), sig.slice(0, 32)]), { text: true });
-      const [r] = await pressed(SUB.ANCHOR, concat([Uint8Array.of(2), sig.slice(32, 64)]), { timeoutMs }, onPress);
+      const [r] = await pressed(SUB.ANCHOR, concat([Uint8Array.of(2), sig.slice(32, 64)]), { timeoutMs, newLink: true }, onPress);
       return seqHeadTag(r);
     },
 
@@ -638,13 +686,13 @@ function setup(imports, register) {
       if (![peerHash, head, keychain].every((b) => b instanceof Uint8Array && b.length === 32)) throw new TypeError('Edge: sync fields are sync.syncFields(...)');
       await call(SUB.SYNC, concat([Uint8Array.of(0), peerHash, u32(first), u32(last)]), { text: true });
       await call(SUB.SYNC, concat([Uint8Array.of(1), head]), { text: true });
-      const [r] = await pressed(SUB.SYNC, concat([Uint8Array.of(2), keychain]), { timeoutMs }, onPress);
+      const [r] = await pressed(SUB.SYNC, concat([Uint8Array.of(2), keychain]), { timeoutMs, newLink: true }, onPress);
       return seqHeadTag(r);
     },
 
     async loss({ from, to, onPress, timeoutMs = 30000 } = {}) {
       if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) throw new RangeError(`Edge: a loss is #from..#to, not ${from}..${to}`);
-      const pending = pressed(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs }, onPress);
+      const pending = pressed(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
       return seqHeadTag(r);
     },
