@@ -7,9 +7,9 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
-const { derive, list, artifacts } = require('../src/keychain');
-const { ed25519, x25519 } = require('../src/vendor/exports/@noble/curves/ed25519.js');
-const { p256 } = require('../src/vendor/exports/@noble/curves/nist.js');
+const { derive, list, artifacts } = require('../src');
+const { ed25519, x25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
+const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 
 const random = (n) => Uint8Array.from(crypto.randomBytes(n));
 const fixed = () => new Date('2026-10-01T00:00:00Z');

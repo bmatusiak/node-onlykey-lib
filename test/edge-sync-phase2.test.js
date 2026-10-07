@@ -128,7 +128,7 @@ test('approveSync: a place NOT on the key\'s list never reaches the sheet; Decli
 
 /* ------------------------------------------------ the Key Chain list (merged, never "yours") */
 
-const list = require('../src/keychain/list');
+const list = require('../keychain/src/list');
 const derived = (label, pub, extra = {}) => list.createEntry({ kind: 'derived', type: 'ed25519', scheme: 'ssh', label, publicKey: pub, created: '2026-10-05T00:00:00.000Z', ...extra });
 const pubOf = (n) => require('../src/vendor/exports/@noble/curves/ed25519.js').ed25519.getPublicKey(new Uint8Array(32).fill(n));
 

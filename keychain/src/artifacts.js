@@ -15,9 +15,9 @@
  * caller that can ask for them and kept in the Key Chain list.
  */
 
-const { toHex, toBase64 } = require('../bytes');
-const ssh = require('../crypto/ssh-pub');
-const pqc = require('../crypto/age_pqc');
+const { toHex, toBase64 } = require('../../src/bytes');
+const ssh = require('../../src/crypto/ssh-pub');
+const pqc = require('../../src/crypto/age_pqc');
 
 /**
  * @param {{type: string, publicKey: Uint8Array, comment?: string}} key

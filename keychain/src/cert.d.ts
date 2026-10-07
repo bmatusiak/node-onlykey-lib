@@ -36,17 +36,3 @@ export function makeRevocation(okcrypto: any, openpgp: any, { label, version, cr
     fingerprint: string;
 }>;
 export function uidOf(label: any): string;
-/**
- * Before a certificate (spec session, 2026-10-03, no firmware exemption):
- * refuse while the key owes anything - R18 would hold every budget anyway, and
- * our own presses would join an unexplained list. -> the seq to ticket after.
- * @param {object|null} edge the key's Edge plugin, or null (no Edge: nothing to do)
- * @returns {Promise<number|null>}
- */
-export function guardOwed(edge: object | null): Promise<number | null>;
-/**
- * After the presses: under R16 a press with a key a live budget covers owes a
- * ticket. File ours at once - code OK, "cert self-signature <fingerprint>".
- * @returns {Promise<number[]>} the seqs ticketed
- */
-export function ticketOwnPresses(edge: any, startSeq: any, fingerprint: any): Promise<number[]>;

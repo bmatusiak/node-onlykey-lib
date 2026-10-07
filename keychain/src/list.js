@@ -18,8 +18,8 @@
  * keys as hex.
  */
 
-const { toHex, fromHex } = require('../bytes');
-const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const { toHex, fromHex } = require('../../src/bytes');
+const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const artifacts = require('./artifacts');
 
 const FORMAT = 'onlykey-keychain';
@@ -114,7 +114,7 @@ function parse(text) {
  * Add `incoming` to `existing`. An entry with an id already present gets the
  * fields only the incoming copy has (`joined`) - nothing either side knew is
  * dropped. Keeping the existing copy as it was lost the computer's PGP
- * certificate on every okedge sync, and the next agent start put it back, so
+ * certificate on every onlykey-js edge sync, and the next agent start put it back, so
  * every sync "moved" it again and asked for a press (the A13, 2026-10-05).
  * A twin (the same derived key under a hash and a name) becomes one entry.
  * @returns {{entries: object[], added: number, paired: number, joined: number, kept: number}}

@@ -33,14 +33,14 @@
  * plain, and Hermes-clean (vendored @noble only).
  */
 
-const { ed25519, x25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
-const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
+const { ed25519, x25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
+const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 
 /* OpenPGP public-key algorithm ids (RFC 9580 9.1) */
 const ALG = { RSA: [1, 2, 3], ECDH: 18, ECDSA: 19, EDDSA_LEGACY: 22, X25519: 25, ED25519: 27 };
 
 /* noble's randomBytes, as age_file and pkcs8 use it - not a bare crypto global (bytes.js says why) */
-const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
+const { randomBytes } = require('../../src/vendor/exports/@noble/ciphers/utils.js');
 
 const eq = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
 

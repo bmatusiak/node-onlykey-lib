@@ -26,8 +26,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const list = require('../src/keychain/list');
-const { toHex } = require('../src/bytes');
+const list = require('../src/list');
+const { toHex } = require('../../src/bytes');
 
 /* okcrypto.agent keyType -> the list's type */
 const TYPE_OF_KEYTYPE = { 1: 'ed25519', 2: 'p256', 3: 'secp256k1', 4: 'x25519' };

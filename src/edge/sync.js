@@ -233,7 +233,7 @@ function syncSubject(fields) {
 
 /* ------------------------------------------------ the Key Chain list */
 
-const list = require('../keychain/list');
+const list = require('../../keychain/src/list');
 
 /*
  * CANONICAL: keys sorted at every level. The same entry built two ways (the

@@ -17,8 +17,8 @@
  * (keys.validateBackupPassphrase) refuses before anything is written.
  */
 
-const { validateBackupPassphrase } = require('../device/keys');
-const pkcs8 = require('../crypto/pkcs8');
+const { validateBackupPassphrase } = require('../../src/device/keys');
+const pkcs8 = require('../../src/crypto/pkcs8');
 
 /**
  * @param {import('../vendor/openpgp/openpgp').PrivateKey} privateKey a DECRYPTED openpgp key

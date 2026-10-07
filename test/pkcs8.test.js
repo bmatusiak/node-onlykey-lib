@@ -63,7 +63,7 @@ test('the default is 600000 PBKDF2-SHA256 rounds, and OpenSSL reads them', async
 
 test('keychain.export.encryptedPgp: gpg-style armored copy that openpgp opens only with the passphrase', async () => {
   const openpgp = require('../src/crypto/pgp');
-  const { export: kcExport } = require('../src/keychain');
+  const { export: kcExport } = require('../keychain/src');
   const { privateKey } = await openpgp.generateKey({ type: 'ecc', curve: 'curve25519', userIDs: [{ name: 'kc' }], format: 'object' });
   const armored = await kcExport.encryptedPgp(privateKey, PASS, { confirm: PASS, openpgp });
   assert.match(armored, /^-----BEGIN PGP PRIVATE KEY BLOCK-----/);

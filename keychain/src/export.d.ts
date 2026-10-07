@@ -5,9 +5,9 @@
  *   passed in so a caller that never exports PGP never loads it (1.2 MB)
  * @returns {Promise<string>} armored
  */
-export function encryptedPgp(privateKey: import("../vendor/openpgp/openpgp").PrivateKey, passphrase: string, { confirm, openpgp }?: {
+export function encryptedPgp(privateKey: any, passphrase: string, { confirm, openpgp }?: {
     confirm?: string | null;
     openpgp: any;
 }): Promise<string>;
-import pkcs8 = require("../crypto/pkcs8");
+import pkcs8 = require("../../src/crypto/pkcs8");
 export declare let encryptedPem: typeof pkcs8.encryptedPem;

@@ -426,7 +426,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       }
       const c = copy.load(where, Buffer.from(r.deviceId, 'hex'));
       /* this PC's public Key Chain list goes too, merged on the phone under the same sheet and press */
-      const kcFile = require('./keychain-record');
+      const kcFile = require('../keychain/cli/record');
       const myList = kcFile.load();
       try {
         r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: `${require('os').hostname()} copies`, keychain: myList });

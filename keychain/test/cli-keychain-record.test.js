@@ -16,11 +16,11 @@ const path = require('path');
 const FILE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'okjs-keychain-')), 'keychain.json');
 process.env.ONLYKEY_KEYCHAIN = FILE;
 
-const { main } = require('../cli/index');
-const { startDesktop } = require('../cli/desktop');
-const { fakeFirmware } = require('./helpers/fake-firmware');
-const rec = require('../cli/keychain-record');
-const list = require('../src/keychain/list');
+const { main } = require('../../cli/index');
+const { startDesktop } = require('../../cli/desktop');
+const { fakeFirmware } = require('../../test/helpers/fake-firmware');
+const rec = require('../cli/record');
+const list = require('../src/list');
 
 const K132 = new Uint8Array(32).map((_, i) => (i * 29 + 7) & 0xff);
 

@@ -8,10 +8,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
-const { hostKey, wipe, RSA_BITS } = require('../src/keychain/generate');
-const keys = require('../src/device/keys');
-const { createSubtle } = require('../src/webcrypto/subtle');
-const rsa = require('../src/crypto/rsa');
+const { hostKey, wipe, RSA_BITS } = require('../src/generate');
+const keys = require('../../src/device/keys');
+const { createSubtle } = require('../../src/webcrypto/subtle');
+const rsa = require('../../src/crypto/rsa');
 
 /* Node's generator handing over primes - what the Android native module does in ok-rn. */
 async function nodePrimes(bits, e) {

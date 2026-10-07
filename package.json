@@ -15,7 +15,7 @@
     "./transport": "./src/transport/index.js",
     "./transport/webauthn": "./src/transport/webauthn.js",
     "./device": "./src/device/index.js",
-    "./keychain": "./src/keychain/index.js",
+    "./keychain": "./keychain/src/index.js",
     "./edge": "./src/edge/index.js",
     "./btpair": "./src/btpair/index.js",
     "./config": "./src/config/ini.js",
@@ -44,7 +44,7 @@
     "./cli/desktop": "./cli/desktop.js",
     "./cli/edge-agent": "./cli/edge-agent.js",
     "./cli/edge-control": "./cli/edge-control.js",
-    "./cli/keychain-record": "./cli/keychain-record.js",
+    "./cli/keychain-record": "./keychain/cli/record.js",
     "./edge/cli/commands": "./edge/cli/commands.js",
     "./cli/ssh-wire": "./cli/ssh-wire.js",
     "./cli/ssh-session-bind": "./cli/ssh-session-bind.js",
@@ -56,6 +56,7 @@
   },
   "files": [
     "src",
+    "keychain",
     "plugins",
     "cli",
     "edge",
@@ -67,7 +68,7 @@
     "FINDING-*.md"
   ],
   "scripts": {
-    "test": "npm run types && node --test test/*.test.js",
+    "test": "npm run types && node --test test/*.test.js keychain/test/*.test.js",
     "types": "node scripts/gen-types.js",
     "release-check": "node scripts/release-check.js"
   },

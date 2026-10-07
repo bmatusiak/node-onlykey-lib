@@ -18,12 +18,12 @@
  * now, though a 1024-bit key made elsewhere still loads.
  */
 
-const { ed25519, x25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
-const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
-const { secp256k1 } = require('../vendor/exports/@noble/curves/secp256k1.js');
-const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
-const { fromBase64Url } = require('../bytes');
-const keys = require('../device/keys');
+const { ed25519, x25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
+const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
+const { secp256k1 } = require('../../src/vendor/exports/@noble/curves/secp256k1.js');
+const { randomBytes } = require('../../src/vendor/exports/@noble/ciphers/utils.js');
+const { fromBase64Url } = require('../../src/bytes');
+const keys = require('../../src/device/keys');
 
 const RSA_BITS = Object.freeze([2048, 3072, 4096]);
 

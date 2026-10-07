@@ -8,11 +8,11 @@ const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
 
-const { main } = require('../cli/index');
-const { startDesktop } = require('../cli/desktop');
-const { fakeFirmware } = require('./helpers/fake-firmware');
-const { MSG } = require('../src/protocol/msg');
-const { ed25519 } = require('../src/vendor/exports/@noble/curves/ed25519.js');
+const { main } = require('../../cli/index');
+const { startDesktop } = require('../../cli/desktop');
+const { fakeFirmware } = require('../../test/helpers/fake-firmware');
+const { MSG } = require('../../src/protocol/msg');
+const { ed25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 
 const PASS = 'a passphrase of twenty-five characters or more';
 const NO_DEVICE = () => { throw new Error('opened a device'); };
@@ -121,7 +121,7 @@ test('keychain gen pgp --host: an encrypted armored copy and the public certific
   assert.equal(r.code, 0, r.err.join('\n'));
   assert.match(r.files['k.asc'], /^-----BEGIN PGP PRIVATE KEY BLOCK-----/);
   assert.match(r.out.join('\n'), /-----BEGIN PGP PUBLIC KEY BLOCK-----/);
-  const openpgp = require('../src/crypto/pgp');
+  const openpgp = require('../../src/crypto/pgp');
   const key = await openpgp.readPrivateKey({ armoredKey: r.files['k.asc'] });
   assert.equal(key.isDecrypted(), false);
 });

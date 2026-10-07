@@ -22,6 +22,8 @@ const {execFileSync} = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
+/* the feature plugins' sources (step 3): their declarations sit beside them as well */
+const PLUGIN_SRC = [path.join(ROOT, 'keychain', 'src')];
 const KEEP = path.join(SRC, 'vendor');
 
 function removeGenerated(dir) {
@@ -39,7 +41,7 @@ function removeGenerated(dir) {
   return removed;
 }
 
-const removed = removeGenerated(SRC);
+const removed = [SRC, ...PLUGIN_SRC].reduce((n, dir) => n + (fs.existsSync(dir) ? removeGenerated(dir) : 0), 0);
 if (removed) console.log(`cleaned ${removed} generated .d.ts`);
 
 /*

@@ -35,7 +35,7 @@ test('no vendored package is also an npm dependency', () => {
 });
 
 test('the library reaches the copies only through the shims', () => {
-  const files = execSync('git ls-files -co --exclude-standard src plugins test scripts', {cwd: ROOT, encoding: 'utf8'})
+  const files = execSync('git ls-files -co --exclude-standard src plugins test scripts keychain edge', {cwd: ROOT, encoding: 'utf8'})
     .split('\n')
     .filter((f) => /\.(js|ts)$/.test(f) && !f.startsWith('src/vendor/') && !f.endsWith('.d.ts') &&
       f !== 'test/vendor.test.js' && f !== 'scripts/vendor.js');

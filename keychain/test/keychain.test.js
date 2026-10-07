@@ -9,17 +9,17 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const Rectify = require('@bmatusiak/rectify');
-const hostPlugin = require('../plugins/host');
-const embedded = require('../plugins/transport/embedded');
-const sessionPlugin = require('../plugins/session');
-const devicePlugin = require('../plugins/device');
-const { fakeFirmware } = require('./helpers/fake-firmware');
-const { MSG } = require('../src/protocol/msg');
-const { toLatin1 } = require('../src/bytes');
-const keychain = require('../src/keychain');
-const { p256 } = require('../src/vendor/exports/@noble/curves/nist.js');
-const { secp256k1 } = require('../src/vendor/exports/@noble/curves/secp256k1.js');
-const { ed25519, x25519 } = require('../src/vendor/exports/@noble/curves/ed25519.js');
+const hostPlugin = require('../../plugins/host');
+const embedded = require('../../plugins/transport/embedded');
+const sessionPlugin = require('../../plugins/session');
+const devicePlugin = require('../../plugins/device');
+const { fakeFirmware } = require('../../test/helpers/fake-firmware');
+const { MSG } = require('../../src/protocol/msg');
+const { toLatin1 } = require('../../src/bytes');
+const keychain = require('../src');
+const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
+const { secp256k1 } = require('../../src/vendor/exports/@noble/curves/secp256k1.js');
+const { ed25519, x25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 
 const { formatTag, parseTag, LABEL_MAX } = keychain.tag;
 

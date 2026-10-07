@@ -1,20 +1,20 @@
 'use strict';
 
 /*
- * `keychain cert` (src/keychain/cert.js; spec session, 2026-10-03): the
- * certificate of a derived gpg identity, its renewal and its revocation are
- * self-signatures by the OnlyKey - each a PHYSICAL PRESS, never paid by an Edge
- * budget, even under a live budget that covers that very label.
+ * Edge and Key Chain's certificate (step 3a: the test moved here from Key Chain's,
+ * which must not need Edge). A certificate's self-signatures are PHYSICAL PRESSES,
+ * never paid by an Edge budget - even under a live budget that covers that very
+ * label - and an ordinary press is not Edge: no link, nothing owed.
  */
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('crypto');
 
 const openpgp = require('../src/vendor/openpgp/openpgp.js');
-const { request, approve, client, codes, chain } = require('../src/edge');
+const { request, approve, client, chain } = require('../src/edge');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 const agentProto = require('../src/protocol/agent');
-const certLib = require('../src/keychain/cert');
+const certLib = require('../keychain/src/cert');
 
 const AGENT = request.signerFromSecret(new Uint8Array(32).fill(43));
 const hex = (b) => Buffer.from(b).toString('hex');
@@ -76,25 +76,4 @@ test('a certificate under a live budget covering its label: both self-signatures
   const key = await openpgp.readKey({ armoredKey: c.armored });
   assert.equal(key.getUserIDs()[0], UID);
   assert.equal(Math.round(((await key.getExpirationTime()).getTime() / 1000 - c.created) / 86400), 365);
-});
-
-test('R16 (spec session, 2026-10-06): a cert press owes nothing - there is nothing for the cert to ticket', async () => {
-  const s = await stack();
-  const start = await certLib.guardOwed(s.edge);
-  const c = await certLib.makeCertificate(s.okcrypto, openpgp, { label: LABEL });
-  assert.equal((await s.edge.head()).owed, 0, 'two ordinary presses, nothing owed');
-  await certLib.guardOwed(s.edge); /* a second cert is not held up */
-  assert.deepEqual(await certLib.ticketOwnPresses(s.edge, start, c.fingerprint), [], 'nothing to ticket');
-});
-
-test('renewal keeps the fingerprint; a revocation (one press) revokes that key', async () => {
-  const s = await stack();
-  const first = await certLib.makeCertificate(s.okcrypto, openpgp, { label: LABEL, expires: 30 * 86400 });
-  const renewed = await certLib.makeCertificate(s.okcrypto, openpgp, { label: LABEL, created: first.created, expires: 365 * 86400 });
-  assert.equal(renewed.fingerprint, first.fingerprint, 'the same key, a new expiry');
-  const before = s.presses.length;
-  const r = await certLib.makeRevocation(s.okcrypto, openpgp, { label: LABEL, created: first.created, reason: 3 });
-  assert.equal(s.presses.length - before, 1);
-  const revoked = await openpgp.revokeKey({ key: await openpgp.readKey({ armoredKey: renewed.armored }), revocationCertificate: r.armored, format: 'object' });
-  assert.equal(await revoked.publicKey.isRevoked(), true, 'the key reads as revoked');
 });

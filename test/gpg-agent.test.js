@@ -667,7 +667,7 @@ function slotPair() {
   return { fw, cert, signPub, ecdhPub };
 }
 
-test('gpg init --skey ECC2 --dkey ECC1 --import-pub: the slots\' certificate is imported as it is, after it is checked against them', async () => {
+test('(Key Chain) gpg init --skey ECC2 --dkey ECC1 --import-pub: the slots\' certificate is imported as it is, after it is checked against them', async () => {
   const parent = tmpdir();
   const home = path.join(parent, 'home');
   try {
@@ -704,7 +704,7 @@ test('gpg init --skey ECC2 --dkey ECC1 --import-pub: the slots\' certificate is 
   }
 });
 
-test('gpg-agent --skey ECC2 --dkey ECC1: gpg\'s signature comes from ECC2, its ECDH from ECC1', async () => {
+test('(Key Chain) gpg-agent --skey ECC2 --dkey ECC1: gpg\'s signature comes from ECC2, its ECDH from ECC1', async () => {
   const parent = tmpdir();
   const home = path.join(parent, 'home');
   try {

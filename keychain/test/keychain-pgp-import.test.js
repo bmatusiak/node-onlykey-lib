@@ -9,10 +9,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const openpgp = require('../src/vendor/openpgp/openpgp.js');
-const pgpCert = require('../src/crypto/pgp-cert.js');
-const keychain = require('../src/keychain');
-const { ed25519, x25519 } = require('../src/vendor/exports/@noble/curves/ed25519.js');
+const openpgp = require('../../src/vendor/openpgp/openpgp.js');
+const pgpCert = require('../../src/crypto/pgp-cert.js');
+const keychain = require('../src');
+const { ed25519, x25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 
 const { pgpImport } = keychain;
 const SK = new Uint8Array(32).fill(3); /* "ECC2": signing */
