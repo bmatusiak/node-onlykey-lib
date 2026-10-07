@@ -948,6 +948,32 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
  *   ONLYKEY_JS_DEBUG is set
  * @returns the pipe contract (start/stop/isRunning/write/on) plus `link`
  */
+/*
+ * CTRL+C SAYS GOODBYE TOO (Brad, 2026-10-07). A short command (status, watch)
+ * stopped with Ctrl+C exited at once, without its goodbye: the phone kept the
+ * session open - its ⚿ green - and Windows kept the link (a killed process never
+ * closes it). So the open links say goodbye first (2 s at most), then the process
+ * exits as Ctrl+C would. A command that handles the signal itself (the agent
+ * services, which close their link on the way out) is left to do so: this runs
+ * first and steps aside when anything else listens.
+ */
+const livePipes = new Set();
+let signalsArmed = false;
+function onSignal(sig) {
+  if (process.listenerCount(sig) > 1) return;
+  const byes = [...livePipes].map((p) => Promise.race([
+    Promise.resolve(p.stop()).catch(() => {}),
+    new Promise((r) => setTimeout(r, 2000)),
+  ]));
+  Promise.all(byes).finally(() => process.exit(sig === 'SIGINT' ? 130 : 143));
+}
+function armSignals() {
+  if (signalsArmed || typeof process === 'undefined' || typeof process.prependListener !== 'function') return;
+  signalsArmed = true;
+  process.prependListener('SIGINT', () => onSignal('SIGINT'));
+  process.prependListener('SIGTERM', () => onSignal('SIGTERM'));
+}
+
 function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, computerName = null, onPairingRenewed = null, now = () => Date.now(), reconnect = true, onLink = null } = {}) {
   const btpair = require('../src/btpair');
   /* Part T: the session (null = plaintext, until this user is paired with this phone) and waiters for 0x85 answers */
@@ -1371,10 +1397,12 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     ]);
   }
 
-  return {
+  const pipe = {
     async start() {
       const r = await startLink();
       started = true;
+      livePipes.add(pipe);
+      armSignals();
       return r;
     },
 
@@ -1399,6 +1427,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
        */
       if (renewing) await Promise.race([renewing, new Promise((r) => setTimeout(r, 5000))]);
       started = false; /* a deliberate stop: no write reconnects after it */
+      livePipes.delete(pipe);
       await goodbye();
       const was = link;
       link = null;
@@ -1456,6 +1485,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     /** Which phone, once started. */
     get link() { return link ? link.describe : null; },
   };
+  return pipe;
 }
 
 function concatAll(list) {
