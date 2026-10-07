@@ -464,3 +464,24 @@ test('grants: R11a - identityLabel is the agent\'s identity hash; the grant subj
   const pre = sha256(Uint8Array.from([...Buffer.from('OKEDGE-GRANT-v1'), ...enc, ...base.reasonHash, ...base.genesis, 0, 0]));
   assert.equal(hex(stored), hex(pre));
 });
+
+/* a ticket's message check is kept with its link (ok-rn A13: pairing ~110 ms a sync) - never past a changed message */
+test('tickets: the message check is kept per ticket link, and a changed message is checked again', () => {
+  const provider = require('../src/crypto/provider');
+  let hashes = 0;
+  provider.setCryptoProvider({ sha256: (b) => { hashes++; return provider.js.sha256(b); } }, 'counting');
+  try {
+    const es = entries();
+    const first = tickets.pairTickets(es, { [T.refSeq]: T.message });
+    const firstHashes = hashes;
+    assert.equal(first.uses.find((u) => u.seq === T.refSeq).messageStatus, 'match');
+    hashes = 0;
+    const again = tickets.pairTickets(es, { [T.refSeq]: T.message });
+    assert.equal(again.uses.find((u) => u.seq === T.refSeq).messageStatus, 'match');
+    assert.ok(hashes < firstHashes, `kept: ${hashes} hashes, first time ${firstHashes}`);
+    const changed = tickets.pairTickets(es, { [T.refSeq]: T.message + ' (edited)' });
+    assert.equal(changed.uses.find((u) => u.seq === T.refSeq).messageStatus, 'mismatch');
+  } finally {
+    provider.setCryptoProvider(null);
+  }
+});

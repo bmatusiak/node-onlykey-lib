@@ -24,6 +24,17 @@ const { decodeLink } = require('./chain');
 const { H, u32le, u8, bytes32, same } = require('./hash');
 const { utf8ToBytes } = require('../bytes');
 
+/*
+ * A TICKET'S MESSAGE CHECK, KEPT WITH ITS LINK (ok-rn on a Galaxy A13, 2026-10-07:
+ * pairing ~110 ms a sync - two SHA-256 per ticket, every ticket, every sync). The
+ * answer depends only on the ticket link, the use's head and the message text: the
+ * same three objects/text, the same answer. Keyed by the link's bytes object, so a
+ * host that keeps its copy in memory (ok-rn) checks only new tickets and changed
+ * messages; a copy read fresh is new objects and is checked in full. Links are
+ * never changed in place.
+ */
+const messageChecked = new WeakMap();
+
 function messageHash(message) {
   return H(utf8ToBytes(String(message)));
 }
@@ -164,8 +175,14 @@ function pairTickets(entries, messages = {}) {
     if (text === undefined) use.messageStatus = 'none';
     else if (!refHead) use.messageStatus = 'unchecked';
     else {
-      const subject = ticketSubject({ refSeq: f.refSeq, refHead, code: f.code, msgHash: messageHash(text) });
-      if (same(subject, f.subject)) { use.message = String(text); use.messageStatus = 'match'; }
+      const kept = messageChecked.get(r.link);
+      let match;
+      if (kept && kept.text === text && kept.refHead === refHead) match = kept.match;
+      else {
+        match = same(ticketSubject({ refSeq: f.refSeq, refHead, code: f.code, msgHash: messageHash(text) }), f.subject);
+        messageChecked.set(r.link, { text, refHead, match });
+      }
+      if (match) { use.message = String(text); use.messageStatus = 'match'; }
       else use.messageStatus = 'mismatch';
     }
   }
