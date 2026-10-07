@@ -161,12 +161,23 @@ function uncoveredGaps(entries, gaps, held) {
  * over its grant-create link's stored head) and any the copy kept
  * (copy.checkpoints). Only signatures that verify under key.publicKey count.
  */
-function checkpointAnchors(entries, copy, key) {
+/*
+ * SEALED (BLOCKS.md §2a; Brad, 2026-10-07: "we only need to verify the new stuff").
+ * sealed = {seq, head}: a checkpoint the CALLER checked THIS session against the
+ * key's public key - a seal the key signed when a budget had ended. It stands in
+ * for every signature at or below it: those checks, one per budget ever opened,
+ * are what makes the full check grow with the chain (10.3 s on a Galaxy A13 at
+ * #572). The stored links are still welded to it by chain.verify, and gaps,
+ * losses and the verdict come out exactly as in the full check.
+ */
+function checkpointAnchors(entries, copy, key, sealed = null) {
   if (!key.publicKey) return []; /* nothing to check a signature with: no checkpoint anchors */
   const deviceId = chain.deviceIdOf(key.publicKey);
   const out = new Map();
+  if (sealed) out.set(sealed.seq, { seq: sealed.seq, head: sealed.head });
+  const below = (seq) => sealed && seq <= sealed.seq;
   const take = (seq, head, signature) => {
-    if (out.has(seq) || !head || !signature) return;
+    if (out.has(seq) || below(seq) || !head || !signature) return;
     if (chain.verifyCheckpoint({ deviceId, seq, head }, signature, key.publicKey)) out.set(seq, { seq, head });
   };
   const openings = copy.openings || {};
@@ -187,6 +198,8 @@ function checkpointAnchors(entries, copy, key) {
  * opts.ringFrom: the oldest seq the key still holds (missing links at or
  * above it were removed, not lost); opts.lastSeen: the head this host verified
  * last session (an older one now is a rollback).
+ * opts.sealed: {seq, head} the caller checked against key.publicKey THIS session (a
+ * seal, BLOCKS.md 2a): it stands in for every signature at or below it.
  * -> {chain (chain.verify's result), anchors, missing, losses, open}
  *    missing: ranges no anchor reaches, minus the key's own links;
  *    losses: the verified LOSS links; open: missing ranges none of them covers.
@@ -195,7 +208,8 @@ function assess(copy, key, opts = {}) {
   if (opts.from) return assessFrom(copy, key, opts);
   const entries = (copy.links || []).map((e) => (e instanceof Uint8Array ? { link: e } : e));
   const deviceId = key.publicKey ? chain.deviceIdOf(key.publicKey) : key.deviceId;
-  const anchors = checkpointAnchors(entries, copy, key);
+  /* opts.sealed: see checkpointAnchors - the caller checked it against key.publicKey this session */
+  const anchors = checkpointAnchors(entries, copy, key, opts.sealed || null);
   const v = chain.verify(entries, {
     ...chain.chainStart(entries, deviceId), /* R28: a chain that begins with a continue starts there */
     deviceId, expectHead: { seq: key.head.seq, head: key.head.head }, anchors,

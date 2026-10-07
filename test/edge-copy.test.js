@@ -464,3 +464,36 @@ test('version: the byte is inside the welded 64 bytes - changing it breaks the w
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'chain', 'the stored head no longer welds from the edited link');
 });
+
+/*
+ * SEALED (BLOCKS.md §2a; Brad, 2026-10-07: "we only need to verify the new stuff").
+ * A seal the caller checked THIS session stands in for every signature at or below
+ * it - the per-budget signature checks were what made the full check grow with the
+ * chain. The links are still welded to it, so the verdict is the full check's.
+ */
+const countVerifies = (fn) => {
+  const real = chain.verifyCheckpoint;
+  let n = 0;
+  chain.verifyCheckpoint = (...a) => { n += 1; return real(...a); };
+  try { return { result: fn(), checks: n }; } finally { chain.verifyCheckpoint = real; }
+};
+
+test('copy: assess with a seal gives the full check\'s verdict without the signatures below it', () => {
+  const s = story();
+  const c = { links: s.links, openings: s.openings };
+  const seal = { seq: s.key.checkpoint.seq, head: s.key.checkpoint.head };
+  const full = countVerifies(() => copy.assess(c, s.key));
+  const sealed = countVerifies(() => copy.assess(c, s.key, { sealed: seal }));
+  for (const k of ['ok', 'verifiedThrough', 'gaps', 'failure']) assert.deepEqual(sealed.result.chain[k], full.result.chain[k], k);
+  for (const k of ['missing', 'losses', 'open']) assert.deepEqual(sealed.result[k], full.result[k], k);
+  assert.ok(full.checks >= 2, `the full check verified ${full.checks} signature(s)`);
+  assert.equal(sealed.checks, 0, 'nothing at or below the seal is verified again');
+});
+
+test('copy: an edited link below the seal is still caught - the seal anchors, it does not excuse', () => {
+  const s = story();
+  const links = s.links.map((e, i) => (i === 2 ? { ...e, link: e.link.map((b, j) => (j === 20 ? b ^ 1 : b)) } : e));
+  const seal = { seq: s.key.checkpoint.seq, head: s.key.checkpoint.head };
+  const a = copy.assess({ links, openings: s.openings }, s.key, { sealed: seal });
+  assert.ok(!a.chain.ok || a.chain.failure || a.open.length, 'an edited sealed link must not pass');
+});

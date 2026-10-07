@@ -58,6 +58,8 @@ export function verifyCopyKept(copy: any, key: any, prev?: null): {
  * opts.ringFrom: the oldest seq the key still holds (missing links at or
  * above it were removed, not lost); opts.lastSeen: the head this host verified
  * last session (an older one now is a rollback).
+ * opts.sealed: {seq, head} the caller checked against key.publicKey THIS session (a
+ * seal, BLOCKS.md 2a): it stands in for every signature at or below it.
  * -> {chain (chain.verify's result), anchors, missing, losses, open}
  *    missing: ranges no anchor reaches, minus the key's own links;
  *    losses: the verified LOSS links; open: missing ranges none of them covers.
