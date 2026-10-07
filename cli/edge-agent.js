@@ -116,7 +116,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   };
 
   /*
-   * One paid use: ARM over the budget's head and exactly the bytes the
+   * One paid use: TX start over the budget's head and exactly the bytes the
    * firmware will be given (message || identity hash - okcrypto.agent.sign's
    * payload, R13a), the sign, the link read back and checked (client.js).
    */
@@ -148,7 +148,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget - ask for one first (onlykey-js edge budget)');
     /*
      * Refused BEFORE the command runs (daily-loop §3, must fail safely): a
-     * ticket still owed (R18 - the key would refuse the ARM anyway, mid-git),
+     * ticket still owed (R18 - the key would refuse the TX start anyway, mid-git),
      * the budget held or gone on the key (Hold from the phone), a stale head.
      */
     const owed = budget.pending();

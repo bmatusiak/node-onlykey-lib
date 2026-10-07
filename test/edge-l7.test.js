@@ -80,7 +80,7 @@ test('L7: request -> use -> ticket -> use -> ticket -> end, each use paid by the
   const one = await budget.use(Uint8Array.from([1, 2, 3]), sign);
   assert.equal(JSON.stringify([one.link.paid, one.link.step]), '[true,1]', 'the budget paid for use 1');
   assert.deepEqual(budget.pending(), [one.link.seq]);
-  await assert.rejects(budget.use(Uint8Array.from([4]), sign), (e) => e.code === 'EEDGE_ARM' && e.reason === 'ticket-owed', 'use() before the ticket');
+  await assert.rejects(budget.use(Uint8Array.from([4]), sign), (e) => e.code === 'EEDGE_TX' && e.reason === 'ticket-owed', 'use() before the ticket');
   const first = await budget.ticket(one.link, { code: 'OK', message: 'pushed' });
   assert.equal(first.ended, undefined, 'a ticket with uses left must not end the budget');
   const two = await budget.use(Uint8Array.from([4, 5]), sign);
@@ -90,7 +90,7 @@ test('L7: request -> use -> ticket -> use -> ticket -> end, each use paid by the
   assert.equal(last.ended, true, 'the last ticket did not end the used-up budget');
   assert.deepEqual((await edge.head()).live, [], 'the used-up budget still holds a live slot');
   let ran = false;
-  await assert.rejects(budget.use(Uint8Array.from([6]), async (b) => { ran = true; return sign(b); }), (e) => e.code === 'EEDGE_ARM' && e.reason === 'ended');
+  await assert.rejects(budget.use(Uint8Array.from([6]), async (b) => { ran = true; return sign(b); }), (e) => e.code === 'EEDGE_TX' && e.reason === 'ended');
   assert.equal(ran, false, 'an ended budget never runs the operation');
   await budget.end(); /* again: harmless */
 });
@@ -175,7 +175,7 @@ test('L7: an answer that is not the budget the agent asked for is caught - the o
     (e) => e.code === 'EEDGE_OPENING');
 });
 
-test('L7 + R13a: another request slipped in between ARM and sign is REFUSED by the key - no link, the ARM used up, counted (2026-10-06)', async () => {
+test('L7 + R13a: another request slipped in between TX start and sign is REFUSED by the key - no link, the TX start used up, counted (2026-10-06)', async () => {
   const { transport, edge } = await readyKey();
   const c = client.createEdgeClient({ edge, channel: phone(edge), signer: AGENT });
   const budget = await c.request({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }], ttlMinutes: 10 });
@@ -183,9 +183,9 @@ test('L7 + R13a: another request slipped in between ARM and sign is REFUSED by t
   await assert.rejects(budget.use(Uint8Array.from([1]), async () => transport.use(Uint8Array.from([9, 9]), { slot: 222 })), (e) => e.kind === 'edge' && /EDGE:1C/.test(e.message));
   const after = await edge.head();
   assert.equal(after.seq, before.seq, 'no link');
-  assert.equal(after.refusedArms, before.refusedArms + 1, 'HEAD byte 60 counts the refused sign');
-  assert.equal(transport.armed(), false, 'the ARM is used up - ARM again');
-  /* the budget still pays a use that matches its ARM */
+  assert.equal(after.refusedTx, before.refusedTx + 1, 'HEAD byte 60 counts the refused sign');
+  assert.equal(transport.started(), false, 'the TX start is used up - TX start again');
+  /* the budget still pays a use that matches its TX start */
   const u = await budget.use(Uint8Array.from([2]), (x) => transport.use(x, { slot: 222 }));
   assert.equal(u.link.paid, true);
 });
@@ -196,14 +196,14 @@ test('R13a (2026-10-06): announce a sign, hold the budget, then sign - refused, 
   const budget = await c.request({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }], ttlMinutes: 10 });
   const bytes = Uint8Array.from([7, 7]);
   const before = await edge.head();
-  await edge.arm(before.head, grants.requestSubject(bytes));
+  await edge.txStart(before.head, grants.requestSubject(bytes));
   await edge.hold(budget.grantId);
   const held = await edge.head();
   assert.throws(() => transport.use(bytes, { slot: 222 }), (e) => e.kind === 'edge' && /EDGE:0D/.test(e.message));
   const after = await edge.head();
   assert.equal(after.seq, held.seq, 'no record');
-  assert.equal(after.refusedArms, held.refusedArms + 1, 'counted');
-  assert.equal(transport.armed(), false, 'the announcement is used up');
+  assert.equal(after.refusedTx, held.refusedTx + 1, 'counted');
+  assert.equal(transport.started(), false, 'the announcement is used up');
 });
 
 test('L7: a budget outlives one process - resume() from the store, with what is owed', async () => {

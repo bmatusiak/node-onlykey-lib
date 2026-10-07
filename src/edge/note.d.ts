@@ -1,26 +1,26 @@
 export const TYPE: "EDGE_NOTE";
 export const MAX_REASON: 280;
 export const MAX_TICKET_MSG: 1024;
-export const MAX_ARM_REFUSED: 64;
+export const MAX_TX_REFUSED: 64;
 /** The signed bytes of a note. */
-export function body({ agent, nonce, seq, reason, ticketMsg, armRefused }: {
+export function body({ agent, nonce, seq, reason, ticketMsg, txRefused }: {
     agent: any;
     nonce: any;
     seq: any;
     reason: any;
     ticketMsg: any;
-    armRefused: any;
+    txRefused: any;
 }): Uint8Array<ArrayBuffer>;
 /** The agent side: a signed note about `seq`. */
-export function build({ signer, seq, reason, ticketMsg, armRefused, nonce }: {
+export function build({ signer, seq, reason, ticketMsg, txRefused, nonce }: {
     signer: any;
     seq: any;
     reason: any;
     ticketMsg: any;
-    armRefused: any;
+    txRefused: any;
     nonce?: (Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>) | undefined;
 }): Promise<{
-    armRefused?: string | undefined;
+    txRefused?: string | undefined;
     ticketMsg?: string | undefined;
     reason?: string | undefined;
     type: string;

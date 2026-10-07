@@ -214,11 +214,15 @@ test('device id and checkpoint digest match the Python reading', () => {
   assert.notEqual(toHex(grants.grantSubject({ scopes: V.grant.scopes, reasonHash: fromHex(V.grant.reasonHash), genesis: fromHex(V.grant.genesis), lifetime: 0 })), V.grant.subject);
 });
 
-test('ARM token (R13a) matches the Python reading, and binds both the head and the request', () => {
-  const a = V.arm;
-  assert.equal(toHex(grants.armToken({ head: fromHex(a.head), subject: fromHex(a.subject) })), a.token);
-  assert.notEqual(toHex(grants.armToken({ head: fromHex(a.head), subject: new Uint8Array(32) })), a.token);
-  assert.notEqual(toHex(grants.armToken({ head: new Uint8Array(32), subject: fromHex(a.subject) })), a.token);
+test('TX start token (R13a) matches the Python reading, and binds both the head and the request', () => {
+  const a = V.tx;
+  /* with an intent: the 16 bytes intentOf() makes are in the token; none = 16 zero bytes, a different token */
+  assert.equal(toHex(grants.intentOf(a.intentText)), a.intent);
+  assert.equal(toHex(grants.txToken({ head: fromHex(a.head), subject: fromHex(a.subject), intent: fromHex(a.intent) })), a.tokenWithIntent);
+  assert.equal(toHex(grants.txToken({ head: fromHex(a.head), subject: fromHex(a.subject), intent: new Uint8Array(16) })), a.token);
+  assert.equal(toHex(grants.txToken({ head: fromHex(a.head), subject: fromHex(a.subject) })), a.token);
+  assert.notEqual(toHex(grants.txToken({ head: fromHex(a.head), subject: new Uint8Array(32) })), a.token);
+  assert.notEqual(toHex(grants.txToken({ head: new Uint8Array(32), subject: fromHex(a.subject) })), a.token);
   /* the vector's subject is the request subject of its bytes */
   assert.equal(toHex(grants.requestSubject(new TextEncoder().encode('the bytes the agent submits'))), a.subject);
 });
@@ -305,7 +309,7 @@ const pressedUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISIO
 /* the person's own direct press on a slot no budget covers: linked, owes nothing (R16) */
 const directUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 3, flags: codes.FLAG.PRESS_OBSERVED, subject: new Uint8Array(32).fill(es.length) });
 
-test('tickets: R16 - a direct press with neither owes_ticket nor armed owes nothing; the key decided at the sign', () => {
+test('tickets: R16 - a direct press with neither owes_ticket nor started owes nothing; the key decided at the sign', () => {
   const es = entries();
   const before = tickets.keyDebts(es);
   const d = directUse(es);

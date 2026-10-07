@@ -3,7 +3,7 @@
 /**
  * L7 - EDGE FROM AN APP (onlykey-edge okrn-edge-tab.md 4.1 L7; first users
  * apk-signer and the agent service). One small API, so an app never handles
- * ARM, heads or debts by hand:
+ * TX start, heads or debts by hand:
  *
  *   const client = createEdgeClient({ edge, channel, signer });
  *   const budget = await client.request({ reason, scopes, ttlMinutes });
@@ -17,12 +17,12 @@
  *   the budget's opening is read back from the key and checked
  *   (grants.verifyBudgetOpening) against the scopes, reason and lifetime this
  *   client asked for.
- * - use() takes the exact bytes the operation will submit, ARMs with a token
+ * - use() takes the exact bytes the operation will submit, TX starts with a token
  *   over the head it holds and SHA-256 of those bytes (R13a), runs the
  *   operation, and returns the link it caused - checked to be this use.
- *   It FAILS FAST: a refused ARM throws EEDGE_ARM with the key's reason
+ *   It FAILS FAST: a refused TX start throws EEDGE_TX with the key's reason
  *   instead of sending an operation that would wait for a press nobody gives.
- * - use() refuses while this budget owes a ticket (EEDGE_ARM 'ticket-owed').
+ * - use() refuses while this budget owes a ticket (EEDGE_TX 'ticket-owed').
  * - No Edge on this key: request() rejects EEDGE_UNSUPPORTED.
  * - The app answers nothing to a key it has not registered: EEDGE_NO_ANSWER.
  *   register(name) first - once, with a press on the phone.
@@ -62,7 +62,7 @@ const storeKey = (grantId) => `okedge.budget.${grantId}`;
 function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs = 4000 }) {
   /*
    * B7 stage 2: EDGE_NOTE - the agent's words about a use, a ticket or a refused
-   * ARM, to the phone. Changes nothing anywhere, so it never fails what it
+   * TX start, to the phone. Changes nothing anywhere, so it never fails what it
    * describes: no channel, an old phone, no answer within noteTimeoutMs - all
    * the same, the use stands.
    */
@@ -120,7 +120,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       reason: record.reason,
       scopes: record.scopes,
       /**
-       * The head this budget holds (hex): what the agent's next use ARMs over,
+       * The head this budget holds (hex): what the agent's next use TX starts over,
        * and what `okedge exec --head` must name - proof the agent saw its own
        * last ticket's reply (mcp-service.md §4.2a).
        */
@@ -132,19 +132,19 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
         return [...state.owed];
       },
       /**
-       * One use: ARM over the head this budget holds and SHA-256(bytes), run
+       * One use: TX start over the head this budget holds and SHA-256(bytes), run
        * op(bytes), and return the link it caused.
        * -> {result, link: {seq, paid, step, reveal}}
        */
       async use(bytes, op, { reason, intent = reason } = {}) {
-        if (state.ended) throw fail('EEDGE_ARM', 'edge: this budget has ended', { reason: 'ended' });
-        if (state.owed.length) throw fail('EEDGE_ARM', `edge: a ticket is owed for #${state.owed[0]} - ticket it first`, { reason: 'ticket-owed' });
+        if (state.ended) throw fail('EEDGE_TX', 'edge: this budget has ended', { reason: 'ended' });
+        if (state.owed.length) throw fail('EEDGE_TX', `edge: a ticket is owed for #${state.owed[0]} - ticket it first`, { reason: 'ticket-owed' });
         const data = Uint8Array.from(bytes);
         const subject = grants.requestSubject(data);
         /*
-         * ARM over the KEY's head, read now - not the one this budget last saw.
+         * TX start over the KEY's head, read now - not the one this budget last saw.
          * Other links land between this budget's uses: a person's own pressed
-         * sign, another agent, the key's own events. An ARM over the older head
+         * sign, another agent, the key's own events. A TX start over the older head
          * makes the key treat the use as a press, and the budget would never
          * pay again (found 2026-10-03 by the agent service's test: another
          * process signing during an exec). "Did the agent see its last
@@ -156,22 +156,22 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
         const said = intent !== undefined && intent !== null ? clip(String(intent), note.MAX_REASON) : null;
         try {
           /* R13b: the reason goes into the link itself, before the signature exists - when the key can take it */
-          await edge.arm(state.head, subject, before.canIntent && said ? { intent: grants.intentOf(said) } : {});
+          await edge.txStart(state.head, subject, before.canIntent && said ? { intent: grants.intentOf(said) } : {});
         } catch (e) {
-          await sendNote({ seq: (await edge.head().catch(() => ({ seq: 0 }))).seq ?? 0, armRefused: String(e.status || e.message || 'refused').slice(0, note.MAX_ARM_REFUSED) });
-          throw fail('EEDGE_ARM', `edge: the key refused the ARM (${e.status || e.message})`, { reason: e.status || 'refused' });
+          await sendNote({ seq: (await edge.head().catch(() => ({ seq: 0 }))).seq ?? 0, txRefused: String(e.status || e.message || 'refused').slice(0, note.MAX_TX_REFUSED) });
+          throw fail('EEDGE_TX', `edge: the key refused the TX start (${e.status || e.message})`, { reason: e.status || 'refused' });
         }
         /*
          * R13b: the text BEFORE the sign, for the link it is about to make - the
          * phone shows it with the press prompt ("the agent says:") when its hash
-         * matches the armed intent, and beside the link afterwards.
+         * matches the started intent, and beside the link afterwards.
          */
         if (said) await sendNote({ seq: before.seq === null ? 0 : before.seq + 1, reason: said });
         const result = await op(data);
         /*
          * THIS USE'S LINK, WITHOUT A THIRD HEAD READ (Brad, 2026-10-06: each key
          * request is ~0.3-0.5 s over Bluetooth). It is the link after the head the
-         * ARM was made over - picked up directly and checked by its subject (this
+         * TX start was made over - picked up directly and checked by its subject (this
          * use's bytes). Anything else there (another link landed in between, or the
          * key refused the read) falls back to the newest link, as before.
          */
@@ -541,7 +541,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
 
     /**
      * Pick up a budget another process asked for (with the same store). The
-     * key's HEAD must still list it; the head to ARM over is read from the key.
+     * key's HEAD must still list it; the head to TX start over is read from the key.
      */
     async resume(grantId) {
       if (!store) throw fail('EEDGE_NO_STORE', 'edge: resume needs the store the budget was saved to');

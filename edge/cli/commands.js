@@ -42,7 +42,7 @@ const plain = (t) => String(t).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 2
  * edge watch's lines for one feed (mcp-service.md: one line per use, its
  * reason, then its ticket; alarms highlighted - okrn-edge-tab.md B7): an alarm
  * ticket (bit 7 or an unknown code), a press asked for under a live budget, an
- * ARM that did not match its request, a refused exec, a budget ended, a LOSS or
+ * TX start that did not match its request, a refused exec, a budget ended, a LOSS or
  * a wipe, links lost from the key's ring.
  */
 function watchLines(feed, { color = false, time = new Date() } = {}) {

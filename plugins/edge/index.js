@@ -34,7 +34,7 @@ const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, VOUCH: 0x05,
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
-  TICKET: 0x20, WAIVE: 0x21, ARM: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, REPLAY_INTENT: 0x25, LOSS: 0x34,
+  TICKET: 0x20, WAIVE: 0x21, TX_START: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, REPLAY_INTENT: 0x25, LOSS: 0x34,
   AGENT_ADD: 0x15,
   PEER_ADD: 0x30, PEER_REMOVE: 0x31, PEER_LIST: 0x32,
   /* sync phase 2 (Brad, 2026-10-05): the `sync` link; number CHOSEN, pending the spec */
@@ -91,7 +91,7 @@ function hexHead(bytes) {
  * Is this report a HEAD answer? The key pads its 61 bytes with zeros and its
  * flags are small: three zero bytes, a 4-bit hold mask, owed <= OWED_MAX, two
  * booleans. A signature passes all of that about once in 2^32. (Byte 60 is the
- * refused-ARM counter since B7 stage 2; older firmware sends 0 there.)
+ * refused-TX start counter since B7 stage 2; older firmware sends 0 there.)
  */
 function isHeadReply(r) {
   /* byte 61 = capabilities (R13b: bit 0, intent) - no other bit is known; 62-63 zero */
@@ -347,8 +347,8 @@ function setup(imports, register) {
      *  live: [budget ids], held: [the live ids on hold (R15a)], owed: number of
      *  uses owing a ticket (R16), overflow: an owed use fell off the key's list,
      *  restoring: restored from a backup and not yet finished (R26),
-     *  refusedArms: ARMs the key refused since power-up, RAM only (B7 stage 2;
-     *  0 on firmware before it) - a refused ARM writes no link, so this is the
+     *  refusedTx: TX starts the key refused since power-up, RAM only (B7 stage 2;
+     *  0 on firmware before it) - a refused TX start writes no link, so this is the
      *  key's own evidence; the phone alarms when it rises}
      */
     async head(opts) {
@@ -366,8 +366,8 @@ function setup(imports, register) {
         owed: r[57],
         overflow: Boolean(r[58]),
         restoring: Boolean(r[59]),
-        refusedArms: r[60],
-        /* R13b: this build takes ARM {token, intent} (HEAD byte 61, bit 0) */
+        refusedTx: r[60],
+        /* R13b: this build takes TX start {token, intent} (HEAD byte 61, bit 0) */
         canIntent: Boolean(r[61] & 1),
       };
     },
@@ -454,7 +454,7 @@ function setup(imports, register) {
      * File the ticket for an owed use (any of the key's up to 4, R16; the key
      * refuses another - EdgeError 'no-ticket-waiting'). msgHash =
      * tickets.messageHash(message); the message never goes to the key.
-     * -> {seq, head, tag} after the ticket link: the head the next arm() passes
+     * -> {seq, head, tag} after the ticket link: the head the next txStart() passes
      * (R13a), and the key's vouch tag for it - keep it with the copy: a restore
      * commits a replay only up to a vouched head (R26).
      */
@@ -474,27 +474,27 @@ function setup(imports, register) {
     },
 
     /**
-     * R13a: arm ONE self-press for ONE request. `head` is the head the key
+     * R13a: start ONE self-press for ONE request. `head` is the head the key
      * returned after the previous step (the grant's checkpoint for a budget's
      * first use, the ticket's reply after that); `subject` is SHA-256 of
      * exactly the bytes the next sign/decrypt will submit. The key gets only
-     * the token SHA256("OKEDGE-ARM-v1" || head || subject) and pays for the next
+     * the token SHA256("OKEDGE-TX-v1" || head || subject || intent) and pays for the next
      * request only if it recomputes the same token from its own head and that
-     * request; anything else uses the arm up and needs a press. Refused -
-     * EdgeError 'ticket-owed', 'nothing-to-arm', 'restoring' - when a ticket is
+     * request; anything else uses the TX start up and needs a press. Refused -
+     * EdgeError 'ticket-owed', 'nothing-to-pay', 'restoring' - when a ticket is
      * owed, no live budget off hold and unexpired could pay, or a restore is
      * unfinished. A stale head shows at the sign (as a press), not here.
      */
-    /** R13a + R13b: ARM {token} - or {token, intent} when opts.intent (16 bytes, grants.intentOf) is given */
-    async arm(head, subject, opts = {}) {
+    /** R13a + R13b: TX start {token, intent} - always 48 bytes; the intent is 16 zero bytes when opts.intent (grants.intentOf) is not given */
+    async txStart(head, subject, opts = {}) {
       const { grants } = require('../../src/edge');
       const intent = opts.intent || null;
-      const token = grants.armToken({ head, subject, intent });
-      await call(SUB.ARM, intent ? concat([token, intent]) : token, { ...opts, text: true });
+      const token = grants.txToken({ head, subject, intent });
+      await call(SUB.TX_START, concat([token, intent || new Uint8Array(16)]), { ...opts, text: true });
       return true;
     },
 
-    /** R15a: pause a live budget - it pays for nothing, nothing arms under it. No press. */
+    /** R15a: pause a live budget - it pays for nothing, nothing starts under it. No press. */
     async hold(grantId, opts) {
       await call(SUB.GRANT_HOLD, u32(grantId), { ...opts, text: true });
       return true;

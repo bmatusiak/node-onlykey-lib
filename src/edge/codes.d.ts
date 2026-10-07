@@ -45,7 +45,7 @@ export const FLAG: Readonly<{
     PREV_NO_TICKET: 4;
     HISTORY_AT_RISK: 8;
     OWES_TICKET: 16;
-    ARMED: 32;
+    STARTED: 32;
 }>;
 export const TAG: Readonly<{
     GENESIS: "OKEDGE-GENESIS-v1";
@@ -57,8 +57,7 @@ export const TAG: Readonly<{
     TICKET: "OKEDGE-TICKET-v1";
     RECEIPT: "OKEDGE-RCPT-v1";
     WAIVE: "OKEDGE-WAIVE-v1";
-    ARM: "OKEDGE-ARM-v1";
-    ARM_V2: "OKEDGE-ARM-v2";
+    TX: "OKEDGE-TX-v1";
     INTENT: "OKEDGE-INTENT-v1";
 }>;
 export const TICKET: Readonly<{

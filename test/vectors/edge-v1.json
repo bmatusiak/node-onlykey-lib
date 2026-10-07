@@ -68,10 +68,14 @@
     "lifetime": 120,
     "subject": "580420a91ed11840e26e97cdde1c2be90b4a7d6bcbe789a29f5d3bb7c548eba4"
   },
-  "arm": {
+  "tx": {
+    "note": "TX start (R13a/R13b, the rename 2026-10-07): SHA256(\"OKEDGE-TX-v1\" || head || subject || intent16), intent16 zero when the use names none. Computed with Python hashlib; the spec's make_vectors.py still writes the old ARM-v1 vector (spec session to update).",
     "head": "2d438dd58ef9b4b45733ebb0ac096fc1d314b82dbce4ab20ac8f2d97d4b2a1aa",
     "subject": "3257a16d5ef46df8d622bd4279687426200b26d66058c8d80fd0c968303ba0ca",
-    "token": "a679f79ac3fbd3a43456fe6f866c1a7f0d9e027167b1f81ff5172907739757d4"
+    "token": "6e06fedb4e4903e22f8f0b8f42b66d834b7457c285d81df4b7310b8352c436de",
+    "intentText": "push: ok-rn master",
+    "intent": "41716d5aa08b9fede14aefb479d2de35",
+    "tokenWithIntent": "ff3b2634e34adda11bb6de8920693d51ba4a9c8d916e279b9bbfce9accdf7c1c"
   },
   "checkpoint": {
     "seq": 5,

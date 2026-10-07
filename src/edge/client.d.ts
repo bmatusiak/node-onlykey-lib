@@ -53,7 +53,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         reason: any;
         scopes: any;
         /**
-         * The head this budget holds (hex): what the agent's next use ARMs over,
+         * The head this budget holds (hex): what the agent's next use TX starts over,
          * and what `okedge exec --head` must name - proof the agent saw its own
          * last ticket's reply (mcp-service.md §4.2a).
          */
@@ -61,7 +61,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         /** the uses still waiting for their ticket (seqs) */
         pending(): any[];
         /**
-         * One use: ARM over the head this budget holds and SHA-256(bytes), run
+         * One use: TX start over the head this budget holds and SHA-256(bytes), run
          * op(bytes), and return the link it caused.
          * -> {result, link: {seq, paid, step, reveal}}
          */
@@ -106,7 +106,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         reason: any;
         scopes: any;
         /**
-         * The head this budget holds (hex): what the agent's next use ARMs over,
+         * The head this budget holds (hex): what the agent's next use TX starts over,
          * and what `okedge exec --head` must name - proof the agent saw its own
          * last ticket's reply (mcp-service.md §4.2a).
          */
@@ -114,7 +114,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         /** the uses still waiting for their ticket (seqs) */
         pending(): any[];
         /**
-         * One use: ARM over the head this budget holds and SHA-256(bytes), run
+         * One use: TX start over the head this budget holds and SHA-256(bytes), run
          * op(bytes), and return the link it caused.
          * -> {result, link: {seq, paid, step, reveal}}
          */
@@ -244,7 +244,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
     }>;
     /**
      * Pick up a budget another process asked for (with the same store). The
-     * key's HEAD must still list it; the head to ARM over is read from the key.
+     * key's HEAD must still list it; the head to TX start over is read from the key.
      */
     resume(grantId: any): Promise<{
         grantId: any;
@@ -252,7 +252,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         reason: any;
         scopes: any;
         /**
-         * The head this budget holds (hex): what the agent's next use ARMs over,
+         * The head this budget holds (hex): what the agent's next use TX starts over,
          * and what `okedge exec --head` must name - proof the agent saw its own
          * last ticket's reply (mcp-service.md §4.2a).
          */
@@ -260,7 +260,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         /** the uses still waiting for their ticket (seqs) */
         pending(): any[];
         /**
-         * One use: ARM over the head this budget holds and SHA-256(bytes), run
+         * One use: TX start over the head this budget holds and SHA-256(bytes), run
          * op(bytes), and return the link it caused.
          * -> {result, link: {seq, paid, step, reveal}}
          */

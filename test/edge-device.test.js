@@ -94,36 +94,36 @@ test('edge: EDGE:xx refusals become named errors', async () => {
   await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 1000 }, { op: 1, slot: 3, cap: 25 }], reasonHash: new Uint8Array(32), verifiedHead: new Uint8Array(32) }),
     (e) => e.status === 'too-many-uses');
   const t = await edge.ticket(0, 0, new Uint8Array(32));
-  assert.equal(t.seq, 1, 'the ticket comes back with the seq and head the next arm() passes');
+  assert.equal(t.seq, 1, 'the ticket comes back with the seq and head the next txStart() passes');
   assert.equal(t.head.length, 32);
 });
 
-test('edge: ARM, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', async () => {
+test('edge: TX start, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', async () => {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  const armedToken = () => transport.armed();
+  const startedToken = () => transport.started();
   let h = await edge.head();
   assert.equal(h.owed, 1, 'the approved use owes its ticket');
-  /* nothing arms, and no budget opens, while a ticket is owed */
-  const S = new Uint8Array(32).fill(4); /* the subject of the request an arm is for */
-  await assert.rejects(edge.arm(h.head, S), (e) => e.status === 'ticket-owed');
+  /* nothing starts, and no budget opens, while a ticket is owed */
+  const S = new Uint8Array(32).fill(4); /* the subject of the request a TX start is for */
+  await assert.rejects(edge.txStart(h.head, S), (e) => e.status === 'ticket-owed');
   await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head }), (e) => e.status === 'ticket-owed');
   /* WAIVE clears it */
   const w = await edge.waive();
   assert.equal(w.seq, 1);
   h = await edge.head();
   assert.equal(h.owed, 0);
-  /* no live budget: nothing to arm; a stale head: refused */
-  await assert.rejects(edge.arm(h.head, S), (e) => e.status === 'nothing-to-arm');
+  /* no live budget: nothing to start; a stale head: refused */
+  await assert.rejects(edge.txStart(h.head, S), (e) => e.status === 'nothing-to-pay');
   const g = await edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head });
   h = await edge.head();
-  assert.equal(await edge.arm(h.head, S), true);
-  assert.equal(Buffer.from(armedToken()).toString('hex'), Buffer.from(grants.armToken({ head: h.head, subject: S })).toString('hex'), 'ARM sends the token, not the head');
-  /* hold: listed, nothing arms; resume: back */
+  assert.equal(await edge.txStart(h.head, S), true);
+  assert.equal(Buffer.from(startedToken()).toString('hex'), Buffer.from(grants.txToken({ head: h.head, subject: S })).toString('hex'), 'TX start sends the token, not the head');
+  /* hold: listed, nothing starts; resume: back */
   assert.equal(await edge.hold(g.grantId), true);
   h = await edge.head();
   assert.deepEqual(h.held, [g.grantId]);
-  await assert.rejects(edge.arm(h.head, S), (e) => e.status === 'nothing-to-arm');
+  await assert.rejects(edge.txStart(h.head, S), (e) => e.status === 'nothing-to-pay');
   let asked = false;
   await assert.rejects(edge.resume(g.grantId, { verifiedHead: new Uint8Array(32).fill(1) }), (e) => e.status === 'stale-head');
   assert.equal(await edge.resume(g.grantId, { verifiedHead: h.head, onPress: () => { asked = true; } }), true);

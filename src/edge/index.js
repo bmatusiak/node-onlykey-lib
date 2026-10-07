@@ -14,7 +14,7 @@ module.exports = {
   copy: require('./copy'),
   /* B7: what a use was and whether it stands out - the phone's Live view and okedge watch */
   live: require('./live'),
-  /* B7 stage 2: the agent's signed words about a use (reason, ticket message, a refused ARM) */
+  /* B7 stage 2: the agent's signed words about a use (reason, ticket message, a refused TX start) */
   note: require('./note'),
   /* L7 (2026-10-03): the budget request message, the app's side, the agent's side */
   request: require('./request'),

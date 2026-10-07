@@ -68,7 +68,7 @@ export function grantSubject({ scopes, reasonHash, genesis, lifetime }: {
     lifetime?: number | undefined;
 }): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export function requestSubject(bytes: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-export function armToken({ head, subject, intent }: {
+export function txToken({ head, subject, intent }: {
     head: any;
     subject: any;
     intent?: null | undefined;

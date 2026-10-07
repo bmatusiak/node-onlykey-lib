@@ -72,10 +72,10 @@ const FLAG = Object.freeze({
   BUDGET_SPENT: 0x02,
   PREV_NO_TICKET: 0x04,
   HISTORY_AT_RISK: 0x08,
-  /* R16 (2026-10-02 evening): set by the key at the sign - this use owes a ticket (ARMed, or its op/slot covered by a budget) */
+  /* R16 (2026-10-02 evening): set by the key at the sign - this use owes a ticket (started, or its op/slot covered by a budget) */
   OWES_TICKET: 0x10,
-  /* R16: an arm was waiting when the request was primed (a self-press, or a mismatched ARM that was pressed) */
-  ARMED: 0x20,
+  /* R16: a TX start was waiting when the request was primed (a self-press, or a mismatched TX start that was pressed) */
+  STARTED: 0x20,
 });
 
 /* Domain tags, ASCII, exactly as the spec spells them (R2, R7, R12, R16, R21). */
@@ -91,10 +91,12 @@ const TAG = Object.freeze({
   RECEIPT: 'OKEDGE-RCPT-v1',
   /* firmware.md R18: a human's press clears every owed ticket at once */
   WAIVE: 'OKEDGE-WAIVE-v1',
-  /* firmware.md R13a (2026-10-02): an ARM is bound to the head AND the exact request */
-  ARM: 'OKEDGE-ARM-v1',
-  /* firmware.md R13b (2026-10-06): the arm also carries what the use is for; the intent is welded into the link */
-  ARM_V2: 'OKEDGE-ARM-v2',
+  /*
+   * firmware.md R13a/R13b: a TX start is bound to the head, the exact request and
+   * what the use is for (the intent, welded into the link). One label since the
+   * rename (2026-10-07): the ARM-v1/-v2 split is gone.
+   */
+  TX: 'OKEDGE-TX-v1',
   INTENT: 'OKEDGE-INTENT-v1',
 });
 
@@ -138,9 +140,9 @@ const STATUS = Object.freeze({
   0x08: { name: 'no-ticket-waiting', text: 'That use owes no ticket (or nothing is owed to waive)' },
   0x09: { name: 'not-held', text: 'The key no longer holds that link' },
   0x0a: { name: 'unknown-request', text: 'This key does not know that Edge request' },
-  0x0b: { name: 'stale-head', text: 'The chain moved since that head - read the head and arm again' },
+  0x0b: { name: 'stale-head', text: 'The chain moved since that head - read the head and start again' },
   0x0c: { name: 'ticket-owed', text: 'A use is waiting for its ticket - ticket it, or waive in the app' },
-  0x0d: { name: 'nothing-to-arm', text: 'No live budget (or every one is on hold)' },
+  0x0d: { name: 'nothing-to-pay', text: 'No live budget (or every one is on hold)' },
   /* R26 (CHOSEN numbers, pending the spec) */
   0x0e: { name: 'restoring', text: 'The key was restored from a backup - finish the restore in the app first' },
   0x0f: { name: 'replay-mismatch', text: 'That link is not the next one, or does not weld onto the key\x27s head' },
@@ -161,8 +163,8 @@ const STATUS = Object.freeze({
   0x1a: { name: 'no-such-sibling', text: 'This key has no paired phone at that index' },
   /* R30 anchors (P2c, CHOSEN number) */
   0x1b: { name: 'bad-checkpoint', text: 'That checkpoint is not signed by the paired key - nothing anchored' },
-  /* R13a (2026-10-06): the sign was not the request the agent ARMed for - refused, no link; ARM again */
-  0x1c: { name: 'arm-mismatch', text: 'That request was not the one the agent ARMed for - refused (the ARM is used up)' },
+  /* R13a (2026-10-06): the sign was not the request the agent started for - refused, no link; TX start again */
+  0x1c: { name: 'tx-mismatch', text: 'That request was not the one the agent started for - refused (the TX start is used up)' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

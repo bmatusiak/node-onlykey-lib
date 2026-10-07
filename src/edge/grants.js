@@ -188,11 +188,11 @@ function grantSubject({ scopes, reasonHash, genesis, lifetime = 0 }) {
 }
 
 /*
- * R13a (2026-10-02): ARM {token} arms ONE self-press for ONE request:
- *   token = SHA256("OKEDGE-ARM-v1" || head || subject)
+ * R13a (2026-10-02): TX start {token, intent} starts ONE self-press for ONE request:
+ *   token = SHA256("OKEDGE-TX-v1" || head || subject || intent)
  * subject = SHA-256 of exactly the bytes the agent will submit - the subject
  * the link records. The key recomputes it from ITS head and the request it
- * gets; anything else (a stale head, another program's request) uses the arm
+ * gets; anything else (a stale head, another program's request) uses the TX start
  * up and needs a press.
  */
 /*
@@ -200,7 +200,7 @@ function grantSubject({ scopes, reasonHash, genesis, lifetime = 0 }) {
  * primes - the reassembled payload it hands okcore_prime_user_confirmation,
  * which the Edge plugin hashes into the link (pend.subject). For a chunked
  * request that is every chunk joined, without the framing. What a host signs
- * or decrypts must be these bytes and no others, or the ARM token will not
+ * or decrypts must be these bytes and no others, or the TX start token will not
  * match and the key asks for a press.
  */
 function requestSubject(bytes) {
@@ -209,16 +209,16 @@ function requestSubject(bytes) {
 }
 
 /*
- * R13b: with an intent (16 bytes, intentOf), the v2 token - the key checks it
- * against the same intent and writes the intent into the self-press link.
- * Without one, the v1 token (a key that predates R13b, or no reason given).
+ * R13a + R13b, ONE formula (the TX start rename, 2026-10-07):
+ *   token = SHA256("OKEDGE-TX-v1" || head || subject || intent)
+ * intent = the 16 bytes intentOf() makes, or 16 zero bytes when the use names
+ * none - the key then writes no intent into the link. The old split (ARM-v1
+ * without an intent, -v2 with one) is gone.
  */
-function armToken({ head, subject, intent = null }) {
-  if (intent) {
-    if (!(intent instanceof Uint8Array) || intent.length !== 16) throw new TypeError('edge: intent must be 16 bytes (intentOf)');
-    return H(TAG.ARM_V2, bytes32(head, 'head'), bytes32(subject, 'subject'), intent);
-  }
-  return H(TAG.ARM, bytes32(head, 'head'), bytes32(subject, 'subject'));
+const NO_INTENT = new Uint8Array(16);
+function txToken({ head, subject, intent = null }) {
+  if (intent && (!(intent instanceof Uint8Array) || intent.length !== 16)) throw new TypeError('edge: intent must be 16 bytes (intentOf)');
+  return H(TAG.TX, bytes32(head, 'head'), bytes32(subject, 'subject'), intent || NO_INTENT);
 }
 
 /** R13b: what a use is for, as the 16 bytes a self-press link carries in 47-62 */
@@ -316,6 +316,6 @@ function peerSubject(peerKey) {
 module.exports = {
   agentSubject, peerSubject, siblingSubject, siblingCode, anchorSubject,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
-  encodeScopes, grantSubject, requestSubject, armToken, intentOf, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
+  encodeScopes, grantSubject, requestSubject, txToken, intentOf, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel,
 };
