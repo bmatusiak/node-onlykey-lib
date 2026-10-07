@@ -8,11 +8,12 @@ const { codes, live } = require('../src/edge');
 const { OP, DECISION, FLAG } = codes;
 const use = (decision, flags = 0, op = OP.SIGN) => ({ op, decision, flags });
 
-test('each decision and flag mix gives one kind, and only the two R16 cases are alarms', () => {
+test('each decision and flag mix gives one kind; only a mismatched ARM (an old link) is an alarm', () => {
   const rows = [
     [use(DECISION.SELF_PRESS, FLAG.BUDGET_SPENT), 'self-press', null],
     [use(DECISION.APPROVE), 'press', null],
-    [use(DECISION.APPROVE, FLAG.PRESS_OBSERVED | FLAG.OWES_TICKET), 'press-under-budget', live.ALARM['press-under-budget']],
+    /* an old link: the B7 alarm for it is gone (2026-10-06) */
+    [use(DECISION.APPROVE, FLAG.PRESS_OBSERVED | FLAG.OWES_TICKET), 'press-under-budget', null],
     [use(DECISION.APPROVE, FLAG.ARMED | FLAG.OWES_TICKET | FLAG.PRESS_OBSERVED), 'mismatched-arm', live.ALARM['mismatched-arm']],
     /* R13b: the key copies the intent only when the ARM matched - ARMED + intent is the agent's own pressed request */
     [{ ...use(DECISION.APPROVE, FLAG.ARMED | FLAG.OWES_TICKET | FLAG.PRESS_OBSERVED), intent: new Uint8Array(16).fill(7) }, 'armed-press', null],

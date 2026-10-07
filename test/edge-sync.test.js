@@ -14,7 +14,7 @@ async function keyWith(n) {
   const transport = fakeKey();
   const edge = edgeOver(transport);
   await edge.ticket(0, 0, new Uint8Array(32));
-  for (let i = 0; i < n; i++) transport.use(crypto.randomBytes(40), { slot: 201 });
+  for (let i = 0; i < n; i++) transport.edgeRecord();
   return { transport, edge };
 }
 const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-sync-'));
@@ -38,7 +38,7 @@ test('a later sync picks up only the new links', async () => {
   const { transport, edge } = await keyWith(2);
   const h = home();
   const first = await sync(edge, h);
-  transport.use(crypto.randomBytes(40), { slot: 201 });
+  transport.edgeRecord();
   const r = await sync(edge, h);
   assert.equal(r.copy.added, 1);
   assert.equal(r.copy.count, first.copy.count + 1);
@@ -56,7 +56,7 @@ test('a copy edited by hand is reported and not saved over - repairs are the pho
   mid.link = mid.link.slice(0, 40) + (mid.link[40] === 'a' ? 'b' : 'a') + mid.link.slice(41); /* one byte of the subject */
   fs.writeFileSync(f, JSON.stringify(s));
   const edited = fs.readFileSync(f, 'utf8');
-  transport.use(crypto.randomBytes(40), { slot: 201 });
+  transport.edgeRecord();
   const r = await sync(edge, h);
   assert.equal(r.verdict.kind, 'tampered');
   assert.equal(r.copy.saved, false);

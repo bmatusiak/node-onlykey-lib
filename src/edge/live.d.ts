@@ -9,7 +9,6 @@ export const KIND: Readonly<{
 }>;
 export const ALARM: Readonly<{
     "mismatched-arm": "an ARM that did not match its request - someone else jumped in?";
-    "press-under-budget": "a press asked for under a live budget (it owes a ticket, R16)";
 }>;
 /**
  * A sign or decrypt link's decoded fields (chain.decodeLink) -> {kind, alarm}

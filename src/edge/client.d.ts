@@ -30,16 +30,6 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
             pcIn: number | null;
         };
     }>;
-    pressedUse(bytes: any, op: any, { intent }?: {}): Promise<{
-        result: any;
-        link: {
-            seq: number;
-            paid: boolean;
-            paidBy: null;
-            step: null;
-            reveal: null;
-        };
-    }>;
     /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
     ticketOwed: (seq: any, { code, message }: {
         code?: string | undefined;

@@ -199,6 +199,12 @@ function errorKind(message) {
   }
   if (/^Timeout occured/i.test(said)) return 'challenge';
   /*
+   * An Edge refusal answering a sign/decrypt (plugin status EDGE:xx, never 00 there):
+   * the key refused the request before it ran - e.g. EDGE:1C, a sign that did not
+   * match its ARM (R13a, 2026-10-06). Read as data, it would become a "signature".
+   */
+  if (/^EDGE:[0-9A-F]{2}$/i.test(said) && !/^EDGE:00$/i.test(said)) return 'edge';
+  /*
    * A THIRD: set_slot case 23 refuses the second-profile mode on a key past
    * first use with "Second Profile Mode may only be changed on first use"
    * (okcore.cpp:1912 at release 3.1.0) - no "Error". The 'refused' rule below

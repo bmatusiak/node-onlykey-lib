@@ -51,15 +51,17 @@ test('a paid use carries its intent in bytes 47-62, version 1 in 63; HEAD says t
   assert.equal(f.reservedZero, true);
 });
 
-test('an intent with nothing able to pay: the ARM is taken, the use is pressed and records the intent', async () => {
+test('budget or no go (Brad, 2026-10-06, R13b): an ARM with an intent and nothing able to pay is refused - no sign, no link', async () => {
   const { edge, c, sign } = await setup();
   const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: ID }], ttlMinutes: 10 });
   await edge.hold(b.grantId);
-  const u = await b.use(Uint8Array.from([2]), sign, { reason: 'pressed, but it says why' });
-  assert.equal(u.link.paid, false);
-  const f = await linkAt(edge, u.link.seq);
-  assert.equal(f.decision, codes.DECISION.APPROVE);
-  assert.deepEqual(Buffer.from(f.intent), Buffer.from(grants.intentOf('pressed, but it says why')));
+  const before = (await edge.head()).seq;
+  let signed = false;
+  await assert.rejects(b.use(Uint8Array.from([2]), async (x) => { signed = true; return sign(x); }, { reason: 'pressed, but it says why' }), { code: 'EEDGE_ARM' });
+  assert.equal(signed, false, 'nothing reached the sign');
+  assert.equal((await edge.head()).seq, before, 'no link');
+  const h = await edge.head();
+  await assert.rejects(edge.arm(h.head, grants.requestSubject(Uint8Array.from([9])), { intent: grants.intentOf('x') }), (e) => e.status === 'nothing-to-arm');
 });
 
 test('an ARM is refused while a ticket is owed - intent or not (R13a, R13b)', async () => {

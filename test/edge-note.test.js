@@ -69,8 +69,7 @@ test('the edge client sends a note for a use (its reason), its ticket (the messa
   await edge.hold(b.grantId);
   await assert.rejects(b.use(Uint8Array.from([3]), (x) => transport.use(x, { slot: 222 }), {}), { code: 'EEDGE_ARM' });
   assert.ok(notes[2].armRefused, 'the refused ARM is reported in the agent\'s own note');
-  /* R13b: WITH an intent the ARM is taken although nothing can pay - the use is pressed, not paid, and records the intent */
-  const pressed = await b.use(Uint8Array.from([4]), (x) => transport.use(x, { slot: 222 }), { reason: 'again, pressed' });
-  assert.equal(pressed.link.paid, false);
+  /* R13b, budget or no go (Brad, 2026-10-06): WITH an intent too, nothing can pay - refused, never pressed */
+  await assert.rejects(b.use(Uint8Array.from([4]), (x) => transport.use(x, { slot: 222 }), { reason: 'again' }), { code: 'EEDGE_ARM' });
 });
 

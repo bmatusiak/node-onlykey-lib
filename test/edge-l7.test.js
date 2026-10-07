@@ -11,7 +11,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
-const { request, approve, client, codes, chain } = require('../src/edge');
+const { request, approve, client, codes, chain, grants } = require('../src/edge');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 
 const AGENT = request.signerFromSecret(new Uint8Array(32).fill(21));
@@ -175,11 +175,35 @@ test('L7: an answer that is not the budget the agent asked for is caught - the o
     (e) => e.code === 'EEDGE_OPENING');
 });
 
-test('L7: the use is checked to be this use - another request slipped in between ARM and sign is caught', async () => {
+test('L7 + R13a: another request slipped in between ARM and sign is REFUSED by the key - no link, the ARM used up, counted (2026-10-06)', async () => {
   const { transport, edge } = await readyKey();
   const c = client.createEdgeClient({ edge, channel: phone(edge), signer: AGENT });
   const budget = await c.request({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }], ttlMinutes: 10 });
-  await assert.rejects(budget.use(Uint8Array.from([1]), async () => transport.use(Uint8Array.from([9, 9]), { slot: 222 })), (e) => e.code === 'EEDGE_LINK');
+  const before = await edge.head();
+  await assert.rejects(budget.use(Uint8Array.from([1]), async () => transport.use(Uint8Array.from([9, 9]), { slot: 222 })), (e) => e.kind === 'edge' && /EDGE:1C/.test(e.message));
+  const after = await edge.head();
+  assert.equal(after.seq, before.seq, 'no link');
+  assert.equal(after.refusedArms, before.refusedArms + 1, 'HEAD byte 60 counts the refused sign');
+  assert.equal(transport.armed(), false, 'the ARM is used up - ARM again');
+  /* the budget still pays a use that matches its ARM */
+  const u = await budget.use(Uint8Array.from([2]), (x) => transport.use(x, { slot: 222 }));
+  assert.equal(u.link.paid, true);
+});
+
+test('R13a (2026-10-06): announce a sign, hold the budget, then sign - refused, no prompt, no record', async () => {
+  const { transport, edge } = await readyKey();
+  const c = client.createEdgeClient({ edge, channel: phone(edge), signer: AGENT });
+  const budget = await c.request({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }], ttlMinutes: 10 });
+  const bytes = Uint8Array.from([7, 7]);
+  const before = await edge.head();
+  await edge.arm(before.head, grants.requestSubject(bytes));
+  await edge.hold(budget.grantId);
+  const held = await edge.head();
+  assert.throws(() => transport.use(bytes, { slot: 222 }), (e) => e.kind === 'edge' && /EDGE:0D/.test(e.message));
+  const after = await edge.head();
+  assert.equal(after.seq, held.seq, 'no record');
+  assert.equal(after.refusedArms, held.refusedArms + 1, 'counted');
+  assert.equal(transport.armed(), false, 'the announcement is used up');
 });
 
 test('L7: a budget outlives one process - resume() from the store, with what is owed', async () => {

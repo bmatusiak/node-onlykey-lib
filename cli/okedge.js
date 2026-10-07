@@ -231,11 +231,11 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const head = opt(args, '--head');
       /* R13b: what this use is for - welded into its link before the signature exists (--reason, the older name) */
       const reason = opt(args, '--intent') || opt(args, '--reason');
-      /* --press (Brad, 2026-10-06): a pressed use that says what it is for - no budget, no --head; a person presses */
-      const press = args.slice(0, dd < 0 ? args.length : dd).includes('--press');
-      if (dd < 0 || (!head && !press) || !reason || dd === args.length - 1) { err('okedge exec --head H --intent "…" -- <command…>   or   okedge exec --press --intent "…" -- <command…>'); return 2; }
+      /* --press is gone (Brad, 2026-10-06, R13b: budget or no go): Edge signs only under a budget; a pressed sign is the ordinary ssh/gpg agent */
+      if (args.slice(0, dd < 0 ? args.length : dd).includes('--press')) { err('okedge: --press was removed - Edge signs only under a budget; for a pressed sign use the ordinary ssh/gpg agent'); return 2; }
+      if (dd < 0 || !head || !reason || dd === args.length - 1) { err('okedge exec --head H --intent "…" -- <command…>'); return 2; }
       const command = args.slice(dd + 1);
-      const ex = await ask('exec-open', { head, reason, press }, press ? { timeoutMs: 200000 } : undefined);
+      const ex = await ask('exec-open', { head, reason });
       const gitEntries = Object.entries(ex.git || {});
       const childEnv = {
         ...env,

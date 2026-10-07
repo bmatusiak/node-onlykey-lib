@@ -167,7 +167,7 @@ test('okedge exec returns the command\'s own exit code', async () => {
   }
 });
 
-test('okedge watch --once: one line per use with its reason, its ticket under it, and a press under a live budget as an alarm', async () => {
+test('okedge watch --once: one line per use with its reason, its ticket under it; an ordinary press shows nothing (not Edge, 2026-10-06)', async () => {
   const s = await stack();
   try {
     let cap = capture();
@@ -181,7 +181,7 @@ test('okedge watch --once: one line per use with its reason, its ticket under it
     await okedge.main(['exec', '--head', head, '--reason', 'commit: watch me', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'w'], cap.io);
     const seq = Number(/link #(\d+)/.exec(cap.lines.find((l) => l.startsWith('signed:')) || 'link #0')[1]);
     await okedge.main(['ticket', String(seq), '--msg', 'committed\nwith a newline'], capture().io);
-    /* a pressed sign with the agent's key while the budget covers it (the shim outside an exec) */
+    /* a pressed sign with the agent's key while the budget covers it (the shim outside an exec): an ordinary press, no link */
     await new Promise((resolve) => {
       const p = require('child_process').spawn(process.execPath, [SHIM, '--status-fd=2', '-bsau', 'x'], { env: { ...process.env, OKEDGE_GPG_TOKEN: '' } });
       p.on('exit', resolve);
@@ -192,40 +192,46 @@ test('okedge watch --once: one line per use with its reason, its ticket under it
     const text = cap.lines.join('\n');
     assert.match(text, new RegExp(`#${seq} \\d\\d:\\d\\d:\\d\\d sign slot 221 · self-press · budget \\d+, use 1 · "commit: watch me"`));
     assert.match(text, new RegExp(`↳ #\\d+ ticket for #${seq}: OK · "committed with a newline"`), 'the message on one plain line');
-    assert.match(text, /pressed .*⚠ a press asked for under a live budget/);
+    assert.doesNotMatch(text, /a press asked for under a live budget/, 'the B7 alarm is gone');
+    assert.doesNotMatch(text, /sign slot 221 · pressed/, 'an ordinary press writes no link, so watch has no line for it');
   } finally {
     await s.agent.closeAll();
     await s.control.close();
   }
 });
 
-test('okedge exec --press --intent: no budget, a person presses, the intent is in the link, and its ticket is owed (Brad, 2026-10-06)', async () => {
+test('okedge exec --press is gone (Brad, 2026-10-06, R13b: budget or no go) - refused before anything runs', async () => {
   const s = await stack();
   try {
-    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-press-'));
+    const cap = capture();
+    assert.equal(await okedge.main(['exec', '--press', '--intent', 'commit: pressed', '--', 'git', '--version'], cap.io), 2);
+    assert.match(cap.lines.join(' | '), /--press was removed - Edge signs only under a budget/);
+  } finally {
+    await s.control.close();
+  }
+});
+
+test('an owed ticket filed after the agent lost its budget: straight to the key, its message reaches the phone, the head prints as hex', async () => {
+  const s = await stack();
+  try {
+    let cap = capture();
+    assert.equal(await okedge.main(['budget', '--reason', 'work', '--gpg', '1', '--ttl', '60'], cap.io), 0, cap.lines.join('\n'));
+    const head = cap.lines.find((l) => l.startsWith('head = ')).slice(7);
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-owed-'));
     execFileSync('git', ['-C', repo, 'init', '-q']);
     execFileSync('git', ['-C', repo, 'config', 'user.name', 'Claude (agent)']);
     execFileSync('git', ['-C', repo, 'config', 'user.email', 'claude@test']);
-    let cap = capture();
-    const code = await okedge.main(['exec', '--press', '--intent', 'commit: pressed, says why', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'p'], cap.io);
-    assert.equal(code, 0, cap.lines.join(' | '));
-    const line = cap.lines.find((l) => l.startsWith('signed:'));
-    assert.match(line, /not paid by the budget - ticket owed/);
-    const f = await s.lastLink();
-    assert.equal(f.decision, codes.DECISION.APPROVE, 'pressed, not paid');
-    /* the phone and okedge watch must not call this the mismatch alarm (seen live on the Pixel, #431) */
-    assert.deepEqual(require('../src/edge').live.classifyUse(f), { kind: 'armed-press', alarm: null });
-    assert.deepEqual(Buffer.from(f.intent), Buffer.from(grants.intentOf('commit: pressed, says why')));
-    /* while that ticket is owed, a second --press is refused */
     cap = capture();
-    assert.notEqual(await okedge.main(['exec', '--press', '--intent', 'again', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'q'], cap.io), 0);
-    assert.match(cap.lines.join(' | '), /owe/);
-    /* no budget pays for it, so the ticket goes straight to the key - and its head prints as hex */
+    assert.equal(await okedge.main(['exec', '--head', head, '--reason', 'commit: owed', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'o'], cap.io), 0, cap.lines.join(' | '));
+    const seq = Number(/link #(\d+)/.exec(cap.lines.find((l) => l.startsWith('signed:')))[1]);
+    /* the agent restarted: it has no budget, the key still owes the ticket */
+    s.agent.setBudget(null);
     cap = capture();
-    assert.equal(await okedge.main(['ticket', String(f.seq), '--msg', 'pressed p'], cap.io), 0, cap.lines.join(' | '));
+    assert.equal(await okedge.main(['ticket', String(seq), '--msg', 'committed o'], cap.io), 0, cap.lines.join(' | '));
+    /* the head prints as hex (it printed "[object Object]" on this path, Pixel #431) */
     assert.match(cap.lines.join(' | '), /head = [0-9a-f]{64}/);
-    /* and the phone gets its message (it showed "No message synced" on the Pixel, #432) */
-    assert.ok(s.notes.some((n) => n.seq === f.seq && n.ticketMsg === 'pressed p'), 'the ticket message reaches the phone');
+    /* and the phone gets the message (it showed "No message synced", Pixel #432) */
+    assert.ok(s.notes.some((n) => n.seq === seq && n.ticketMsg === 'committed o'), 'the ticket message reaches the phone');
   } finally {
     await s.control.close();
   }

@@ -21,9 +21,13 @@ const KIND = Object.freeze({
   TIMED_OUT: 'timed-out',
 });
 
+/*
+ * The B7 'press during a live budget' alarm is gone (spec session, 2026-10-06): an
+ * ordinary press is not Edge. New keys write neither kind any more (a mismatched sign
+ * is refused, an ordinary press writes no link); these name old links only.
+ */
 const ALARM = Object.freeze({
   [KIND.MISMATCHED_ARM]: 'an ARM that did not match its request - someone else jumped in?',
-  [KIND.PRESS_UNDER_BUDGET]: 'a press asked for under a live budget (it owes a ticket, R16)',
 });
 
 /**

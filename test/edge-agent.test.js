@@ -153,40 +153,30 @@ test('an exec\'s endpoint: a sign bound to the pinned host is paid by the budget
   assert.equal(signed[0], wire.MSG.SIGN_RESPONSE);
   let f = await lastLink();
   assert.equal(JSON.stringify([f.decision, f.grantId]), JSON.stringify([codes.DECISION.SELF_PRESS, b.grantId]), 'paid by the budget');
-  /* a second sign on the same exec: the use is spent - a press */
+  /* a second sign on the same exec: the use is spent - an ordinary press, which is not Edge: no link (2026-10-06) */
   const sid2 = crypto.randomBytes(32);
   await sshClient(ex.sshPath, [h.bind(sid2), signMsg(keyBlob, userauth(sid2))]);
-  f = await lastLink();
-  assert.equal(f.decision, codes.DECISION.APPROVE, 'one paid use per exec');
+  assert.equal((await lastLink()).seq, f.seq, 'one paid use per exec; the press wrote no link');
   const links = await ex.close();
   assert.equal(links.length, 1);
   assert.equal(links[0].paid, true);
 });
 
-test('THE FIX: another process signing during an exec gets a press, not the budget - and under R16 that press owes a ticket, which status names and exec refuses on', async () => {
+test('THE FIX: another process signing during an exec gets a press, not the budget - an ordinary press: no link, nothing owed (2026-10-06)', async () => {
   const { agent, b, h, keyBlob, lastLink } = await setup();
+  const before = (await lastLink()).seq;
   const ex = await agent.openExec({ head: b.head(), reason: 'push lib' });
   /* the other process: the shared endpoint, even bound to the pinned host */
   const sid = crypto.randomBytes(32);
   const conn = {};
   await agent.sharedHandler.handle(h.bind(sid), conn);
   await agent.sharedHandler.handle(signMsg(keyBlob, userauth(sid)), conn);
-  const f = await lastLink();
-  assert.equal(f.decision, codes.DECISION.APPROVE, 'a press - the budget did not pay');
-  assert.notEqual(f.grantId, b.grantId);
+  assert.equal((await lastLink()).seq, before, 'a press - the budget did not pay, and the press is not Edge: no link');
   await ex.close();
-  /*
-   * R16 (seen on the Pixel, 2026-10-03): a pressed sign with the agent's key owes
-   * a ticket while a budget covers it, and nothing is paid until it is ticketed
-   * (R18). The key says so; the agent names the seq and refuses before running.
-   */
-  const st = await agent.status();
-  assert.deepEqual(st.keyOwed, [f.seq], 'status names what the key owes');
-  await assert.rejects(agent.openExec({ head: b.head(), reason: 'next' }), { code: 'EEDGE_KEY_OWED' });
-  const next = await agent.ticket(f.seq, { message: 'the pressed sign on the shared endpoint' });
-  assert.deepEqual((await agent.status()).keyOwed, []);
-  /* ticketed: the exec's own use pays again */
-  const ex2 = await agent.openExec({ head: next, reason: 'push lib' });
+  /* R16 (spec session, 2026-10-06): only budget uses owe a ticket - the key owes nothing */
+  assert.deepEqual((await agent.status()).keyOwed, [], 'nothing owed');
+  /* the exec's own use still pays */
+  const ex2 = await agent.openExec({ head: b.head(), reason: 'push lib' });
   const sid2 = crypto.randomBytes(32);
   await sshClient(ex2.sshPath, [h.bind(sid2), signMsg(keyBlob, userauth(sid2))]);
   assert.equal((await lastLink()).decision, codes.DECISION.SELF_PRESS);
@@ -202,13 +192,13 @@ test('the budget does not pay for a host that is not pinned, a forged bind, no b
     ['another session', (sid) => [h.bind(sid), signMsg(keyBlob, userauth(crypto.randomBytes(32)))]],
   ];
   for (const [name, msgs] of cases) {
+    const before = (await lastLink()).seq;
     const ex = await agent.openExec({ head: b.head(), reason: name });
     await sshClient(ex.sshPath, msgs(crypto.randomBytes(32)));
-    const f = await lastLink();
-    assert.equal(f.decision, codes.DECISION.APPROVE, `${name}: paid by the budget`);
+    assert.equal((await lastLink()).seq, before, `${name}: not paid by the budget - an ordinary press, no link`);
     await ex.close();
-    /* R16: that press used the agent's key under its budget - it owes a ticket before the next exec */
-    await agent.ticket(f.seq, { message: `pressed: ${name}` });
+    /* R16 (2026-10-06): that press is not Edge - nothing owed, so the next exec runs */
+    assert.deepEqual((await agent.status()).keyOwed, [], `${name}: nothing owed`);
   }
 });
 
@@ -246,11 +236,13 @@ test('the gpg shim: with the exec\'s token the budget pays once; without it, a p
   const ex = await agent.openExec({ head: b.head(), reason: 'commit: R19 test' });
   const digest = crypto.randomBytes(32);
   await agent.shimSign(ex.token, SSH_IDENTITY, digest);
-  assert.equal((await lastLink()).decision, codes.DECISION.SELF_PRESS, 'paid with the token');
+  const paid = await lastLink();
+  assert.equal(paid.decision, codes.DECISION.SELF_PRESS, 'paid with the token');
+  /* an ordinary press is not Edge (2026-10-06): no link */
   await agent.shimSign(ex.token, SSH_IDENTITY, crypto.randomBytes(32));
-  assert.equal((await lastLink()).decision, codes.DECISION.APPROVE, 'spent: a press');
+  assert.equal((await lastLink()).seq, paid.seq, 'spent: a press, no link');
   await agent.shimSign('ff'.repeat(32), SSH_IDENTITY, crypto.randomBytes(32));
-  assert.equal((await lastLink()).decision, codes.DECISION.APPROVE, 'a wrong token: a press');
+  assert.equal((await lastLink()).seq, paid.seq, 'a wrong token: a press, no link');
   await ex.close();
   void GPG_IDENTITY;
 });

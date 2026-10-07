@@ -128,30 +128,6 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     return result;
   }
 
-  /*
-   * okedge exec --press (Brad, 2026-10-06): one PRESSED use that says what it
-   * is for (R13b) - no budget pays, a person presses; refused while a ticket is
-   * owed (R13a). The exec's endpoints are the same; the sign goes to pressed().
-   */
-  async function pressed(exec, identity, message, what) {
-    exec.used = true;
-    const bytes = new Uint8Array([...message, ...agentProto.identityHash(identity)]);
-    if (!client) throw fail('EEDGE_NO_CLIENT', 'this agent has no Edge client for a pressed use');
-    const { result, link } = await client.pressedUse(bytes, () => device.sign(identity, message), { intent: exec.reason });
-    exec.links.push({ ...link, what });
-    note(link.seq, { reason: exec.reason, what });
-    log(`signed: link #${link.seq} (${what}) - pressed - ticket owed for #${link.seq}`);
-    return result;
-  }
-  async function openPressExec({ reason, capMs }) {
-    if (budget && budget.pending().length) throw fail('EEDGE_TICKET_OWED', `ticket owed for #${budget.pending().join(', #')} - okedge ticket first`);
-    if (edge) {
-      const k = await keyOwed(await edge.head());
-      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - okedge ticket them first`);
-    }
-    return openEndpoint({ reason, capMs, press: true });
-  }
-
   /**
    * Open an exec: `head` must be the budget's head (the agent saw its last
    * ticket's reply), then a fresh endpoint and token for this one command.
@@ -165,9 +141,8 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
       throw e;
     }
   }
-  async function openExecChecked({ head, reason, press = false, capMs = EXEC_CAP_MS }) {
+  async function openExecChecked({ head, reason, capMs = EXEC_CAP_MS }) {
     if (typeof reason !== 'string' || !reason.trim()) throw fail('EEDGE_REASON', 'an exec needs a reason');
-    if (press) return openPressExec({ reason, capMs });
     if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget - ask for one first (okedge budget)');
     /*
      * Refused BEFORE the command runs (daily-loop §3, must fail safely): a
@@ -202,19 +177,18 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     if (String(head || '').toLowerCase() !== budget.head()) {
       throw fail('EEDGE_STALE_HEAD', `--head is not the budget's head (${budget.head().slice(0, 16)}…): file the last ticket and use the head it printed`);
     }
-    return openEndpoint({ reason, capMs, press: false });
+    return openEndpoint({ reason, capMs });
   }
 
-  /* the exec's own endpoints (one ssh socket/pipe, one gpg token) - for a paid exec and a pressed one alike */
-  async function openEndpoint({ reason, capMs, press }) {
-    const exec = { token: crypto.randomBytes(32).toString('hex'), reason, press, used: false, closed: false, links: [] };
+  /* the exec's own endpoints (one ssh socket/pipe, one gpg token) */
+  async function openEndpoint({ reason, capMs }) {
+    const exec = { token: crypto.randomBytes(32).toString('hex'), reason, used: false, closed: false, links: [] };
     const handler = agentSrv.createAgentHandler({
       keys: [{ curve: ssh.curve, raw: ssh.raw, comment: ssh.comment }],
       sessionBind: true,
       log,
       sign: async (key, data, conn) => {
         if (exec.closed || exec.used) return plainSign(ssh.identity, data); /* one paid use per exec */
-        if (exec.press) return pressed(exec, ssh.identity, data, 'ssh'); /* --press: a person presses, the intent is welded in */
         const ok = bindLib.boundToPinned(conn && conn.bind, data, pins);
         if (!ok.ok) {
           log(`not paid by the budget: ${ok.reason} - the key asks for a press`);
@@ -245,7 +219,6 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
    */
   async function shimSign(token, identity, digest) {
     const exec = token ? execs.get(token) : null;
-    if (exec && exec.press && !exec.closed && !exec.used) return pressed(exec, identity, digest, 'gpg');
     if (!exec || exec.closed || exec.used || !budget) {
       log('gpg sign outside an exec (or its use is spent) - the key asks for a press');
       return plainSign(identity, digest);
@@ -374,8 +347,8 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       agent.setBudget(b);
       return summary(b);
     },
-    'exec-open': async ({ head, reason, press }) => {
-      const ex = await agent.openExec({ head, reason, press: Boolean(press) });
+    'exec-open': async ({ head, reason }) => {
+      const ex = await agent.openExec({ head, reason });
       const git = {};
       if (gpg && shimCommand) {
         git['gpg.program'] = shimCommand;

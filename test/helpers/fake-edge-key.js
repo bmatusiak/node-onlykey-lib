@@ -1,4 +1,5 @@
 'use strict';
+const okmsg = require('../../src/protocol/okmsg');
 
 /*
  * A fake Edge key: answers OKEDGE sub-ops the way the soft-key firmware plugin
@@ -45,6 +46,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
   const onHold = new Set();
   let owed = [];
   let armed = false;
+  /* R13a (2026-10-06): an ARM voided by a later link, kept with the head it was made over - its request is refused at the sign */
+  let voided = null;
   let armedIntent = null; /* R13b: the intent a v2 arm carried */
   let replayIntent = null; /* R13b: staged by REPLAY_INTENT for the next REPLAY */
   let refusedArms = 0; /* B7 stage 2: HEAD byte 60, as the firmware counts them */
@@ -56,6 +59,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
     const seq = held.length;
     /* R3: every link this key writes is version 1 (unless a test builds an old one) */
     const link = chain.encodeLink({ seq, version: 1, ...fields });
+    if (armed && fields.decision !== codes.DECISION.SELF_PRESS) voided = { token: armed, intent: armedIntent, head };
     head = chain.weld(head, link);
     held.push({ link, head, reveal });
     armed = false; /* R13a: any link clears the arm */
@@ -113,10 +117,10 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
         /* R13a: a token over head + the request's subject; the fake keeps it (a real key checks it at the sign) */
         if (owed.length) { refusedArms = Math.min(255, refusedArms + 1); return emit(status(0x0c)); }
         /* as the firmware's any_budget_payable: live, off hold, with uses left */
-        /* R13b: an ARM with an intent is taken even when no budget can pay (the next sign is pressed and records it) */
-        const withIntent = arg.slice(32, 48).some((x) => x);
-        if (!withIntent && !live.some((id) => !onHold.has(id) && (!budgets.has(id) || budgets.get(id).used < budgets.get(id).uses))) { refusedArms = Math.min(255, refusedArms + 1); return emit(status(0x0d)); }
+        /* R13b, budget or no go (Brad, 2026-10-06): with or without an intent, refused unless a budget can pay */
+        if (!live.some((id) => !onHold.has(id) && (!budgets.has(id) || budgets.get(id).used < budgets.get(id).uses))) { refusedArms = Math.min(255, refusedArms + 1); return emit(status(0x0d)); }
         armed = arg.slice(0, 32);
+        voided = null; /* a new ARM replaces a voided one */
         /* R13b: a v2 arm carries its intent; zeros = v1 */
         armedIntent = arg.slice(32, 48).some((x) => x) ? arg.slice(32, 48) : null;
         emit(status(0x00));
@@ -126,6 +130,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
         if (sub === 0x14 && owed.length) return emit(status(0x0c));
         if (sub === 0x14 && !same(arg.slice(4, 36), head)) return emit(status(0x0b));
         if (sub === 0x13) onHold.add(id); else onHold.delete(id);
+        /* as the firmware: hold and resume are links (grant-hold / grant-resume) */
+        append({ op: sub === 0x13 ? codes.OP.GRANT_HOLD : codes.OP.GRANT_RESUME, decision: codes.DECISION.APPROVE, slot: 0, flags: sub === 0x14 ? codes.FLAG.PRESS_OBSERVED : 0, grantId: id, subject: new Uint8Array(32) });
         emit(status(0x00));
       } else if (sub === 0x21) {
         append({ op: codes.OP.TICKET, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: tickets.waiveSubject(owed, false) });
@@ -315,22 +321,40 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
   };
   transport.writes = writes;
   transport.armed = () => armed;
+  /* a test link that IS Edge's own (an approved sync, no ticket owed) - ordinary presses write none (2026-10-06) */
+  transport.edgeRecord = () => append({ op: codes.OP.SYNC, decision: codes.DECISION.APPROVE, slot: 0, flags: codes.FLAG.PRESS_OBSERVED, subject: require('node:crypto').randomBytes(32) });
   /* the soft key's idle restart / a lock: live budgets live in RAM and are gone, with no link written */
   transport.restart = () => { live.length = 0; onHold.clear(); };
   /*
-   * A sign the KEY decides (okplugin_edge_primed / _decision): it pays when the
-   * ARM token is over THIS head and THESE bytes and a live budget off hold has
-   * room - a self-press link with its reveal - and otherwise it is a pressed
-   * use - owing when an arm was waiting, or when a live budget covers the
-   * slot (R16: the agent's key used outside Edge; the fake matches the slot,
-   * not the label).
+   * A sign the KEY decides (okplugin_edge_primed / _decision / _refused): it pays
+   * when the ARM token is over THIS head and THESE bytes and a live budget off
+   * hold has room - a self-press link with its reveal. A sign that does not match
+   * a waiting ARM is REFUSED (R13a, 2026-10-06: EDGE:1C, the arm used up, counted
+   * in HEAD byte 60). Anything else is an ordinary press: not Edge, NO link, owes
+   * nothing (spec session, 2026-10-06). -> {seq, paid} or {seq: null, paid: false}
    */
   transport.use = (bytes, { slot = 2 } = {}) => {
     const subject = grants.requestSubject(Uint8Array.from(bytes));
     const wasArmed = Boolean(armed);
     const intent = armedIntent;
     const match = wasArmed && same(armed, grants.armToken({ head, subject, intent }));
+    /* R13a: the request whose ARM a later link voided (a hold in between) - refused, never pressed */
+    if (!wasArmed && voided) {
+      const v = voided;
+      voided = null;
+      if (same(v.token, grants.armToken({ head: v.head, subject, intent: v.intent }))) {
+        refusedArms = Math.min(255, refusedArms + 1);
+        throw okmsg.deviceError('EDGE:0D');
+      }
+    }
     const id = match && !owed.length ? live.find((i) => !onHold.has(i) && budgets.get(i).used < budgets.get(i).uses) : null;
+    /* R13a (2026-10-06): the announced request, but no budget can pay it now (held, ended, expired) - refused, never pressed */
+    if (match && !id) {
+      armed = false;
+      armedIntent = null;
+      refusedArms = Math.min(255, refusedArms + 1);
+      throw okmsg.deviceError('EDGE:0D');
+    }
     if (id) {
       const b = budgets.get(id);
       b.used += 1;
@@ -349,14 +373,13 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
       owed.push(seq);
       return { seq, paid: true };
     }
-    const F = codes.FLAG;
-    const covered = live.some((i) => (budgets.get(i).scopes || []).some((sc) => sc.op === codes.OP.SIGN && sc.slot === slot));
-    const owes = wasArmed || covered;
-    /* R13b: a pressed use records the intent its (matching) arm carried */
-    const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot, subject, ...(wasArmed && same(armed || new Uint8Array(32), grants.armToken({ head, subject, intent })) && intent ? { intent } : {}),
-      flags: F.PRESS_OBSERVED | (owes ? F.OWES_TICKET : 0) | (wasArmed ? F.ARMED : 0) });
-    if (owes) owed.push(seq);
-    return { seq, paid: false };
+    armed = false;
+    armedIntent = null;
+    if (wasArmed && !match) {
+      refusedArms = Math.min(255, refusedArms + 1);
+      throw okmsg.deviceError('EDGE:1C');
+    }
+    return { seq: null, paid: false };
   };
   return transport;
 }

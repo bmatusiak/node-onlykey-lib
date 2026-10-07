@@ -161,6 +161,8 @@ const STATUS = Object.freeze({
   0x1a: { name: 'no-such-sibling', text: 'This key has no paired phone at that index' },
   /* R30 anchors (P2c, CHOSEN number) */
   0x1b: { name: 'bad-checkpoint', text: 'That checkpoint is not signed by the paired key - nothing anchored' },
+  /* R13a (2026-10-06): the sign was not the request the agent ARMed for - refused, no link; ARM again */
+  0x1c: { name: 'arm-mismatch', text: 'That request was not the one the agent ARMed for - refused (the ARM is used up)' },
 });
 
 /** "EDGE:xx" -> {code, name, text}, or null when the text is not an Edge status. */

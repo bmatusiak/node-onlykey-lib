@@ -350,38 +350,6 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       await channel.send({ type: pingLib.RECEIPT_TYPE, re: msg.id, exact: c.ok, why: c.why || null, ms, parts }, { oneWay: true }).catch(() => {});
       return { exact: c.ok, why: c.why, ms, bytes: n, wire, parts };
     },
-    /*
-     * okedge exec --press (Brad, 2026-10-06; R13b): a PRESSED use that says what
-     * it is for. No budget pays: the key waits for a person's press, and the
-     * phone's prompt shows the agent's text when it hashes to the armed intent.
-     * Refused while the key owes a ticket (R13a). The link owes its ticket (it
-     * was armed, R16). -> {result, link: {seq, paid: false}}
-     */
-    async pressedUse(bytes, op, { intent } = {}) {
-      const data = Uint8Array.from(bytes);
-      const subject = grants.requestSubject(data);
-      const before = await edge.head();
-      if (before.owed) throw fail('EEDGE_TICKET_OWED', 'edge: the key owes a ticket - file it first (R13a)');
-      const said = intent !== undefined && intent !== null ? clip(String(intent), note.MAX_REASON) : null;
-      const next = before.seq === null ? 0 : before.seq + 1;
-      if (said && before.canIntent) {
-        try {
-          await edge.arm(before.head, subject, { intent: grants.intentOf(said) });
-        } catch (e) {
-          throw fail('EEDGE_ARM', `edge: the key refused the ARM (${e.status || e.message})`, { reason: e.status || 'refused' });
-        }
-      }
-      if (said) await sendNote({ seq: next, reason: said });
-      const result = await op(data);
-      let l = await edge.pickup(next, 1).then((r) => r[0], () => null);
-      if (!l || !same(chain.decodeLink(l.link).subject, subject)) {
-        const h = await edge.head();
-        [l] = await edge.pickup(h.seq, 1);
-      }
-      const f = chain.decodeLink(l.link);
-      if (!same(f.subject, subject)) throw fail('EEDGE_LINK', `edge: the key's newest link (#${f.seq}) is not this use`);
-      return { result, link: { seq: f.seq, paid: false, paidBy: null, step: null, reveal: null } };
-    },
     /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
     ticketOwed,
     /**

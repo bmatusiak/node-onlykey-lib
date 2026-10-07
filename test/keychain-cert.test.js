@@ -64,35 +64,27 @@ async function stack() {
   return { okcrypto, edge, b, links, presses };
 }
 
-test('a certificate under a live budget covering its label: both self-signatures are presses, the budget pays nothing', async () => {
+test('a certificate under a live budget covering its label: both self-signatures are ordinary presses - no link, the budget pays nothing (2026-10-06)', async () => {
   const s = await stack();
+  const before = await s.edge.head();
   let pressed = 0;
   const c = await certLib.makeCertificate(s.okcrypto, openpgp, { label: LABEL, expires: 365 * 86400, onPress: () => { pressed += 1; } });
   assert.equal(pressed, 2, 'the user ID certification and the subkey binding: two presses asked for');
-  const signs = (await s.links(2)).filter((f) => f.op === codes.OP.SIGN);
-  assert.equal(signs.length, 2);
-  for (const f of signs) {
-    assert.equal(f.decision, codes.DECISION.APPROVE, 'a press, not a self-press');
-    assert.ok(f.flags & codes.FLAG.PRESS_OBSERVED);
-    assert.equal(f.grantId, 0, 'no budget paid');
-  }
+  const after = await s.edge.head();
+  assert.equal(after.seq, before.seq, 'an ordinary press is not Edge: no link');
+  assert.equal(after.owed, 0, 'and nothing owed');
   const key = await openpgp.readKey({ armoredKey: c.armored });
   assert.equal(key.getUserIDs()[0], UID);
   assert.equal(Math.round(((await key.getExpirationTime()).getTime() / 1000 - c.created) / 86400), 365);
 });
 
-test('R16, no exemption: the cert refuses to start while anything is owed, and tickets its own presses right after', async () => {
+test('R16 (spec session, 2026-10-06): a cert press owes nothing - there is nothing for the cert to ticket', async () => {
   const s = await stack();
   const start = await certLib.guardOwed(s.edge);
   const c = await certLib.makeCertificate(s.okcrypto, openpgp, { label: LABEL });
-  assert.equal((await s.edge.head()).owed, 2, 'two presses under a covering budget owe two tickets');
-  await assert.rejects(certLib.guardOwed(s.edge), { code: 'EEDGE_KEY_OWED' }, 'a second cert waits for those');
-  const done = await certLib.ticketOwnPresses(s.edge, start, c.fingerprint);
-  assert.equal(done.length, 2);
-  assert.equal((await s.edge.head()).owed, 0, 'nothing owed after');
-  const t = (await s.links(1))[0];
-  assert.equal(t.op, codes.OP.TICKET);
-  assert.equal(t.code, 0x00, 'code OK');
+  assert.equal((await s.edge.head()).owed, 0, 'two ordinary presses, nothing owed');
+  await certLib.guardOwed(s.edge); /* a second cert is not held up */
+  assert.deepEqual(await certLib.ticketOwnPresses(s.edge, start, c.fingerprint), [], 'nothing to ticket');
 });
 
 test('renewal keeps the fingerprint; a revocation (one press) revokes that key', async () => {
