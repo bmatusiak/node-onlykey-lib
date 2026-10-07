@@ -76,7 +76,8 @@ function gate({ windowOpen = true, approve = true, batch = false, mtu } = {}) {
           g.packed += 1;
           for (let i = 1; i < pt.length; i += 64) { g.toKey.push(pt.slice(i, i + 64)); firmware.write(IFACE.VENDOR, pt.slice(i, i + 64)); }
         }
-        if (pt[0] === 0x02 && pt[1] === 0x31) g.bye = (g.bye || 0) + 1; /* the computer's goodbye */
+        /* the computer's goodbye - checked first and never a renewal answer, as ok-rn's btTransit.onControl */
+        if (pt[0] === 0x02 && pt[1] === 0x31) { g.bye = (g.bye || 0) + 1; return []; }
         if (pt[0] === 0x02 && renewState) {
           const rec = g.records[0];
           g.renewed = bt.phoneRenewFinish(rec, renewState, pt.slice(1), Date.now());
@@ -346,4 +347,24 @@ test('link counts: connects and reconnects are counted, and a failed reconnect i
   assert.strictEqual(g.noble.phone.received.length, before, 'nothing went out');
   g.noble.state = 'poweredOn';
   await p.stop();
+});
+
+/*
+ * A COMMAND'S END SAYS GOODBYE (A13, 2026-10-07): closing on this side left the LE link
+ * up ~3.6 s in Windows, into the next onlykey-js process - its scan waited for it, or its
+ * first request got no answer. stop() now tells the phone, sealed, so it lets the link go.
+ */
+test('stop(): a command\'s end tells the phone goodbye, sealed - not only release()', async () => {
+  const home = tmpHome();
+  const g = gate();
+  const p0 = pipeOver(g);
+  await p0.start();
+  await store.pairOverPipe(p0, { address: 'PIXEL', home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await p0.stop();
+  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+  assert.strictEqual((await p.start()).encrypted, true);
+  const before = g.bye || 0;
+  await p.stop();
+  await new Promise((r) => setTimeout(r, 50)); /* the fake phone handles a write on a later tick */
+  assert.strictEqual((g.bye || 0) - before, 1);
 });

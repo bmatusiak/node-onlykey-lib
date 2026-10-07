@@ -169,6 +169,10 @@ function bleError(code, message, cause) {
 const bare = (uuid) => uuid.replace(/-/g, '').toLowerCase();
 /* An address compared the way a person types it: case and colons do not matter. */
 const addrKey = (s) => String(s || '').replace(/[:-]/g, '').toLowerCase();
+/* connecting straight to --address, and its first service list: a phone that is not there falls back to the scan after this */
+const DIRECT_MS = 4000;
+/* an advertising phone is seen in 50-300 ms once the scan runs, but Windows starts its scan slowly: 0.5 s missed it (A13); not seen by then, a link is probably still held */
+const QUICK_SCAN_MS = 1200;
 const looksLikeAddress = (s) => /^[0-9a-f]{12}$/i.test(addrKey(s));
 
 /* ------------------------------------------------------------ framing */
@@ -383,7 +387,7 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
     return prev.uuids.has('fffd') || prev.uuids.has(bare(FIDO_UUID))
       || prev.uuids.has(bare(SERVICE_UUID));
   };
-  const peripheral = await new Promise((resolve, reject) => {
+  const scan = (quickMs = 0) => new Promise((resolve, reject) => {
     const done = (err, p) => {
       clearTimeout(timer);
       noble.removeListener('discover', onDiscover);
@@ -391,6 +395,7 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
     };
     const onDiscover = (p) => { if (wanted(p)) done(null, p); };
     const timer = setTimeout(() => {
+      if (quickMs) { done(null, null); return; }
       const fido = [...seen.entries()].filter(([, v]) => v.uuids.has('fffd') || v.uuids.has(bare(FIDO_UUID)));
       const named = [...seen.values()].filter((v) => v.name).map((v) => `"${v.name}"`);
       done(bleError('ENOPHONE',
@@ -400,138 +405,178 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
         + (named.length ? `; names: ${[...new Set(named)].slice(0, 8).join(', ')}` : '')
         + '. Is ok-rn open with its soft key on and Bluetooth on in the phone, and is the phone '
         + 'paired with this computer (Settings > Bluetooth & devices)?'));
-    }, timeouts.scanMs);
+    }, quickMs || timeouts.scanMs);
     noble.on('discover', onDiscover);
     Promise.resolve(noble.startScanningAsync([], true)).catch((err) => done(bleError('ESCAN',
       `Bluetooth scan failed to start: ${err && err.message}`, err)));
   });
-  const name = (seen.get(peripheral.id) || {}).name || peripheral.id;
-  log(`found ${name} (${peripheral.id}) in ${Date.now() - t0} ms, rssi ${peripheral.rssi}`);
 
-  const onDrop = (reason) => onDisconnect(reason);
-  peripheral.once('disconnect', onDrop);
-  const giveUp = async () => {
-    peripheral.removeListener('disconnect', onDrop);
-    try { await peripheral.disconnectAsync(); } catch { /* never connected */ }
-  };
-
-  const tc = Date.now();
-  try {
-    await within(peripheral.connectAsync(), timeouts.connectMs, () => {
-      try { peripheral.cancelConnect(); } catch { /* nothing pending */ }
-      return bleError('ECONNECT',
-        `${name} was seen but did not accept a connection in ${timeouts.connectMs / 1000} s. `
-        + 'The phone serves one computer at a time over LE - is another one connected to it?');
-    });
-  } catch (err) {
-    await giveUp();
-    throw err.code ? err : bleError('ECONNECT', `could not connect to ${name}: ${err && err.message}`, err);
+  /*
+   * STRAIGHT TO A KNOWN ADDRESS (A13, 2026-10-07). Windows keeps the LE link ~3 s
+   * after a command closes it - neither side's hang-up ends it sooner - and while it
+   * is up the phone does not advertise, so the next command's scan waited for the
+   * drop (up to 4.8 s). Connecting by address takes the link Windows still holds
+   * (~0.6 s to a link up in 1.9-2.2 s, measured). But with no link held, Windows
+   * finding the phone by address took over 4 s, where a scan sees it in 50-300 ms.
+   * So with --address: a short look first (an advertising phone is seen at once),
+   * then straight to the address (a link is still held), then the full scan, which
+   * says what it saw. The straight path gets a short time and no slow retry.
+   */
+  const quick = target && looksLikeAddress(target) && typeof noble.connectAsync === 'function'
+    ? await scan(QUICK_SCAN_MS) : null;
+  if (quick) {
+    log(`found ${(seen.get(quick.id) || {}).name || quick.id} (${quick.id}) in ${Date.now() - t0} ms, rssi ${quick.rssi}`);
+    return linkUp(quick, { connected: false, resolveMs: timeouts.resolveMs, retry: true });
   }
-  log(`connected in ${Date.now() - tc} ms, mtu ${peripheral.mtu}`);
-
-  /*
-   * VENDOR-ONLY DISCOVERY. Asking for just the one service and its two
-   * characteristics is what the spike did; a full discovery also works but
-   * reads the whole table, FIDO and all, on every command.
-   */
-  let req;
-  let rsp;
-  /*
-   * fresh: the WHOLE table, asked of the phone itself. The quick vendor-only
-   * discovery is served from Windows' cache, and after the phone app was
-   * reinstalled its services sat at other handles - Windows connected every
-   * 35 s and never listed them (the Pixel, 2026-10-05: FIDO moved to handle
-   * 200). The full discovery is uncached in noble's WinRT code, so the retry
-   * uses it: the cache is refreshed from the phone instead of trusted again.
-   */
-  const discover = async (fresh = false) => {
-    const found = await within(
-      fresh
-        ? peripheral.discoverAllServicesAndCharacteristicsAsync()
-        : peripheral.discoverSomeServicesAndCharacteristicsAsync([bare(SERVICE_UUID)], [bare(REQUEST_UUID), bare(RESPONSE_UUID)]),
-      timeouts.resolveMs,
-      () => bleError('EDISCOVER', `${name} connected but did not list its services in ${timeouts.resolveMs / 1000} s.`));
-    const chars = found.characteristics || [];
-    req = chars.find((c) => c.uuid === bare(REQUEST_UUID));
-    rsp = chars.find((c) => c.uuid === bare(RESPONSE_UUID));
-  };
-  let first = null;
-  try {
-    await discover();
-  } catch (e) {
-    first = e;
-  }
-  /*
-   * A table WITHOUT our service gets the same retry (Brad, 2026-10-06: an agent
-   * restarted right after the old one was killed listed no vendor service, twice
-   * 5 s apart, while the phone saw no new connection at all - Windows answered
-   * from its cache over the dead process's link). The fresh discovery asks the
-   * phone itself; a FIDO device that really has no vendor service still ends in
-   * ENOVENDOR below.
-   */
-  if (first || !req || !rsp) {
-    /*
-     * ONE RETRY (owner, 2026-10-03: pushes now go through the phone, and the
-     * third push in a row failed "Device is unreachable while discovering
-     * services" - WinRT, while the previous command's link was still being
-     * torn down; run again, it worked). Disconnect, let the link settle,
-     * connect and discover once more. Once only: a phone that is really
-     * gone still fails fast, with the first attempt's words.
-     */
-    log(`discovery ${first ? `failed (${first.message})` : 'listed no vendor service'}; reconnecting once, asking the phone for its whole table`);
+  if (target && looksLikeAddress(target) && typeof noble.connectAsync === 'function') {
+    const td = Date.now();
+    let direct = null;
     try {
-      /* our own disconnect is not the phone dropping the link: unhook that handler around it */
-      peripheral.removeListener('disconnect', onDrop);
-      try { await peripheral.disconnectAsync(); } catch { /* already down */ }
-      await new Promise((r) => setTimeout(r, 1500));
-      await within(peripheral.connectAsync(), timeouts.connectMs, () => bleError('ECONNECT', `${name} did not accept the reconnect`));
-      peripheral.once('disconnect', onDrop);
-      await discover(true);
-    } catch {
-      /* a failed discovery keeps the first attempt's words; a table without our service ends in ENOVENDOR below */
-      if (first) { await giveUp(); throw first; }
+      direct = await within(noble.connectAsync(addrKey(target)), DIRECT_MS,
+        () => bleError('ECONNECT', `no answer in ${DIRECT_MS / 1000} s`));
+      log(`connected straight to ${direct.id} in ${Date.now() - td} ms - no scan`);
+      return await linkUp(direct, { connected: true, resolveMs: DIRECT_MS, retry: false });
+    } catch (e) {
+      log(`straight to ${addrKey(target)}: ${e.message} - scanning`);
+      try { noble.cancelConnect(addrKey(target)); } catch { /* nothing pending */ }
+      if (direct) { try { await direct.disconnectAsync(); } catch { /* not connected */ } }
     }
   }
-  if (!req || !rsp) {
-    await giveUp();
-    throw bleError('ENOVENDOR',
-      `${name} has no OnlyKey vendor service (${SERVICE_UUID}). Is it the phone running ok-rn, `
-      + 'with the soft key on? Another FIDO device nearby can match; choose the phone with --address.');
-  }
+  const scanned = await scan();
+  log(`found ${(seen.get(scanned.id) || {}).name || scanned.id} (${scanned.id}) in ${Date.now() - t0} ms, rssi ${scanned.rssi}`);
+  return linkUp(scanned, { connected: false, resolveMs: timeouts.resolveMs, retry: true });
 
-  /*
-   * SUBSCRIBE BEFORE THE FIRST WRITE. The reply to a write can arrive before
-   * the write's own acknowledgement does; a subscription made after it would
-   * miss it.
-   */
-  const onNotify = (data) => onData(data);
-  rsp.on('data', onNotify);
-  try {
-    await rsp.subscribeAsync();
-  } catch (err) {
-    rsp.removeListener('data', onNotify);
-    await giveUp();
-    throw bleError('ESUBSCRIBE', `could not subscribe to ${name}'s replies: ${err && err.message}`, err);
-  }
-  log(`subscribed, ${Date.now() - t0} ms from start`);
-
-  return {
-    /*
-     * Read at each write, not now: WinRT reports the MTU only after the
-     * exchange that follows the connect (null at connect, 517 once
-     * subscribed), and a value frozen here fell back to 20-byte fragments.
-     */
-    get mtu() { return peripheral.mtu || 23; },
-    describe: `${name} (${peripheral.id})`,
-    /* WITH response: the phone acknowledges each fragment, so a lost one is an error, not silence. */
-    write: (frag) => req.writeAsync(Buffer.from(frag), false),
-    async close() {
-      rsp.removeListener('data', onNotify);
+  async function linkUp(peripheral, { connected, resolveMs, retry }) {
+    const name = (seen.get(peripheral.id) || {}).name || peripheral.id;
+    const onDrop = (reason) => onDisconnect(reason);
+    peripheral.once('disconnect', onDrop);
+    const giveUp = async () => {
       peripheral.removeListener('disconnect', onDrop);
-      try { await rsp.unsubscribeAsync(); } catch { /* link already gone */ }
-      try { await peripheral.disconnectAsync(); } catch { /* link already gone */ }
-    },
-  };
+      try { await peripheral.disconnectAsync(); } catch { /* never connected */ }
+    };
+
+    const tc = Date.now();
+    if (!connected) try {
+      await within(peripheral.connectAsync(), timeouts.connectMs, () => {
+        try { peripheral.cancelConnect(); } catch { /* nothing pending */ }
+        return bleError('ECONNECT',
+          `${name} was seen but did not accept a connection in ${timeouts.connectMs / 1000} s. `
+          + 'The phone serves one computer at a time over LE - is another one connected to it?');
+      });
+    } catch (err) {
+      await giveUp();
+      throw err.code ? err : bleError('ECONNECT', `could not connect to ${name}: ${err && err.message}`, err);
+    }
+    if (!connected) log(`connected in ${Date.now() - tc} ms, mtu ${peripheral.mtu}`);
+
+    /*
+     * VENDOR-ONLY DISCOVERY. Asking for just the one service and its two
+     * characteristics is what the spike did; a full discovery also works but
+     * reads the whole table, FIDO and all, on every command.
+     */
+    let req;
+    let rsp;
+    /*
+     * fresh: the WHOLE table, asked of the phone itself. The quick vendor-only
+     * discovery is served from Windows' cache, and after the phone app was
+     * reinstalled its services sat at other handles - Windows connected every
+     * 35 s and never listed them (the Pixel, 2026-10-05: FIDO moved to handle
+     * 200). The full discovery is uncached in noble's WinRT code, so the retry
+     * uses it: the cache is refreshed from the phone instead of trusted again.
+     */
+    const discover = async (fresh = false) => {
+      const found = await within(
+        fresh
+          ? peripheral.discoverAllServicesAndCharacteristicsAsync()
+          : peripheral.discoverSomeServicesAndCharacteristicsAsync([bare(SERVICE_UUID)], [bare(REQUEST_UUID), bare(RESPONSE_UUID)]),
+        resolveMs,
+        () => bleError('EDISCOVER', `${name} connected but did not list its services in ${resolveMs / 1000} s.`));
+      const chars = found.characteristics || [];
+      req = chars.find((c) => c.uuid === bare(REQUEST_UUID));
+      rsp = chars.find((c) => c.uuid === bare(RESPONSE_UUID));
+    };
+    let first = null;
+    try {
+      await discover();
+    } catch (e) {
+      first = e;
+    }
+    /*
+     * A table WITHOUT our service gets the same retry (Brad, 2026-10-06: an agent
+     * restarted right after the old one was killed listed no vendor service, twice
+     * 5 s apart, while the phone saw no new connection at all - Windows answered
+     * from its cache over the dead process's link). The fresh discovery asks the
+     * phone itself; a FIDO device that really has no vendor service still ends in
+     * ENOVENDOR below.
+     */
+    if (!retry && (first || !req || !rsp)) {
+      await giveUp();
+      throw first || bleError('ENOVENDOR', `${name} listed no OnlyKey vendor service`);
+    }
+    if (first || !req || !rsp) {
+      /*
+       * ONE RETRY (owner, 2026-10-03: pushes now go through the phone, and the
+       * third push in a row failed "Device is unreachable while discovering
+       * services" - WinRT, while the previous command's link was still being
+       * torn down; run again, it worked). Disconnect, let the link settle,
+       * connect and discover once more. Once only: a phone that is really
+       * gone still fails fast, with the first attempt's words.
+       */
+      log(`discovery ${first ? `failed (${first.message})` : 'listed no vendor service'}; reconnecting once, asking the phone for its whole table`);
+      try {
+        /* our own disconnect is not the phone dropping the link: unhook that handler around it */
+        peripheral.removeListener('disconnect', onDrop);
+        try { await peripheral.disconnectAsync(); } catch { /* already down */ }
+        await new Promise((r) => setTimeout(r, 1500));
+        await within(peripheral.connectAsync(), timeouts.connectMs, () => bleError('ECONNECT', `${name} did not accept the reconnect`));
+        peripheral.once('disconnect', onDrop);
+        await discover(true);
+      } catch {
+        /* a failed discovery keeps the first attempt's words; a table without our service ends in ENOVENDOR below */
+        if (first) { await giveUp(); throw first; }
+      }
+    }
+    if (!req || !rsp) {
+      await giveUp();
+      throw bleError('ENOVENDOR',
+        `${name} has no OnlyKey vendor service (${SERVICE_UUID}). Is it the phone running ok-rn, `
+        + 'with the soft key on? Another FIDO device nearby can match; choose the phone with --address.');
+    }
+
+    /*
+     * SUBSCRIBE BEFORE THE FIRST WRITE. The reply to a write can arrive before
+     * the write's own acknowledgement does; a subscription made after it would
+     * miss it.
+     */
+    const onNotify = (data) => onData(data);
+    rsp.on('data', onNotify);
+    try {
+      await rsp.subscribeAsync();
+    } catch (err) {
+      rsp.removeListener('data', onNotify);
+      await giveUp();
+      throw bleError('ESUBSCRIBE', `could not subscribe to ${name}'s replies: ${err && err.message}`, err);
+    }
+    log(`subscribed, ${Date.now() - t0} ms from start`);
+
+    return {
+      /*
+       * Read at each write, not now: WinRT reports the MTU only after the
+       * exchange that follows the connect (null at connect, 517 once
+       * subscribed), and a value frozen here fell back to 20-byte fragments.
+       */
+      get mtu() { return peripheral.mtu || 23; },
+      describe: `${name} (${peripheral.id})`,
+      /* WITH response: the phone acknowledges each fragment, so a lost one is an error, not silence. */
+      write: (frag) => req.writeAsync(Buffer.from(frag), false),
+      async close() {
+        rsp.removeListener('data', onNotify);
+        peripheral.removeListener('disconnect', onDrop);
+        try { await rsp.unsubscribeAsync(); } catch { /* link already gone */ }
+        try { await peripheral.disconnectAsync(); } catch { /* link already gone */ }
+      },
+    };
+  }
 }
 
 /* ------------------------------------------------------------ Linux: BlueZ over D-Bus */
@@ -1306,6 +1351,26 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
     return result;
   }
 
+  /*
+   * GOODBYE FIRST: closing on this side does not end the link - on the Pixel it
+   * shares the keyboard's classic connection, which Windows keeps, and on the A13
+   * Windows held the LE link ~3.6 s after the app closed it (measured 2026-10-07:
+   * disconnect asked 19:57:36.8, the phone saw it 19:57:40.4), even into the next
+   * onlykey-js process - so the next command's scan waited for it (up to 4.8 s) or
+   * its first request got no answer. So the phone is told, sealed, and lets the
+   * link go itself (ok-rn btTransit: the session ends, the computer is
+   * disconnected, it advertises again at once). Every way out says it: release()
+   * (the agent going idle) and stop() (a command's end). Best effort: a link
+   * already dead just closes.
+   */
+  async function goodbye() {
+    if (!session || !link) return;
+    await Promise.race([
+      sendRaw(CMD_SEALED, btpair.seal(session, Uint8Array.of(KIND_CONTROL, CTRL_BYE))).catch(() => {}),
+      new Promise((r) => setTimeout(r, 1500)),
+    ]);
+  }
+
   return {
     async start() {
       const r = await startLink();
@@ -1334,6 +1399,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
        */
       if (renewing) await Promise.race([renewing, new Promise((r) => setTimeout(r, 5000))]);
       started = false; /* a deliberate stop: no write reconnects after it */
+      await goodbye();
       const was = link;
       link = null;
       if (was) await was.close();
@@ -1356,19 +1422,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       if (!link) return;
       if (writing || handshaking) return; /* mid-write or mid-hello: not now */
       if (renewing) await Promise.race([renewing, new Promise((r) => setTimeout(r, 5000))]);
-      /*
-       * GOODBYE FIRST: closing on this side does not always end the link - on the
-       * Pixel it shares the keyboard's classic connection, which Windows keeps.
-       * So the phone is told, sealed, and lets the link go itself (ok-rn
-       * btTransit: the session ends, the computer is disconnected). Best effort:
-       * a link already dead just closes.
-       */
-      if (session) {
-        await Promise.race([
-          sendRaw(CMD_SEALED, btpair.seal(session, Uint8Array.of(KIND_CONTROL, CTRL_BYE))).catch(() => {}),
-          new Promise((r) => setTimeout(r, 1500)),
-        ]);
-      }
+      await goodbye();
       const was = link;
       link = null;
       session = null;
