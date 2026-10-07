@@ -21,7 +21,7 @@
  *               the key's own evidence is HEAD's refused-TX start counter. `seq` is
  *               the key's head when it happened.
  */
-const { ed25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
+const crypto = require('../crypto/provider');
 const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
 const { utf8ToBytes, toHex, fromHex, concat } = require('../bytes');
 
@@ -84,7 +84,7 @@ function verify(msg, { registered, seen } = {}) {
   }
   let good = false;
   try {
-    good = ed25519.verify(fromHex(msg.signature), body(msg), fromHex(msg.agent));
+    good = crypto.ed25519Verify(fromHex(msg.signature), body(msg), fromHex(msg.agent));
   } catch { good = false; } /* an oversize field throws in body(): not a note we take */
   if (!good) return { ok: false, reason: 'bad-signature' };
   if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };

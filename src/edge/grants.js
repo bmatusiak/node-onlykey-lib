@@ -21,7 +21,7 @@ const { utf8ToBytes } = require('../bytes');
  * which ties the revealed step to what was approved (the link's subject).
  * CHOSEN: i counts from 1, so use 1 reveals H^(n-1)(seed) and use n the seed.
  */
-const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const crypto = require('../crypto/provider');
 const { TAG, OP } = require('./codes');
 const chain = require('./chain');
 const { H, hmacSha256, bytes32, same, u8 } = require('./hash');
@@ -43,9 +43,7 @@ function u16le(n) {
 const MAX_USES = 1024;
 
 function hashTimes(v, times) {
-  let x = v;
-  for (let k = 0; k < times; k++) x = sha256(x);
-  return x;
+  return crypto.sha256Repeat(v, times);
 }
 
 /** The value use `step` reveals, from the seed (for tests and fakes - a host never has the seed). */
@@ -82,7 +80,7 @@ function checkSelfPress({ genesis, uses, step, value, mac, subject }) {
     /* bounded (<= 1024 hashes): tell a mislabelled step from a foreign value */
     let x = value;
     for (let k = 1; k <= uses; k++) {
-      x = sha256(x);
+      x = crypto.sha256(x);
       if (k !== step && same(x, genesis)) return { ok: false, reason: 'wrong-step', actualStep: k };
     }
     return { ok: false, reason: 'wrong-budget' };
@@ -205,7 +203,7 @@ function grantSubject({ scopes, reasonHash, genesis, lifetime = 0 }) {
  */
 function requestSubject(bytes) {
   if (!(bytes instanceof Uint8Array) || !bytes.length) throw new TypeError('edge: requestSubject needs the request bytes');
-  return sha256(bytes);
+  return crypto.sha256(bytes);
 }
 
 /*
@@ -310,7 +308,7 @@ function siblingCode(a, b) {
 function peerSubject(peerKey) {
   const k = Uint8Array.from(peerKey);
   if (k.length !== 64) throw new TypeError('peerSubject needs a 64-byte P-256 key (X || Y)');
-  return sha256(k);
+  return crypto.sha256(k);
 }
 
 module.exports = {

@@ -25,6 +25,7 @@
     "./versions": "./src/versions/index.js",
     "./crypto": "./src/crypto/index.js",
     "./crypto/pgp": "./src/crypto/pgp.js",
+    "./crypto/provider": "./src/crypto/provider.js",
     "./vendor/openpgp": "./src/vendor/openpgp/openpgp.js",
     "./vendor/@noble/*": "./src/vendor/exports/@noble/*",
     "./vendor/tweetnacl": "./src/vendor/exports/tweetnacl.js",

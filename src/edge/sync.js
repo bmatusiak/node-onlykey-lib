@@ -26,8 +26,7 @@
  * message (255 pieces), and a link record is 128 bytes, 256 as hex.
  */
 
-const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
-const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
+const crypto = require('../crypto/provider');
 const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
 const { utf8ToBytes, toHex, fromHex, concat } = require('../bytes');
 const chain = require('./chain');
@@ -145,7 +144,7 @@ function verify(msg, { seen } = {}) {
     || utf8ToBytes(p.name).length > 0xff)) return { ok: false, reason: 'malformed' };
   let good = false;
   try {
-    good = p256.verify(fromHex(msg.signature), body(msg), Uint8Array.from([4, ...fromHex(msg.peer)]), { prehash: true });
+    good = crypto.p256Verify(fromHex(msg.signature), body(msg), Uint8Array.from([4, ...fromHex(msg.peer)]));
   } catch { good = false; }
   if (!good) return { ok: false, reason: 'bad-signature' };
   if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
@@ -220,7 +219,7 @@ function syncFields({ peer, added, head, keychainHash = null }) {
   if (h.length !== 32) throw new TypeError('edge sync: the copy head is 32 bytes');
   const kc = keychainHash ? bytesOf(keychainHash) : new Uint8Array(32);
   if (kc.length !== 32) throw new TypeError('edge sync: the Key Chain hash is 32 bytes');
-  return { peerHash: sha256(bytesOf(peer)), first: Math.min(...seqs), last: Math.max(...seqs), head: h, keychain: kc };
+  return { peerHash: crypto.sha256(bytesOf(peer)), first: Math.min(...seqs), last: Math.max(...seqs), head: h, keychain: kc };
 }
 
 /**
@@ -268,7 +267,7 @@ function keychainText(entries) {
 
 /** SHA256 of the list in id order - the sync link's last field when a list moved. */
 function keychainDigest(entries) {
-  return sha256(utf8ToBytes(keychainText(entries)));
+  return crypto.sha256(utf8ToBytes(keychainText(entries)));
 }
 
 /** Entries as plain JSON objects (public key hex), split into parts of about KEYCHAIN_PART_CHARS. */

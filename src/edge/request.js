@@ -35,7 +35,7 @@
  * the Worker mailbox later (sealed). Pure: no device, no Node built-ins.
  */
 
-const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const crypto = require('../crypto/provider');
 const { ed25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
 const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
 const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
@@ -126,7 +126,7 @@ function verifyRegister(msg, { seen } = {}) {
   }
   let good = false;
   try {
-    good = ed25519.verify(fromHex(msg.signature), registerBody(msg), fromHex(msg.agent));
+    good = crypto.ed25519Verify(fromHex(msg.signature), registerBody(msg), fromHex(msg.agent));
   } catch { good = false; }
   if (!good) return { ok: false, reason: 'bad-signature' };
   if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
@@ -175,7 +175,7 @@ function verifyPeerAdd(msg, { seen } = {}) {
   }
   let good = false;
   try {
-    good = p256.verify(fromHex(msg.signature), peerBody(msg), Uint8Array.from([4, ...fromHex(msg.peer)]), { prehash: true });
+    good = crypto.p256Verify(fromHex(msg.signature), peerBody(msg), Uint8Array.from([4, ...fromHex(msg.peer)]));
   } catch { good = false; }
   if (!good) return { ok: false, reason: 'bad-signature' };
   if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
@@ -217,7 +217,7 @@ function verify(msg, { registered, seen }) {
   }
   let good = false;
   try {
-    good = ed25519.verify(fromHex(msg.signature), body(msg), fromHex(msg.agent));
+    good = crypto.ed25519Verify(fromHex(msg.signature), body(msg), fromHex(msg.agent));
   } catch { good = false; }
   if (!good) return { ok: false, reason: 'bad-signature' };
   if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
@@ -256,7 +256,7 @@ function grantScopes(msg) {
 
 /* the reason hash the key gets, made by the APP from the text the person read - never one the agent sends */
 function reasonHash(reason) {
-  return sha256(utf8ToBytes(String(reason)));
+  return crypto.sha256(utf8ToBytes(String(reason)));
 }
 
 /**

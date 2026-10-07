@@ -40,7 +40,7 @@ const { OP, TAG, DECISION } = require('./codes');
 /* R3: the newest link format this library reads (byte 63) */
 const LINK_VERSION = 1;
 const { p256 } = require('../vendor/exports/@noble/curves/nist.js');
-const { sha256 } = require('../vendor/exports/@noble/hashes/sha2.js');
+const crypto = require('../crypto/provider');
 const { concat } = require('../bytes');
 const { H, ascii, u32le, bytes32, same } = require('./hash');
 
@@ -301,13 +301,13 @@ function checkpointMessage({ deviceId, seq, head }) {
 }
 
 function checkpointDigest(fields) {
-  return sha256(checkpointMessage(fields));
+  return crypto.sha256(checkpointMessage(fields));
 }
 
 /** {deviceId, seq, head}, the key's 64-byte signature, the Edge public key -> boolean */
 function verifyCheckpoint(fields, signature, publicKey) {
   try {
-    return p256.verify(Uint8Array.from(signature), checkpointDigest(fields), sec1(publicKey), { prehash: false, lowS: false });
+    return crypto.p256VerifyDigest(Uint8Array.from(signature), checkpointDigest(fields), sec1(publicKey), { lowS: false });
   } catch {
     return false;
   }
