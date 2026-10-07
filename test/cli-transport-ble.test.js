@@ -102,7 +102,8 @@ test('the phone refusal (CMD_ERROR 0xbf) is told apart from a key report', () =>
 test('a missing noble or dbus-next is named, with the command that installs it', () => {
   assert.throws(() => loadNoble(notInstalled('@stoprocent/noble')), (err) => {
     assert.equal(err.code, 'ENOBLE');
-    assert.match(err.message, /OPTIONAL PEER.*npm install @stoprocent\/noble@2\.8\.0/);
+    /* the patched fork, pinned to its commit (2.8.0 hangs on Android 17 phones) */
+    assert.match(err.message, /OPTIONAL PEER.*npm install github:bmatusiak\/noble-ble#[0-9a-f]{40}/);
     return true;
   });
   assert.throws(() => loadDbus(notInstalled('dbus-next')), (err) => {

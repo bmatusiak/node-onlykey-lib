@@ -243,6 +243,17 @@ function createAssembler() {
  * the way loadNodeHid does (the fix differs, and a package whose OWN
  * dependency is missing throws the same code).
  */
+/*
+ * THE NOBLE FORK (2026-10-07). stoprocent/noble 2.8.0 hangs on Windows against an
+ * Android 17 phone: it asks for the WHOLE service table uncached, Windows fails that
+ * with E_UNEXPECTED once Google Play services have moved the phone's GATT handles,
+ * and the failure is lost inside its native handler - "did not list its services".
+ * bmatusiak/noble-ble fix/win-discovery asks for our one service by UUID and reports
+ * failures (2.8.0-bm.1). Proven on the Pixel 6a: 0 of 2 before, 6 of 6 after.
+ */
+const NOBLE_FORK = 'github:bmatusiak/noble-ble#d41c7dd91130ae04603858249dd91edf2a324053';
+const NOBLE_FORK_VERSION = '2.8.0-bm.1';
+
 function loadOptional(name, loader, why) {
   try {
     return loader();
@@ -255,7 +266,7 @@ function loadOptional(name, loader, why) {
         `--ble needs "${name}" ${why}, and it is not installed. `
         + 'It is an OPTIONAL PEER of node-onlykey-lib - not installed with it, so the '
         + 'web app and ok-rn never download it - install it next to the library: '
-        + `npm install ${name === '@stoprocent/noble' ? '@stoprocent/noble@2.8.0' : name}`,
+        + `npm install ${name === '@stoprocent/noble' ? NOBLE_FORK : name}`,
         err);
     }
     throw bleError('EBLELOAD',
@@ -266,8 +277,21 @@ function loadOptional(name, loader, why) {
 }
 
 /** @param {() => object} [loader] injectable, so a test can be a machine without it */
-function loadNoble(loader = () => require('@stoprocent/noble')) {
-  return loadOptional('@stoprocent/noble', loader, 'to reach a phone over Bluetooth on Windows');
+let nobleChecked = false;
+function loadNoble(loader) {
+  const injected = Boolean(loader);
+  const noble = loadOptional('@stoprocent/noble', loader || (() => require('@stoprocent/noble')), 'to reach a phone over Bluetooth on Windows');
+  /* the real install only (tests inject their own), once: say so if it is not the fork */
+  if (!injected && !nobleChecked) {
+    nobleChecked = true;
+    let version = null;
+    try { version = require('@stoprocent/noble/package.json').version; } catch { /* no package.json export: say nothing */ }
+    if (version && version !== NOBLE_FORK_VERSION) {
+      process.stderr.write(`onlykey-js ble: @stoprocent/noble ${version} is not the patched fork (${NOBLE_FORK_VERSION}) - `
+        + `against an Android 17 phone its service discovery can hang ("did not list its services"). Install: npm install ${NOBLE_FORK}\n`);
+    }
+  }
+  return noble;
 }
 
 /** @param {() => object} [loader] injectable */
