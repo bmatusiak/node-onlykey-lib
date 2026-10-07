@@ -1535,155 +1535,6 @@ async function keychainGenHost(io, opts, type, keychain) {
 }
 
 /*
- * EDGE FROM A COMPUTER (mcp-service.md 4.7a, step 2): ask the phone's app for
- * a budget over Bluetooth. The request goes to ok-rn, NOT to the key - the
- * phone's vendor bridge keeps OKEDGE_REQUEST (0xF7) for the app, which shows
- * the text and names, and the person presses. Then the opening is read back
- * from the key and checked here (client.js), never taken on the app's word.
- *
- * The agent's own key: an Ed25519 secret in ~/.onlykey-js/edge/agent.key
- * (made on first use, readable by this user only), registered ONCE with the
- * app (`edge register`, a press on the phone). Budgets this computer asked
- * for: ~/.onlykey-js/edge/budgets.json (for continue).
- */
-function edgeHome(opts) {
-  /* --edge-home, else OKEDGE_HOME, else ~/.onlykey-js/edge - one home for edge, edge-agent and okedge */
-  return opts['edge-home'] || require('./edge-control').edgeHome();
-}
-
-function edgeAgent(opts) {
-  const fsm = require('fs');
-  const pathm = require('path');
-  const { request } = require('../src/edge');
-  const dir = edgeHome(opts);
-  fsm.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const file = pathm.join(dir, 'agent.key');
-  if (!fsm.existsSync(file)) {
-    fsm.writeFileSync(file, Buffer.from(require('crypto').randomBytes(32)).toString('hex') + '\n', { mode: 0o600 });
-  }
-  const signer = request.signerFromSecret(Uint8Array.from(Buffer.from(fsm.readFileSync(file, 'utf8').trim(), 'hex')));
-  const storeFile = pathm.join(dir, 'budgets.json');
-  const read = () => (fsm.existsSync(storeFile) ? JSON.parse(fsm.readFileSync(storeFile, 'utf8')) : {});
-  const store = {
-    async get(k) { return read()[k] || null; },
-    async set(k, v) { const all = read(); all[k] = v; fsm.writeFileSync(storeFile, JSON.stringify(all, null, 2), { mode: 0o600 }); },
-  };
-  return { signer, store };
-}
-
-/* "sign:222:5:ssh://agent@nitro16" -> {op, slot, cap, identity} - the identity keeps its own colons */
-function parseScope(text) {
-  const m = /^(sign|decrypt):(\d+):(\d+)(?::(.+))?$/.exec(text);
-  if (!m) throw usage(`a scope is op:slot:cap[:identity] (e.g. sign:222:5:ssh://agent@host), not "${text}"`);
-  return { op: m[1], slot: Number(m[2]), cap: Number(m[3]), ...(m[4] ? { identity: m[4] } : {}) };
-}
-
-COMMANDS.edge = {
-  mirrors: '(new)',
-  usage: 'register <name> | request <reason> <op:slot:cap[:identity]>... --ttl <minutes> | continue <budget> --ttl <minutes> [--caps n,n] | use <budget> <identity> <text> | ticket <budget> <seq> <message> | end <budget>',
-  summary: 'Edge: register this computer\'s agent key with ok-rn, ask it for a budget, continue one',
-  device: true,
-  options: {
-    ttl: { type: 'string' },
-    caps: { type: 'string' },
-    wait: { type: 'string' },
-    'edge-home': { type: 'string' },
-  },
-  async run(io, opts, args) {
-    const { client, wire } = require('../src/edge');
-    const [sub, ...rest] = args;
-    const ttl = () => {
-      const n = Number(opts.ttl);
-      if (!Number.isInteger(n)) throw usage('--ttl <minutes> is required (1 to 1440) - a budget never falls back to the key\'s default');
-      return n;
-    };
-    if (!['register', 'request', 'continue', 'use', 'ticket', 'end'].includes(sub)) throw usage('edge register | request | continue | use | ticket | end');
-    if (sub === 'use' && rest.length !== 3) throw usage('edge use takes a budget id, the identity (ssh://...) and the text to sign');
-    if (sub === 'ticket' && rest.length !== 3) throw usage('edge ticket takes a budget id, the seq of the use and the message');
-    if (sub === 'end' && rest.length !== 1) throw usage('edge end takes a budget id');
-    if (sub === 'register' && rest.length !== 1) throw usage('edge register takes the name the phone shows');
-    if (sub === 'request' && rest.length < 2) throw usage('edge request takes a reason and at least one scope');
-    if (sub === 'continue' && rest.length !== 1) throw usage('edge continue takes a budget id');
-    const { signer, store } = edgeAgent(opts);
-
-    const app = await io.start(deviceOpts(opts));
-    try {
-      const { transport, device } = app.services;
-      await device.connect();
-      let edge = null;
-      require('../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
-      const channel = wire.createWireChannel(transport, { timeoutMs: (Number(opts.wait) || 120) * 1000 });
-      const c = client.createEdgeClient({ edge, channel, signer, store });
-      try {
-        if (sub === 'register') {
-          const keyHex = Buffer.from(signer.publicKey).toString('hex');
-          /* the phone's sheet shows the same fingerprint: compare them before you press */
-          io.out(row('agent key', require('../src/edge').request.fingerprint(keyHex)));
-          io.out(row('full key', keyHex));
-          io.out('Check the phone shows the same key, Register there, then press the key...');
-          const r = await c.register(rest[0]);
-          io.out(r.already ? 'already registered' : 'registered');
-          return 0;
-        }
-        if (sub === 'use') {
-          /*
-           * One agent sign (P-256, agent v2) paid by the budget: ARM over its
-           * head and this request, sign, and the link it caused. The ticket is
-           * NOT filed here - `edge ticket` does that - so a use can be left
-           * owing on purpose (a test of ticket_owed).
-           */
-          const { grants } = require('../src/edge');
-          const { sha256 } = require('../src/vendor/exports/@noble/hashes/sha2.js');
-          const identity = grants.identityLabel(rest[1]);
-          const message = sha256(new TextEncoder().encode(rest[2]));
-          const b = await c.resume(Number(rest[0]));
-          const { okcrypto } = app.services;
-          const { link } = await b.use(new Uint8Array([...message, ...identity]), () => okcrypto.agent.sign(identity, message, { keyType: 2, version: 2 }));
-          io.out(row('use', `#${link.seq}${link.paid ? `, paid by budget ${rest[0]} (step ${link.step})` : link.paidBy !== null ? `, paid by another live budget: ${link.paidBy}` : ', not paid by a budget (a direct use)'}`));
-          io.out(row('ticket', `owed - file it with: edge ticket ${rest[0]} ${link.seq} "<what happened>"`));
-          return 0;
-        }
-        if (sub === 'ticket') {
-          /* the budget ended (a lock, its lifetime, its end) but the key still owes the ticket: file it without one */
-          const b = await c.resume(Number(rest[0])).catch((e) => { if (e && e.code === 'EEDGE_GONE') return null; throw e; });
-          const r = b
-            ? await b.ticket({ seq: Number(rest[1]) }, { code: 'OK', message: rest[2] })
-            : await c.ticketOwed(Number(rest[1]), { code: 'OK', message: rest[2] });
-          io.out(row('ticket', `filed for #${rest[1]} (the key's head is now #${r.seq})`));
-          return 0;
-        }
-        if (sub === 'end') {
-          await (await c.resume(Number(rest[0]))).end();
-          io.out(`budget ${rest[0]} ended`);
-          return 0;
-        }
-        io.out('Waiting for the phone - read the request there, then press...');
-        const b = sub === 'request'
-          ? await c.request({ reason: rest[0], scopes: rest.slice(1).map(parseScope), ttlMinutes: ttl() })
-          : await c.continue(Number(rest[0]), { ttlMinutes: ttl(), caps: opts.caps ? opts.caps.split(',').map(Number) : null });
-        io.out(row('budget', String(b.grantId)));
-        io.out(row('uses', String(b.uses)));
-        io.out(row('lifetime', `${ttl()} min`));
-        return 0;
-      } catch (e) {
-        if (e.code === 'EEDGE_REFUSED') { io.err(`refused: ${e.refusal}`); return 1; }
-        if (e.code && String(e.code).startsWith('EEDGE_')) { io.err(e.message); return 1; }
-        throw e;
-      }
-    } finally {
-      await app.destroy();
-    }
-  },
-};
-
-/*
- * THE AGENT SERVICE (Edge Phase 2; onlykey-edge mcp-service.md §4.2 / §4.2a,
- * decided 2026-10-03). One long-running process, ONE link to the phone, the
- * agent's OWN keys (D2), the work budget, and the endpoints okedge and git
- * use. See cli/edge-agent.js for the rules (one-shot endpoints per exec, the
- * shared endpoint never pays, session-bind pins).
- */
-/*
  * PART T (onlykey-edge features/BLUETOOTH-PAIRING-SPEC.md): pair THIS computer
  * user with ok-rn over Bluetooth. Brad opens "Pair a computer" in ok-rn's
  * Bluetooth tab (a ~2-minute window); both sides show the same 6-digit code; he
@@ -1694,13 +1545,28 @@ COMMANDS.edge = {
  */
 COMMANDS.pair = {
   mirrors: '(new)',
-  usage: '[--name <computer>]   (with --ble [--address <phone>])',
-  summary: 'Part T: pair this computer with ok-rn over Bluetooth (keys in this user\'s home) - the phone shows the same 6-digit code',
+  usage: '[list | forget] [--name <computer>]   (with --ble [--address <phone>])',
+  summary: 'Part T: pair this computer with ok-rn over Bluetooth (the phone shows the same 6-digit code); pair list | pair forget',
   device: false,
   options: { name: { type: 'string' } },
-  async run(io, opts) {
-    if (!opts.ble) throw usage('pair works over Bluetooth only: onlykey-js --ble [--address <phone>] pair');
+  async run(io, opts, args = []) {
     const store = require('./btpair-store');
+    /* pair list | pair forget (CLI.md §2, 2026-10-06 - was `pairing [--forget]`) */
+    if (args[0] === 'list') {
+      const all = store.list();
+      if (!all.length) { io.out(`no pairings for this user on ${store.computerName()} (onlykey-js --ble pair)`); return 0; }
+      for (const r of all) {
+        io.out(`${r.name || store.computerName()}  phone ${r.address || '(default)'}  pairing ${String(r.id).slice(0, 8)}...  epoch ${r.epoch}  renewed ${new Date(r.renewedAt).toISOString().slice(0, 10)}`);
+      }
+      return 0;
+    }
+    if (args[0] === 'forget') {
+      store.removePairing(opts.address);
+      io.out(`forgot the pairing for ${opts.address || 'the default phone'} (revoke it on the phone too)`);
+      return 0;
+    }
+    if (args.length) throw usage('pair | pair list | pair forget');
+    if (!opts.ble) throw usage('pair works over Bluetooth only: onlykey-js --ble [--address <phone>] pair');
     const pipe = require('./transport-ble').createBlePipe({ address: opts.address }); /* no pairing yet: the pairing messages themselves */
     await pipe.start();
     try {
@@ -1715,172 +1581,6 @@ COMMANDS.pair = {
       io.out(`paired: ${name} with the phone (pairing ${result.record.id.slice(0, 8)}...); from now on this user's Bluetooth commands are encrypted`);
     } finally {
       await pipe.stop();
-    }
-  },
-};
-
-COMMANDS.pairing = {
-  mirrors: '(new)',
-  usage: '[--forget]   (with --ble --address <phone> to forget that one)',
-  summary: 'Part T: this computer user\'s Bluetooth pairings (owner-only ~/.onlykey-js/bt-pairing.json)',
-  device: false,
-  options: { forget: { type: 'boolean' } },
-  async run(io, opts) {
-    const store = require('./btpair-store');
-    if (opts.forget) {
-      store.removePairing(opts.address);
-      io.out(`forgot the pairing for ${opts.address || 'the default phone'} (revoke it on the phone too)`);
-      return;
-    }
-    const all = store.list();
-    if (!all.length) { io.out(`no pairings for this user on ${store.computerName()} (onlykey-js --ble pair)`); return; }
-    for (const r of all) {
-      io.out(`${r.name || store.computerName()}  phone ${r.address || '(default)'}  pairing ${String(r.id).slice(0, 8)}...  epoch ${r.epoch}  renewed ${new Date(r.renewedAt).toISOString().slice(0, 10)}`);
-    }
-  },
-};
-
-COMMANDS['edge-agent'] = {
-  mirrors: '(new)',
-  usage: '[--ssh ssh://user@host --gpg "Name <email>" --committer-name N --committer-email E --expires 1y|<n>d|never]',
-  summary: 'Edge: the agent service - the agent\'s own ssh/gpg keys, its work budget, the endpoints okedge uses',
-  device: true,
-  options: {
-    ssh: { type: 'string' },
-    gpg: { type: 'string' },
-    'committer-name': { type: 'string' },
-    'committer-email': { type: 'string' },
-    'edge-home': { type: 'string' },
-    expires: { type: 'string' },
-    wait: { type: 'string' },
-  },
-  async run(io, opts) {
-    const fsm = require('fs');
-    const pathm = require('path');
-    const { client, wire } = require('../src/edge');
-    const { startEdgeAgent } = require('./edge-agent');
-    const home = edgeHome(opts);
-    if (opts['edge-home']) process.env.OKEDGE_HOME = home; /* okedge and the gpg shim find the same home */
-    const cfgFile = pathm.join(home, 'agent.json');
-    const config = fsm.existsSync(cfgFile) ? JSON.parse(fsm.readFileSync(cfgFile, 'utf8')) : {};
-    if (opts.ssh) config.ssh = opts.ssh;
-    if (opts.gpg) config.gpgUid = opts.gpg;
-    if (opts['committer-name'] || opts['committer-email']) {
-      config.committer = { name: opts['committer-name'] || (config.committer || {}).name, email: opts['committer-email'] || (config.committer || {}).email };
-    }
-    /* the certificate's lifetime (Brad, 2026-10-03: one year for the real key): 1y, <n>d, or never */
-    if (opts.expires !== undefined) config.expires = parseExpires(opts.expires);
-    if (!config.ssh) throw usage('the first run needs --ssh ssh://user@host (the agent\'s own SSH identity) and --gpg "Name <email>"');
-    const saveConfig = (c) => {
-      fsm.mkdirSync(home, { recursive: true, mode: 0o700 });
-      fsm.writeFileSync(cfgFile, JSON.stringify(c, null, 2), { mode: 0o600 });
-    };
-    saveConfig(config);
-    const { signer, store } = edgeAgent(opts);
-
-    /* ENOVENDOR at start: one more try after ~5 s (edge-agent.js openWithOneRetry) */
-    const app = await require('./edge-agent').openWithOneRetry(async () => {
-      const a = await io.start(deviceOpts(opts));
-      try { await a.services.device.connect(); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
-      return a;
-    }, { log: (l) => io.err(`edge-agent: ${l}`) });
-    try {
-      const { transport, device, okcrypto } = app.services;
-      let edge = null;
-      require('../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
-      /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */
-      /* the envelope's dev: this computer's Part T pairing id (stable); stale answers are logged */
-      const wired = wire.createWireChannel(transport, {
-        timeoutMs: (Number(opts.wait) || 180) * 1000,
-        device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
-        log: (l) => io.err(`edge-agent: ${l}`),
-      });
-      /*
-       * OKEDGE_TIMES=1: every key request, sign and message to the phone, with how
-       * long it took (Brad, 2026-10-06: where a signed commit's 7 s go). Times and
-       * request names only.
-       */
-      const times = process.env.OKEDGE_TIMES === '1';
-      const SUBNAMES = Object.fromEntries(Object.entries(edge.SUB || {}).map(([k, v]) => [v, k]));
-      if (times) edge.onTiming = (sub, ms, ok) => io.err(`edge-agent: time key ${SUBNAMES[sub] || sub} ${ms} ms${ok ? '' : ' (failed)'}`);
-      const channel = times
-        ? { send: async (m, o) => { const t = Date.now(); try { return await wired.send(m, o); } finally { io.err(`edge-agent: time phone ${(m && m.type) || 'message'} ${Date.now() - t} ms`); } } }
-        : wired;
-      const timedCrypto = times
-        ? { ...okcrypto, agent: { ...okcrypto.agent, sign: async (...a) => { const t = Date.now(); try { return await okcrypto.agent.sign(...a); } finally { io.err(`edge-agent: time key SIGN ${Date.now() - t} ms`); } } } }
-        : okcrypto;
-      const c = client.createEdgeClient({ edge, channel, signer, store });
-      const svc = await startEdgeAgent({
-        okcrypto: timedCrypto, client: c, edge, config, saveConfig, openpgp: require('../src/crypto/pgp'),
-        shimCommand: pathm.resolve(__dirname, 'edge-gpg-shim.js').split(pathm.sep).join('/'),
-        log: (l) => io.err(`edge-agent: ${l}`),
-        confirm: () => io.err('edge-agent: confirm on the OnlyKey (a press)'),
-        selfName: opts.address || null,
-        linkStats: () => (typeof transport.linkStats === 'function' ? transport.linkStats() : null),
-        /* a request nobody answered: let the Bluetooth link go (the next one connects fresh, hello first) */
-        onSilence: opts.ble ? async () => { await transport.release('nobody answered').catch(() => {}); } : null,
-        /* R29 (okedge sibling add): a second link, to the other phone, for one request */
-        openOther: async (address) => {
-          if (!opts.ble) throw new Error('pairing another phone needs --ble (the other phone is reached over Bluetooth)');
-          const app2 = await io.start(deviceOpts({ ...opts, address }));
-          try {
-            await app2.services.device.connect();
-            let edge2 = null;
-            require('../plugins/edge')({ transport: app2.services.transport }, (err, s) => { if (err) throw err; edge2 = s.edge; });
-            const channel2 = wire.createWireChannel(app2.services.transport, { timeoutMs: (Number(opts.wait) || 180) * 1000 });
-            return { edge: edge2, client: client.createEdgeClient({ edge: edge2, channel: channel2, signer, store }), close: () => app2.destroy() };
-          } catch (e) {
-            await app2.destroy().catch(() => undefined);
-            throw e;
-          }
-        },
-      });
-      io.out(row('ssh key', svc.sshLine));
-      if (svc.fingerprint) io.out(row('gpg key', svc.fingerprint));
-      /* the certificate into the host's Key Chain list too, so `keychain export --pgp` prints it (spec session, step 3) */
-      if (io.keychainRecord && config.cert && config.gpgUid) {
-        try {
-          io.keychainRecord({
-            scheme: 'gpg', label: `gpg://${config.gpgUid}`, type: 'ed25519', publicKey: config.cert.signPublic, code: 232,
-            pgp: config.cert.armored, pgpFingerprint: config.cert.fingerprint, certCreated: config.cert.created,
-            certExpires: config.cert.expires || 0, tool: 'onlykey-js edge-agent',
-          });
-        } catch (e) {
-          io.err(`edge-agent: the certificate was not recorded in the Key Chain list (${e.message})`);
-        }
-      }
-      if (svc.certArmored) {
-        fsm.writeFileSync(pathm.join(home, 'agent-gpg.asc'), svc.certArmored);
-        io.out(row('gpg cert', pathm.join(home, 'agent-gpg.asc')));
-      }
-      io.out(row('ssh agent', `${svc.sharedPath}  (shared: every sign here asks for a press)`));
-      io.out(row('control', svc.controlPath));
-      io.out('ready - okedge budget / exec / ticket; Ctrl-C to stop');
-      /*
-       * RELEASE WHEN IDLE (Brad, 2026-10-06): the link is let go once the key's
-       * lane has been quiet this long - nothing running, nothing waiting (a press
-       * wait and a budget sheet both sit in the lane, so neither is cut). The
-       * phone goes back to advertising; the next request connects fresh and says
-       * hello first, so a link the phone no longer holds a session for never
-       * outlives one burst.
-       */
-      /* 60 s (Brad, 2026-10-06: both ends recover on their own now, so a working session stays connected) */
-      const IDLE_MS = Number(process.env.OKEDGE_IDLE_MS) || 60000;
-      const idleTick = opts.ble && typeof transport.laneState === 'function'
-        ? setInterval(() => {
-          const st = transport.laneState();
-          if (st.idle && Date.now() - st.since >= IDLE_MS && transport.isOpen()) void transport.release('idle').catch(() => {});
-        }, 1000)
-        : null;
-      if (idleTick && idleTick.unref) idleTick.unref();
-      await new Promise((resolve) => {
-        process.once('SIGINT', resolve);
-        process.once('SIGTERM', resolve);
-      });
-      await svc.close();
-      return 0;
-    } finally {
-      await app.destroy();
     }
   },
 };
@@ -2757,6 +2457,36 @@ function runWithAgent(argv, env) {
 
 /* ------------------------------------------------------------ main */
 
+/*
+ * THE DEV BUILD'S SET (CLI.md §5): test and dev-only commands, options and
+ * switches live in cli/dev, loaded only when that folder is there. The published
+ * package leaves it out (package.json "files"); scripts/release-check.js fails if
+ * any of it is reachable.
+ */
+const DEV = (() => {
+  try {
+    return require('./dev');
+  } catch (e) {
+    /* only cli/dev itself missing ("Cannot find module './dev'") - a broken require inside it still throws */
+    if (e && e.code === 'MODULE_NOT_FOUND' && /'\.\/dev'/.test(e.message)) return null;
+    throw e;
+  }
+})();
+
+/*
+ * EDGE IS A PLUGIN (CLI.md §6): `onlykey-js edge …` exists only when edge/ is
+ * there - remove the folder and everything else still works.
+ */
+const registerEdge = (() => {
+  try {
+    return require('../edge/cli/register');
+  } catch (e) {
+    if (e && e.code === 'MODULE_NOT_FOUND' && /edge[\\/]cli[\\/]register/.test(e.message)) return null;
+    throw e;
+  }
+})();
+if (registerEdge) registerEdge(COMMANDS, { row, usage, CliError, parseExpires, deviceOpts, NAME, dev: DEV });
+
 /**
  * Run one command line.
  *
@@ -2829,59 +2559,92 @@ async function main(argv, io = {}) {
     address: { type: 'string' },
     yes: { type: 'boolean' },
   };
-  const options = { ...GLOBAL_OPTIONS };
-  for (const c of Object.values(COMMANDS)) Object.assign(options, c.options || {});
+  /*
+   * A RAW COMMAND (edge - `exec … -- <command>` must reach it as typed): only the
+   * global options before its name are parsed here; everything after is its own.
+   */
+  let rawCmd = null;
+  {
+    let i = 0;
+    while (i < argv.length) {
+      const t = argv[i];
+      if (t === '--path' || t === '--address') { i += 2; continue; }
+      if (t === '--ble' || t === '--yes' || t === '--help' || t === '-h' || t.startsWith('--path=') || t.startsWith('--address=')) { i += 1; continue; }
+      break;
+    }
+    const t = argv[i];
+    if (t && Object.prototype.hasOwnProperty.call(COMMANDS, t) && COMMANDS[t].raw) rawCmd = { name: t, globals: argv.slice(0, i), rest: argv.slice(i + 1) };
+  }
 
   let parsed;
-  try {
-    parsed = parseArgs({
-      args: argv,
-      allowPositionals: true,
-      strict: true,
-      options,
-    });
-  } catch (err) {
-    /*
-     * Two commands may give one option name different shapes (edge-agent's
-     * `--ssh ssh://user@host`, keychain export's bare `--ssh`): the union cannot
-     * hold both. Find the command loosely, then parse again with ITS options.
-     */
-    const loose = parseArgs({ args: argv, allowPositionals: true, strict: false, options: GLOBAL_OPTIONS });
-    const guess = loose.positionals[0];
-    const own = guess && Object.prototype.hasOwnProperty.call(COMMANDS, guess) ? COMMANDS[guess] : null;
+  let name;
+  let rest;
+  let cmd;
+  if (rawCmd) {
     try {
-      if (!own) throw err;
-      parsed = parseArgs({ args: argv, allowPositionals: true, strict: true, options: { ...GLOBAL_OPTIONS, ...(own.options || {}) } });
-    } catch (err2) {
-      full.err(`${NAME}: ${err2.message}`);
-      full.err(`Run "${NAME} help" for the commands.`);
-      return 2;
-    }
-  }
-
-  const name = parsed.positionals[0];
-  let rest = parsed.positionals.slice(1);
-  if (parsed.values.help || !name) return COMMANDS.help.run(full);
-
-  const cmd = Object.prototype.hasOwnProperty.call(COMMANDS, name) ? COMMANDS[name] : null;
-  if (!cmd) {
-    full.err(`${NAME}: unknown command "${name}". Run "${NAME} help" for the commands.`);
-    return 2;
-  }
-  const foreign = Object.keys(parsed.values)
-    .filter((k) => !(k in GLOBAL_OPTIONS) && !(cmd.options && k in cmd.options));
-  if (foreign.length) {
-    full.err(`${NAME}: "${name}" does not take ${foreign.map((k) => `--${k}`).join(', ')}.`);
-    return 2;
-  }
-  /* the union gave a shared name the other command's shape: parse again with this command's own */
-  if (cmd.options) {
-    try {
-      parsed = parseArgs({ args: argv, allowPositionals: true, strict: true, options: { ...GLOBAL_OPTIONS, ...cmd.options } });
-      rest = parsed.positionals.slice(1);
+      parsed = parseArgs({ args: rawCmd.globals, allowPositionals: false, strict: true, options: GLOBAL_OPTIONS });
     } catch (err) {
       full.err(`${NAME}: ${err.message}`);
       return 2;
+    }
+    name = rawCmd.name;
+    rest = rawCmd.rest;
+    cmd = COMMANDS[name];
+    if (parsed.values.help) return COMMANDS.help.run(full);
+  } else {
+    const options = { ...GLOBAL_OPTIONS };
+    for (const c of Object.values(COMMANDS)) Object.assign(options, c.options || {});
+
+    try {
+      parsed = parseArgs({
+        args: argv,
+        allowPositionals: true,
+        strict: true,
+        options,
+      });
+    } catch (err) {
+      /*
+       * Two commands may give one option name different shapes (edge-agent's
+       * `--ssh ssh://user@host`, keychain export's bare `--ssh`): the union cannot
+       * hold both. Find the command loosely, then parse again with ITS options.
+       */
+      const loose = parseArgs({ args: argv, allowPositionals: true, strict: false, options: GLOBAL_OPTIONS });
+      const guess = loose.positionals[0];
+      const own = guess && Object.prototype.hasOwnProperty.call(COMMANDS, guess) ? COMMANDS[guess] : null;
+      try {
+        if (!own) throw err;
+        parsed = parseArgs({ args: argv, allowPositionals: true, strict: true, options: { ...GLOBAL_OPTIONS, ...(own.options || {}) } });
+      } catch (err2) {
+        full.err(`${NAME}: ${err2.message}`);
+        full.err(`Run "${NAME} help" for the commands.`);
+        return 2;
+      }
+    }
+
+    name = parsed.positionals[0];
+    rest = parsed.positionals.slice(1);
+    if (parsed.values.help || !name) return COMMANDS.help.run(full);
+
+    cmd = Object.prototype.hasOwnProperty.call(COMMANDS, name) ? COMMANDS[name] : null;
+    if (!cmd) {
+      full.err(`${NAME}: unknown command "${name}". Run "${NAME} help" for the commands.`);
+      return 2;
+    }
+    const foreign = Object.keys(parsed.values)
+      .filter((k) => !(k in GLOBAL_OPTIONS) && !(cmd.options && k in cmd.options));
+    if (foreign.length) {
+      full.err(`${NAME}: "${name}" does not take ${foreign.map((k) => `--${k}`).join(', ')}.`);
+      return 2;
+    }
+    /* the union gave a shared name the other command's shape: parse again with this command's own */
+    if (cmd.options) {
+      try {
+        parsed = parseArgs({ args: argv, allowPositionals: true, strict: true, options: { ...GLOBAL_OPTIONS, ...cmd.options } });
+        rest = parsed.positionals.slice(1);
+      } catch (err) {
+        full.err(`${NAME}: ${err.message}`);
+        return 2;
+      }
     }
   }
   /*
@@ -2939,7 +2702,7 @@ async function main(argv, io = {}) {
     if (err instanceof CliError && err.exitCode === 2 && cmd.usage) {
       full.err(`Usage: ${NAME} ${name} ${cmd.usage}`);
     }
-    if (process.env.ONLYKEY_JS_DEBUG && err && err.stack) full.err(err.stack);
+    if (DEV && DEV.debugStack && err && err.stack) full.err(err.stack);
     return err instanceof CliError ? err.exitCode : 1;
   }
 }

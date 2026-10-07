@@ -894,7 +894,11 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   let renewing = null;
   const listeners = new Set();
   const limits = { ...TIMEOUTS, ...timeouts };
-  const trace = log || (process.env.ONLYKEY_JS_DEBUG
+  /* the full trace is a dev-build switch (cli/dev, CLI.md §5): a production package reads no env var for it */
+  const devTrace = (() => {
+    try { return require('./dev').debugStack; } catch (e) { if (e && e.code === 'MODULE_NOT_FOUND') return false; throw e; }
+  })();
+  const trace = log || (devTrace
     ? (line) => process.stderr.write(`onlykey-js ble: ${line}\n`) : () => {});
   /* the link's own news (down, reconnecting, back): always to onLink - a long-running service shows it - and to the trace */
   const say = (line) => {

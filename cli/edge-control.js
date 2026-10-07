@@ -26,9 +26,16 @@ const path = require('path');
 
 const IS_WINDOWS = process.platform === 'win32';
 
-/* OKEDGE_HOME moves everything (a test's scratch home; a second agent) - the child processes of an exec inherit it */
+/*
+ * The Edge home is ~/.onlykey-js/edge. A different one (a test's scratch home, a second
+ * agent) is set only through setHome - by a test, or by the dev command set
+ * (cli/dev, --edge-home): a production package reads no environment variable for it
+ * (CLI.md §5, 2026-10-06: the agent could set one itself).
+ */
+let homeOverride = null;
+function setHome(dir) { homeOverride = dir ? path.resolve(dir) : null; }
 function edgeHome(home = os.homedir()) {
-  return process.env.OKEDGE_HOME ? path.resolve(process.env.OKEDGE_HOME) : path.join(home, '.onlykey-js', 'edge');
+  return homeOverride || path.join(home, '.onlykey-js', 'edge');
 }
 
 function controlPath({ home = os.homedir(), windows = IS_WINDOWS } = {}) {
@@ -44,7 +51,7 @@ function controlKey({ home = os.homedir(), create = false } = {}) {
   const dir = edgeHome(home);
   const file = path.join(dir, 'control.key');
   if (!fs.existsSync(file)) {
-    if (!create) throw Object.assign(new Error('the agent service is not set up here (no control key) - start `onlykey-js edge-agent`'), { code: 'EEDGE_NO_AGENT' });
+    if (!create) throw Object.assign(new Error('the agent service is not set up here (no control key) - start `onlykey-js edge agent`'), { code: 'EEDGE_NO_AGENT' });
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(file, crypto.randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
   }
@@ -61,9 +68,10 @@ const same = (a, b) => {
  * Serve the control endpoint. handlers: {[op]: async (request) => answer}.
  * A request without the right `auth` gets {ok: false, error: 'unauthorised'}.
  */
-async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOWS, log = () => {}, onError = null }) {
-  const key = controlKey({ home, create: true });
-  const where = controlPath({ home, windows });
+async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOWS, log = () => {}, onError = null, where: at = null, key: givenKey = null }) {
+  /* where/key: a one-shot endpoint of its own (an exec's gpg endpoint) instead of the home's control endpoint */
+  const key = givenKey || controlKey({ home, create: true });
+  const where = at || controlPath({ home, windows });
   if (!windows) {
     fs.mkdirSync(path.dirname(where), { recursive: true, mode: 0o700 });
     fs.chmodSync(path.dirname(where), 0o700);
@@ -119,15 +127,17 @@ async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOW
  * onSent: called once the agent has the request - "waiting for the phone" is
  * said only when something is actually waiting.
  */
-function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeoutMs = 120000, onSent = null } = {}) {
-  let key;
-  try {
-    key = controlKey({ home });
-  } catch (e) {
-    return Promise.reject(Object.assign(new Error('no edge-agent is running (it was never set up here) - start `onlykey-js --ble --address <phone> edge-agent`'), { code: 'EEDGE_NO_AGENT' }));
+function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeoutMs = 120000, onSent = null, where = null, key: givenKey = null } = {}) {
+  let key = givenKey;
+  if (!key) {
+    try {
+      key = controlKey({ home });
+    } catch (e) {
+      return Promise.reject(Object.assign(new Error('no edge agent is running here (it was never set up) - start `onlykey-js --ble --address <phone> edge agent`'), { code: 'EEDGE_NO_AGENT' }));
+    }
   }
   return new Promise((resolve, reject) => {
-    const sock = net.connect(controlPath({ home, windows }));
+    const sock = net.connect(where || controlPath({ home, windows }));
     let buf = '';
     let done = false;
     const finish = (fn, v) => { if (done) return; done = true; clearTimeout(timer); fn(v); };
@@ -135,8 +145,8 @@ function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeo
     let connected = false;
     sock.once('error', (e) => {
       finish(reject, connected
-        ? Object.assign(new Error(`the edge-agent stopped while handling "${op}" (${e.code || e.message}) - see its log, then start it again`), { code: 'EEDGE_AGENT_GONE' })
-        : Object.assign(new Error(`no edge-agent is running (${e.code || e.message}) - start \`onlykey-js --ble --address <phone> edge-agent\``), { code: 'EEDGE_NO_AGENT' }));
+        ? Object.assign(new Error(`the edge agent stopped while handling "${op}" (${e.code || e.message}) - see its log, then start it again`), { code: 'EEDGE_AGENT_GONE' })
+        : Object.assign(new Error(`no edge agent is running (${e.code || e.message}) - start \`onlykey-js --ble --address <phone> edge agent\``), { code: 'EEDGE_NO_AGENT' }));
     });
     sock.on('connect', () => {
       connected = true;
@@ -153,9 +163,9 @@ function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeo
       else finish(reject, Object.assign(new Error(answer.error), { code: answer.code || 'EEDGE_AGENT' }));
     });
     sock.on('close', () => {
-      finish(reject, Object.assign(new Error(`the edge-agent stopped before answering "${op}" - it may have crashed; see its log, then start it again`), { code: 'EEDGE_AGENT_GONE' }));
+      finish(reject, Object.assign(new Error(`the edge agent stopped before answering "${op}" - it may have crashed; see its log, then start it again`), { code: 'EEDGE_AGENT_GONE' }));
     });
   });
 }
 
-module.exports = { edgeHome, controlPath, controlKey, serveControl, ask };
+module.exports = { edgeHome, setHome, controlPath, controlKey, serveControl, ask };

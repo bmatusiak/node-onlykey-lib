@@ -103,15 +103,17 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   let budget = null;          /* the work budget (src/edge/client.js budget), once asked for or resumed */
   const execs = new Map();    /* token -> the open exec */
 
-  const plainSign = (identity, message) => device.sign(identity, message); /* no ARM: the key asks for a press */
-
-  /* the shared ssh-agent endpoint's handler: the agent's key, NEVER paid by the budget */
-  const sharedHandler = agentSrv.createAgentHandler({
-    keys: [{ curve: ssh.curve, raw: ssh.raw, comment: ssh.comment }],
-    sessionBind: true,
-    log,
-    sign: (key, data) => plainSign(ssh.identity, data),
-  });
+  /*
+   * BUDGET OR NO GO, EVERYWHERE (CLI.md §3-4, Brad 2026-10-06): Edge has no shared
+   * endpoint and nothing that forwards a sign for a press. A sign it cannot pay
+   * (an exec's second use, a host not pinned, a gpg sign outside an exec) is
+   * refused. A pressed sign is the ordinary `onlykey-js agent` / `gpg-agent`.
+   */
+  const refuse = (why) => {
+    log(`refused (budget or no go): ${why}`);
+    event('refused', why);
+    throw fail('EEDGE_BUDGET_ONLY', `Edge signs only when a budget pays - ${why}`);
+  };
 
   /*
    * One paid use: ARM over the budget's head and exactly the bytes the
@@ -143,18 +145,18 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   }
   async function openExecChecked({ head, reason, capMs = EXEC_CAP_MS }) {
     if (typeof reason !== 'string' || !reason.trim()) throw fail('EEDGE_REASON', 'an exec needs a reason');
-    if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget - ask for one first (okedge budget)');
+    if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget - ask for one first (onlykey-js edge budget)');
     /*
      * Refused BEFORE the command runs (daily-loop §3, must fail safely): a
      * ticket still owed (R18 - the key would refuse the ARM anyway, mid-git),
      * the budget held or gone on the key (Hold from the phone), a stale head.
      */
     const owed = budget.pending();
-    if (owed.length) throw fail('EEDGE_TICKET_OWED', `ticket owed for #${owed.join(', #')} - okedge ticket first`);
+    if (owed.length) throw fail('EEDGE_TICKET_OWED', `ticket owed for #${owed.join(', #')} - onlykey-js edge ticket first`);
     if (edge) {
       const h = await edge.head();
       const k = await keyOwed(h);
-      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - okedge ticket them first (R16: a pressed sign with the agent's key owes one too)`);
+      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - onlykey-js edge ticket them first`);
       if (!h.live.includes(budget.grantId) && onGone && !continued.has(budget.grantId)) {
         /*
          * The budget is gone - the soft key's idle restart, a lock (spec session,
@@ -188,13 +190,9 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
       sessionBind: true,
       log,
       sign: async (key, data, conn) => {
-        if (exec.closed || exec.used) return plainSign(ssh.identity, data); /* one paid use per exec */
+        if (exec.closed || exec.used) return refuse('this exec has used its one paid sign (or closed)');
         const ok = bindLib.boundToPinned(conn && conn.bind, data, pins);
-        if (!ok.ok) {
-          log(`not paid by the budget: ${ok.reason} - the key asks for a press`);
-          event('press', `not paid by the budget: ${ok.reason}`);
-          return plainSign(ssh.identity, data);
-        }
+        if (!ok.ok) return refuse(`a budget pays only for a pinned host: ${ok.reason}`);
         return paid(exec, ssh.identity, data, `ssh ${ok.host}`);
       },
     });
@@ -214,20 +212,16 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   }
 
   /**
-   * The gpg shim's sign, by token: the open exec's one paid use, or a press.
+   * The gpg shim's sign, by token: the open exec's one paid use, else refused.
    * `identity` the agent's gpg derivation identity, `digest` what the device signs.
    */
   async function shimSign(token, identity, digest) {
     const exec = token ? execs.get(token) : null;
-    if (!exec || exec.closed || exec.used || !budget) {
-      log('gpg sign outside an exec (or its use is spent) - the key asks for a press');
-      return plainSign(identity, digest);
-    }
+    if (!exec || exec.closed || exec.used || !budget) return refuse('a gpg sign outside an open exec (or its one use is spent)');
     return paid(exec, identity, digest, 'gpg');
   }
 
   return {
-    sharedHandler,
     openExec,
     shimSign,
     setBudget(b) { budget = b; },
@@ -329,6 +323,16 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
     ...(nGpg && gpg ? [{ op: 'sign', slot: signCode, cap: nGpg, identity: gpg.name }] : []),
   ];
   const summary = (b) => ({ budget: b.grantId, uses: b.uses, head: b.head() });
+  const gpgSign = async ({ token, data }) => {
+    if (!gpg || !openpgp) throw new Error('this agent has no PGP identity');
+    const { signDetached } = require('../src/crypto/pgp-cert');
+    return signDetached(openpgp, {
+      data: Buffer.from(String(data), 'base64'), signPublic: gpg.raw, curve: 'ed25519', created: gpg.created,
+      sign: (digest) => agent.shimSign(token, gpg.identity, digest),
+    });
+  };
+  /* token -> the exec's own gpg endpoint (closed with the exec) */
+  const gpgEndpoints = new Map();
   return {
     status: async () => agent.status(),
     /* okedge watch: read-only */
@@ -350,16 +354,31 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
     'exec-open': async ({ head, reason }) => {
       const ex = await agent.openExec({ head, reason });
       const git = {};
+      let gpgEndpoint = null;
       if (gpg && shimCommand) {
         git['gpg.program'] = shimCommand;
         git['gpg.format'] = 'openpgp';
         git['user.signingkey'] = gpg.fingerprint;
+        /*
+         * THE EXEC'S OWN GPG ENDPOINT (2026-10-06): a fresh owner-only path and key,
+         * like its ssh endpoint, closed with the exec. The shim gets both in its
+         * environment, so it needs no fixed control path and no home - and no
+         * running service (`edge exec` alone serves it too).
+         */
+        const key = crypto.randomBytes(32).toString('hex');
+        const { serveControl } = require('./edge-control');
+        const spot = oneShotPath();
+        const served = await serveControl({ handlers: { 'gpg-sign': (req) => gpgSign({ data: req.data, token: ex.token }) }, where: spot.path, key });
+        gpgEndpoints.set(ex.token, { close: async () => { await served.close(); spot.cleanup(); } });
+        gpgEndpoint = { path: served.path, key };
       }
-      return { sshPath: ex.sshPath, token: ex.token, git, committer: gpg ? gpg.committer : null };
+      return { sshPath: ex.sshPath, token: ex.token, git, committer: gpg ? gpg.committer : null, gpg: gpgEndpoint };
     },
     'exec-close': async ({ token }) => {
       const ex = agent.execByToken(token);
       const links = ex ? await ex.close() : [];
+      const g = gpgEndpoints.get(token);
+      if (g) { gpgEndpoints.delete(token); await g.close(); }
       return { links, head: agent.budget() ? agent.budget().head() : null };
     },
     ticket: async ({ seq, code, message }) => ({ head: await agent.ticket(seq, { code: code || 'OK', message }) }),
@@ -384,7 +403,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       const mine = Buffer.from(signer.publicKey).toString('hex');
       const list = await edge.peers();
       if (!list.peers.some((p) => Buffer.from(p.publicKey).toString('hex') === mine)) {
-        r.phone = { skipped: 'this PC is not on the key\'s list of places that keep copies - okedge peer add' };
+        r.phone = { skipped: 'this PC is not on the key\'s list of places that keep copies - onlykey-js edge peer add' };
         return r;
       }
       const c = copy.load(where, Buffer.from(r.deviceId, 'hex'));
@@ -490,7 +509,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         const [ka, kb] = [await edge.publicKey(), await other.edge.publicKey()];
         if (hex(ka.publicKey) === hex(kb.publicKey)) throw new Error('both links reach the same key - give the OTHER phone\'s address');
         const paired = async (e, k) => (await e.siblings()).siblings.some((s) => hex(s.publicKey) === hex(k.publicKey));
-        if (!(await paired(edge, kb)) || !(await paired(other.edge, ka))) throw new Error('the two keys are not paired both ways - okedge sibling add first');
+        if (!(await paired(edge, kb)) || !(await paired(other.edge, ka))) throw new Error('the two keys are not paired both ways - onlykey-js edge sibling add first');
         /* the checkpoints first: each phone's copy, read after, reaches at least that far */
         const [cpA, cpB] = [await edge.checkpoint(), await other.edge.checkpoint()];
         const thisName = name || (await client.phoneName(signer, { deviceId: ka.deviceId }).catch(() => null)) || selfName || 'the other phone';
@@ -521,14 +540,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       agent.setBudget(null);
       return { ended: b ? b.grantId : null };
     },
-    'gpg-sign': async ({ token, data }) => {
-      if (!gpg || !openpgp) throw new Error('this agent service has no PGP identity');
-      const { signDetached } = require('../src/crypto/pgp-cert');
-      return signDetached(openpgp, {
-        data: Buffer.from(String(data), 'base64'), signPublic: gpg.raw, curve: 'ed25519', created: gpg.created,
-        sign: (digest) => agent.shimSign(token, gpg.identity, digest),
-      });
-    },
+    'gpg-sign': gpgSign,
   };
 }
 
@@ -583,7 +595,7 @@ async function openWithOneRetry(open, { waitMs = 5000, log = () => {} } = {}) {
   }
 }
 
-async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null, onSilence = null, linkStats = null }) {
+async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null, onSilence = null, linkStats = null, serve = true }) {
   const wire = require('./ssh-wire');
   const sshPub = require('../src/crypto/ssh-pub');
   const pgpCert = require('../src/crypto/pgp-cert');
@@ -667,7 +679,6 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
       return r;
     };
   }
-  const shared = await agentSrv.serveAgent({ handler: agent.sharedHandler, where: agentSrv.defaultAgentPath(), log });
   /*
    * NOBODY ANSWERED (Brad, 2026-10-06): a request that ended in silence - no
    * report at all from the key or the phone - means this link may be one the
@@ -675,17 +686,17 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
    * onSilence lets the link go; the next request connects fresh, hello first.
    * The request is not sent again.
    */
-  const control = await serveControl({ handlers, log, onError: async (e) => { if (onSilence && isSilence(e)) await onSilence(e); } });
-
-  return {
+  const base = {
     agent,
+    handlers,
     sshLine: sshPub.publicKeyLine('ed25519', sshRaw, sshName),
     certArmored: config.cert ? config.cert.armored : null,
     fingerprint: gpg ? gpg.fingerprint : null,
-    sharedPath: shared.path,
-    controlPath: control.path,
-    async close() { await agent.closeAll(); await shared.close(); await control.close(); },
   };
+  /* no service (CLI.md §4, the default): the caller runs the handlers in-process for one command */
+  if (!serve) return { ...base, controlPath: null, async close() { await agent.closeAll(); } };
+  const control = await serveControl({ handlers, log, onError: async (e) => { if (onSilence && isSilence(e)) await onSilence(e); } });
+  return { ...base, controlPath: control.path, async close() { await agent.closeAll(); await control.close(); } };
 }
 
 module.exports = {

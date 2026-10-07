@@ -14,7 +14,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-process.env.OKEDGE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-start-'));
+require('../cli/edge-control').setHome(fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-start-'))); /* setHome, never the env (CLI.md §5) */
 
 const openpgp = require('../src/vendor/openpgp/openpgp.js');
 const { startEdgeAgent } = require('../cli/edge-agent');

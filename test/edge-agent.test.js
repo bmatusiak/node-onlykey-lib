@@ -6,11 +6,11 @@
  * The rules under test:
  * - each exec gets its own endpoint; the budget pays once, only for a sign on
  *   it, bound to a PINNED host and for the bound session;
- * - the shared endpoint never pays - so another process signing during an exec
- *   gets a press, not the budget;
+ * - there is no shared endpoint, and nothing is turned into a press: a sign
+ *   no budget pays is refused (budget or no go, CLI.md §3-4, 2026-10-06);
  * - a stale --head is refused before anything runs; the endpoint closes with
  *   the exec, or at its cap;
- * - the gpg shim's token is the exec's: a sign without it is a press.
+ * - the gpg shim's token is the exec's: a sign without it is refused.
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -144,7 +144,7 @@ test('GitHub\'s pinned host key fingerprints are the published ones (checked aga
   ].sort());
 });
 
-test('an exec\'s endpoint: a sign bound to the pinned host is paid by the budget, once; the next sign on it is a press', async () => {
+test('an exec\'s endpoint: a sign bound to the pinned host is paid by the budget, once; the next sign on it is refused', async () => {
   const { agent, b, h, keyBlob, lastLink } = await setup();
   const ex = await agent.openExec({ head: b.head(), reason: 'push lib to origin/master' });
   const sid = crypto.randomBytes(32);
@@ -153,35 +153,27 @@ test('an exec\'s endpoint: a sign bound to the pinned host is paid by the budget
   assert.equal(signed[0], wire.MSG.SIGN_RESPONSE);
   let f = await lastLink();
   assert.equal(JSON.stringify([f.decision, f.grantId]), JSON.stringify([codes.DECISION.SELF_PRESS, b.grantId]), 'paid by the budget');
-  /* a second sign on the same exec: the use is spent - an ordinary press, which is not Edge: no link (2026-10-06) */
+  /* a second sign on the same exec: the use is spent - refused (budget or no go), no link */
   const sid2 = crypto.randomBytes(32);
-  await sshClient(ex.sshPath, [h.bind(sid2), signMsg(keyBlob, userauth(sid2))]);
-  assert.equal((await lastLink()).seq, f.seq, 'one paid use per exec; the press wrote no link');
+  const [, second] = await sshClient(ex.sshPath, [h.bind(sid2), signMsg(keyBlob, userauth(sid2))]);
+  assert.notEqual(second[0], wire.MSG.SIGN_RESPONSE, 'a second sign on a spent exec was signed');
+  assert.equal((await lastLink()).seq, f.seq, 'one paid use per exec; the refusal wrote no link');
   const links = await ex.close();
   assert.equal(links.length, 1);
   assert.equal(links[0].paid, true);
 });
 
-test('THE FIX: another process signing during an exec gets a press, not the budget - an ordinary press: no link, nothing owed (2026-10-06)', async () => {
+test('THE FIX, budget or no go: there is no shared endpoint - another process can reach the agent\'s key only through an exec, and its one use pays (2026-10-06)', async () => {
   const { agent, b, h, keyBlob, lastLink } = await setup();
+  assert.equal(agent.sharedHandler, undefined, 'the agent still has a shared endpoint');
   const before = (await lastLink()).seq;
   const ex = await agent.openExec({ head: b.head(), reason: 'push lib' });
-  /* the other process: the shared endpoint, even bound to the pinned host */
   const sid = crypto.randomBytes(32);
-  const conn = {};
-  await agent.sharedHandler.handle(h.bind(sid), conn);
-  await agent.sharedHandler.handle(signMsg(keyBlob, userauth(sid)), conn);
-  assert.equal((await lastLink()).seq, before, 'a press - the budget did not pay, and the press is not Edge: no link');
+  await sshClient(ex.sshPath, [h.bind(sid), signMsg(keyBlob, userauth(sid))]);
+  const f = await lastLink();
+  assert.equal(JSON.stringify([f.decision, f.seq > before]), JSON.stringify([codes.DECISION.SELF_PRESS, true]), 'the exec\'s use was not paid');
   await ex.close();
-  /* R16 (spec session, 2026-10-06): only budget uses owe a ticket - the key owes nothing */
-  assert.deepEqual((await agent.status()).keyOwed, [], 'nothing owed');
-  /* the exec's own use still pays */
-  const ex2 = await agent.openExec({ head: b.head(), reason: 'push lib' });
-  const sid2 = crypto.randomBytes(32);
-  await sshClient(ex2.sshPath, [h.bind(sid2), signMsg(keyBlob, userauth(sid2))]);
-  assert.equal((await lastLink()).decision, codes.DECISION.SELF_PRESS);
-  await ex2.close();
-  assert.equal((await agent.status()).spent, 1, 'spent, from the budget steps');
+  assert.deepEqual((await agent.status()).keyOwed, [f.seq], 'the paid use owes its ticket');
 });
 test('the budget does not pay for a host that is not pinned, a forged bind, no bind, or a request for another session', async () => {
   const { agent, b, h, keyBlob, lastLink } = await setup();
@@ -230,7 +222,7 @@ test('the endpoint closes with the exec, and at its cap', async () => {
   await assert.rejects(new Promise((resolve, reject) => { const s = net.connect(capped.sshPath); s.once('connect', () => { s.destroy(); resolve(); }); s.once('error', reject); }));
 });
 
-test('the gpg shim: with the exec\'s token the budget pays once; without it, a press', async () => {
+test('the gpg shim: with the exec\'s token the budget pays once; without it, refused', async () => {
   const { agent, b, lastLink } = await setup();
   /* the budget covers the ssh identity only, so for this test the shim signs under it too */
   const ex = await agent.openExec({ head: b.head(), reason: 'commit: R19 test' });
@@ -239,10 +231,11 @@ test('the gpg shim: with the exec\'s token the budget pays once; without it, a p
   const paid = await lastLink();
   assert.equal(paid.decision, codes.DECISION.SELF_PRESS, 'paid with the token');
   /* an ordinary press is not Edge (2026-10-06): no link */
-  await agent.shimSign(ex.token, SSH_IDENTITY, crypto.randomBytes(32));
-  assert.equal((await lastLink()).seq, paid.seq, 'spent: a press, no link');
-  await agent.shimSign('ff'.repeat(32), SSH_IDENTITY, crypto.randomBytes(32));
-  assert.equal((await lastLink()).seq, paid.seq, 'a wrong token: a press, no link');
+  /* budget or no go (2026-10-06): spent, or a wrong token - refused, no link */
+  await assert.rejects(agent.shimSign(ex.token, SSH_IDENTITY, crypto.randomBytes(32)), { code: 'EEDGE_BUDGET_ONLY' });
+  assert.equal((await lastLink()).seq, paid.seq, 'spent: refused, no link');
+  await assert.rejects(agent.shimSign('ff'.repeat(32), SSH_IDENTITY, crypto.randomBytes(32)), { code: 'EEDGE_BUDGET_ONLY' });
+  assert.equal((await lastLink()).seq, paid.seq, 'a wrong token: refused, no link');
   await ex.close();
   void GPG_IDENTITY;
 });

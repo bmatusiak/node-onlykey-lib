@@ -18,7 +18,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-test-'));
-process.env.OKEDGE_HOME = HOME;
+require('../cli/edge-control').setHome(HOME); /* a test home: setHome, never the env (CLI.md §5) */
 
 const openpgp = require('../src/vendor/openpgp/openpgp.js');
 const pgpCert = require('../src/crypto/pgp-cert.js');
@@ -27,7 +27,8 @@ const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 const agentProto = require('../src/protocol/agent');
 const { createEdgeAgent, controlHandlers } = require('../cli/edge-agent');
 const { serveControl } = require('../cli/edge-control');
-const okedge = require('../cli/okedge');
+/* onlykey-js edge's commands (edge/cli/commands.js; okedge is gone, 2026-10-06) over the real control endpoint, with the dev set */
+const okedge = { main: (args, io = {}) => require('../edge/cli/commands').main(args, { ask: require('../cli/edge-control').ask, dev: require('../cli/dev').edge, ...io }) };
 
 const AGENT = request.signerFromSecret(new Uint8Array(32).fill(41));
 const hex = (b) => Buffer.from(b).toString('hex');
@@ -76,9 +77,10 @@ async function stack() {
   });
   const agent = createEdgeAgent({ device, edge, client: c, ssh: { identity: sshIdentity, name: 'ssh://claude@test', comment: 'claude@test', curve: 'ed25519', raw: sshRaw } });
   const gpg = { identity: gpgIdentity, name: 'gpg://Claude (agent) <claude@test>', raw: gpgRaw, created, fingerprint: cert.fingerprint, committer: { name: 'Claude (agent)', email: 'claude@test' } };
-  const control = await serveControl({ handlers: controlHandlers({ agent, client: c, ssh: { name: 'ssh://claude@test' }, gpg, openpgp, shimCommand: SHIM }) });
+  const handlers = controlHandlers({ agent, client: c, ssh: { name: 'ssh://claude@test' }, gpg, openpgp, shimCommand: SHIM });
+  const control = await serveControl({ handlers });
   const lastLink = async () => { const hd = await edge.head(); return chain.decodeLink((await edge.pickup(hd.seq, 1))[0].link); };
-  return { agent, control, cert, lastLink, edge, notes };
+  return { agent, control, handlers, cert, lastLink, edge, notes };
 }
 
 function capture() {
@@ -130,22 +132,27 @@ test('okedge budget, then `git commit -S` inside okedge exec: the commit is sign
   }
 });
 
-test('the gpg shim outside an exec still signs - as a press, not paid by the budget', async () => {
+test('the gpg shim outside an exec is refused - budget or no go: no signature, no link (CLI.md §3-4, 2026-10-06)', async () => {
   const s = await stack();
   try {
     const cap = capture();
     assert.equal(await okedge.main(['budget', '--reason', 'work', '--gpg', '1', '--ttl', '30'], cap.io), 0, cap.lines.join('\n'));
     /* async: this process serves the control endpoint the shim talks to - a sync spawn would deadlock it */
-    const out = await new Promise((resolve, reject) => {
+    const before = await s.edge.head();
+    const r = await new Promise((resolve, reject) => {
       const p = require('child_process').spawn(process.execPath, [SHIM, '--status-fd=2', '-bsau', 'x'], { env: { ...process.env, OKEDGE_GPG_TOKEN: '' } });
       let o = '';
+      let e = '';
       p.stdout.on('data', (d) => { o += d; });
+      p.stderr.on('data', (d) => { e += d; });
       p.on('error', reject);
-      p.on('exit', () => resolve(o));
+      p.on('exit', (code) => resolve({ code, out: o, err: e }));
       p.stdin.end('some data');
     });
-    assert.match(out, /BEGIN PGP SIGNATURE/);
-    assert.equal((await s.lastLink()).decision, codes.DECISION.APPROVE, 'a press - no exec, no budget');
+    assert.notEqual(r.code, 0, 'the shim signed outside an exec');
+    assert.doesNotMatch(r.out, /BEGIN PGP SIGNATURE/);
+    assert.match(r.err, /not inside onlykey-js edge exec/);
+    assert.equal((await s.edge.head()).seq, before.seq, 'no link');
   } finally {
     await s.agent.closeAll();
     await s.control.close();
@@ -232,6 +239,53 @@ test('an owed ticket filed after the agent lost its budget: straight to the key,
     assert.match(cap.lines.join(' | '), /head = [0-9a-f]{64}/);
     /* and the phone gets the message (it showed "No message synced", Pixel #432) */
     assert.ok(s.notes.some((n) => n.seq === seq && n.ticketMsg === 'committed o'), 'the ticket message reaches the phone');
+  } finally {
+    await s.control.close();
+  }
+});
+
+/* CLI.md §4, §7 (2026-10-06): no service - the command runs the handlers in this process, as edge/cli/register.js does */
+const localAsk = (handlers) => async (op, fields = {}, o = {}) => {
+  if (o.onSent) o.onSent();
+  return { ok: true, ...(await handlers[op](fields)) };
+};
+const listening = (p) => new Promise((resolve) => {
+  const k = require('net').connect(p);
+  k.once('connect', () => { k.destroy(); resolve(true); });
+  k.once('error', () => resolve(false));
+});
+
+test('no service: edge exec signs under a budget in-process and leaves nothing listening afterwards (CLI.md §7)', async () => {
+  const s = await stack();
+  try {
+    let cap = capture();
+    assert.equal(await okedge.main(['budget', '--reason', 'work', '--gpg', '1', '--ttl', '30'], { ...cap.io, ask: localAsk(s.handlers) }), 0, cap.lines.join(' | '));
+    const head = cap.lines.find((l) => l.startsWith('head = ')).slice(7);
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-local-'));
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Claude (agent)']);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'claude@test']);
+    let seen = null;
+    const spawnFn = (cmd, argv, o) => { seen = o.env; return require('child_process').spawn(cmd, argv, o); };
+    cap = capture();
+    assert.equal(await okedge.main(['exec', '--head', head, '--intent', 'commit: in-process', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'l'], { ...cap.io, ask: localAsk(s.handlers), spawnFn }), 0, cap.lines.join(' | '));
+    assert.equal((await s.lastLink()).decision, codes.DECISION.SELF_PRESS, 'paid by the budget');
+    assert.ok(seen && seen.SSH_AUTH_SOCK && seen.OKEDGE_GPG_ENDPOINT, 'the exec gave its command its own ssh and gpg endpoints');
+    for (const p of [seen.SSH_AUTH_SOCK, seen.OKEDGE_GPG_ENDPOINT]) assert.equal(await listening(p), false, `still listening after the exec: ${p}`);
+  } finally {
+    await s.control.close();
+  }
+});
+
+test('edge exec with no live budget is refused at once: no prompt, no link (CLI.md §7)', async () => {
+  const s = await stack();
+  try {
+    const before = await s.edge.head();
+    const cap = capture();
+    const code = await okedge.main(['exec', '--head', '00'.repeat(32), '--intent', 'x', '--', 'git', '--version'], { ...cap.io, ask: localAsk(s.handlers) });
+    assert.notEqual(code, 0);
+    assert.match(cap.lines.join(' | '), /no work budget/);
+    assert.equal((await s.edge.head()).seq, before.seq, 'no link');
   } finally {
     await s.control.close();
   }

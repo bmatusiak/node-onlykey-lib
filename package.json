@@ -6,9 +6,7 @@
   "type": "commonjs",
   "main": "src/index.js",
   "bin": {
-    "onlykey-js": "cli/index.js",
-    "okedge": "cli/okedge.js",
-    "onlykey-edge-gpg": "cli/edge-gpg-shim.js"
+    "onlykey-js": "cli/index.js"
   },
   "exports": {
     ".": "./src/index.js",
@@ -46,7 +44,7 @@
     "./cli/edge-agent": "./cli/edge-agent.js",
     "./cli/edge-control": "./cli/edge-control.js",
     "./cli/keychain-record": "./cli/keychain-record.js",
-    "./cli/okedge": "./cli/okedge.js",
+    "./edge/cli/commands": "./edge/cli/commands.js",
     "./cli/ssh-wire": "./cli/ssh-wire.js",
     "./cli/ssh-session-bind": "./cli/ssh-session-bind.js",
     "./cli/firmware-plugins": "./cli/firmware-plugins.js",
@@ -59,6 +57,9 @@
     "src",
     "plugins",
     "cli",
+    "edge",
+    "!cli/dev",
+    "!edge/cli/dev",
     "scripts",
     "tsconfig.json",
     "FINDINGS.md",
@@ -66,7 +67,8 @@
   ],
   "scripts": {
     "test": "npm run types && node --test test/*.test.js",
-    "types": "node scripts/gen-types.js"
+    "types": "node scripts/gen-types.js",
+    "release-check": "node scripts/release-check.js"
   },
   "dependencies": {
     "@bmatusiak/rectify": "github:bmatusiak/rectify#a0d9f0e6e537053122273b1f763ac87ae461361c"

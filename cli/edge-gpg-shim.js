@@ -33,11 +33,11 @@ function statusFd(args) {
 
 async function main(args, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env, write = require('fs').writeSync } = {}) {
   if (args.includes('--verify')) {
-    stderr.write('onlykey-edge-gpg: verifying is gpg\'s job - this only signs inside `okedge exec`\n');
+    stderr.write('onlykey-js edge (gpg): verifying is gpg\'s job - this only signs inside `okedge exec`\n');
     return 2;
   }
   if (!args.some((a) => /^-[a-zA-Z]*b[a-zA-Z]*s|^--detach-sign$/.test(a))) {
-    stderr.write(`onlykey-edge-gpg: only detached signing (-bsau) is supported, not: ${args.join(' ')}\n`);
+    stderr.write(`onlykey-js edge (gpg): only detached signing (-bsau) is supported, not: ${args.join(' ')}\n`);
     return 2;
   }
   const chunks = [];
@@ -45,9 +45,11 @@ async function main(args, { stdin = process.stdin, stdout = process.stdout, stde
   const data = Buffer.concat(chunks);
   let r;
   try {
-    r = await ask('gpg-sign', { token: env.OKEDGE_GPG_TOKEN || null, data: data.toString('base64') }, { timeoutMs: 60000 });
+    /* the exec's own gpg endpoint (path + key in this exec's environment, 2026-10-06) - no home, no service needed */
+    if (!env.OKEDGE_GPG_ENDPOINT || !env.OKEDGE_GPG_KEY) throw new Error('not inside onlykey-js edge exec (no gpg endpoint) - Edge signs only under a budget');
+    r = await ask('gpg-sign', { token: env.OKEDGE_GPG_TOKEN || null, data: data.toString('base64') }, { timeoutMs: 60000, where: env.OKEDGE_GPG_ENDPOINT, key: env.OKEDGE_GPG_KEY });
   } catch (e) {
-    stderr.write(`onlykey-edge-gpg: ${e.message}\n`);
+    stderr.write(`onlykey-js edge (gpg): ${e.message}\n`);
     return 1;
   }
   stdout.write(r.armored);
@@ -62,5 +64,5 @@ async function main(args, { stdin = process.stdin, stdout = process.stdout, stde
 module.exports = { main, statusFd };
 
 if (require.main === module) {
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { process.stderr.write(`onlykey-edge-gpg: ${e.message}\n`); process.exitCode = 1; });
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { process.stderr.write(`onlykey-js edge (gpg): ${e.message}\n`); process.exitCode = 1; });
 }
