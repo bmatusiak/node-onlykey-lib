@@ -202,7 +202,6 @@ export function parseStatus(text: any): {
     name: any;
     text: any;
 } | null;
-/** Name and alarm state of a ticket code: alarm = bit 7 OR not a v1 code. */
 export function ticketCode(code: any): {
     code: any;
     name: any;
@@ -210,5 +209,7 @@ export function ticketCode(code: any): {
     alarm: boolean;
     class: number;
 };
+/** Name and alarm state of a ticket code: alarm = bit 7 OR not a v1 code. */
+export function ticketByte(code: any): number;
 /** Reverse lookup for display: OP/DECISION value -> lower-case name, or null. */
 export function nameOf(table: any, value: any): string | null;

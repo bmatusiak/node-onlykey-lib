@@ -459,6 +459,8 @@ function setup(imports, register) {
      * commits a replay only up to a vouched head (R26).
      */
     async ticket(refSeq, code, msgHash, opts) {
+      /* a code object here became 0 - OK - for every ticket (codes.ticketByte, 2026-10-07) */
+      if (!Number.isInteger(code) || code < 0 || code > 0xff) throw new TypeError(`edge: a ticket code is a byte, got ${typeof code === 'object' ? JSON.stringify(code) : code}`);
       const [r] = await call(SUB.TICKET, concat([u32(refSeq), Uint8Array.of(code), msgHash]), opts);
       return seqHeadTag(r);
     },

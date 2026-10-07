@@ -177,6 +177,26 @@ function parseStatus(text) {
 }
 
 /** Name and alarm state of a ticket code: alarm = bit 7 OR not a v1 code. */
+/*
+ * A TICKET CODE AS ITS BYTE (Brad, 2026-10-07: a failed push's ticket showed OK).
+ * Every ticket was filed with ticketCode(code) - the DISPLAY record, an object - and
+ * the plugin wrote Uint8Array.of(object): 0, OK, whatever was asked for. This turns
+ * a name (TARGET_UNREACHABLE), a number (0x21) or its hex text ("0x21") into the
+ * byte, and refuses anything else - never a silent OK.
+ */
+function ticketByte(code) {
+  if (typeof code === 'number') {
+    if (Number.isInteger(code) && code >= 0 && code <= 0xff) return code;
+  } else if (typeof code === 'string') {
+    const t = code.trim();
+    if (/^0x[0-9a-f]{1,2}$/i.test(t)) return parseInt(t, 16);
+    if (/^[0-9]{1,3}$/.test(t) && Number(t) <= 0xff) return Number(t);
+    const hit = Object.entries(TICKET).find(([, name]) => name === t.toUpperCase());
+    if (hit) return Number(hit[0]);
+  }
+  throw new RangeError(`edge: not a ticket code: ${JSON.stringify(code)} (one of ${Object.values(TICKET).join(', ')}, or a byte)`);
+}
+
 function ticketCode(code) {
   const name = Object.prototype.hasOwnProperty.call(TICKET, code) ? TICKET[code] : null;
   return {
@@ -195,4 +215,4 @@ function nameOf(table, value) {
   return null;
 }
 
-module.exports = { OP, DECISION, FLAG, TAG, TICKET, STATUS, parseStatus, ticketCode, nameOf };
+module.exports = { OP, DECISION, FLAG, TAG, TICKET, STATUS, parseStatus, ticketCode, ticketByte, nameOf };

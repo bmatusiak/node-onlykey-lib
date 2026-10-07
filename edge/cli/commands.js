@@ -246,10 +246,28 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         });
       } finally {
         const closed = await ask('exec-close', { token: ex.token });
+        /*
+         * A COMMAND THAT FAILED FILES A FAILED TICKET (Brad, 2026-10-07: "when a push
+         * does not reach, it should give back a failed ticket"). Its uses get
+         * TARGET_UNREACHABLE with the command and its exit code - not left owed, and
+         * never OK. A command that succeeded leaves its tickets owed, as before:
+         * whether it did what was meant is the agent's to say.
+         */
         for (const l of closed.links) {
+          if (code !== 0) {
+            const why = `FAILED: ${command.join(' ')} exited ${code}${l.failed ? ` (the sign: ${l.failed})` : ''}`;
+            try {
+              const r = await ask('ticket', { seq: l.seq, code: 'TARGET_UNREACHABLE', message: why });
+              out(`signed: link #${l.seq} (${l.what}) - the command failed: ticket filed (TARGET_UNREACHABLE)`);
+              out(`head = ${r.head}`);
+              continue;
+            } catch (e) {
+              err(`onlykey-js edge: the failed ticket for #${l.seq} was not filed: ${e.message}`);
+            }
+          }
           out(`signed: link #${l.seq} (${l.what})${l.paid ? '' : ' - not paid by the budget'} - ticket owed for #${l.seq}`);
         }
-        if (!closed.links.length) out('signed: nothing under the budget');
+        if (!closed.links.length) out(code === 0 ? 'signed: nothing under the budget' : 'signed: nothing under the budget - the command failed before a sign');
       }
       return code;
     }

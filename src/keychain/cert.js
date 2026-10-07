@@ -99,7 +99,7 @@ async function ticketOwnPresses(edge, startSeq, fingerprint) {
   const rows = await edge.pickup(h.oldest, h.seq - h.oldest + 1);
   const done = [];
   for (const seq of tickets.keyDebts(rows).owed.filter((q) => q > startSeq)) {
-    await edge.ticket(seq, codes.ticketCode('OK'), tickets.messageHash(`cert self-signature ${fingerprint}`));
+    await edge.ticket(seq, codes.ticketByte('OK'), tickets.messageHash(`cert self-signature ${fingerprint}`));
     done.push(seq);
   }
   return done;

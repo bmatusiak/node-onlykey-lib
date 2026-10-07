@@ -123,7 +123,25 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   async function paid(exec, identity, message, what) {
     exec.used = true;
     const bytes = new Uint8Array([...message, ...agentProto.identityHash(identity)]);
-    const { result, link } = await budget.use(bytes, () => device.sign(identity, message), { reason: exec.reason });
+    let used;
+    try {
+      used = await budget.use(bytes, () => device.sign(identity, message), { reason: exec.reason });
+    } catch (e) {
+      /*
+       * THE KEY SIGNED, THE ANSWER DID NOT COME BACK (the A13, 2026-10-07: a push's
+       * use #738 was spent and owed, exec said "nothing under the budget", and no
+       * ticket was filed). An exec opens only when the key owes nothing, so what it
+       * owes now is this exec's: kept as its link, marked failed, for the ticket.
+       */
+      if (edge) {
+        const k = await keyOwed(await edge.head()).catch(() => ({ seqs: [] }));
+        for (const seq of k.seqs) {
+          if (!exec.links.some((l) => l.seq === seq)) exec.links.push({ seq, paid: true, what, failed: String(e && e.message || e) });
+        }
+      }
+      throw e;
+    }
+    const { result, link } = used;
     exec.links.push({ ...link, what });
     note(link.seq, { reason: exec.reason, what });
     log(`signed: link #${link.seq} (${what})${link.paid ? '' : ' - NOT paid by the budget'} - ticket owed for #${link.seq}`);
@@ -241,7 +259,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
        */
       if (!edge && !client) throw fail('EEDGE_NO_BUDGET', 'no work budget');
       /* through the client when there is one: it also sends the message to the phone (a pressed use's ticket showed "No message synced", Pixel #432) */
-      const r = client ? await client.ticketOwed(seq, { code, message }) : await edge.ticket(seq, codes.ticketCode(code), tickets.messageHash(message));
+      const r = client ? await client.ticketOwed(seq, { code, message }) : await edge.ticket(seq, codes.ticketByte(code), tickets.messageHash(message));
       note(seq, { ticket: { code, message } });
       /* hex like budget.head(): raw bytes reach okedge as an object ("head = [object Object]") */
       return Buffer.from(r.head).toString('hex');

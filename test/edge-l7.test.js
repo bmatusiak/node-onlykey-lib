@@ -291,3 +291,23 @@ test('a ticket whose answer never came is NEVER sent twice: the key is asked ins
   await assert.rejects(b2.ticket(two.link, { message: 'pushed' }), /no answer/);
   assert.equal(sent2, 1, 'no resend');
 });
+
+/*
+ * A TICKET KEEPS ITS CODE (Brad, 2026-10-07: a failed push's ticket showed OK in the
+ * budget history). Tickets were filed with the display record, which the plugin wrote
+ * as 0 - OK - for every code. Now the byte: TARGET_UNREACHABLE is 0x21 on the key.
+ */
+test('a ticket keeps its code on the key: TARGET_UNREACHABLE is 0x21, not OK; an unknown code is refused', async () => {
+  const { transport, edge } = await readyKey();
+  const c = client.createEdgeClient({ edge, channel: phone(edge), signer: AGENT });
+  const budget = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: AGENT_ID }], ttlMinutes: 60 });
+  const one = await budget.use(Uint8Array.from([1]), (bytes) => transport.use(bytes, { slot: 222 }));
+  await budget.ticket(one.link, { code: 'TARGET_UNREACHABLE', message: 'the push did not reach' });
+  const h = await edge.head();
+  const [t] = await edge.pickup(h.seq, 1);
+  assert.equal(chain.decodeLink(t.link).code, 0x21);
+  assert.equal(codes.ticketByte('OK'), 0);
+  assert.equal(codes.ticketByte('0x21'), 0x21);
+  assert.throws(() => codes.ticketByte('NOPE'), RangeError);
+  await assert.rejects(edge.ticket(one.link.seq, codes.ticketCode(0x21), new Uint8Array(32)), TypeError); /* the plugin never writes a code object */
+});

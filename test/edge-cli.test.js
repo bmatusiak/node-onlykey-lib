@@ -167,7 +167,7 @@ test('okedge exec returns the command\'s own exit code', async () => {
     const head = cap.lines.find((l) => l.startsWith('head = ')).slice(7);
     cap = capture();
     assert.equal(await okedge.main(['exec', '--head', head, '--reason', 'fails', '--', process.execPath, '-e', 'process.exit(7)'], cap.io), 7);
-    assert.ok(cap.lines.includes('signed: nothing under the budget'));
+    assert.ok(cap.lines.includes('signed: nothing under the budget - the command failed before a sign'));
   } finally {
     await s.agent.closeAll();
     await s.control.close();
@@ -286,6 +286,35 @@ test('edge exec with no live budget is refused at once: no prompt, no link (CLI.
     assert.notEqual(code, 0);
     assert.match(cap.lines.join(' | '), /no work budget/);
     assert.equal((await s.edge.head()).seq, before.seq, 'no link');
+  } finally {
+    await s.control.close();
+  }
+});
+
+/*
+ * A FAILED COMMAND FILES A FAILED TICKET (Brad, 2026-10-07: "when a push does not
+ * reach, it should give back a failed ticket"): its use gets TARGET_UNREACHABLE
+ * (0x21) with the command and its exit code - not left owed, never OK.
+ */
+test('edge exec: the command signs, then fails - its use gets a TARGET_UNREACHABLE ticket at once', async () => {
+  const s = await stack();
+  try {
+    let cap = capture();
+    assert.equal(await okedge.main(['budget', '--reason', 'work', '--gpg', '1', '--ttl', '30'], { ...cap.io, ask: localAsk(s.handlers) }), 0, cap.lines.join(' | '));
+    const head = cap.lines.find((l) => l.startsWith('head = ')).slice(7);
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-fail-'));
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Claude (agent)']);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'claude@test']);
+    /* signs a commit, then fails as a push that did not reach would */
+    const script = `require('child_process').execFileSync('git', ['-C', ${JSON.stringify(repo)}, 'commit', '-q', '--allow-empty', '-S', '-m', 'l'], {stdio: 'inherit'}); process.exit(3)`;
+    cap = capture();
+    const code = await okedge.main(['exec', '--head', head, '--intent', 'push: does not reach', '--', process.execPath, '-e', script], { ...cap.io, ask: localAsk(s.handlers) });
+    assert.equal(code, 3, cap.lines.join(' | '));
+    const last = await s.lastLink();
+    assert.equal(last.op, codes.OP.TICKET, 'the use is ticketed, not left owed');
+    assert.equal(last.code, 0x21, 'TARGET_UNREACHABLE, not OK');
+    assert.ok(cap.lines.some((l) => /ticket filed \(TARGET_UNREACHABLE\)/.test(l)), cap.lines.join(' | '));
   } finally {
     await s.control.close();
   }

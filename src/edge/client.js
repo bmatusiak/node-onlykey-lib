@@ -214,7 +214,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
            * is this use's ticket, it was filed and only the answer was lost;
            * otherwise the error stands and the caller decides.
            */
-          r = await edge.ticket(link.seq, codes.ticketCode(code), tickets.messageHash(message)).catch(async (e) => {
+          r = await edge.ticket(link.seq, codes.ticketByte(code), tickets.messageHash(message)).catch(async (e) => {
             if (!/no answer to request/.test(String(e && e.message))) throw e;
             const h = await edge.head();
             const [newest] = h.seq === null ? [] : await edge.pickup(h.seq, 1);
@@ -282,7 +282,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
    * person never has to waive what the agent can answer.
    */
   async function ticketOwed(seq, { code = 'OK', message }) {
-    const r = await edge.ticket(seq, codes.ticketCode(code), tickets.messageHash(message));
+    const r = await edge.ticket(seq, codes.ticketByte(code), tickets.messageHash(message));
     if (message !== undefined && message !== null) await sendNote({ seq, ticketMsg: String(message) });
     return r;
   }
