@@ -48,9 +48,16 @@ function agentKeys(home) {
   if (!fs.existsSync(file)) fs.writeFileSync(file, require('crypto').randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
   const signer = request.signerFromSecret(Uint8Array.from(Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'hex')));
   const storeFile = path.join(home, 'budgets.json');
-  const read = () => (fs.existsSync(storeFile) ? JSON.parse(fs.readFileSync(storeFile, 'utf8')) : {});
+  /*
+   * Version 1 since the clean start (Brad, 2026-10-07: every schema v1): a store
+   * without it holds the old chain's budgets, which the reset ended - read as empty.
+   */
+  const read = () => {
+    const all = fs.existsSync(storeFile) ? JSON.parse(fs.readFileSync(storeFile, 'utf8')) : {};
+    return all && all.v === 1 ? all : { v: 1 };
+  };
   const store = {
-    async get(k) { return read()[k] || null; },
+    async get(k) { return k === 'v' ? null : read()[k] || null; },
     async set(k, v) { const all = read(); all[k] = v; fs.writeFileSync(storeFile, JSON.stringify(all, null, 2), { mode: 0o600 }); },
   };
   return { signer, store };
@@ -60,9 +67,18 @@ function agentKeys(home) {
 function loadConfig(home) {
   const file = path.join(home, 'agent.json');
   const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  /*
+   * Version 1 since the clean start (Brad, 2026-10-07). An older file keeps the
+   * person's settings - identities, committer, expiry, certificate, pins - and drops
+   * its budget, which belonged to the chain the reset ended.
+   */
+  if (config.v !== 1) {
+    delete config.budget;
+    config.v = 1;
+  }
   const save = (c) => {
     fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(file, JSON.stringify(c, null, 2), { mode: 0o600 });
+    fs.writeFileSync(file, JSON.stringify({ ...c, v: 1 }, null, 2), { mode: 0o600 });
   };
   return { config, save };
 }
@@ -381,3 +397,6 @@ module.exports = function register(COMMANDS, h) {
 };
 
 module.exports.USAGE = USAGE;
+/* the PC store's two files, for tests (version 1 since the clean start) */
+module.exports.loadConfig = loadConfig;
+module.exports.agentKeys = agentKeys;

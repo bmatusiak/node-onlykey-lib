@@ -36,6 +36,8 @@ function load(home, deviceId) {
   const f = copyFile(home, deviceId);
   if (!fs.existsSync(f)) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], seen: [] };
   const s = JSON.parse(fs.readFileSync(f, 'utf8'));
+  /* version 1 since the clean start: an older copy is the old chain's - read as no copy */
+  if (s.v !== 1) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], seen: [] };
   return {
     deviceId,
     links: s.links.map((l) => ({ link: fromHex(l.link), head: fromHex(l.head), ...(l.reveal ? { reveal: fromHex(l.reveal) } : {}) })),
@@ -49,6 +51,7 @@ function load(home, deviceId) {
 function save(home, c) {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const s = {
+    v: 1,
     deviceId: toHex(c.deviceId),
     links: c.links.map((l) => ({ link: toHex(l.link), head: toHex(l.head), ...(l.reveal ? { reveal: toHex(l.reveal) } : {}) })),
     lastSeen: c.lastSeen ? { seq: c.lastSeen.seq, head: toHex(c.lastSeen.head) } : null,

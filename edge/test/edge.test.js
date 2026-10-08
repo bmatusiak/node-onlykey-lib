@@ -2,7 +2,7 @@
 
 /*
  * Edge chain library (edge/src/). The vectors in edge/test/vectors/edge-v1.json
- * come from onlykey-edge/vectors/make_vectors.py - stdlib Python written from
+ * come from onlykey-edge/edge/vectors/make_vectors.py - stdlib Python written from
  * the spec text, not from this code - so agreeing with them means two
  * independent readings of the spec produce the same bytes.
  */

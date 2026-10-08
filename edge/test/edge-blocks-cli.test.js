@@ -33,7 +33,7 @@ const sealAt = (seq) => ({ seq, head: heads[seq], signature: chain.signCheckpoin
 
 function homeWithCopy() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'okblocks-'));
-  fs.writeFileSync(copy.copyFile(home, id), JSON.stringify({
+  fs.writeFileSync(copy.copyFile(home, id), JSON.stringify({ v: 1,
     deviceId: toHex(id), publicKey: toHex(pub), lastSeen: null,
     links: links.map((l, i) => ({ link: toHex(l), head: toHex(heads[i]) })),
   }));

@@ -1,5 +1,5 @@
 {
-  "about": "Edge v1 vectors from onlykey-edge/vectors/make_vectors.py (stdlib Python, from the spec text)",
+  "about": "Edge v1 vectors from onlykey-edge/edge/vectors/make_vectors.py (stdlib Python, from the spec text)",
   "deviceId": "0102030405060708090a0b0c0d0e0f10",
   "genesis": "064eecd56473dc9ade949528fd699e0c1809aa7559f17091291772d8e31ffc5a",
   "otherDeviceId": "65666768696a6b6c6d6e6f7071727374",
@@ -69,7 +69,6 @@
     "subject": "580420a91ed11840e26e97cdde1c2be90b4a7d6bcbe789a29f5d3bb7c548eba4"
   },
   "tx": {
-    "note": "TX start (R13a/R13b, the rename 2026-10-07): SHA256(\"OKEDGE-TX-v1\" || head || subject || intent16), intent16 zero when the use names none. Computed with Python hashlib; the spec's make_vectors.py still writes the old ARM-v1 vector (spec session to update).",
     "head": "2d438dd58ef9b4b45733ebb0ac096fc1d314b82dbce4ab20ac8f2d97d4b2a1aa",
     "subject": "3257a16d5ef46df8d622bd4279687426200b26d66058c8d80fd0c968303ba0ca",
     "token": "6e06fedb4e4903e22f8f0b8f42b66d834b7457c285d81df4b7310b8352c436de",

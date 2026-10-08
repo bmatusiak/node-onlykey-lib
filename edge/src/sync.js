@@ -65,9 +65,16 @@ const BATCH = 40;
 
 const isHex = (s, n) => typeof s === 'string' && (n === undefined ? s.length % 2 === 0 : s.length === n * 2) && /^[0-9a-f]*$/i.test(s);
 
-/* what a message's signature covers: the tag, its type, the place's key, the nonce, the payload as sent */
+/*
+ * What a message's signature covers: the tag, its type, the place's key, the nonce,
+ * and the payload in its canonical form - keys sorted at every level (canon below).
+ * Since the clean start (v1, Brad 2026-10-07): it was the payload as sent, so two
+ * writers that built the same payload in a different key order signed different
+ * bytes. canon, not the blocks' strict subset (block.js), because a payload carries
+ * the Key Chain list, whose names may be any text.
+ */
 function body({ type, peer, nonce, payload }) {
-  return concat([utf8ToBytes(TAG), utf8ToBytes(type), fromHex(peer), fromHex(nonce), utf8ToBytes(JSON.stringify(payload))]);
+  return concat([utf8ToBytes(TAG), utf8ToBytes(type), fromHex(peer), fromHex(nonce), utf8ToBytes(JSON.stringify(canon(payload)))]);
 }
 
 async function sign(type, signer, payload, nonce = randomBytes(16)) {
