@@ -10,7 +10,7 @@
  *  - only a place on the KEY's peer list (R20) may offer links;
  *  - a sync that changes anything shows a sheet, takes Yes and a press, and the
  *    press writes a `sync` link (op 20) whose subject is SHA256 of what moved;
- *    it owes no ticket;
+ *    it owes no receipt;
  *  - it moves history only - never budgets, debts, registrations or "yours";
  *  - it REPORTS, never repairs: a link that disagrees with one the phone
  *    already holds is a fork, and the whole sync stops there.
@@ -44,23 +44,26 @@ const LINKS_TYPE = 'EDGE_SYNC_LINKS';
 const KEYCHAIN_TYPE = 'EDGE_SYNC_KEYCHAIN';
 const COMMIT_TYPE = 'EDGE_SYNC_COMMIT';
 const TAKE_TYPE = 'EDGE_SYNC_TAKE';
-/* R29 (P2b): pair the phone's key with another key of yours - the place relays that key */
-const SIBLING_TYPE = 'EDGE_SIBLING_ADD';
 /*
- * R30 (P2c): a sync between siblings. GIVE asks a phone for its own copy of its
- * chain (read-only, history only - a place on the key's list may keep copies
- * anyway); HAVE and LINKS carry `chain` = whose links they are (absent: the
- * phone's own); ANCHOR ends it - one sheet, a press, the anchor link.
+ * GIVE asks a phone for its own copy of its chain (read-only, history only); HAVE and
+ * LINKS carry `chain` = whose links they are (absent: the phone's own). No sibling or
+ * anchor message since 2026-10-08: pairing and sync are all the app's (Brad), and
+ * another device's log is offered and HELD until the person approves it.
  */
 const GIVE_TYPE = 'EDGE_SYNC_GIVE';
-const ANCHOR_TYPE = 'EDGE_SYNC_ANCHOR';
-const TYPES = [HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, SIBLING_TYPE, GIVE_TYPE, ANCHOR_TYPE];
+/*
+ * OFFER (2026-10-08) ends a sync of ANOTHER device's log: its links (LINKS with `chain`) up
+ * to its key's signed checkpoint, and its owner statement. The phone HOLDS it - no sheet pops
+ * up, nothing merges - until the person approves the merge from the Edge tab's banner (Brad:
+ * "hold these blocks in the app until approved and merged"). devices.classify sorts it.
+ */
+const OFFER_TYPE = 'EDGE_SYNC_OFFER';
+const TYPES = [HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, GIVE_TYPE, OFFER_TYPE];
 /* a Key Chain part: JSON text up to this many characters (the wire carries ~14 KB a message) */
 const KEYCHAIN_PART_CHARS = 8000;
 /* no link moved, only the Key Chain list: the sync link's seq fields (CHOSEN, pending the spec) */
 const NO_SEQ = 0xffffffff;
 const TAG = 'OKEDGE-SYNC-MSG-v1';
-const SUBJECT_TAG = 'OKEDGE-SYNC-v1';
 const BATCH = 40;
 
 const isHex = (s, n) => typeof s === 'string' && (n === undefined ? s.length % 2 === 0 : s.length === n * 2) && /^[0-9a-f]*$/i.test(s);
@@ -104,18 +107,9 @@ async function buildLinks({ signer, deviceId, records, sid = toHex(randomBytes(8
 }
 
 /**
- * R29 (P2b): ask the phone whose key is `deviceId` to pair it with another
- * key of yours (its Edge key X || Y and device id, read from that key by this
- * place). The place only RELAYS that key - the phone shows a code made from
- * both keys (grants.siblingCode) that the other phone shows too.
- */
-function buildSibling({ signer, deviceId, key, id, name }) {
-  return sign(SIBLING_TYPE, signer, { deviceId: toHex(deviceId), key: toHex(key), id: toHex(id), name: String(name) });
-}
-
-/**
- * The phone's side: signed by the key it names, well formed, new. Whether that
- * key is on the KEY's peer list is the caller's check (it needs the device).
+ * The phone's side: signed by the key it names, well formed, new. Which computer
+ * that key is, is the caller's to show (the link itself came over a Bluetooth
+ * pairing the person approved with its 6-digit code).
  * -> {ok} | {ok: false, reason}
  */
 function verify(msg, { seen } = {}) {
@@ -139,16 +133,17 @@ function verify(msg, { seen } = {}) {
   if (msg.type === TAKE_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.part) || p.part < 0 || p.part > 255)) return { ok: false, reason: 'malformed' };
   if (p.chain !== undefined && !isHex(p.chain, 16)) return { ok: false, reason: 'malformed' };
   if (msg.type === GIVE_TYPE && (!Number.isInteger(p.from) || p.from < 0 || p.from > 0xffffffff)) return { ok: false, reason: 'malformed' };
-  if (msg.type === ANCHOR_TYPE) {
+  if (msg.type === OFFER_TYPE) {
     const c = p.checkpoint;
+    const st = p.statement;
+    const u32ok = (n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
     if (!isHex(p.sid, 8) || !isHex(p.chain, 16) || !Number.isInteger(p.linkParts) || p.linkParts < 0 || p.linkParts > 255
-      || typeof p.name !== 'string' || !p.name.trim() || utf8ToBytes(p.name).length > 0xff
-      || !c || !Number.isInteger(c.seq) || c.seq < 0 || c.seq > 0xffffffff || !isHex(c.head, 32) || !isHex(c.signature, 64)) {
+      || !c || !u32ok(c.seq) || !isHex(c.head, 32) || !isHex(c.signature, 64)
+      || !st || !isHex(st.publicKey, 64) || !(st.seq === null || u32ok(st.seq)) || typeof st.nametag !== 'string' || !st.nametag.trim()
+      || utf8ToBytes(st.nametag).length > 0xff || !isHex(st.signature, 64)) {
       return { ok: false, reason: 'malformed' };
     }
   }
-  if (msg.type === SIBLING_TYPE && (!isHex(p.key, 64) || !isHex(p.id, 16) || typeof p.name !== 'string' || !p.name.trim()
-    || utf8ToBytes(p.name).length > 0xff)) return { ok: false, reason: 'malformed' };
   let good = false;
   try {
     good = crypto.p256Verify(fromHex(msg.signature), body(msg), Uint8Array.from([4, ...fromHex(msg.peer)]));
@@ -209,34 +204,6 @@ function merge(have, offered) {
 }
 
 const bytesOf = (b) => (b instanceof Uint8Array ? b : fromHex(b));
-
-/**
- * The `sync` link's fields (spec, 2026-10-05; onlykey-edge firmware.md):
- * SHA256(peer pubkey X || Y) . first seq moved . last seq moved . the phone
- * copy's head after the merge . SHA256(the merged Key Chain list), or 32 zero
- * bytes when no list moved. The KEY computes the subject from these (SYNC's
- * three parts) and checks the peer hash is one of its own peers.
- * -> {peerHash, first, last, head, keychain}
- */
-function syncFields({ peer, added, head, keychainHash = null }) {
-  if (!added.length && !keychainHash) throw new RangeError('edge sync: nothing moved, nothing to record');
-  /* only the Key Chain list moved: no link range to name (NO_SEQ) */
-  const seqs = added.length ? added.map((r) => chain.decodeLink(r.link).seq) : [NO_SEQ];
-  const h = bytesOf(head);
-  if (h.length !== 32) throw new TypeError('edge sync: the copy head is 32 bytes');
-  const kc = keychainHash ? bytesOf(keychainHash) : new Uint8Array(32);
-  if (kc.length !== 32) throw new TypeError('edge sync: the Key Chain hash is 32 bytes');
-  return { peerHash: crypto.sha256(bytesOf(peer)), first: Math.min(...seqs), last: Math.max(...seqs), head: h, keychain: kc };
-}
-
-/**
- * The subject: SHA256("OKEDGE-SYNC-v1" || peerHash || u32le first || u32le last
- * || head || keychain) - the bytes the key hashes, in its order.
- */
-function syncSubject(fields) {
-  const f = fields.peerHash ? fields : syncFields(fields);
-  return H(SUBJECT_TAG, f.peerHash, u32le(f.first), u32le(f.last), f.head, f.keychain);
-}
 
 /* ------------------------------------------------ the Key Chain list */
 
@@ -310,6 +277,20 @@ async function buildKeychain({ signer, deviceId, sid, entries }) {
 }
 
 /** The place's side: "that is everything - merge it and ask". pcIds: the ids its list holds. */
+/**
+ * The computer's side: "that is device `chain`'s log up to its signed checkpoint, with its
+ * statement" - for the phone whose key is `deviceId` to HOLD until the person approves.
+ * checkpoint: {seq, head, signature}; statement: {publicKey, seq, nametag, signature} (as
+ * plugin.statement gives it, or as that device's phone kept it).
+ */
+function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement }) {
+  return sign(OFFER_TYPE, signer, {
+    sid, deviceId: toHex(deviceId), chain: toHex(chainId), linkParts,
+    checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature) },
+    statement: { publicKey: toHex(statement.publicKey), seq: statement.seq ?? null, nametag: String(statement.nametag), signature: toHex(statement.signature) },
+  });
+}
+
 function buildCommit({ signer, deviceId, sid, linkParts, keychainParts: kcParts }) {
   return sign(COMMIT_TYPE, signer, { sid, deviceId: toHex(deviceId), linkParts, keychainParts: kcParts });
 }
@@ -320,24 +301,13 @@ function buildGive({ signer, deviceId, from = 0 }) {
 }
 
 /**
- * R30: "that is the sibling's chain up to its signed checkpoint - anchor it".
- * chain: the sibling's device id; checkpoint: {seq, head, signature} from the
- * sibling's key; name: the sibling as the place calls it (shown, never trusted).
- */
-function buildAnchor({ signer, deviceId, sid, chain, linkParts, checkpoint, name }) {
-  return sign(ANCHOR_TYPE, signer, {
-    sid, deviceId: toHex(deviceId), chain: toHex(chain), linkParts, name: String(name),
-    checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature) },
-  });
-}
-
-/**
- * R30 (P2c): before a phone anchors its sibling, the sibling's chain as offered
- * must hold up - the phone's side, no I/O.
- *   records:    the phone's copy of the sibling's chain merged with what came
- *   publicKey:  the sibling's Edge key (X || Y), from the KEY's sibling list
- *   checkpoint: {seq, head, signature} the place read from the sibling's key
- *   anchors:    [{seq, head}] this phone anchored that sibling at before
+ * Before a phone merges another device's log, that chain as offered must hold up - the
+ * phone's side, no I/O (devices.classify runs it). (Named for the anchors it served until
+ * 2026-10-08; the check itself is unchanged.)
+ *   records:    the phone's copy of that chain merged with what came
+ *   publicKey:  that device's checkpoint key (X || Y), as its statement names it
+ *   checkpoint: {seq, head, signature} read from that device's key
+ *   anchors:    [{seq, head}] the points of that chain this phone merged before
  * ALARMS (spec R30: "a sibling anchors a head its own chain doesn't contain:
  * one device's rollback or tampering is proven by the other"):
  *   bad-checkpoint - not signed by the sibling's key;
@@ -399,7 +369,7 @@ function checkTaken(placeEntries, taken) {
 }
 
 module.exports = {
-  HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, SIBLING_TYPE, GIVE_TYPE, ANCHOR_TYPE, BATCH, NO_SEQ, buildSibling, buildGive, buildAnchor, anchorCheck,
+  HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, GIVE_TYPE, OFFER_TYPE, BATCH, NO_SEQ, buildGive, buildOffer, anchorCheck,
   keychainText, keychainDigest, keychainParts, keychainEntriesOf, buildKeychain, buildCommit, buildTake, keychainPlan, checkTaken,
-  body, buildHave, buildLinks, verify, recordsOf, rangesOf, missing, merge, syncFields, syncSubject,
+  body, buildHave, buildLinks, verify, recordsOf, rangesOf, missing, merge,
 };

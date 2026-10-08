@@ -1,14 +1,14 @@
 export let codes: typeof import("./codes");
 export let chain: typeof import("./chain");
 export let grants: typeof import("./grants");
-export let tickets: typeof import("./tickets");
+export let receipts: typeof import("./receipts");
 export let copy: typeof import("./copy");
-export let live: typeof import("./live");
 export let note: typeof import("./note");
 export let request: typeof import("./request");
 export let approve: typeof import("./approve");
 export let client: typeof import("./client");
 export let wire: typeof import("./wire");
 export let sync: typeof import("./sync");
+export let devices: typeof import("./devices");
 export let ping: typeof import("./ping");
 export let block: typeof import("./block");

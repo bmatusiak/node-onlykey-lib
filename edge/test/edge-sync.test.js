@@ -13,7 +13,7 @@ const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 async function keyWith(n) {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32));
+  await edge.receipt(0, 0, new Uint8Array(32));
   for (let i = 0; i < n; i++) transport.edgeRecord();
   return { transport, edge };
 }

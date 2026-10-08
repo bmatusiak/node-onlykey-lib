@@ -40,7 +40,7 @@ function sharedBus() {
 
 async function withLinks(n) {
   const bus = sharedBus();
-  await bus.edge.ticket(0, 0, new Uint8Array(32));
+  await bus.edge.receipt(0, 0, new Uint8Array(32));
   for (let i = 0; i < n; i++) bus.transport.use(crypto.randomBytes(40), { slot: 201 });
   return bus;
 }

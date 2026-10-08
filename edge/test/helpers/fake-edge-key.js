@@ -12,7 +12,7 @@ const okmsg = require('../../../src/protocol/okmsg');
  * budget off hold has room (a self-press link with its reveal), and otherwise
  * it is a pressed use - as okplugin_edge_primed / _decision do.
  */
-const { chain, codes, grants, tickets } = require('../../src');
+const { chain, codes, grants, receipts } = require('../../src');
 const { H } = require('../../src/hash');
 const { sha256 } = require('../../../src/vendor/exports/@noble/hashes/sha2.js');
 const { p256 } = require('../../../src/vendor/exports/@noble/curves/nist.js');
@@ -22,34 +22,26 @@ const setup = require('../../plugin');
 const SECRET = new Uint8Array(32).fill(5);
 const PUB = p256.getPublicKey(SECRET, false).slice(1);
 const DEVICE = chain.deviceIdOf(PUB);
+/* the owner secret: the same on every fake made "from the same backup" (a real key: HKDF(K132) with no salt) */
+const OWNER_SECRET = new Uint8Array(32).fill(6);
 
 const u32 = (n) => [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff];
 const report = (bytes) => { const r = new Uint8Array(64); r.set(bytes.slice(0, 64)); return r; };
 const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUpperCase().padStart(2, '0')}`)]);
 
 /* a fake key: a tiny chain, one held link, answers by sub-op */
-function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, secret = SECRET, intentCap = true } = {}) {
-  /* each fake key its own Edge key (R29 siblings need two) - SECRET by default */
+function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET } = {}) {
+  /* each fake key its own Edge key - SECRET by default */
   const myPub = p256.getPublicKey(secret, false).slice(1);
   const myDevice = chain.deviceIdOf(myPub);
   const listeners = new Set();
   let head = chain.genesis(myDevice);
   const held = [];
-  const peers = []; /* R20: X || Y, in index order */
-  let peerX = null; /* PEER_ADD part 0, until part 1 */
-  const siblings = []; /* R29: X || Y */
-  let anchorParts = null; /* R30: ANCHOR parts 0-1, until part 2 */
-  let sibX = null;
-  let syncParts = 0; /* SYNC's parts received, in order */
-  let syncFields = [];
   const live = [];
   const onHold = new Set();
   let owed = [];
   let started = false;
-  /* R13a (2026-10-06): a TX start voided by a later link, kept with the head it was made over - its request is refused at the sign */
-  let voided = null;
   let startedIntent = null; /* R13b: the intent a v2 start carried */
-  let replayIntent = null; /* R13b: staged by REPLAY_INTENT for the next REPLAY */
   let refusedTx = 0; /* B7 stage 2: HEAD byte 60, as the firmware counts them */
   const writes = [];
   const emit = (r) => setTimeout(() => listeners.forEach((l) => l({ iface: IFACE.VENDOR, data: r })), delay);
@@ -59,7 +51,6 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
     const seq = held.length;
     /* R3: every link this key writes is version 1 (unless a test builds an old one) */
     const link = chain.encodeLink({ seq, version: 1, ...fields });
-    if (started && fields.decision !== codes.DECISION.SELF_PRESS) voided = { token: started, intent: startedIntent, head };
     head = chain.weld(head, link);
     held.push({ link, head, reveal });
     started = false; /* R13a: any link clears the TX start */
@@ -71,13 +62,11 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
     emit(report([...u32(seq), ...head]));
     emit(report([...sig]));
   };
-  /* one approved use that owes (R16: the key marked it owes_ticket - a pressed use on a covered slot), so there is something to pick up and ticket */
-  append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_TICKET, subject: new Uint8Array(32).fill(9) });
+  /* one approved use that owes (R16: the key marked it owes_receipt - a pressed use on a covered slot), so there is something to pick up and receipt */
+  append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_RECEIPT, subject: new Uint8Array(32).fill(9) });
   owed = [0];
-  /* the fake's vouch tag: any MAC the fake can recompute (a real key keys it with K_vouch) */
-  const tagOf = (seq, h) => require('node:crypto').createHmac('sha256', 'fake K_vouch').update(Buffer.concat([Buffer.from(u32(seq)), Buffer.from(h)])).digest().subarray(0, 16);
-  const seqHead = () => report([...u32(held.length - 1), ...head, ...tagOf(held.length - 1, head)]);
-  let tent = null; /* R26: the tentative replay */
+  /* seq . head: RECEIPT's, WAIVE's, LOSS's and AGENT_ADD's answer (no vouch tag since 2026-10-08) */
+  const seqHead = () => report([...u32(held.length - 1), ...head]);
   let staged = {}; /* R11a: GRANT_LABEL's labels, by scope index, for the next GRANT_CREATE */
 
   const transport = {
@@ -93,9 +82,17 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, restoring ? 1 : 0, refusedTx, intentCap ? 1 : 0]));
+        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, 0, refusedTx, 0]));
       } else if (sub === 0x04) {
         emit(report([...myPub]));
+      } else if (sub === 0x06) {
+        /* the owner statement (okplugin_edge statement()): seq . nametag hash, the owner key, the signature - no link */
+        const seq = held.length ? held.length - 1 : 0xffffffff;
+        const nh = arg.slice(0, 32);
+        const digest = grants.statementDigest({ deviceId: myDevice, publicKey: myPub, seq, nametagHash: nh });
+        emit(report([...u32(seq), ...nh]));
+        emit(report([...p256.getPublicKey(ownerSecret, false).slice(1)]));
+        emit(report([...p256.sign(digest, ownerSecret, { prehash: false, lowS: false })]));
       } else if (sub === 0x03) {
         checkpoint();
       } else if (sub === 0x02) {
@@ -110,7 +107,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
       } else if (sub === 0x20) {
         const ref = arg[0] | (arg[1] << 8);
         if (!owed.includes(ref)) return emit(status(0x08));
-        append({ op: codes.OP.TICKET, decision: arg[4], subject: new Uint8Array(32), grantId: ref });
+        append({ op: codes.OP.RECEIPT, decision: arg[4], subject: new Uint8Array(32), grantId: ref });
         owed = owed.filter((q) => q !== ref);
         emit(seqHead());
       } else if (sub === 0x22) {
@@ -120,7 +117,6 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
         /* R13b, budget or no go (Brad, 2026-10-06): with or without an intent, refused unless a budget can pay */
         if (!live.some((id) => !onHold.has(id) && (!budgets.has(id) || budgets.get(id).used < budgets.get(id).uses))) { refusedTx = Math.min(255, refusedTx + 1); return emit(status(0x0d)); }
         started = arg.slice(0, 32);
-        voided = null; /* a new TX start replaces a voided one */
         /* R13b: a v2 start carries its intent; zeros = v1 */
         startedIntent = arg.slice(32, 48).some((x) => x) ? arg.slice(32, 48) : null;
         emit(status(0x00));
@@ -134,7 +130,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
         append({ op: sub === 0x13 ? codes.OP.GRANT_HOLD : codes.OP.GRANT_RESUME, decision: codes.DECISION.APPROVE, slot: 0, flags: sub === 0x14 ? codes.FLAG.PRESS_OBSERVED : 0, grantId: id, subject: new Uint8Array(32) });
         emit(status(0x00));
       } else if (sub === 0x21) {
-        append({ op: codes.OP.TICKET, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: tickets.waiveSubject(owed, false) });
+        append({ op: codes.OP.RECEIPT, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: receipts.waiveSubject(owed, false) });
         owed = [];
         emit(seqHead());
       } else if (sub === 0x11) {
@@ -174,8 +170,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
         budgets.delete(id);
         emit(status(0x00));
       } else if (sub === 0x34) {
-        /* R24: {from, to}, pressed; refused while restoring or past the head */
-        if (restoring) return emit(status(0x0e));
+        /* R24: {from, to}, pressed; refused past the head */
         const from = arg[0] | (arg[1] << 8), to = arg[4] | (arg[5] << 8);
         if (from > to || to > held.length - 1) return emit(status(0x12));
         const subject = new Uint8Array(32);
@@ -186,133 +181,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
         append({ op: codes.OP.LOSS, decision: 1, flags: 1, grantId: from, subject });
         emit(seqHead());
       } else if (sub === 0x15) {
-        /* 4.7a AGENT_ADD {agent key}, pressed; refused while restoring */
-        if (restoring) return emit(status(0x0e));
+        /* 4.7a AGENT_ADD {agent key}, pressed */
         append({ op: codes.OP.AGENT_ADD, decision: 1, flags: 1, grantId: 0, subject: grants.agentSubject(arg.slice(0, 32)) });
-        emit(seqHead());
-      } else if (sub === 0x30) {
-        /* R20 PEER_ADD: {0, X} staged, then {1, Y} pressed; refused while restoring, full, known or not a point */
-        if (restoring) return emit(status(0x0e));
-        if (arg[0] === 0) { peerX = arg.slice(1, 33); return emit(status(0x00)); }
-        if (arg[0] !== 1 || !peerX) return emit(status(0x15));
-        const xy = Uint8Array.from([...peerX, ...arg.slice(1, 33)]);
-        peerX = null;
-        try { p256.Point.fromBytes(Uint8Array.from([4, ...xy])).assertValidity(); } catch { return emit(status(0x15)); }
-        if (peers.some((p) => same(p, xy))) return emit(status(0x14));
-        if (peers.length >= 4) return emit(status(0x13));
-        append({ op: codes.OP.PEER_ADD, decision: 1, flags: 1, slot: peers.length, grantId: 0, subject: grants.peerSubject(xy) });
-        peers.push(xy);
-        emit(seqHead());
-      } else if (sub === 0x35) {
-        /* R29 SIBLING_ADD: {0, X} staged, then {1, Y, id} pressed; refused: itself, a wrong id, known, full */
-        if (restoring) return emit(status(0x0e));
-        if (arg[0] === 0) { sibX = arg.slice(1, 33); return emit(status(0x00)); }
-        if (arg[0] !== 1 || !sibX) return emit(status(0x15));
-        const xy = Uint8Array.from([...sibX, ...arg.slice(1, 33)]);
-        const id = arg.slice(33, 49);
-        sibX = null;
-        try { p256.Point.fromBytes(Uint8Array.from([4, ...xy])).assertValidity(); } catch { return emit(status(0x15)); }
-        if (!same(chain.deviceIdOf(xy), id) || same(xy, myPub)) return emit(status(0x15));
-        if (siblings.some((k) => same(k, xy))) return emit(status(0x18));
-        if (siblings.length >= 4) return emit(status(0x19));
-        append({ op: codes.OP.SIBLING_ADD, decision: 1, flags: 1, grantId: 0, subject: grants.siblingSubject(xy, id) });
-        siblings.push(xy);
-        emit(seqHead());
-      } else if (sub === 0x36) {
-        if (restoring) return emit(status(0x0e));
-        const i = arg[0];
-        if (i >= siblings.length) return emit(status(0x1a));
-        append({ op: codes.OP.SIBLING_REMOVE, decision: 1, flags: 1, grantId: 0, subject: grants.siblingSubject(siblings[i], chain.deviceIdOf(siblings[i])) });
-        siblings.splice(i, 1);
-        emit(seqHead());
-      } else if (sub === 0x38) {
-        /* R30 ANCHOR: {0, index, seq, head}, {1, r}, {2, s} -> the checkpoint checked under that sibling's key, pressed */
-        if (restoring) { anchorParts = null; return emit(status(0x0e)); }
-        if (arg[0] === 0) {
-          anchorParts = null;
-          if (arg[1] >= siblings.length) return emit(status(0x1a));
-          anchorParts = { index: arg[1], seq: arg[2] | (arg[3] << 8) | (arg[4] << 16) | (arg[5] << 24), head: arg.slice(6, 38) };
-          return emit(status(0x00));
-        }
-        if (arg[0] === 1 && anchorParts && !anchorParts.r) { anchorParts.r = arg.slice(1, 33); return emit(status(0x00)); }
-        if (arg[0] !== 2 || !anchorParts || !anchorParts.r) { anchorParts = null; return emit(status(0x17)); }
-        const a = anchorParts;
-        anchorParts = null;
-        const sib = siblings[a.index];
-        const deviceId = chain.deviceIdOf(sib);
-        const signature = Uint8Array.from([...a.r, ...arg.slice(1, 33)]);
-        if (!chain.verifyCheckpoint({ deviceId, seq: a.seq >>> 0, head: a.head }, signature, sib)) return emit(status(0x1b));
-        append({ op: codes.OP.ANCHOR, decision: 1, flags: 1, slot: a.index, grantId: a.seq >>> 0, subject: grants.anchorSubject({ deviceId, seq: a.seq >>> 0, head: a.head, signature }) });
-        emit(seqHead());
-      } else if (sub === 0x37) {
-        emit(report([siblings.length, 4]));
-        for (let i = 0; i < 4; i++) emit(report(i < siblings.length ? [...siblings[i]] : []));
-      } else if (sub === 0x39) {
-        /*
-         * sync phase 2, three parts as okplugin_edge: {0, peerHash, first, last} (a peer
-         * on the list), {1, head}, {2, keychain}, then pressed; the KEY hashes the subject
-         */
-        if (restoring) { syncParts = 0; return emit(status(0x0e)); }
-        const part = arg[0];
-        if (part === 0) {
-          syncParts = 0;
-          if (!peers.some((p) => same(sha256(p), arg.slice(1, 33)))) return emit(status(0x16));
-          const u = (o) => (arg[o] | (arg[o + 1] << 8) | (arg[o + 2] << 16) | (arg[o + 3] << 24)) >>> 0;
-          if (u(33) > u(37)) return emit(status(0x12));
-          syncFields = [arg.slice(1, 41)];
-          syncParts = 1;
-          return emit(status(0x00));
-        }
-        if (part === 1 && syncParts === 1) { syncFields.push(arg.slice(1, 33)); syncParts = 2; return emit(status(0x00)); }
-        if (part !== 2 || syncParts !== 2) { syncParts = 0; return emit(status(0x17)); }
-        syncParts = 0;
-        const subject = H('OKEDGE-SYNC-v1', ...syncFields, arg.slice(1, 33));
-        append({ op: codes.OP.SYNC, decision: 1, flags: 1, grantId: 0, subject });
-        emit(seqHead());
-      } else if (sub === 0x31) {
-        /* R20 PEER_REMOVE {index}, pressed */
-        if (restoring) return emit(status(0x0e));
-        const i = arg[0];
-        if (i >= peers.length) return emit(status(0x16));
-        append({ op: codes.OP.PEER_REMOVE, decision: 1, flags: 1, slot: i, grantId: 0, subject: grants.peerSubject(peers[i]) });
-        peers.splice(i, 1);
-        emit(seqHead());
-      } else if (sub === 0x32) {
-        /* R20 PEER_LIST: header, then one report per slot - X || Y, zeros when empty */
-        emit(report([peers.length, 0, 4]));
-        for (let i = 0; i < 4; i++) emit(report(i < peers.length ? [...peers[i]] : []));
-      } else if (sub === 0x05) {
-        if (restoring) return emit(status(0x0e));
-        emit(seqHead());
-      } else if (sub === 0x25) {
-        /* R13b + R26: stage the next REPLAY's intent */
-        if (!restoring) return emit(status(0x10));
-        replayIntent = arg.slice(0, 16);
-        emit(status(0x00));
-      } else if (sub === 0x23) {
-        /* R26: 47 bytes (R3: through the scope byte), zero-filled to a link; the next seq, welding onto the TENTATIVE head */
-        if (!restoring) return emit(status(0x10));
-        tent ??= { head, links: [] };
-        const link = new Uint8Array(64);
-        link.set(arg.slice(0, 47));
-        /* R13b: the intent REPLAY_INTENT staged, for a sign/decrypt link; R3: the version byte after the head check */
-        if (replayIntent && (link[4] === codes.OP.SIGN || link[4] === codes.OP.DECRYPT)) link.set(replayIntent, 47);
-        replayIntent = null;
-        link[63] = arg[55];
-        const f = chain.decodeLink(link);
-        if (f.seq !== held.length + tent.links.length) return emit(status(0x0f));
-        const h2 = chain.weld(tent.head, link);
-        if (!same(h2.slice(0, 8), arg.slice(47, 55))) return emit(status(0x0f));
-        tent.head = h2;
-        tent.links.push({ link, head: h2 });
-        emit(status(0x00));
-      } else if (sub === 0x24) {
-        const seq = arg[0] | (arg[1] << 8) | (arg[2] << 16) | (arg[3] << 24);
-        const ok = tent && seq === held.length + tent.links.length - 1 && same(arg.slice(4, 20), tagOf(seq, tent.head));
-        if (ok) { held.push(...tent.links); head = tent.head; }
-        tent = null;
-        restoring = false;
-        if (!ok) return emit(status(0x11));
         emit(seqHead());
       } else {
         emit(status(0x0a));
@@ -321,8 +191,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
   };
   transport.writes = writes;
   transport.started = () => started;
-  /* a test link that IS Edge's own (an approved sync, no ticket owed) - ordinary presses write none (2026-10-06) */
-  transport.edgeRecord = () => append({ op: codes.OP.SYNC, decision: codes.DECISION.APPROVE, slot: 0, flags: codes.FLAG.PRESS_OBSERVED, subject: require('node:crypto').randomBytes(32) });
+  /* a test link that IS Edge's own (a pressed agent registration, no receipt owed) - ordinary presses write none (2026-10-06) */
+  transport.edgeRecord = () => append({ op: codes.OP.AGENT_ADD, decision: codes.DECISION.APPROVE, slot: 0, flags: codes.FLAG.PRESS_OBSERVED, subject: require('node:crypto').randomBytes(32) });
   /* the soft key's idle restart / a lock: live budgets live in RAM and are gone, with no link written */
   transport.restart = () => { live.length = 0; onHold.clear(); };
   /*
@@ -331,30 +201,16 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
    * hold has room - a self-press link with its reveal. A sign that does not match
    * a waiting TX start is REFUSED (R13a, 2026-10-06: EDGE:1C, the TX start used up, counted
    * in HEAD byte 60). Anything else is an ordinary press: not Edge, NO link, owes
-   * nothing (spec session, 2026-10-06). -> {seq, paid} or {seq: null, paid: false}
+   * nothing (spec session, 2026-10-06) - the announced request too when no budget can
+   * pay it any more (held, ended, expired): Brad, 2026-10-08, refusing it was a misreading
+   * of "budget or no go". -> {seq, paid} or {seq: null, paid: false}
    */
   transport.use = (bytes, { slot = 2 } = {}) => {
     const subject = grants.requestSubject(Uint8Array.from(bytes));
     const wasStarted = Boolean(started);
     const intent = startedIntent;
     const match = wasStarted && same(started, grants.txToken({ head, subject, intent }));
-    /* R13a: the request whose TX start a later link voided (a hold in between) - refused, never pressed */
-    if (!wasStarted && voided) {
-      const v = voided;
-      voided = null;
-      if (same(v.token, grants.txToken({ head: v.head, subject, intent: v.intent }))) {
-        refusedTx = Math.min(255, refusedTx + 1);
-        throw okmsg.deviceError('EDGE:0D');
-      }
-    }
     const id = match && !owed.length ? live.find((i) => !onHold.has(i) && budgets.get(i).used < budgets.get(i).uses) : null;
-    /* R13a (2026-10-06): the announced request, but no budget can pay it now (held, ended, expired) - refused, never pressed */
-    if (match && !id) {
-      started = false;
-      startedIntent = null;
-      refusedTx = Math.min(255, refusedTx + 1);
-      throw okmsg.deviceError('EDGE:0D');
-    }
     if (id) {
       const b = budgets.get(id);
       b.used += 1;
@@ -368,13 +224,14 @@ function fakeKey({ silent = false, noPin = false, delay = 1, restoring = false, 
       if (si < 0) si = 0;
       b.scopeUsed[si] += 1;
       const F = codes.FLAG;
-      const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.SELF_PRESS, slot, flags: F.BUDGET_SPENT | F.OWES_TICKET | F.STARTED,
+      const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.SELF_PRESS, slot, flags: F.BUDGET_SPENT | F.OWES_RECEIPT,
         subject, grantId: id, grantStep: b.used, scope: scopes.length ? si + 1 : 0, ...(intent ? { intent } : {}) }, grants.reveal(b.seed, b.uses, b.used));
       owed.push(seq);
       return { seq, paid: true };
     }
     started = false;
     startedIntent = null;
+    /* the announced request with no budget left to pay it falls through: an ordinary press */
     if (wasStarted && !match) {
       refusedTx = Math.min(255, refusedTx + 1);
       throw okmsg.deviceError('EDGE:1C');
@@ -391,4 +248,4 @@ function edgeOver(transport) {
 }
 
 
-module.exports = { fakeKey, edgeOver, SECRET, PUB, DEVICE, report, status, u32 };
+module.exports = { fakeKey, edgeOver, SECRET, PUB, DEVICE, OWNER_SECRET, report, status, u32 };

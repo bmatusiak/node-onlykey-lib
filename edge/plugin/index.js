@@ -3,8 +3,8 @@
  *
  * The firmware half is minimal by design (owner, 2026-10-02): the key is a
  * notary that welds each decision, decides budget self-presses, makes one
- * kind of signature (a checkpoint) and links tickets. This plugin is the thin
- * wire layer over it; everything else - verifying, storing, pairing tickets,
+ * kind of signature (a checkpoint) and links receipts. This plugin is the thin
+ * wire layer over it; everything else - verifying, storing, pairing receipts,
  * tracking budgets - is ../src, which these calls feed.
  *
  * Wire: OKEDGE = 0xF8, sub-op in byte 5, arguments from byte 6 (okmsg.build
@@ -24,45 +24,31 @@ const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
 const { assertTransport } = require('../../src/transport/contract');
 const { concat, toHex } = require('../../src/bytes');
-const { codes, chain, tickets, copy: copyCheck } = require('../src');
-const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
+const { codes, chain, receipts, copy: copyCheck } = require('../src');
 
-/* a P-256 key as SEC1 bytes: X || Y (64, what the key gives) gets its 04; 65 or 33 pass as they are */
-const sec1Bytes = (k) => (k.length === 64 ? concat([Uint8Array.of(4), k]) : Uint8Array.from(k));
 
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
-  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, VOUCH: 0x05,
+  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, STATEMENT: 0x06,
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
-  TICKET: 0x20, WAIVE: 0x21, TX_START: 0x22, REPLAY: 0x23, REPLAY_DONE: 0x24, REPLAY_INTENT: 0x25, LOSS: 0x34,
+  RECEIPT: 0x20, WAIVE: 0x21, TX_START: 0x22, LOSS: 0x34,
   AGENT_ADD: 0x15,
-  PEER_ADD: 0x30, PEER_REMOVE: 0x31, PEER_LIST: 0x32,
-  /* sync phase 2 (Brad, 2026-10-05): the `sync` link; number CHOSEN, pending the spec */
-  SYNC: 0x39,
-  /* R29 siblings (P2b) */
-  SIBLING_ADD: 0x35, SIBLING_REMOVE: 0x36, SIBLING_LIST: 0x37,
-  /* R30 anchors (P2c) */
-  ANCHOR: 0x38,
+  /*
+   * No peer, sibling, sync, anchor, vouch or replay sub-op (Brad, 2026-10-08): pairing and
+   * sync are the app's ("pairing and sync is all app stuff, not firmware"), and a restore
+   * continues the log on a new chain instead of replaying it.
+   */
 });
 /*
  * CHOSEN (pending the spec, 2026-10-02): a vendor report carries 58 argument
  * bytes. GRANT_CREATE (spec layout, 2026-10-02): [49] flags, [50..51] the
  * lifetime (u16 LE minutes, R15b), [52..57] the first 6 bytes of the verified
- * head (R27). CHOSEN, pending the spec: REPLAY the link's first 46 bytes (bytes 46-63 are
- * reserved and zero in every link a key writes; the key fills them back) plus
- * the first 8 bytes of the head the copy stored after it - the key's only way
- * to tell that the link welds where the copy says it does.
+ * head (R27).
  */
 const GRANT_HEAD_BYTES = 6;
-/* R26: the vouch tag - HMAC-SHA256(K_vouch, "OKEDGE-VOUCH-v1" || seq || head), first 16 bytes */
-const VOUCH_BYTES = 16;
-/* seq . head . tag: TICKET's, WAIVE's, VOUCH's and REPLAY_DONE's answer */
-const seqHeadTag = (r) => ({ seq: (r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24)) >>> 0, head: r.slice(4, 36), tag: r.slice(36, 36 + VOUCH_BYTES) });
-/* R3: through byte 46 (the scope that paid); 47-63 stay reserved zero */
-const REPLAY_BYTES = 47;
-const REPLAY_HEAD_BYTES = 8;
+/* seq . head: RECEIPT's, WAIVE's and LOSS's answer */
+const seqHead = (r) => ({ seq: (r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24)) >>> 0, head: r.slice(4, 36) });
 const SEQ_NONE = 0xffffffff;
-const PEER_SLOTS = 4; /* R20: up to 4 peers; PEER_LIST answers one report per slot (okplugin_edge MAX_PEERS) */
 const HELD = 8;
 
 /** A refusal from the key: `code` and `name` from codes.STATUS. */
@@ -94,9 +80,9 @@ function hexHead(bytes) {
  * refused-TX start counter since B7 stage 2; older firmware sends 0 there.)
  */
 function isHeadReply(r) {
-  /* byte 61 = capabilities (R13b: bit 0, intent) - no other bit is known; 62-63 zero */
-  if (r.length < 64 || (r[61] & ~1) | r[62] | r[63]) return false;
-  return r[56] < 16 && r[57] <= tickets.OWED_MAX && r[58] <= 1 && r[59] <= 1;
+  /* bytes 61-63 zero (v1: every key takes TX start {token, intent}; no capability byte) */
+  if (r.length < 64 || r[61] | r[62] | r[63]) return false;
+  return r[56] < 16 && r[57] <= receipts.OWED_MAX && r[58] <= 1 && r[59] <= 1;
 }
 
 /*
@@ -345,8 +331,7 @@ function setup(imports, register) {
     /**
      * {seq (null = no link yet), head, oldest (oldest pickable seq, or null),
      *  live: [budget ids], held: [the live ids on hold (R15a)], owed: number of
-     *  uses owing a ticket (R16), overflow: an owed use fell off the key's list,
-     *  restoring: restored from a backup and not yet finished (R26),
+     *  uses owing a receipt (R16), overflow: an owed use fell off the key's list,
      *  refusedTx: TX starts the key refused since power-up, RAM only (B7 stage 2;
      *  0 on firmware before it) - a refused TX start writes no link, so this is the
      *  key's own evidence; the phone alarms when it rises}
@@ -365,10 +350,7 @@ function setup(imports, register) {
         held: ids.filter((id, i) => id && (mask >> i) & 1),
         owed: r[57],
         overflow: Boolean(r[58]),
-        restoring: Boolean(r[59]),
         refusedTx: r[60],
-        /* R13b: this build takes TX start {token, intent} (HEAD byte 61, bit 0) */
-        canIntent: Boolean(r[61] & 1),
       };
     },
 
@@ -377,6 +359,22 @@ function setup(imports, register) {
       const [r] = await call(SUB.PUBKEY, null, opts);
       const publicKey = r.slice(0, 64);
       return { publicKey, deviceId: chain.deviceIdOf(publicKey) };
+    },
+
+    /**
+     * The owner statement (Brad, 2026-10-08): the key signs its own fingerprint (device id,
+     * checkpoint key, current seq) and this NAMETAG with its owner key - no press, no link.
+     * Another device of yours checks it with grants.verifyStatement against ITS owner key.
+     * -> {deviceId, publicKey, seq (null = no link yet), nametag, ownerKey, signature}
+     */
+    async statement(nametag, opts) {
+      const { grants } = require('../src');
+      const tag = String(nametag ?? '').trim();
+      const nh = grants.nametagHash(tag);
+      const { publicKey, deviceId } = await edge.publicKey(opts);
+      const [a, k, sg] = await call(SUB.STATEMENT, nh, { ...opts, reports: 3 });
+      const seq = get32(a, 0);
+      return { deviceId, publicKey, seq: seq === SEQ_NONE ? null : seq, nametag: tag, ownerKey: k.slice(0, 64), signature: sg.slice(0, 64) };
     },
 
     /** Links the key still holds: [{link, head, reveal|null}] (reveal = a self-press's v_i). */
@@ -451,41 +449,29 @@ function setup(imports, register) {
     },
 
     /**
-     * File the ticket for an owed use (any of the key's up to 4, R16; the key
-     * refuses another - EdgeError 'no-ticket-waiting'). msgHash =
-     * tickets.messageHash(message); the message never goes to the key.
-     * -> {seq, head, tag} after the ticket link: the head the next txStart() passes
-     * (R13a), and the key's vouch tag for it - keep it with the copy: a restore
-     * commits a replay only up to a vouched head (R26).
+     * File the receipt for an owed use (any of the key's up to 4, R16; the key
+     * refuses another - EdgeError 'no-receipt-waiting'). msgHash =
+     * receipts.messageHash(message); the message never goes to the key.
+     * -> {seq, head} after the receipt link: the head the next txStart() passes (R13a).
      */
-    async ticket(refSeq, code, msgHash, opts) {
-      /* a code object here became 0 - OK - for every ticket (codes.ticketByte, 2026-10-07) */
-      if (!Number.isInteger(code) || code < 0 || code > 0xff) throw new TypeError(`edge: a ticket code is a byte, got ${typeof code === 'object' ? JSON.stringify(code) : code}`);
-      const [r] = await call(SUB.TICKET, concat([u32(refSeq), Uint8Array.of(code), msgHash]), opts);
-      return seqHeadTag(r);
+    async receipt(refSeq, code, msgHash, opts) {
+      /* a code object here became 0 - OK - for every receipt (codes.receiptByte, 2026-10-07) */
+      if (!Number.isInteger(code) || code < 0 || code > 0xff) throw new TypeError(`edge: a receipt code is a byte, got ${typeof code === 'object' ? JSON.stringify(code) : code}`);
+      const [r] = await call(SUB.RECEIPT, concat([u32(refSeq), Uint8Array.of(code), msgHash]), opts);
+      return seqHead(r);
     },
 
-    /**
-     * R26: the key's vouch tag for its CURRENT head - HMAC with a key only it
-     * holds, over (seq, head). No press; refused while restoring ('restoring').
-     * A host keeps the newest tag with its copy. -> {seq, head, tag}
-     */
-    async vouch(opts) {
-      const [r] = await call(SUB.VOUCH, null, opts);
-      return seqHeadTag(r);
-    },
 
     /**
      * R13a: start ONE self-press for ONE request. `head` is the head the key
      * returned after the previous step (the grant's checkpoint for a budget's
-     * first use, the ticket's reply after that); `subject` is SHA-256 of
+     * first use, the receipt's reply after that); `subject` is SHA-256 of
      * exactly the bytes the next sign/decrypt will submit. The key gets only
      * the token SHA256("OKEDGE-TX-v1" || head || subject || intent) and pays for the next
      * request only if it recomputes the same token from its own head and that
      * request; anything else uses the TX start up and needs a press. Refused -
-     * EdgeError 'ticket-owed', 'nothing-to-pay', 'restoring' - when a ticket is
-     * owed, no live budget off hold and unexpired could pay, or a restore is
-     * unfinished. A stale head shows at the sign (as a press), not here.
+     * EdgeError 'receipt-owed', 'nothing-to-pay' - when a receipt is
+     * owed, or no live budget off hold and unexpired could pay. A stale head shows at the sign (as a press), not here.
      */
     /** R13a + R13b: TX start {token, intent} - always 48 bytes; the intent is 16 zero bytes when opts.intent (grants.intentOf) is not given */
     async txStart(head, subject, opts = {}) {
@@ -515,56 +501,17 @@ function setup(imports, register) {
     },
 
     /**
-     * R18: clear every owed ticket at once - a PHYSICAL press (the person's Yes
-     * in the app first). Linked as a ticket 0x8F with the press flag
-     * (tickets.waiveSubject). -> {seq, head, tag} after the waive link.
+     * R18: clear every owed receipt at once - a PHYSICAL press (the person's Yes
+     * in the app first). Linked as a receipt 0x8F with the press flag
+     * (receipts.waiveSubject). -> {seq, head} after the waive link.
      */
     async waive({ onPress, timeoutMs = 30000 } = {}) {
       const pending = pressed(SUB.WAIVE, null, { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
-      return seqHeadTag(r);
+      return seqHead(r);
     },
 
-    /**
-     * R26: hand the key, while it is restoring, the next link of the newest copy
-     * the host has, with the head the copy stored after it. The key takes it
-     * only if it is its next seq and welding it onto the key's head gives that
-     * head ('replay-mismatch' otherwise: where the copy forks or is from another
-     * key - stop there and show it). It moves the head and applies the debt
-     * rules; no press.
-     */
-    async replay(link, storedHead, opts) {
-      if (!(link instanceof Uint8Array) || link.length !== chain.LINK_BYTES) throw new TypeError(`Edge: a link is ${chain.LINK_BYTES} bytes`);
-      if (!(storedHead instanceof Uint8Array) || storedHead.length !== 32) throw new TypeError('Edge: replay needs the head the copy stored after the link');
-      if (!chain.decodeLink(link).reservedZero) {
-        throw Object.assign(new Error('Edge: this link has non-zero reserved bytes - no key wrote it'), { code: 'EDGE_NOT_A_KEY_LINK' });
-      }
-      /* R13b: a link with an intent sends it first (the key welds it in at the REPLAY); R3: the version byte rides after the head */
-      const intent = link.subarray(47, 63);
-      if (intent.some((x) => x)) await call(SUB.REPLAY_INTENT, intent, { ...opts, text: true });
-      await call(SUB.REPLAY, concat([link.subarray(0, REPLAY_BYTES), storedHead.subarray(0, REPLAY_HEAD_BYTES), Uint8Array.of(link[63])]), { ...opts, text: true });
-      return true;
-    },
 
-    /**
-     * R26: finish a restore - a PHYSICAL press over "restored to #N, the newest
-     * your copies hold". The replay is tentative until now: the key commits it
-     * only if {seq, tag} is ITS vouch tag for exactly the replayed head - so
-     * replay up to the newest vouched head you hold, and pass that tag. Anything
-     * else is thrown away (EdgeError 'not-vouched'), and the LOSS covers
-     * everything since the backup. newestSeq (optional) = the newest seq any copy
-     * holds: past what is committed, the key links a LOSS over the rest
-     * (grant_id = the first lost seq, the subject's first 4 bytes = newestSeq).
-     * -> {seq, head, tag}
-     */
-    async replayDone({ seq, tag, newestSeq, onPress, timeoutMs = 30000 } = {}) {
-      if (!Number.isInteger(seq) || seq < 0) throw new TypeError('Edge: replayDone needs the seq the vouch tag is for');
-      if (!(tag instanceof Uint8Array) || tag.length !== VOUCH_BYTES) throw new TypeError(`Edge: replayDone needs the key's ${VOUCH_BYTES}-byte vouch tag`);
-      const newest = Number.isInteger(newestSeq) && newestSeq >= 0 ? newestSeq : SEQ_NONE;
-      const pending = pressed(SUB.REPLAY_DONE, concat([u32(seq), tag, u32(newest)]), { timeoutMs }, onPress);
-      const [r] = await pending;
-      return seqHeadTag(r);
-    },
 
     /**
      * R27, the calls a host should use: run the copy check (edge/src/copy.js)
@@ -598,7 +545,7 @@ function setup(imports, register) {
         /*
          * ONE MOMENT OF THE KEY (Pixel, 2026-10-06): the head, its newest links,
          * the checkpoint and the ring are separate reads; an agent's link (its
-         * ticket) landing between them gave a checkpoint for a newer head than
+         * receipt) landing between them gave a checkpoint for a newer head than
          * the one checked - "full: new part: checkpoint", no state kept, and the
          * next checks from scratch. So the head is read again after the others:
          * if it moved, the check is done again (3 tries), and only a check the
@@ -622,141 +569,29 @@ function setup(imports, register) {
     },
 
     /**
-     * R24: the person accepts #from..#to as unrecoverable - a PHYSICAL press
-     * (the person's Yes in the app first). The key links op = loss, grant_id =
-     * from, subject = to; it pays no debt. A copy then passes R27 with that gap
-     * (copy.uncoveredGaps). Refused while restoring ('restoring') and for a
-     * range past the key's head ('bad-range'). -> {seq, head, tag}
-     */
-    /**
      * mcp-service.md 4.7a: register an agent's key - the person's Yes in the
      * app first, then a PHYSICAL press; the key links op = agent-add with
-     * subject grants.agentSubject(key). Refused while restoring.
-     * -> {seq, head, tag}
+     * subject grants.agentSubject(key). -> {seq, head}
      */
     async agentAdd(agentKey, { onPress, timeoutMs = 30000 } = {}) {
       if (!(agentKey instanceof Uint8Array) || agentKey.length !== 32) throw new TypeError('Edge: agentAdd needs a 32-byte Ed25519 key');
       const pending = pressed(SUB.AGENT_ADD, agentKey, { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
-      return seqHeadTag(r);
+      return seqHead(r);
     },
 
     /**
-     * R20: add a place that keeps copies (this PC's copy store; the Worker at
-     * E5) - the person's Yes in the app first, then a PHYSICAL press. A sync
-     * goes only to places added this way. The key links op = peer-add, slot =
-     * its index, subject grants.peerSubject(X || Y). peerKey: P-256 as 64 bytes
-     * X || Y, 65 with the 04, or 33 compressed.
-     *
-     * Two requests on the wire: X || Y does not fit beside the header and the
-     * firmware's micro-ecc cannot decompress, so part 0 stages X (no press)
-     * and part 1 brings Y and waits for the press.
-     * Refused: 'peers-full', 'peer-known', 'bad-key', 'restoring'. -> {seq, head, tag}
+     * R24: the person accepts #from..#to as unrecoverable - a PHYSICAL press
+     * (the person's Yes in the app first). The key links op = loss, grant_id =
+     * from, subject = to; it pays no debt. A copy then passes R27 with that gap
+     * (copy.uncoveredGaps). Refused for a range past the key's head ('bad-range').
+     * -> {seq, head}
      */
-    async peerAdd(peerKey, { onPress, timeoutMs = 30000 } = {}) {
-      const xy = p256.Point.fromBytes(sec1Bytes(peerKey)).toBytes(false).slice(1);
-      await call(SUB.PEER_ADD, concat([Uint8Array.of(0), xy.slice(0, 32)]), { text: true });
-      const [r] = await pressed(SUB.PEER_ADD, concat([Uint8Array.of(1), xy.slice(32)]), { timeoutMs, newLink: true }, onPress);
-      return seqHeadTag(r);
-    },
-
-    /** R20: remove the place at `index` (a press); the later ones move down. -> {seq, head, tag} */
-    async peerRemove(index, { onPress, timeoutMs = 30000 } = {}) {
-      if (!Number.isInteger(index) || index < 0 || index > 255) throw new RangeError(`Edge: no peer index ${index}`);
-      const [r] = await pressed(SUB.PEER_REMOVE, Uint8Array.of(index), { timeoutMs, newLink: true }, onPress);
-      return seqHeadTag(r);
-    },
-
-    /**
-     * R20: the places the key will sync with - no press (public keys only, R8).
-     * The key always sends its header and one report per slot (max), so the
-     * count of reports is known before asking.
-     * -> {k (0 = not set until E5), max, peers: [{index, publicKey (X || Y)}]}
-     * (backed_through comes with E5's receipts)
-     */
-    async peers(opts) {
-      const [h, ...slots] = await call(SUB.PEER_LIST, null, { ...opts, reports: 1 + PEER_SLOTS });
-      const peers = [];
-      slots.slice(0, h[0]).forEach((r, index) => peers.push({ index, publicKey: r.slice(0, 64) }));
-      return { k: h[1], max: h[2], peers };
-    },
-
-    /**
-     * Sync phase 2: record an approved sync - the person's Yes on the sheet
-     * first, then a PHYSICAL press; the key links op = sync with `subject`
-     * (sync.syncSubject: SHA256 of what moved). Owes no ticket. Refused while
-     * restoring. -> {seq, head, tag}
-     */
-    /**
-     * R29: pair another key that is yours - the person's Yes (with the code
-     * both phones show) first, then a PHYSICAL press; the key links op =
-     * sibling with grants.siblingSubject(key, id). The id is the key's own
-     * (chain.deviceIdOf): the key refuses any other, itself, a known one.
-     * Two requests on the wire (X staged, then Y . id and the press).
-     * -> {seq, head, tag}
-     */
-    async siblingAdd(key, { onPress, timeoutMs = 30000 } = {}) {
-      const xy = p256.Point.fromBytes(sec1Bytes(key)).toBytes(false).slice(1);
-      const id = chain.deviceIdOf(xy);
-      await call(SUB.SIBLING_ADD, concat([Uint8Array.of(0), xy.slice(0, 32)]), { text: true });
-      const [r] = await pressed(SUB.SIBLING_ADD, concat([Uint8Array.of(1), xy.slice(32), id]), { timeoutMs, newLink: true }, onPress);
-      return seqHeadTag(r);
-    },
-
-    /** R29: unpair the sibling at `index` (a press); the later ones move down. -> {seq, head, tag} */
-    async siblingRemove(index, { onPress, timeoutMs = 30000 } = {}) {
-      if (!Number.isInteger(index) || index < 0 || index > 255) throw new RangeError(`Edge: no sibling index ${index}`);
-      const [r] = await pressed(SUB.SIBLING_REMOVE, Uint8Array.of(index), { timeoutMs, newLink: true }, onPress);
-      return seqHeadTag(r);
-    },
-
-    /** R29: the key's paired phones, no press. -> {max, siblings: [{index, publicKey (X || Y), deviceId}]} */
-    /**
-     * R30: anchor the sibling at `index` at its SIGNED checkpoint {seq, head,
-     * signature} (the sibling key's own edge.checkpoint()). The key checks the
-     * signature against that sibling's key (EDGE:1B if not), then waits for a
-     * PHYSICAL press and links op 19 (grants.anchorSubject). Only inside a sync
-     * the person approved (spec): the caller's sheet comes first.
-     * Three requests on the wire: {index, seq, head}, r, s. -> {seq, head, tag}
-     */
-    async anchor(index, { seq, head, signature }, { onPress, timeoutMs = 30000 } = {}) {
-      if (!Number.isInteger(index) || index < 0 || index > 255) throw new RangeError(`Edge: no sibling index ${index}`);
-      const sig = Uint8Array.from(signature);
-      const s4 = Uint8Array.of(seq & 0xff, (seq >>> 8) & 0xff, (seq >>> 16) & 0xff, (seq >>> 24) & 0xff);
-      await call(SUB.ANCHOR, concat([Uint8Array.of(0, index), s4, Uint8Array.from(head)]), { text: true });
-      await call(SUB.ANCHOR, concat([Uint8Array.of(1), sig.slice(0, 32)]), { text: true });
-      const [r] = await pressed(SUB.ANCHOR, concat([Uint8Array.of(2), sig.slice(32, 64)]), { timeoutMs, newLink: true }, onPress);
-      return seqHeadTag(r);
-    },
-
-    async siblings(opts) {
-      const [h, ...slots] = await call(SUB.SIBLING_LIST, null, { ...opts, reports: 1 + PEER_SLOTS });
-      return {
-        max: h[1],
-        siblings: slots.slice(0, h[0]).map((r, index) => ({ index, publicKey: r.slice(0, 64), deviceId: chain.deviceIdOf(r.slice(0, 64)) })),
-      };
-    },
-
-    async sync(fields, { onPress, timeoutMs = 30000 } = {}) {
-      /*
-       * fields: sync.syncFields(...). Three requests (104 bytes do not fit one):
-       * the key checks the peer hash is one of its peers, then computes the
-       * subject itself and waits for the press. Refused: 'no-such-peer',
-       * 'bad-range', 'sync-order', 'restoring'.
-       */
-      const { peerHash, first, last, head, keychain } = fields || {};
-      if (![peerHash, head, keychain].every((b) => b instanceof Uint8Array && b.length === 32)) throw new TypeError('Edge: sync fields are sync.syncFields(...)');
-      await call(SUB.SYNC, concat([Uint8Array.of(0), peerHash, u32(first), u32(last)]), { text: true });
-      await call(SUB.SYNC, concat([Uint8Array.of(1), head]), { text: true });
-      const [r] = await pressed(SUB.SYNC, concat([Uint8Array.of(2), keychain]), { timeoutMs, newLink: true }, onPress);
-      return seqHeadTag(r);
-    },
-
     async loss({ from, to, onPress, timeoutMs = 30000 } = {}) {
       if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) throw new RangeError(`Edge: a loss is #from..#to, not ${from}..${to}`);
       const pending = pressed(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
-      return seqHeadTag(r);
+      return seqHead(r);
     },
 
     /**
@@ -794,7 +629,7 @@ function setup(imports, register) {
     let readMore = false;
     /*
      * THE KEY AHEAD OF THE COPY (A13, 2026-10-06): an agent's link (its
-     * ticket) lands on the key between the phone's sync and this check, so
+     * receipt) lands on the key between the phone's sync and this check, so
      * the stored copy ends one link short of the live head. Both the short
      * path and the full check called that link a gap - the full check failed,
      * kept no state, and every later check started from scratch (13-16 s on

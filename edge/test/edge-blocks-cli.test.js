@@ -26,7 +26,7 @@ const id = chain.deviceIdOf(pub);
 const b32 = (n) => new Uint8Array(32).fill(n);
 
 /* two budgets' worth of links, the second still open after its last link */
-const links = [OP.GRANT_CREATE, OP.SIGN, OP.TICKET, OP.GRANT_END, OP.GRANT_CREATE, OP.SIGN].map((op, seq) =>
+const links = [OP.GRANT_CREATE, OP.SIGN, OP.RECEIPT, OP.GRANT_END, OP.GRANT_CREATE, OP.SIGN].map((op, seq) =>
   chain.encodeLink({ seq, op, decision: op === OP.SIGN ? DECISION.SELF_PRESS : DECISION.APPROVE, subject: b32(seq + 1), grantId: 3, version: 1 }));
 const heads = chain.heads(links, chain.genesis(id));
 const sealAt = (seq) => ({ seq, head: heads[seq], signature: chain.signCheckpoint({ deviceId: id, seq, head: heads[seq] }, sk) });

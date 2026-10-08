@@ -258,61 +258,61 @@ function agentSubject(agentKey) {
 }
 
 /*
- * PEER_ADD / PEER_REMOVE subject (firmware.md R20): SHA256 of the peer's P-256
- * key as X || Y - the same 64 bytes the key answers PUBKEY with for its own.
- * No domain tag: R20 names the bare hash.
+ * No peer, sibling or anchor subjects since 2026-10-08: pairing and sync are the app's
+ * (Brad: "pairing and sync is all app stuff, not firmware"), so the key links none of them.
  */
-/*
- * SIBLING_ADD / SIBLING_REMOVE subject (firmware.md R29): SHA256("OKEDGE-
- * SIBLING-v1" || the sibling's Edge key X || Y || its device id).
- */
-function siblingSubject(key, deviceId) {
-  const k = Uint8Array.from(key);
-  const id = Uint8Array.from(deviceId);
-  if (k.length !== 64 || id.length !== 16) throw new TypeError('siblingSubject needs the 64-byte key X || Y and the 16-byte device id');
-  return H('OKEDGE-SIBLING-v1', k, id);
-}
 
 /*
- * THE CODE BOTH PHONES SHOW (spec, 2026-10-05: the computer relays each phone's
- * key and could swap one). Six digits from SHA256("OKEDGE-SIBLING-CODE-v1" ||
- * the two (key || id) in byte order) - the same on both screens only when each
- * phone got the OTHER's real key. The person compares them before pressing.
- * -> "123 456"
+ * THE OWNER STATEMENT (Brad, 2026-10-08: "if it has the private ecc key to sign the block,
+ * then i want the log"; a device names its own fingerprint with a NAMETAG). Each key signs,
+ * with an OWNER key derived from its secret with no salt - the same on every device made
+ * from the same backup - a statement about itself: its device id, its checkpoint key, its
+ * seq and the hash of its nametag (okplugin_edge.cpp statement()). Any device of yours
+ * checks another's statement with ITS OWN owner public key: it verifies only if the same
+ * OnlyKey secret made it. No press, no link.
  */
-/*
- * R30 ANCHOR subject (firmware.md): SHA256("OKEDGE-ANCHOR-v1" || the sibling's
- * device id || its seq (u32 LE) || its head || its checkpoint signature) - the
- * signed checkpoint this key says it has seen the sibling's chain up to.
- */
-function anchorSubject({ deviceId, seq, head, signature }) {
+const NAMETAG_MAX = 64; /* characters, trimmed */
+
+/** A nametag as the person typed it -> its hash, the 32 bytes the key signs. Throws on an empty or too long one. */
+function nametagHash(nametag) {
+  const t = String(nametag ?? '').trim();
+  if (!t) throw new TypeError('edge: a nametag needs at least one character');
+  if ([...t].length > NAMETAG_MAX) throw new RangeError(`edge: a nametag is at most ${NAMETAG_MAX} characters`);
+  return H('OKEDGE-NAMETAG-v1', utf8ToBytes(t));
+}
+
+/** SHA256("OKEDGE-STATEMENT-v1" || device id 16 || checkpoint pubkey X||Y 64 || seq u32 LE || nametag hash 32) - what the owner key signs. */
+function statementDigest({ deviceId, publicKey, seq, nametagHash: nh }) {
   const id = Uint8Array.from(deviceId);
-  const h = Uint8Array.from(head);
-  const sig = Uint8Array.from(signature);
-  if (id.length !== 16 || h.length !== 32 || sig.length !== 64 || !Number.isInteger(seq) || seq < 0 || seq > 0xffffffff) {
-    throw new TypeError('anchorSubject needs the device id (16), seq (u32), head (32) and signature (64)');
+  const pub = Uint8Array.from(publicKey);
+  const tag = Uint8Array.from(nh);
+  if (id.length !== 16 || pub.length !== 64 || tag.length !== 32 || !Number.isInteger(seq) || seq < 0 || seq > 0xffffffff) {
+    throw new TypeError('edge: a statement is the device id (16), the checkpoint key X||Y (64), a u32 seq and a nametag hash (32)');
   }
   const s4 = Uint8Array.of(seq & 0xff, (seq >>> 8) & 0xff, (seq >>> 16) & 0xff, (seq >>> 24) & 0xff);
-  return H('OKEDGE-ANCHOR-v1', id, s4, h, sig);
+  return H('OKEDGE-STATEMENT-v1', id, pub, s4, tag);
 }
 
-function siblingCode(a, b) {
-  const one = (x) => Uint8Array.from([...Uint8Array.from(x.publicKey), ...Uint8Array.from(x.deviceId)]);
-  const [p, q] = [one(a), one(b)].sort((x, y) => { for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return x[i] - y[i]; return 0; });
-  const h = H('OKEDGE-SIBLING-CODE-v1', p, q);
-  const n = ((h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3]) >>> 0;
-  const digits = String(n % 1000000).padStart(6, '0');
-  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
-}
-
-function peerSubject(peerKey) {
-  const k = Uint8Array.from(peerKey);
-  if (k.length !== 64) throw new TypeError('peerSubject needs a 64-byte P-256 key (X || Y)');
-  return crypto.sha256(k);
+/**
+ * Is this statement signed by MY owner key, and does it name the key it carries?
+ * statement: {deviceId, publicKey, seq, nametag (text), signature}; ownerKey: this device's
+ * own owner public key (X||Y). -> boolean (false on anything malformed)
+ */
+function verifyStatement(statement, ownerKey) {
+  try {
+    const { deviceId, publicKey, seq, nametag, signature } = statement || {};
+    if (!same(chain.deviceIdOf(Uint8Array.from(publicKey)), Uint8Array.from(deviceId))) return false; /* the id is the key's */
+    /* seq null = the key had no link yet: it signed 0xFFFFFFFF */
+    const digest = statementDigest({ deviceId, publicKey, seq: seq === null ? 0xffffffff : seq, nametagHash: nametagHash(nametag) });
+    const owner = Uint8Array.from(ownerKey);
+    return crypto.p256VerifyDigest(Uint8Array.from(signature), digest, owner.length === 64 ? Uint8Array.from([4, ...owner]) : owner, { lowS: false });
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {
-  agentSubject, peerSubject, siblingSubject, siblingCode, anchorSubject,
+  agentSubject, NAMETAG_MAX, nametagHash, statementDigest, verifyStatement,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, txToken, intentOf, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel,

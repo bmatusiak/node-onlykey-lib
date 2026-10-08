@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const setup = require('../plugin');
-const { chain, codes, grants, tickets } = require('../src');
+const { chain, codes, grants, receipts } = require('../src');
 const { H } = require('../src/hash');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 const { IFACE } = require('../../src/protocol/msg');
@@ -41,7 +41,7 @@ test('edge: the checkpoint is read and verifies with the Edge key', async () => 
 test('edge: a budget\'s opening comes back as a proof verifyBudgetOpening accepts', async () => {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32)); /* R10: no budget while a ticket is owed */
+  await edge.receipt(0, 0, new Uint8Array(32)); /* R10: no budget while a receipt is owed */
   const before = await edge.head();
   const scopes = [{ op: codes.OP.SIGN, slot: 2, cap: 4 }];
   const reasonHash = new Uint8Array(32).fill(7);
@@ -70,7 +70,7 @@ test('edge: a budget\'s opening comes back as a proof verifyBudgetOpening accept
 test('edge: requests from two callers at once never swap answers (one Edge request at a time)', async () => {
   const transport = fakeKey({ delay: 30 });
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32)); /* R10: no budget while a ticket is owed */
+  await edge.receipt(0, 0, new Uint8Array(32)); /* R10: no budget while a receipt is owed */
   const before = await edge.head();
   const scopes = [{ op: codes.OP.SIGN, slot: 2, cap: 4 }];
   const [g, picked, h] = await Promise.all([
@@ -89,12 +89,12 @@ test('edge: requests from two callers at once never swap answers (one Edge reque
 test('edge: EDGE:xx refusals become named errors', async () => {
   const edge = edgeOver(fakeKey());
   await assert.rejects(edge.revoke(99), (e) => e instanceof edge.EdgeError && e.status === 'no-such-budget' && e.code === 7);
-  await assert.rejects(edge.ticket(5, 0, new Uint8Array(32)), (e) => e.status === 'no-ticket-waiting');
+  await assert.rejects(edge.receipt(5, 0, new Uint8Array(32)), (e) => e.status === 'no-receipt-waiting');
   await assert.rejects(edge.pickup(3, 1), (e) => e.status === 'not-held');
   await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 1000 }, { op: 1, slot: 3, cap: 25 }], reasonHash: new Uint8Array(32), verifiedHead: new Uint8Array(32) }),
     (e) => e.status === 'too-many-uses');
-  const t = await edge.ticket(0, 0, new Uint8Array(32));
-  assert.equal(t.seq, 1, 'the ticket comes back with the seq and head the next txStart() passes');
+  const t = await edge.receipt(0, 0, new Uint8Array(32));
+  assert.equal(t.seq, 1, 'the receipt comes back with the seq and head the next txStart() passes');
   assert.equal(t.head.length, 32);
 });
 
@@ -103,11 +103,11 @@ test('edge: TX start, hold/resume and WAIVE - the spec change (R13a, R15a, R18)'
   const edge = edgeOver(transport);
   const startedToken = () => transport.started();
   let h = await edge.head();
-  assert.equal(h.owed, 1, 'the approved use owes its ticket');
-  /* nothing starts, and no budget opens, while a ticket is owed */
+  assert.equal(h.owed, 1, 'the approved use owes its receipt');
+  /* nothing starts, and no budget opens, while a receipt is owed */
   const S = new Uint8Array(32).fill(4); /* the subject of the request a TX start is for */
-  await assert.rejects(edge.txStart(h.head, S), (e) => e.status === 'ticket-owed');
-  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head }), (e) => e.status === 'ticket-owed');
+  await assert.rejects(edge.txStart(h.head, S), (e) => e.status === 'receipt-owed');
+  await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head }), (e) => e.status === 'receipt-owed');
   /* WAIVE clears it */
   const w = await edge.waive();
   assert.equal(w.seq, 1);
@@ -170,38 +170,6 @@ test('edge: grants.create / resume verify the copy first, send the verified head
   assert.equal(requests(), sent + 1);
 });
 
-test('edge: a restoring key fails the copy check; REPLAY is tentative and REPLAY_DONE commits only on the vouch tag the key issued (R26)', async () => {
-  const edge = edgeOver(fakeKey({ restoring: true }));
-  assert.equal((await edge.head()).restoring, true);
-  assert.equal((await edge.grants.check(await copyOf(edge))).reason, 'restoring');
-  const next = chain.encodeLink({ seq: 1, op: codes.OP.SIGN, decision: codes.DECISION.DENY, subject: new Uint8Array(32).fill(4) });
-  const h0 = await edge.head();
-  /* a copy whose head after the link is not the key's weld: forked */
-  await assert.rejects(edge.replay(next, new Uint8Array(32).fill(6)), (e) => e.status === 'replay-mismatch');
-  assert.equal(await edge.replay(next, chain.weld(h0.head, next)), true);
-  const far = chain.encodeLink({ seq: 5, op: 1, decision: 2, subject: new Uint8Array(32) });
-  await assert.rejects(edge.replay(far, chain.weld(h0.head, far)), (e) => e.status === 'replay-mismatch');
-  /* R13b: only a sign/decrypt link may carry bytes 47-62 (its intent) - on any other link they are no key's */
-  await assert.rejects(edge.replay(chain.encodeLink({ seq: 2, op: codes.OP.TICKET, decision: 0, subject: new Uint8Array(32), reserved: new Uint8Array(18).fill(1) }), new Uint8Array(32)),
-    (e) => e.code === 'EDGE_NOT_A_KEY_LINK');
-  /* the replay is tentative: HEAD still shows the restored head */
-  assert.equal((await edge.head()).seq, 0, 'a replay moved the real head before it was vouched');
-  let asked = false;
-  /* a tag the key did not issue: thrown away (a real key also links the LOSS) */
-  await assert.rejects(edge.replayDone({ seq: 1, tag: new Uint8Array(16).fill(1), onPress: () => { asked = true; } }), (e) => e.status === 'not-vouched');
-  assert.ok(asked);
-  assert.equal((await edge.head()).restoring, false);
-});
-
-test('edge: VOUCH gives seq, head and tag; a replay with a tag the key issued commits (R26)', async () => {
-  const transport = fakeKey();
-  const edge = edgeOver(transport);
-  const v = await edge.vouch();
-  assert.equal(JSON.stringify([v.seq, v.head.length, v.tag.length]), JSON.stringify([0, 32, 16]));
-  const t = await edge.ticket(0, 0, new Uint8Array(32));
-  assert.equal(t.tag.length, 16, 'a ticket reply carries the vouch tag');
-});
-
 test('edge: a stray report on the bus is not taken as the answer (measured on the Pixel soft key)', async () => {
   /* the key leaves a report behind after an agent sign; the next Edge request must not read it */
   const transport = fakeKey({ delay: 60 }); /* a key slower than the stray: it lands between request and answer */
@@ -257,7 +225,7 @@ test('edge: LOSS {from, to} - a pressed loss link with the spec layout; a range 
 test('edge: R11a - a derived-code scope stages its identity label first, and the opening commits to it', async () => {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32)); /* R10: no budget while a ticket is owed */
+  await edge.receipt(0, 0, new Uint8Array(32)); /* R10: no budget while a receipt is owed */
   const before = await edge.head();
   const scopes = [{ op: codes.OP.SIGN, slot: 222, cap: 3, identity: 'ssh://agent@nitro16' }];
   const reasonHash = new Uint8Array(32).fill(7);
@@ -277,7 +245,7 @@ test('edge: R11a - a derived-code scope stages its identity label first, and the
 test('edge: R11a - a derived-code scope without an identity is refused before anything is sent; a stored slot needs none', async () => {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32));
+  await edge.receipt(0, 0, new Uint8Array(32));
   const before = await edge.head();
   const n = transport.writes.length;
   await assert.rejects(edge.grant({ scopes: [{ op: codes.OP.SIGN, slot: 201, cap: 1 }], reasonHash: new Uint8Array(32), verifiedHead: before.head }),
@@ -295,7 +263,7 @@ test('edge: grants.check with the key one link ahead of the copy takes the short
   const first = await copyOf(edge);
   assert.equal((await edge.grants.check(first, { keyTail: true })).ok, true);
   assert.equal(edge.grants.lastPath, 'full: first check');
-  /* a link lands on the key after the copy was read (an agent's ticket, between the sync and this check) */
+  /* a link lands on the key after the copy was read (an agent's receipt, between the sync and this check) */
   await edge.waive();
   const behind = { links: (await copyOf(edge)).links.slice(0, -1), openings: {} };
   assert.equal((await edge.grants.check(behind, { keyTail: true })).ok, true, 'for a display, the key\'s newest link is checked from the key, not called a gap');
@@ -314,7 +282,7 @@ test('edge: grants.check reads one moment of the key - a link landing mid-check 
   assert.equal((await edge.grants.check(await copyOf(edge), { keyTail: true })).ok, true);
   await edge.waive();
   const copy = await copyOf(edge);
-  /* an agent's ticket lands between the head read and the checkpoint read, once */
+  /* an agent's receipt lands between the head read and the checkpoint read, once */
   const checkpoint = edge.checkpoint.bind(edge);
   let raced = false;
   edge.checkpoint = async () => {

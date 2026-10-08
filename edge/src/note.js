@@ -5,7 +5,7 @@
  * build/okrn-edge-tab.md "Decided 2026-10-04"). Over the same channel as
  * EDGE_REQUEST (0xF7 on Bluetooth; the Worker mailbox later):
  *
- *   {type: 'EDGE_NOTE', v: 1, agent, nonce, seq, reason?, ticketMsg?, txRefused?, signature}
+ *   {type: 'EDGE_NOTE', v: 1, agent, nonce, seq, reason?, receiptMsg?, txRefused?, signature}
  *
  * signed by the agent's REGISTERED request key. A note changes nothing - no
  * state, no debts, no budgets. The phone drops one from a key it did not
@@ -15,8 +15,8 @@
  *
  *   reason      why the agent made the use (okedge exec --reason): its claim,
  *               shown quoted, plain text, at most 280 bytes
- *   ticketMsg   the ticket's message: shown only when it hashes to the ticket's
- *               msg_hash (tickets.pairTickets does that check)
+ *   receiptMsg   the receipt's message: shown only when it hashes to the receipt's
+ *               msg_hash (receipts.pairReceipts does that check)
  *   txRefused  the key refused a TX start (its status name): the agent's word only;
  *               the key's own evidence is HEAD's refused-TX start counter. `seq` is
  *               the key's head when it happened.
@@ -28,7 +28,7 @@ const { utf8ToBytes, toHex, fromHex, concat } = require('../../src/bytes');
 const TYPE = 'EDGE_NOTE';
 const TAG = 'OKEDGE-NOTE-v1';
 const MAX_REASON = 280;
-const MAX_TICKET_MSG = 1024;
+const MAX_RECEIPT_MSG = 1024;
 const MAX_TX_REFUSED = 64;
 
 const isHex = (s, n) => typeof s === 'string' && s.length === n * 2 && /^[0-9a-f]+$/i.test(s);
@@ -45,21 +45,21 @@ function field(text, max, name) {
 }
 
 /** The signed bytes of a note. */
-function body({ agent, nonce, seq, reason, ticketMsg, txRefused }) {
+function body({ agent, nonce, seq, reason, receiptMsg, txRefused }) {
   return concat([
     utf8ToBytes(TAG), fromHex(agent), fromHex(nonce), u32(seq),
-    field(reason, MAX_REASON, 'reason'), field(ticketMsg, MAX_TICKET_MSG, 'ticketMsg'), field(txRefused, MAX_TX_REFUSED, 'txRefused'),
+    field(reason, MAX_REASON, 'reason'), field(receiptMsg, MAX_RECEIPT_MSG, 'receiptMsg'), field(txRefused, MAX_TX_REFUSED, 'txRefused'),
   ]);
 }
 
 /** The agent side: a signed note about `seq`. */
-async function build({ signer, seq, reason, ticketMsg, txRefused, nonce = randomBytes(16) }) {
+async function build({ signer, seq, reason, receiptMsg, txRefused, nonce = randomBytes(16) }) {
   if (!isU32(seq)) throw new RangeError(`edge note: seq ${seq} is not a u32`);
-  if (reason === undefined && ticketMsg === undefined && txRefused === undefined) throw new TypeError('edge note: nothing to say');
+  if (reason === undefined && receiptMsg === undefined && txRefused === undefined) throw new TypeError('edge note: nothing to say');
   const msg = {
     type: TYPE, v: 1, agent: toHex(signer.publicKey), nonce: toHex(nonce), seq,
     ...(reason !== undefined ? { reason: String(reason) } : {}),
-    ...(ticketMsg !== undefined ? { ticketMsg: String(ticketMsg) } : {}),
+    ...(receiptMsg !== undefined ? { receiptMsg: String(receiptMsg) } : {}),
     ...(txRefused !== undefined ? { txRefused: String(txRefused) } : {}),
   };
   msg.signature = toHex(await signer.sign(body(msg)));
@@ -78,8 +78,8 @@ function verify(msg, { registered, seen } = {}) {
   if (!(registered || []).some((k) => String(k).toLowerCase() === agent)) return { ok: false, reason: 'unregistered' };
   const str = (v) => v === undefined || typeof v === 'string';
   if (msg.v !== 1 || !isHex(msg.nonce, 16) || !isHex(msg.signature, 64) || !isU32(msg.seq)
-    || !str(msg.reason) || !str(msg.ticketMsg) || !str(msg.txRefused)
-    || (msg.reason === undefined && msg.ticketMsg === undefined && msg.txRefused === undefined)) {
+    || !str(msg.reason) || !str(msg.receiptMsg) || !str(msg.txRefused)
+    || (msg.reason === undefined && msg.receiptMsg === undefined && msg.txRefused === undefined)) {
     return { ok: false, reason: 'malformed' };
   }
   let good = false;
@@ -91,4 +91,4 @@ function verify(msg, { registered, seen } = {}) {
   return { ok: true };
 }
 
-module.exports = { TYPE, MAX_REASON, MAX_TICKET_MSG, MAX_TX_REFUSED, body, build, verify };
+module.exports = { TYPE, MAX_REASON, MAX_RECEIPT_MSG, MAX_TX_REFUSED, body, build, verify };

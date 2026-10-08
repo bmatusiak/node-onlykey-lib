@@ -13,10 +13,8 @@ export function blockId(block: any): string;
  * @param {string|null} o.prev               the previous block's id (hex), null for the first
  * @param {Uint8Array[]} o.links             64-byte links, in seq order, ending at the checkpoint
  * @param {{seq: number, head: Uint8Array, signature: Uint8Array}} o.checkpoint  the key's seal
- * @param {{deviceId, seq, head, signature}[]} [o.seen]  the sibling checkpoints this block's
- *   ANCHOR links record (each must match an ANCHOR link's subject)
  */
-export function buildBlock({ net, deviceId, start, prev, links, checkpoint, seen }: {
+export function buildBlock({ net, deviceId, start, prev, links, checkpoint }: {
     net: "live" | "test";
     deviceId: Uint8Array;
     start: {
@@ -30,12 +28,6 @@ export function buildBlock({ net, deviceId, start, prev, links, checkpoint, seen
         head: Uint8Array;
         signature: Uint8Array;
     };
-    seen?: {
-        deviceId: any;
-        seq: any;
-        head: any;
-        signature: any;
-    }[] | undefined;
 }): {
     v: number;
     net: "test" | "live";
@@ -63,12 +55,6 @@ export function buildBlock({ net, deviceId, start, prev, links, checkpoint, seen
         head: string;
         sig: string;
     };
-    seen: {
-        device: string;
-        seq: any;
-        head: string;
-        sig: string;
-    }[];
 };
 /**
  * The blocks a copy holds: its links cut at its seals, each block naming the one
@@ -81,10 +67,9 @@ export function buildBlock({ net, deviceId, start, prev, links, checkpoint, seen
  * @param {Uint8Array} o.deviceId
  * @param {{link: Uint8Array}[]} o.records  the copy, in seq order
  * @param {{seq, head, signature}[]} o.seals  the key's checkpoints taken when a block closed
- * @param {{deviceId, seq, head, signature}[]} [o.seen]  sibling checkpoints this chain anchored
  * -> {blocks, open (links after the last seal), reason?}
  */
-export function blocksFrom({ net, deviceId, records, seals, seen }: {
+export function blocksFrom({ net, deviceId, records, seals }: {
     net: "live" | "test";
     deviceId: Uint8Array;
     records: {
@@ -95,12 +80,6 @@ export function blocksFrom({ net, deviceId, records, seals, seen }: {
         head: any;
         signature: any;
     }[];
-    seen?: {
-        deviceId: any;
-        seq: any;
-        head: any;
-        signature: any;
-    }[] | undefined;
 }): {
     blocks: {
         v: number;
@@ -129,12 +108,6 @@ export function blocksFrom({ net, deviceId, records, seals, seen }: {
             head: string;
             sig: string;
         };
-        seen: {
-            device: string;
-            seq: any;
-            head: string;
-            sig: string;
-        }[];
     }[];
     open: number;
     reason: string;
@@ -166,12 +139,6 @@ export function blocksFrom({ net, deviceId, records, seals, seen }: {
             head: string;
             sig: string;
         };
-        seen: {
-            device: string;
-            seq: any;
-            head: string;
-            sig: string;
-        }[];
     }[];
     open: number;
     reason?: undefined;

@@ -1,7 +1,7 @@
 'use strict';
 /*
  * R13b (Brad, 2026-10-06): the use says what it's for BEFORE it happens - the
- * intent is welded into the link (bytes 47-62); the ticket is only the result.
+ * intent is welded into the link (bytes 47-62); the receipt is only the result.
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -15,7 +15,7 @@ const ID = 'ssh://agent@nitro16';
 async function setup(opts = {}) {
   const transport = fakeKey(opts);
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32));
+  await edge.receipt(0, 0, new Uint8Array(32));
   const seen = new Set();
   const channel = {
     async send(msg) {
@@ -38,9 +38,8 @@ test('intentOf: the first 16 bytes of SHA256("OKEDGE-INTENT-v1" || UTF-8 text) -
   assert.deepEqual(Buffer.from(grants.intentOf('push über café')), want, 'the text as UTF-8');
 });
 
-test('a paid use carries its intent in bytes 47-62, version 1 in 63; HEAD says the key takes intents', async () => {
+test('a paid use carries its intent in bytes 47-62, version 1 in 63', async () => {
   const { edge, c, sign } = await setup();
-  assert.equal((await edge.head()).canIntent, true);
   const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: ID }], ttlMinutes: 10 });
   const u = await b.use(Uint8Array.from([1]), sign, { reason: 'git push origin master' });
   assert.equal(u.link.paid, true);
@@ -64,21 +63,13 @@ test('budget or no go (Brad, 2026-10-06, R13b): a TX start with an intent and no
   await assert.rejects(edge.txStart(h.head, grants.requestSubject(Uint8Array.from([9])), { intent: grants.intentOf('x') }), (e) => e.status === 'nothing-to-pay');
 });
 
-test('a TX start is refused while a ticket is owed - intent or not (R13a, R13b)', async () => {
+test('a TX start is refused while a receipt is owed - intent or not (R13a, R13b)', async () => {
   const { edge, c, sign } = await setup();
   const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: ID }], ttlMinutes: 10 });
   await b.use(Uint8Array.from([3]), sign, { reason: 'one' });
   const h = await edge.head();
   const subject = grants.requestSubject(Uint8Array.from([4]));
-  await assert.rejects(edge.txStart(h.head, subject, { intent: grants.intentOf('two, without the ticket') }), (e) => e.status === 'ticket-owed');
-  await assert.rejects(edge.txStart(h.head, subject), (e) => e.status === 'ticket-owed');
+  await assert.rejects(edge.txStart(h.head, subject, { intent: grants.intentOf('two, without the receipt') }), (e) => e.status === 'receipt-owed');
+  await assert.rejects(edge.txStart(h.head, subject), (e) => e.status === 'receipt-owed');
 });
 
-test('a key that predates R13b: no capability, the v1 TX start, no intent in the link', async () => {
-  const { edge, c, sign } = await setup({ intentCap: false });
-  assert.equal((await edge.head()).canIntent, false);
-  const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: ID }], ttlMinutes: 10 });
-  const u = await b.use(Uint8Array.from([5]), sign, { reason: 'git push' });
-  assert.equal(u.link.paid, true, 'the v1 token still pays');
-  assert.equal((await linkAt(edge, u.link.seq)).intent, null);
-});

@@ -54,7 +54,7 @@ const MAX_LIFETIME_MINUTES = 24 * 60;
 /* the typed refusals an app answers with (4.7a), plus 'invalid' for a request that fails check() */
 /* still_live (4.7a, 2026-10-03): a continue names a budget that has not ended - only an ended budget can be continued */
 /* busy (2026-10-04): another request is on the phone's sheet - one at a time, never queued */
-const REFUSALS = Object.freeze(['declined', 'timeout', 'copy_unverified', 'ticket_owed', 'restoring', 'still_live', 'invalid', 'busy']);
+const REFUSALS = Object.freeze(['declined', 'timeout', 'copy_unverified', 'receipt_owed', 'still_live', 'invalid', 'busy']);
 const OPS = Object.freeze({ sign: OP.SIGN, decrypt: OP.DECRYPT });
 
 const u16 = (n) => Uint8Array.of(n & 0xff, (n >>> 8) & 0xff);
@@ -139,50 +139,10 @@ function signerFromSecret(secret) {
 }
 
 /*
- * R20 (okedge sync phase 2, P2a, Brad 2026-10-05): a place that keeps copies -
- * this PC's copy store first - asks to be added as a known peer:
- *
- *   { type: 'EDGE_PEER_ADD', v: 1, peer, name, nonce, signature }
- *
- * peer = its P-256 key, X || Y (hex, 64 bytes) - the KEY's list holds it, and a
- * sync only goes to places on that list. Signed by that key (ECDSA P-256 over
- * SHA-256 of the body), so nobody adds a key they do not hold - the place must
- * later sign receipts with it (R21). The phone shows the sheet; the person says
- * Yes and presses; the key links it (peer-add). Not tied to a registered agent:
- * the copy store is not the agent, and the agent cannot vouch for where copies go.
+ * A P-256 signer from a 32-byte secret - this computer's own sync key (<edge home>/peer.key):
+ * it signs every sync message, so the phone can tell which computer sent a log. No list
+ * of peers since 2026-10-08 (Brad: peers dropped) - the Bluetooth pairing is the gate.
  */
-const PEER_TYPE = 'EDGE_PEER_ADD';
-const PEER_TAG = 'OKEDGE-PEER-ADD-v1';
-
-function peerBody({ peer, nonce, name }) {
-  const n = utf8ToBytes(String(name));
-  if (n.length > 0xff) throw new RangeError('edge peer add: the name is too long');
-  return concat([utf8ToBytes(PEER_TAG), fromHex(peer), fromHex(nonce), Uint8Array.of(n.length), n]);
-}
-
-/** The place's side: ask the phone to add it, under a name the person reads. signer: peerSignerFromSecret. */
-async function buildPeerAdd({ signer, name, nonce = randomBytes(16) }) {
-  const msg = { type: PEER_TYPE, v: 1, peer: toHex(signer.publicKey), name: String(name), nonce: toHex(nonce) };
-  msg.signature = toHex(await signer.sign(peerBody(msg)));
-  return msg;
-}
-
-/** The app's side: signed by the key it names, and new. -> {ok} or {ok: false, reason} */
-function verifyPeerAdd(msg, { seen } = {}) {
-  if (!msg || msg.type !== PEER_TYPE || msg.v !== 1 || !isHex(msg.peer, 64) || !isHex(msg.nonce, 16) || !isHex(msg.signature, 64)
-    || typeof msg.name !== 'string' || !msg.name.trim() || utf8ToBytes(msg.name).length > 0xff) {
-    return { ok: false, reason: 'malformed' };
-  }
-  let good = false;
-  try {
-    good = crypto.p256Verify(fromHex(msg.signature), peerBody(msg), Uint8Array.from([4, ...fromHex(msg.peer)]));
-  } catch { good = false; }
-  if (!good) return { ok: false, reason: 'bad-signature' };
-  if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
-  return { ok: true };
-}
-
-/* a P-256 signer from a 32-byte secret - the copy store's peer key; publicKey is X || Y, as the key lists it */
 function peerSignerFromSecret(secret) {
   return {
     publicKey: p256.getPublicKey(secret, false).slice(1),
@@ -298,5 +258,5 @@ module.exports = {
   TYPE, REGISTER_TYPE, MAX_REQUEST_USES, MAX_LIFETIME_MINUTES, REFUSALS,
   body, build, signerFromSecret, verify, check, grantScopes, reasonHash, view, sameScopes,
   registerBody, buildRegister, verifyRegister, fingerprint,
-  PEER_TYPE, peerBody, buildPeerAdd, verifyPeerAdd, peerSignerFromSecret,
+  peerSignerFromSecret,
 };

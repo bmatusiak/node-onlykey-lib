@@ -8,11 +8,10 @@
  *   edge continue --ttl MIN [--caps n,n]                    continue it after a lock (ends the old one first)
  *   edge exec --head H --intent "…" -- <command…>           run one command; its signature is paid by the budget,
  *                                                           its intent welded into the link (R13b)
- *   edge ticket <seq> [--code OK] --msg "…"                 file the ticket; prints the next head
- *   edge sync [--status] | sync --with <address>            the PC's own copy of the key's chain (R27, R30)
- *   edge peer add [--name "…"] | peer list                  places that keep copies (R20)
- *   edge sibling add <address> | sibling list               another key of yours (R29)
- *   edge status | end                                       the budget, its head, tickets owed | end it
+ *   edge receipt <seq> [--code OK] --msg "…"                 file the receipt; prints the next head
+ *   edge sync [--status] | sync --with <address>            the PC's copy of the key's chain (R27), and your other devices' logs offered;
+ *                                                           a phone holds an offered log until you approve the merge
+ *   edge status | end                                       the budget, its head, receipts owed | end it
  *   edge watch [--once]                                     follow the key's links live (read-only)
  *
  * Each command runs through `ask`: the optional `edge agent` service when one is
@@ -27,21 +26,20 @@
  */
 
 const { spawn } = require('child_process');
-const { codes, live, grants } = require('../src');
+const { codes, grants } = require('../src');
 
 /* edge watch: what each link's op is called */
 const OP_NAME = {
-  1: 'sign', 2: 'decrypt', 3: 'fido register', 4: 'fido sign', 5: 'hmac', 6: 'budget opened', 7: 'budget ended',
-  8: 'ticket', 9: 'peer added', 10: 'peer removed', 11: 'LOSS', 12: 'wipe', 13: 'hold', 14: 'resume', 15: 'agent registered',
-  16: 'continue', 17: 'sibling added', 18: 'sibling removed', 19: 'anchor', 20: 'sync',
+  1: 'sign', 2: 'decrypt', 6: 'budget opened', 7: 'budget ended',
+  8: 'receipt', 11: 'LOSS', 13: 'hold', 14: 'resume', 15: 'agent registered', 16: 'continue',
 };
-/* reasons and ticket messages are the agent's own untrusted text: one plain line, never interpreted */
+/* reasons and receipt messages are the agent's own untrusted text: one plain line, never interpreted */
 const plain = (t) => String(t).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
 
 /**
  * edge watch's lines for one feed (mcp-service.md: one line per use, its
- * reason, then its ticket; alarms highlighted - okrn-edge-tab.md B7): an alarm
- * ticket (bit 7 or an unknown code), a press asked for under a live budget, an
+ * reason, then its receipt; alarms highlighted - okrn-edge-tab.md B7): an alarm
+ * receipt (bit 7 or an unknown code), a press asked for under a live budget, an
  * TX start that did not match its request, a refused exec, a budget ended, a LOSS or
  * a wipe, links lost from the key's ring.
  */
@@ -52,18 +50,17 @@ function watchLines(feed, { color = false, time = new Date() } = {}) {
   if (feed.missed) lines.push(red(`⚠ ${feed.missed} link(s) fell out of the key's ring before they were read`));
   for (const l of feed.links || []) {
     const n = l.note || {};
-    if (l.op === codes.OP.TICKET) {
-      const name = codes.TICKET[l.code];
+    if (l.op === codes.OP.RECEIPT) {
+      const name = codes.RECEIPT[l.code];
       const alarm = (l.code & 0x80) || !name;
-      const msg = n.ticket && n.ticket.message ? ` · "${plain(n.ticket.message)}"` : '';
-      const line = `        ↳ #${l.seq} ticket for #${l.refSeq}: ${name || `0x${l.code.toString(16)}`}${msg}`;
+      const msg = n.receipt && n.receipt.message ? ` · "${plain(n.receipt.message)}"` : '';
+      const line = `        ↳ #${l.seq} receipt for #${l.refSeq}: ${name || `0x${l.code.toString(16)}`}${msg}`;
       lines.push(alarm ? red(`${line}  ⚠ ALARM`) : line);
       continue;
     }
     if (l.op === codes.OP.SIGN || l.op === codes.OP.DECRYPT) {
-      const { kind, alarm } = live.classifyUse(l);
-      const how = kind === live.KIND.SELF_PRESS ? `self-press · budget ${l.grantId}, use ${l.grantStep}`
-        : kind === live.KIND.DENIED ? 'denied' : kind === live.KIND.TIMED_OUT ? 'timed out' : 'pressed';
+      /* v1: the key links a sign or decrypt only when a budget paid it (R1, R16) */
+      const how = `self-press · budget ${l.grantId}, use ${l.grantStep}`;
       /*
        * R13b: the intent welded into the link against the text the agent noted -
        * the text shows only when it hashes to the link's 16 bytes. "no intent" =
@@ -76,11 +73,11 @@ function watchLines(feed, { color = false, time = new Date() } = {}) {
         else if (Buffer.from(grants.intentOf(String(n.reason))).toString('hex') !== l.intent) { mismatch = true; what = ` · "${plain(n.reason)}" - intent does not match`; }
       } else what = ` · no intent${n.reason ? ` (noted: "${plain(n.reason)}")` : ''}`;
       const line = `#${l.seq} ${at} ${OP_NAME[l.op]} slot ${l.slot} · ${how}${what}`;
-      lines.push(alarm || mismatch ? red(`${line}  ⚠ ${alarm || 'intent does not match its text'}`) : line);
+      lines.push(mismatch ? red(`${line}  ⚠ intent does not match its text`) : line);
       continue;
     }
     const line = `#${l.seq} ${at} ${OP_NAME[l.op] || `op ${l.op}`}${l.grantId ? ` ${l.grantId}` : ''}`;
-    lines.push([codes.OP.GRANT_END, codes.OP.LOSS, codes.OP.WIPE].includes(l.op) ? red(`${line}  ⚠`) : line);
+    lines.push([codes.OP.GRANT_END, codes.OP.LOSS].includes(l.op) ? red(`${line}  ⚠`) : line);
   }
   for (const e of feed.events || []) lines.push(red(`⚠ agent: ${plain(e.message)}`));
   return lines;
@@ -105,9 +102,9 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         out(`budget ${s.budget}: ${used} · head ${s.head}`);
         const keyOwed = s.keyOwed || [];
         if (keyOwed.length || s.keyOwedOlder) {
-          out(`the key owes ${keyOwed.length ? `tickets for #${keyOwed.join(', #')}` : ''}${keyOwed.length && s.keyOwedOlder ? ' and ' : ''}${s.keyOwedOlder ? `${s.keyOwedOlder} older (waive on the phone)` : ''}`);
-          for (const q of keyOwed) out(`  #${q}: ${s.owed.includes(q) ? "this budget's use" : "a pressed sign with the agent's key (R16)"} - onlykey-js edge ticket ${q} --msg "…"`);
-        } else if (s.owed.length) out(`ticket owed for #${s.owed.join(', #')}`);
+          out(`the key owes ${keyOwed.length ? `receipts for #${keyOwed.join(', #')}` : ''}${keyOwed.length && s.keyOwedOlder ? ' and ' : ''}${s.keyOwedOlder ? `${s.keyOwedOlder} older (waive on the phone)` : ''}`);
+          for (const q of keyOwed) out(`  #${q}: ${s.owed.includes(q) ? "this budget's use" : "a pressed sign with the agent's key (R16)"} - onlykey-js edge receipt ${q} --msg "…"`);
+        } else if (s.owed.length) out(`receipt owed for #${s.owed.join(', #')}`);
       }
       if (s.link) out(`bluetooth: ${s.link.connects} connect(s), ${s.link.reconnects} reconnect(s), ${s.link.reconnectsFailed} failed${s.link.lastUpMs !== null ? `; last link up in ${s.link.lastUpMs} ms` : ''}`);
       return 0;
@@ -132,83 +129,32 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       out(`head = ${r.head}`);
       return 0;
     }
-    if (cmd === 'ticket') {
+    if (cmd === 'receipt') {
       const seq = Number(args[0]);
       const message = opt(args, '--msg');
-      if (!Number.isInteger(seq) || !message) { err('onlykey-js edge ticket <seq> [--code OK] --msg "…"'); return 2; }
-      const r = await ask('ticket', { seq, code: opt(args, '--code') || 'OK', message });
-      out(`ticket filed for #${seq}`);
+      if (!Number.isInteger(seq) || !message) { err('onlykey-js edge receipt <seq> [--code OK] --msg "…"'); return 2; }
+      const r = await ask('receipt', { seq, code: opt(args, '--code') || 'OK', message });
+      out(`receipt filed for #${seq}`);
       out(`head = ${r.head}`);
       return 0;
     }
     if (cmd === 'sync') {
-      /* mcp-service.md 4.2b: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone (its sheet + press). --with worker comes with E5 */
+      /* mcp-service.md 4.2b: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone, which holds it until the person approves the merge (2026-10-08) */
       if (args.includes('--with')) {
-        /* R30 (P2c): with the key on another phone (paired both ways) - each anchors the other, a sheet + press on each */
+        /* each phone's log offered to the other - held there until you approve (2026-10-08) */
         const address = opt(args, '--with');
-        if (!address || address.startsWith('--') || address === 'worker') { err('onlykey-js edge sync --with <the other phone\'s Bluetooth address> (the Worker comes with E5)'); return 2; }
-        const r = await ask('sync-with', { address, name: opt(args, '--name') || null, otherName: opt(args, '--other-name') || null },
-          { timeoutMs: 600000, onSent: () => out('Waiting for the phones - each shows the other key\'s chain to anchor') });
+        if (!address || address.startsWith('--')) { err('onlykey-js edge sync --with <the other phone\'s Bluetooth address>'); return 2; }
+        const r = await ask('sync-with', { address }, { timeoutMs: 300000 });
         for (const [what, x] of [['this phone', r.this], ['the other phone', r.other]]) {
-          if (!x.ok) out(`${what}: not anchored - ${x.error}`);
-          else out(`${what}: anchored the other at #${x.anchored.seq} (link #${x.seq}, ${x.sent} link${x.sent === 1 ? '' : 's'} sent)`);
+          if (!x.ok) out(`${what} ("${x.nametag}"): not offered - ${x.error}`);
+          else out(`${what} ("${x.nametag}"): holds "${x.offered.nametag}" up to #${x.offered.seq} (${x.sent} link${x.sent === 1 ? '' : 's'} sent) - approve it from its Edge tab banner`);
         }
         return r.this.ok && r.other.ok ? 0 : 1;
       }
       const status = args.includes('--status');
-      /* phase 2 may wait on the phone's sheet (2 min) and the press (25 s): longer than a plain read */
-      const r = await ask('sync', { status }, { timeoutMs: status ? 120000 : 240000 });
+      const r = await ask('sync', { status }, { timeoutMs: 120000 });
       for (const l of require('./copy').lines(r, { status })) out(l);
       return r.verdict.kind === 'tampered' ? 1 : 0;
-    }
-    if (cmd === 'peer') {
-      /* sync phase 2, P2a (R20): the places a sync may send copies to - the key's list */
-      const { request } = require('../src');
-      const sub = args[0];
-      if (sub === 'add') {
-        const r0 = await ask('peers');
-        const mine = r0.peers.find((p) => p.thisPc);
-        if (mine) { out(`this PC's copy store is already peer ${mine.index} (${request.fingerprint(mine.key)})`); return 0; }
-        out(`copy store key  ${request.fingerprint(r0.mine)}`);
-        out('Check the phone shows the same key, Add there, then press the key...');
-        const r = await ask('peer-add', { name: opt(args, '--name') || null });
-        out(r.already ? `already peer ${r.index}` : `added as peer ${r.index} (link #${r.seq})`);
-        return 0;
-      }
-      if (sub === 'list' || sub === undefined) {
-        const r = await ask('peers');
-        if (!r.peers.length) out('no places keep copies yet - onlykey-js edge peer add');
-        for (const p of r.peers) out(`peer ${p.index}  ${request.fingerprint(p.key)}${p.thisPc ? '  (this PC)' : ''}`);
-        out(`${r.peers.length} of ${r.max}; k ${r.k || 'not set (E5)'}`);
-        return 0;
-      }
-      err('onlykey-js edge peer add [--name "…"] | onlykey-js edge peer list');
-      return 2;
-    }
-    if (cmd === 'sibling') {
-      /* sync phase 2, P2b (R29): another key of yours, paired with a press on each phone */
-      const { request } = require('../src');
-      const sub = args[0];
-      if (sub === 'add' && args[1] && !args[1].startsWith('--')) {
-        /* each phone may first ask to keep copies (peer), then both show the pairing sheet: minutes, not seconds */
-        const r = await ask('sibling-add', { address: args[1], name: opt(args, '--name') || null, otherName: opt(args, '--other-name') || null },
-          { timeoutMs: 600000, onSent: () => out('Waiting for the phones - each shows a code: pair only if the two codes match') });
-        if (r.peersAdded.length) out(`this PC now keeps copies for: ${r.peersAdded.join(', ')} phone`);
-        for (const [what, x] of [['this phone', r.this], ['the other phone', r.other]]) {
-          if (!x.ok) out(`${what}: not paired - ${x.error}`);
-          else out(`${what}: ${x.already ? 'already paired' : `paired (link #${x.seq})`}`);
-        }
-        return r.this.ok && r.other.ok ? 0 : 1;
-      }
-      if (sub === 'list') {
-        const r = await ask('siblings');
-        if (!r.siblings.length) out('no paired keys - onlykey-js edge sibling add <address>');
-        for (const s of r.siblings) out(`sibling ${s.index}  ${request.fingerprint(s.key)}  device ${s.deviceId}`);
-        out(`${r.siblings.length} of ${r.max}`);
-        return 0;
-      }
-      err('onlykey-js edge sibling add <address> [--name "…"] [--other-name "…"] | onlykey-js edge sibling list');
-      return 2;
     }
     if (cmd === 'end') {
       const r = await ask('end');
@@ -247,25 +193,25 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       } finally {
         const closed = await ask('exec-close', { token: ex.token });
         /*
-         * A COMMAND THAT FAILED FILES A FAILED TICKET (Brad, 2026-10-07: "when a push
-         * does not reach, it should give back a failed ticket"). Its uses get
+         * A COMMAND THAT FAILED FILES A FAILED RECEIPT (Brad, 2026-10-07: "when a push
+         * does not reach, it should give back a failed receipt"). Its uses get
          * TARGET_UNREACHABLE with the command and its exit code - not left owed, and
-         * never OK. A command that succeeded leaves its tickets owed, as before:
+         * never OK. A command that succeeded leaves its receipts owed, as before:
          * whether it did what was meant is the agent's to say.
          */
         for (const l of closed.links) {
           if (code !== 0) {
             const why = `FAILED: ${command.join(' ')} exited ${code}${l.failed ? ` (the sign: ${l.failed})` : ''}`;
             try {
-              const r = await ask('ticket', { seq: l.seq, code: 'TARGET_UNREACHABLE', message: why });
-              out(`signed: link #${l.seq} (${l.what}) - the command failed: ticket filed (TARGET_UNREACHABLE)`);
+              const r = await ask('receipt', { seq: l.seq, code: 'TARGET_UNREACHABLE', message: why });
+              out(`signed: link #${l.seq} (${l.what}) - the command failed: receipt filed (TARGET_UNREACHABLE)`);
               out(`head = ${r.head}`);
               continue;
             } catch (e) {
-              err(`onlykey-js edge: the failed ticket for #${l.seq} was not filed: ${e.message}`);
+              err(`onlykey-js edge: the failed receipt for #${l.seq} was not filed: ${e.message}`);
             }
           }
-          out(`signed: link #${l.seq} (${l.what})${l.paid ? '' : ' - not paid by the budget'} - ticket owed for #${l.seq}`);
+          out(`signed: link #${l.seq} (${l.what})${l.paid ? '' : ' - not paid by the budget'} - receipt owed for #${l.seq}`);
         }
         if (!closed.links.length) out(code === 0 ? 'signed: nothing under the budget' : 'signed: nothing under the budget - the command failed before a sign');
       }
@@ -296,7 +242,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         await new Promise((r) => setTimeout(r, 2000));
       }
     }
-    err('onlykey-js edge budget | continue | end | status | exec | ticket | watch | sync | peer | sibling | register | agent');
+    err('onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync | register | agent');
     return 2;
   } catch (e) {
     err(`onlykey-js edge: ${e.message}`);

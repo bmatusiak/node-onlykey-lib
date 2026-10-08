@@ -3,12 +3,12 @@
  * edge copy check (firmware.md R27): a host may ask for a budget or a resume
  * only when its own copy verifies up to the key's live HEAD. The chain here is
  * built the way the firmware builds it (the same link format, welds, budget
- * opening, reveals, tickets), so each failure below is one a real copy can
+ * opening, reveals, receipts), so each failure below is one a real copy can
  * have.
  */
 const test = require('node:test');
 const assert = require('node:assert');
-const { chain, codes, grants, tickets, copy } = require('../src');
+const { chain, codes, grants, receipts, copy } = require('../src');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 
 const SECRET = new Uint8Array(32).fill(5);
@@ -17,8 +17,8 @@ const DEVICE = chain.deviceIdOf(PUB);
 const { OP, DECISION, FLAG } = codes;
 
 /*
- * A key's story: a pressed use and its ticket, a budget of 2 opened at a press,
- * two self-presses each with its reveal and ticket. -> {links, openings, key}
+ * A key's story: a pressed use and its receipt, a budget of 2 opened at a press,
+ * two self-presses each with its reveal and receipt. -> {links, openings, key}
  */
 /* R3: scopes = the budget's, spendScopes = byte 46 on each spend (default: an older chain, all 0) */
 function story({ scopes: given = null, spendScopes = [], openingScope = null } = {}) {
@@ -30,12 +30,12 @@ function story({ scopes: given = null, spendScopes = [], openingScope = null } =
     links.push({ link, head, reveal });
     return links.length - 1;
   };
-  const ticketFor = (ref) => add({
-    op: OP.TICKET, decision: 0x00, grantId: ref,
-    subject: tickets.ticketSubject({ refSeq: ref, refHead: links[ref].head, code: 0, msgHash: tickets.messageHash(`did ${ref}`) }),
+  const receiptFor = (ref) => add({
+    op: OP.RECEIPT, decision: 0x00, grantId: ref,
+    subject: receipts.receiptSubject({ refSeq: ref, refHead: links[ref].head, code: 0, msgHash: receipts.messageHash(`did ${ref}`) }),
   });
 
-  ticketFor(add({ op: OP.SIGN, decision: DECISION.APPROVE, slot: 2, flags: FLAG.PRESS_OBSERVED, subject: new Uint8Array(32).fill(1) }));
+  receiptFor(add({ op: OP.SIGN, decision: DECISION.APPROVE, slot: 2, flags: FLAG.PRESS_OBSERVED, subject: new Uint8Array(32).fill(1) }));
 
   const seed = new Uint8Array(32).fill(9);
   const uses = 2;
@@ -52,7 +52,7 @@ function story({ scopes: given = null, spendScopes = [], openingScope = null } =
   for (let step = 1; step <= uses; step++) {
     const use = add({ op: OP.SIGN, decision: DECISION.SELF_PRESS, slot: 222, flags: FLAG.BUDGET_SPENT, subject: new Uint8Array(32).fill(20 + step), grantId, grantStep: step, scope: spendScopes[step - 1] || 0 },
       grants.reveal(seed, uses, step));
-    ticketFor(use);
+    receiptFor(use);
   }
   const seq = links.length - 1;
   const key = {
@@ -438,17 +438,15 @@ function relinked(s, edit) {
   return { links: out, key, openings };
 }
 
-test('version: a version-0 link after a version-1 link is red; all version 0 (before versions) or all 1 verifies', () => {
+test('version: v1 is the first release - every link must be version 1; a version-0 link (before the release) or an unknown version is red', () => {
   const s = story();
-  const v1 = relinked(s, (f) => ({ ...f, version: 1 }));
-  const rv1 = copy.verifyCopy({ links: v1.links, openings: v1.openings }, v1.key);
+  const rv1 = copy.verifyCopy({ links: s.links, openings: s.openings }, s.key);
   assert.equal(rv1.ok, true, 'all version 1: ' + JSON.stringify({ reason: rv1.reason, seq: rv1.seq, detail: rv1.detail }));
-  assert.equal(copy.verifyCopy({ links: s.links, openings: s.openings }, s.key).ok, true, 'all version 0 (the links before versions)');
-  const mixed = relinked(s, (f) => ({ ...f, version: f.seq < 3 ? 0 : (f.seq === 4 ? 0 : 1) }));
-  const r = copy.verifyCopy({ links: mixed.links, openings: mixed.openings }, mixed.key);
+  const old = relinked(s, (f) => ({ ...f, version: f.seq === 4 ? 0 : 1 }));
+  const r = copy.verifyCopy({ links: old.links, openings: old.openings }, old.key);
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'version');
-  assert.equal(r.seq, 4, 'the version-0 link after #3 (version 1)');
+  assert.equal(r.seq, 4, 'the version-0 link');
   const up = relinked(s, (f) => ({ ...f, version: 2 }));
   assert.equal(copy.verifyCopy({ links: up.links, openings: up.openings }, up.key).reason, 'version', 'an unknown version is red');
 });

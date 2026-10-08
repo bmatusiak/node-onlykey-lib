@@ -50,7 +50,7 @@ function phone(edge, { answer = 'approve', registered = [], views = [], grants: 
 async function readyKey() {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32));
+  await edge.receipt(0, 0, new Uint8Array(32));
   return { transport, edge };
 }
 

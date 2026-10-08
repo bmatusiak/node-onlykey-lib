@@ -13,9 +13,9 @@ const registered = [hex(AGENT.publicKey)];
 test('a note from the registered agent verifies; each field is optional but one must be there', async () => {
   const m = await note.build({ signer: AGENT, seq: 233, reason: 'git push origin master' });
   assert.deepEqual(note.verify(m, { registered }), { ok: true });
-  const t = await note.build({ signer: AGENT, seq: 233, ticketMsg: 'pushed ok-rn' });
+  const t = await note.build({ signer: AGENT, seq: 233, receiptMsg: 'pushed ok-rn' });
   assert.deepEqual(note.verify(t, { registered }), { ok: true });
-  const r = await note.build({ signer: AGENT, seq: 240, txRefused: 'ticket_owed' });
+  const r = await note.build({ signer: AGENT, seq: 240, txRefused: 'receipt_owed' });
   assert.deepEqual(note.verify(r, { registered }), { ok: true });
   await assert.rejects(note.build({ signer: AGENT, seq: 1 }), /nothing to say/);
 });
@@ -31,17 +31,17 @@ test('dropped: an unregistered key, edited text, a replay, an oversize reason', 
 });
 
 test('no reason and an empty reason are different notes', async () => {
-  const empty = await note.build({ signer: AGENT, seq: 3, reason: '', ticketMsg: 'm' });
+  const empty = await note.build({ signer: AGENT, seq: 3, reason: '', receiptMsg: 'm' });
   assert.equal(note.verify({ ...empty, reason: undefined }, { registered }).reason, 'bad-signature');
 });
 
-/* the client sends them: the reason after a paid use, the message after its ticket, a refused TX start */
-test('the edge client sends a note for a use (its reason), its ticket (the message) and a refused TX start', async () => {
+/* the client sends them: the reason after a paid use, the message after its receipt, a refused TX start */
+test('the edge client sends a note for a use (its reason), its receipt (the message) and a refused TX start', async () => {
   const { approve, client } = require('../src');
   const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32));
+  await edge.receipt(0, 0, new Uint8Array(32));
   const notes = [];
   const seen = new Set();
   const channel = {
@@ -62,10 +62,10 @@ test('the edge client sends a note for a use (its reason), its ticket (the messa
   const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: 'ssh://agent@nitro16' }], ttlMinutes: 10 });
   const used = await b.use(Uint8Array.from([1, 2]), (x) => transport.use(x, { slot: 222 }), { reason: 'git push origin master' });
   assert.deepEqual(notes.map((n) => [n.seq, n.reason]), [[used.link.seq, 'git push origin master']]);
-  await b.ticket(used.link, { message: 'pushed' });
-  assert.deepEqual(notes[1].ticketMsg, 'pushed');
+  await b.receipt(used.link, { message: 'pushed' });
+  assert.deepEqual(notes[1].receiptMsg, 'pushed');
   assert.equal(notes[1].seq, used.link.seq);
-  /* a refused TX start at the KEY: the budget on hold and NO intent (a used-up one now ends at its last ticket and never reaches the key) */
+  /* a refused TX start at the KEY: the budget on hold and NO intent (a used-up one now ends at its last receipt and never reaches the key) */
   await edge.hold(b.grantId);
   await assert.rejects(b.use(Uint8Array.from([3]), (x) => transport.use(x, { slot: 222 }), {}), { code: 'EEDGE_TX' });
   assert.ok(notes[2].txRefused, 'the refused TX start is reported in the agent\'s own note');

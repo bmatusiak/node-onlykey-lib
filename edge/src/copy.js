@@ -26,7 +26,7 @@
  *                    every self-press's reveal hashes back to its budget's G, in
  *                    step order (grants.checkSpends)
  *   debts            the key's debt list replayed over this copy
- *                    (tickets.keyDebts) matches what HEAD reports
+ *                    (receipts.keyDebts) matches what HEAD reports
  *
  * GAPS (R24, R27; the spec's red banner, 2026-10-02): a range the copy cannot
  * verify blocks a budget, unless a LOSS link in the copy covers it - the
@@ -52,7 +52,7 @@
 const { OP, DECISION } = require('./codes');
 const chain = require('./chain');
 const grants = require('./grants');
-const { keyDebts } = require('./tickets');
+const { keyDebts } = require('./receipts');
 const { H, hmacSha256, same } = require('./hash');
 const { toHex, utf8ToBytes } = require('../../src/bytes');
 
@@ -406,26 +406,23 @@ function verifyCore(copy, key, prev, out) {
   /* budgets: each opening, then its self-presses in step order */
   const fields = raw.map((l) => chain.decodeLink(l)).filter((f) => f.seq > (prev ? prev.lastSeq : lastGapEnd));
   /*
-   * R3 (Brad, 2026-10-06): once the chain has a version-1 link, any LATER
-   * version-0 link is red - the key never writes 0 on a new link, and replayed
-   * old links keep their old, lower seqs. Over every link the copy holds on a
-   * full check (a gap must not hide it), over the new ones from a kept state.
+   * R3: every link is version 1 - the first release (Brad, 2026-10-08: "v0 turns to v1");
+   * nothing older is read. Over every link the copy holds on a full check (a gap must not
+   * hide one), over the new ones from a kept state.
    */
-  let firstV1 = prev ? prev.firstV1 : null;
-  for (const f of prev ? fields : raw.map((l) => chain.decodeLink(l)).sort((a, b) => a.seq - b.seq)) {
-    if (f.version >= 1) { if (firstV1 === null || f.seq < firstV1) firstV1 = f.seq; }
-    else if (firstV1 !== null && f.seq > firstV1) return fail('version', { seq: f.seq, detail: { version: 0, reason: 'after-version-1', since: firstV1 } });
+  for (const f of prev ? fields : raw.map((l) => chain.decodeLink(l))) {
+    if (!f.versionKnown) return fail('version', { seq: f.seq, detail: { version: f.version } });
   }
   const openings = copy.openings || {};
   /* the budgets verified so far carry over from a previous state; only the ones new links touch are checked again */
   const spends = new Map(prev ? [...prev.spends].map(([g, l]) => [g, l.slice()]) : []);
-  /* R3: what each opening in this copy says its scope count is (0 = an older budget) */
+  /* R3: what each opening in this copy says its scope count is */
   const openingScopes = new Map(prev ? prev.openingScopes : []);
   const touched = new Set();
   for (const f of fields) {
     /* R3: a scope only on a link that spends a budget; bytes 47-63 always zero */
     const spend = (f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS;
-    /* R3: the opening carries its scope count (0 on an older one); a spend names its scope; nothing else carries one */
+    /* R3: the opening carries its scope count; a spend names its scope; nothing else carries one */
     if (f.scope !== 0 && !spend && f.op !== OP.GRANT_CREATE) return fail('scope', { seq: f.seq, detail: { scope: f.scope, reason: 'not-a-spend' } });
     if (!f.versionKnown) return fail('version', { seq: f.seq, detail: { version: f.version } }); /* R3: a format this library does not know - red */
     if (!f.reservedZero) return fail('reserved', { seq: f.seq });
@@ -519,7 +516,7 @@ function verifyCore(copy, key, prev, out) {
   if (last && lastHead) {
     out.state = {
       keyHead: { seq: h.seq, head: h.head, owed: h.owed || 0, overflow: Boolean(h.overflow), restoring: Boolean(h.restoring) },
-      count: entries.length, lastSeq, lastHead, lastGapEnd, spends, openingScopes, firstV1,
+      count: entries.length, lastSeq, lastHead, lastGapEnd, spends, openingScopes,
       grants: [...spends.keys()], openingsHash: openingsHash(openings, [...spends.keys()]), result,
     };
   }
@@ -531,7 +528,7 @@ function verifyCore(copy, key, prev, out) {
  * oldCopy: {deviceId, links: [{link, head?}]} - the copy kept for the chain it
  * names, with its checkpoint key beside it. The subject commits to the old device
  * id, the seq before the continue, the old head at that seq and the debts carried
- * (tickets.keyDebts over the old copy). A copy that starts after the chain's first
+ * (receipts.keyDebts over the old copy). A copy that starts after the chain's first
  * link may not see every debt: a match is still a match (debtsChecked false), a
  * mismatch there is "unverifiable", never "ok".
  * -> {ok: true, oldSeq, debts, debtsChecked} or {ok: false, reason}

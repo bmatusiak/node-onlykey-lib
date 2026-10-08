@@ -1,13 +1,20 @@
 export function agentSubject(agentKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-export function peerSubject(peerKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-export function siblingSubject(key: any, deviceId: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-export function siblingCode(a: any, b: any): string;
-export function anchorSubject({ deviceId, seq, head, signature }: {
+export const NAMETAG_MAX: 64;
+/** A nametag as the person typed it -> its hash, the 32 bytes the key signs. Throws on an empty or too long one. */
+export function nametagHash(nametag: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+/** SHA256("OKEDGE-STATEMENT-v1" || device id 16 || checkpoint pubkey X||Y 64 || seq u32 LE || nametag hash 32) - what the owner key signs. */
+export function statementDigest({ deviceId, publicKey, seq, nametagHash: nh }: {
     deviceId: any;
+    publicKey: any;
     seq: any;
-    head: any;
-    signature: any;
+    nametagHash: any;
 }): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+/**
+ * Is this statement signed by MY owner key, and does it name the key it carries?
+ * statement: {deviceId, publicKey, seq, nametag (text), signature}; ownerKey: this device's
+ * own owner public key (X||Y). -> boolean (false on anything malformed)
+ */
+export function verifyStatement(statement: any, ownerKey: any): boolean;
 export const MAX_USES: 1024;
 export function grantGenesis(seed: any, uses: any): any;
 /** The value use `step` reveals, from the seed (for tests and fakes - a host never has the seed). */

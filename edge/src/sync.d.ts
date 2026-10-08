@@ -3,30 +3,10 @@ export const LINKS_TYPE: "EDGE_SYNC_LINKS";
 export const KEYCHAIN_TYPE: "EDGE_SYNC_KEYCHAIN";
 export const COMMIT_TYPE: "EDGE_SYNC_COMMIT";
 export const TAKE_TYPE: "EDGE_SYNC_TAKE";
-export const SIBLING_TYPE: "EDGE_SIBLING_ADD";
 export const GIVE_TYPE: "EDGE_SYNC_GIVE";
-export const ANCHOR_TYPE: "EDGE_SYNC_ANCHOR";
+export const OFFER_TYPE: "EDGE_SYNC_OFFER";
 export const BATCH: 40;
 export const NO_SEQ: 4294967295;
-/**
- * R29 (P2b): ask the phone whose key is `deviceId` to pair it with another
- * key of yours (its Edge key X || Y and device id, read from that key by this
- * place). The place only RELAYS that key - the phone shows a code made from
- * both keys (grants.siblingCode) that the other phone shows too.
- */
-export function buildSibling({ signer, deviceId, key, id, name }: {
-    signer: any;
-    deviceId: any;
-    key: any;
-    id: any;
-    name: any;
-}): Promise<{
-    type: any;
-    v: number;
-    peer: string;
-    nonce: string;
-    payload: any;
-}>;
 /** R30: the place asks the phone whose key is `deviceId` for its copy of its own chain, from seq `from` (BATCH at a time). */
 export function buildGive({ signer, deviceId, from }: {
     signer: any;
@@ -39,19 +19,21 @@ export function buildGive({ signer, deviceId, from }: {
     nonce: string;
     payload: any;
 }>;
+/** The place's side: "that is everything - merge it and ask". pcIds: the ids its list holds. */
 /**
- * R30: "that is the sibling's chain up to its signed checkpoint - anchor it".
- * chain: the sibling's device id; checkpoint: {seq, head, signature} from the
- * sibling's key; name: the sibling as the place calls it (shown, never trusted).
+ * The computer's side: "that is device `chain`'s log up to its signed checkpoint, with its
+ * statement" - for the phone whose key is `deviceId` to HOLD until the person approves.
+ * checkpoint: {seq, head, signature}; statement: {publicKey, seq, nametag, signature} (as
+ * plugin.statement gives it, or as that device's phone kept it).
  */
-export function buildAnchor({ signer, deviceId, sid, chain, linkParts, checkpoint, name }: {
+export function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement }: {
     signer: any;
     deviceId: any;
     sid: any;
     chain: any;
     linkParts: any;
     checkpoint: any;
-    name: any;
+    statement: any;
 }): Promise<{
     type: any;
     v: number;
@@ -60,12 +42,13 @@ export function buildAnchor({ signer, deviceId, sid, chain, linkParts, checkpoin
     payload: any;
 }>;
 /**
- * R30 (P2c): before a phone anchors its sibling, the sibling's chain as offered
- * must hold up - the phone's side, no I/O.
- *   records:    the phone's copy of the sibling's chain merged with what came
- *   publicKey:  the sibling's Edge key (X || Y), from the KEY's sibling list
- *   checkpoint: {seq, head, signature} the place read from the sibling's key
- *   anchors:    [{seq, head}] this phone anchored that sibling at before
+ * Before a phone merges another device's log, that chain as offered must hold up - the
+ * phone's side, no I/O (devices.classify runs it). (Named for the anchors it served until
+ * 2026-10-08; the check itself is unchanged.)
+ *   records:    the phone's copy of that chain merged with what came
+ *   publicKey:  that device's checkpoint key (X || Y), as its statement names it
+ *   checkpoint: {seq, head, signature} read from that device's key
+ *   anchors:    [{seq, head}] the points of that chain this phone merged before
  * ALARMS (spec R30: "a sibling anchors a head its own chain doesn't contain:
  * one device's rollback or tampering is proven by the other"):
  *   bad-checkpoint - not signed by the sibling's key;
@@ -123,7 +106,6 @@ export function buildKeychain({ signer, deviceId, sid, entries }: {
     nonce: string;
     payload: any;
 }[]>;
-/** The place's side: "that is everything - merge it and ask". pcIds: the ids its list holds. */
 export function buildCommit({ signer, deviceId, sid, linkParts, keychainParts: kcParts }: {
     signer: any;
     deviceId: any;
@@ -211,8 +193,9 @@ export function buildLinks({ signer, deviceId, records, sid, chain }: {
     payload: any;
 }[]>;
 /**
- * The phone's side: signed by the key it names, well formed, new. Whether that
- * key is on the KEY's peer list is the caller's check (it needs the device).
+ * The phone's side: signed by the key it names, well formed, new. Which computer
+ * that key is, is the caller's to show (the link itself came over a Bluetooth
+ * pairing the person approved with its 6-digit code).
  * -> {ok} | {ok: false, reason}
  */
 export function verify(msg: any, { seen }?: {}): {
@@ -238,28 +221,3 @@ export function merge(have: any, offered: any): {
     added: any[];
     conflicts: number[];
 };
-/**
- * The `sync` link's fields (spec, 2026-10-05; onlykey-edge firmware.md):
- * SHA256(peer pubkey X || Y) . first seq moved . last seq moved . the phone
- * copy's head after the merge . SHA256(the merged Key Chain list), or 32 zero
- * bytes when no list moved. The KEY computes the subject from these (SYNC's
- * three parts) and checks the peer hash is one of its own peers.
- * -> {peerHash, first, last, head, keychain}
- */
-export function syncFields({ peer, added, head, keychainHash }: {
-    peer: any;
-    added: any;
-    head: any;
-    keychainHash?: null | undefined;
-}): {
-    peerHash: Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-    first: number;
-    last: number;
-    head: Uint8Array<ArrayBufferLike>;
-    keychain: Uint8Array<ArrayBufferLike>;
-};
-/**
- * The subject: SHA256("OKEDGE-SYNC-v1" || peerHash || u32le first || u32le last
- * || head || keychain) - the bytes the key hashes, in its order.
- */
-export function syncSubject(fields: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;

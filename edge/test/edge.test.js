@@ -9,7 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const V = require('./vectors/edge-v1.json');
-const { codes, chain, grants, tickets } = require('../src');
+const { codes, chain, grants, receipts } = require('../src');
 const { fromHex, toHex } = require('../../src/bytes');
 
 const deviceId = fromHex(V.deviceId);
@@ -19,16 +19,16 @@ const keyHead = () => ({ seq: lastSeq, head: fromHex(V.chain[lastSeq].head) });
 
 /* ---- vectors ---- */
 
-test('vectors: genesis, every weld and the ticket subject match the Python reading', () => {
+test('vectors: genesis, every weld and the receipt subject match the Python reading', () => {
   assert.equal(toHex(chain.genesis(deviceId)), V.genesis);
   let h = chain.genesis(deviceId);
   for (const e of V.chain) {
     h = chain.weld(h, fromHex(e.link));
     assert.equal(toHex(h), e.head);
   }
-  const t = V.ticket;
-  assert.equal(toHex(tickets.messageHash(t.message)), t.msgHash);
-  assert.equal(toHex(tickets.ticketSubject({ refSeq: t.refSeq, refHead: fromHex(t.refHead), code: t.code, msgHash: fromHex(t.msgHash) })), t.subject);
+  const t = V.receipt;
+  assert.equal(toHex(receipts.messageHash(t.message)), t.msgHash);
+  assert.equal(toHex(receipts.receiptSubject({ refSeq: t.refSeq, refHead: fromHex(t.refHead), code: t.code, msgHash: fromHex(t.msgHash) })), t.subject);
 });
 
 test('vectors: links decode to the fields Python packed, and re-encode byte for byte', () => {
@@ -38,7 +38,7 @@ test('vectors: links decode to the fields Python packed, and re-encode byte for 
     assert.ok(f.reservedZero);
   }
   const t = chain.decodeLink(fromHex(V.chain[3].link));
-  assert.equal(t.op, codes.OP.TICKET);
+  assert.equal(t.op, codes.OP.RECEIPT);
   assert.equal(t.refSeq, 2);
   assert.equal(t.code, 0);
   const s = chain.decodeLink(fromHex(V.chain[2].link));
@@ -281,19 +281,19 @@ test('budget opening: every forged part fails with its own reason', () => {
   assert.equal(grants.verifyBudgetOpening({ ...good, deviceId: fromHex(V.otherDeviceId) }).reason, 'bad-signature');
 });
 
-/* ---- tickets ---- */
+/* ---- receipts ---- */
 
-const T = V.ticket;
+const T = V.receipt;
 
-test('tickets: every approved use owes one - ticketed, waiting, alarm, or owes none; the message only when it matches', () => {
-  const r = tickets.pairTickets(entries(), { [T.refSeq]: T.message });
+test('receipts: every approved use owes one - receipted, waiting, alarm, or owes none; the message only when it matches', () => {
+  const r = receipts.pairReceipts(entries(), { [T.refSeq]: T.message });
   const by = Object.fromEntries(r.uses.map((u) => [u.seq, u]));
   /* R16 (Brad, 2026-10-02): pressed or self-pressed, every approved use owes; the key keeps the latest 4 */
   assert.equal(by[1].status, 'waiting');
-  assert.equal(by[2].status, 'ticketed');
-  assert.equal(by[2].ticket.name, 'OK');
+  assert.equal(by[2].status, 'receipted');
+  assert.equal(by[2].receipt.name, 'OK');
   assert.equal(by[2].message, T.message);
-  assert.equal(by[4].status, 'no-ticket-owed'); // denied decrypt
+  assert.equal(by[4].status, 'no-receipt-owed'); // denied decrypt
   assert.equal(by[5].status, 'waiting'); // a human press owes too
   assert.deepEqual(r.orphans, []);
 });
@@ -304,32 +304,32 @@ function grow(es, fields) {
   es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) });
   return es.length - 1;
 }
-/* a pressed use on a slot a budget covers: it owes (R16 - the key sets owes_ticket, bit 4) */
-const pressedUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_TICKET, subject: new Uint8Array(32).fill(es.length) });
+/* a pressed use on a slot a budget covers: it owes (R16 - the key sets owes_receipt, bit 4) */
+const pressedUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_RECEIPT, subject: new Uint8Array(32).fill(es.length) });
 /* the person's own direct press on a slot no budget covers: linked, owes nothing (R16) */
 const directUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 3, flags: codes.FLAG.PRESS_OBSERVED, subject: new Uint8Array(32).fill(es.length) });
 
-test('tickets: R16 - a direct press with neither owes_ticket nor started owes nothing; the key decided at the sign', () => {
+test('receipts: R16 - a direct press with neither owes_receipt nor started owes nothing; the key decided at the sign', () => {
   const es = entries();
-  const before = tickets.keyDebts(es);
+  const before = receipts.keyDebts(es);
   const d = directUse(es);
-  const u = tickets.pairTickets(es).uses.find((x) => x.seq === d);
-  assert.equal(u.status, 'no-ticket-owed');
-  assert.deepEqual(tickets.keyDebts(es), before, 'a direct press added a debt');
+  const u = receipts.pairReceipts(es).uses.find((x) => x.seq === d);
+  assert.equal(u.status, 'no-receipt-owed');
+  assert.deepEqual(receipts.keyDebts(es), before, 'a direct press added a debt');
   /* the same press on a covered slot owes */
   const c = pressedUse(es);
-  assert.equal(tickets.pairTickets(es).uses.find((x) => x.seq === c).status, 'waiting');
-  assert.ok(tickets.keyDebts(es).owed.includes(c));
+  assert.equal(receipts.pairReceipts(es).uses.find((x) => x.seq === c).status, 'waiting');
+  assert.ok(receipts.keyDebts(es).owed.includes(c));
 });
 
-test('tickets: a deny does not clear a debt; past the key\'s 4, the oldest can only be waived (missing)', () => {
+test('receipts: a deny does not clear a debt; past the key\'s 4, the oldest can only be waived (missing)', () => {
   const es = entries();
   grow(es, { op: codes.OP.DECRYPT, decision: codes.DECISION.DENY, slot: 1, subject: new Uint8Array(32) });
-  let by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
+  let by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u.status]));
   assert.equal(by[5], 'waiting', 'a deny in between does not clear the debt');
   /* 1 and 5 owe; three more uses make 5 owed - the oldest (1) falls off the key's list */
   pressedUse(es); pressedUse(es); pressedUse(es);
-  by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
+  by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u.status]));
   assert.equal(by[1], 'missing');
   assert.deepEqual([by[5], by[7], by[8], by[9]], ['waiting', 'waiting', 'waiting', 'waiting']);
 });
@@ -337,73 +337,73 @@ test('tickets: a deny does not clear a debt; past the key\'s 4, the oldest can o
 /* the WAIVE link the key writes (firmware R18): 0x8F, the press flag, grant_id = oldest waived, subject over the list */
 function waive(es, seqs, overflow) {
   return grow(es, {
-    op: codes.OP.TICKET, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: seqs[0],
-    subject: tickets.waiveSubject(seqs, overflow),
+    op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: seqs[0],
+    subject: receipts.waiveSubject(seqs, overflow),
   });
 }
 
-test('tickets: the WAIVE subject matches the Python reading', () => {
-  assert.equal(toHex(tickets.waiveSubject(V.waive.seqs, Boolean(V.waive.overflow))), V.waive.subject);
-  assert.equal(toHex(tickets.waiveSubject([5, 6, 7, 8], true)), V.waive.overflowSubject);
+test('receipts: the WAIVE subject matches the Python reading', () => {
+  assert.equal(toHex(receipts.waiveSubject(V.waive.seqs, Boolean(V.waive.overflow))), V.waive.subject);
+  assert.equal(toHex(receipts.waiveSubject([5, 6, 7, 8], true)), V.waive.overflowSubject);
 });
 
-test('tickets: a WAIVE clears every use it lists - and, with overflow, the older ones too', () => {
+test('receipts: a WAIVE clears every use it lists - and, with overflow, the older ones too', () => {
   const es = entries();
   const w = waive(es, [1, 5], false);
-  let by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u]));
+  let by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u]));
   assert.deepEqual([by[1].status, by[1].waivedBy, by[5].status], ['waived', w, 'waived']);
   /* overflow: five owed, the key lists the latest 4; the oldest is covered as "waived, not listed" */
   const es2 = entries();
   pressedUse(es2); pressedUse(es2); pressedUse(es2);
   const w2 = waive(es2, [5, 6, 7, 8], true);
-  by = Object.fromEntries(tickets.pairTickets(es2).uses.map((u) => [u.seq, u]));
+  by = Object.fromEntries(receipts.pairReceipts(es2).uses.map((u) => [u.seq, u]));
   assert.equal(by[1].status, 'waived-unlisted');
   assert.deepEqual([5, 6, 7, 8].map((q) => by[q].status), ['waived', 'waived', 'waived', 'waived']);
   assert.equal(by[8].waivedBy, w2);
 });
 
-test('tickets: an agent\'s own 0x8F ticket is not a waive - it pays one use and is an alarm', () => {
+test('receipts: an agent\'s own 0x8F receipt is not a waive - it pays one use and is an alarm', () => {
   const es = entries();
   const ref = 5;
   const l = chain.encodeLink({
-    seq: es.length, op: codes.OP.TICKET, decision: 0x8f, grantId: ref,
-    subject: tickets.ticketSubject({ refSeq: ref, refHead: es[ref].head, code: 0x8f, msgHash: tickets.messageHash('look at this') }),
+    seq: es.length, op: codes.OP.RECEIPT, decision: 0x8f, grantId: ref,
+    subject: receipts.receiptSubject({ refSeq: ref, refHead: es[ref].head, code: 0x8f, msgHash: receipts.messageHash('look at this') }),
   });
   es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) });
-  const by = Object.fromEntries(tickets.pairTickets(es, { [ref]: 'look at this' }).uses.map((u) => [u.seq, u]));
+  const by = Object.fromEntries(receipts.pairReceipts(es, { [ref]: 'look at this' }).uses.map((u) => [u.seq, u]));
   assert.equal(by[5].status, 'alarm');
   assert.equal(by[5].message, 'look at this');
   assert.equal(by[1].status, 'waiting', 'it paid only its own use');
 });
 
-test('tickets: a message that does not match its hash is never shown as text', () => {
-  const r = tickets.pairTickets(entries(), { [T.refSeq]: T.message + ' (edited)' });
+test('receipts: a message that does not match its hash is never shown as text', () => {
+  const r = receipts.pairReceipts(entries(), { [T.refSeq]: T.message + ' (edited)' });
   const u = r.uses.find((x) => x.seq === 2);
   assert.equal(u.message, null);
   assert.equal(u.messageStatus, 'mismatch');
 });
 
-function withTicket(code, refSeq) {
+function withReceipt(code, refSeq) {
   const es = entries().slice(0, 3);
   const refHead = es[refSeq].head;
   const l = chain.encodeLink({
-    seq: 3, op: codes.OP.TICKET, decision: code, grantId: refSeq,
-    subject: tickets.ticketSubject({ refSeq, refHead, code, msgHash: tickets.messageHash('m') }),
+    seq: 3, op: codes.OP.RECEIPT, decision: code, grantId: refSeq,
+    subject: receipts.receiptSubject({ refSeq, refHead, code, msgHash: receipts.messageHash('m') }),
   });
   es.push({ link: l, head: chain.weld(es[2].head, l) });
   return es;
 }
 
-test('tickets: bit 7 and an unknown code are both alarms (fails closed)', () => {
+test('receipts: bit 7 and an unknown code are both alarms (fails closed)', () => {
   for (const code of [0x81, 0x42, 0x0f]) {
-    const u = tickets.pairTickets(withTicket(code, 2), { 2: 'm' }).uses.find((x) => x.seq === 2);
+    const u = receipts.pairReceipts(withReceipt(code, 2), { 2: 'm' }).uses.find((x) => x.seq === 2);
     assert.equal(u.status, 'alarm', `code 0x${code.toString(16)}`);
   }
-  assert.equal(codes.ticketCode(0x42).known, false);
+  assert.equal(codes.receiptCode(0x42).known, false);
 });
 
-test('tickets: a ticket for the wrong seq is an orphan, and the use it skipped is still waiting', () => {
-  const r = tickets.pairTickets(withTicket(0x00, 0)); // seq 0 is the grant-create, not a use
+test('receipts: a receipt for the wrong seq is an orphan, and the use it skipped is still waiting', () => {
+  const r = receipts.pairReceipts(withReceipt(0x00, 0)); // seq 0 is the grant-create, not a use
   assert.deepEqual(r.orphans, [{ seq: 3, refSeq: 0, reason: 'not-a-use' }]);
   assert.equal(r.uses.find((x) => x.seq === 2).status, 'waiting');
 });
@@ -416,7 +416,7 @@ test('Hermes: the whole library runs with Buffer, TextEncoder/Decoder and crypto
   try {
     const r = chain.verify(entries(), { deviceId, expectHead: keyHead() });
     assert.equal(r.ok, true);
-    const p = tickets.pairTickets(entries(), { [T.refSeq]: T.message });
+    const p = receipts.pairReceipts(entries(), { [T.refSeq]: T.message });
     assert.equal(p.uses.find((x) => x.seq === 2).message, T.message);
     assert.deepEqual(grants.checkSpends(G(), V.grant.uses, [spend(0), spend(1)]), { ok: true, spent: 2 });
   } finally {
@@ -424,20 +424,20 @@ test('Hermes: the whole library runs with Buffer, TextEncoder/Decoder and crypto
   }
 });
 
-test('tickets: the key\'s list does not refill - 5 owed, one ticket: 3 waiting + 1 missing, as HEAD says 3 + overflow', () => {
+test('receipts: the key\'s list does not refill - 5 owed, one receipt: 3 waiting + 1 missing, as HEAD says 3 + overflow', () => {
   const es = entries();
   pressedUse(es); pressedUse(es); pressedUse(es); /* owed: 1, 5, 6, 7, 8 -> 1 fell off */
-  let d = tickets.keyDebts(es);
+  let d = receipts.keyDebts(es);
   assert.deepEqual([d.owed, d.overflow, d.dropped], [[5, 6, 7, 8], true, [1]]);
-  /* a ticket for 8 (refHead = head[8]) */
-  grow(es, { op: codes.OP.TICKET, decision: 0x00, grantId: 8, subject: tickets.ticketSubject({ refSeq: 8, refHead: es[8].head, code: 0, msgHash: tickets.messageHash('x') }) });
-  d = tickets.keyDebts(es);
+  /* a receipt for 8 (refHead = head[8]) */
+  grow(es, { op: codes.OP.RECEIPT, decision: 0x00, grantId: 8, subject: receipts.receiptSubject({ refSeq: 8, refHead: es[8].head, code: 0, msgHash: receipts.messageHash('x') }) });
+  d = receipts.keyDebts(es);
   assert.deepEqual([d.owed, d.overflow], [[5, 6, 7], true]);
-  const by = Object.fromEntries(tickets.pairTickets(es).uses.map((u) => [u.seq, u.status]));
-  assert.deepEqual([by[1], by[5], by[6], by[7], by[8]], ['missing', 'waiting', 'waiting', 'waiting', 'ticketed']);
+  const by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u.status]));
+  assert.deepEqual([by[1], by[5], by[6], by[7], by[8]], ['missing', 'waiting', 'waiting', 'waiting', 'receipted']);
   /* the waive over exactly this list and overflow clears both */
-  grow(es, { op: codes.OP.TICKET, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: 5, subject: tickets.waiveSubject([5, 6, 7], true) });
-  d = tickets.keyDebts(es);
+  grow(es, { op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: 5, subject: receipts.waiveSubject([5, 6, 7], true) });
+  d = receipts.keyDebts(es);
   assert.deepEqual([d.owed, d.overflow], [[], false]);
 });
 
@@ -465,21 +465,21 @@ test('grants: R11a - identityLabel is the agent\'s identity hash; the grant subj
   assert.equal(hex(stored), hex(pre));
 });
 
-/* a ticket's message check is kept with its link (ok-rn A13: pairing ~110 ms a sync) - never past a changed message */
-test('tickets: the message check is kept per ticket link, and a changed message is checked again', () => {
+/* a receipt's message check is kept with its link (ok-rn A13: pairing ~110 ms a sync) - never past a changed message */
+test('receipts: the message check is kept per receipt link, and a changed message is checked again', () => {
   const provider = require('../../src/crypto/provider');
   let hashes = 0;
   provider.setCryptoProvider({ sha256: (b) => { hashes++; return provider.js.sha256(b); } }, 'counting');
   try {
     const es = entries();
-    const first = tickets.pairTickets(es, { [T.refSeq]: T.message });
+    const first = receipts.pairReceipts(es, { [T.refSeq]: T.message });
     const firstHashes = hashes;
     assert.equal(first.uses.find((u) => u.seq === T.refSeq).messageStatus, 'match');
     hashes = 0;
-    const again = tickets.pairTickets(es, { [T.refSeq]: T.message });
+    const again = receipts.pairReceipts(es, { [T.refSeq]: T.message });
     assert.equal(again.uses.find((u) => u.seq === T.refSeq).messageStatus, 'match');
     assert.ok(hashes < firstHashes, `kept: ${hashes} hashes, first time ${firstHashes}`);
-    const changed = tickets.pairTickets(es, { [T.refSeq]: T.message + ' (edited)' });
+    const changed = receipts.pairReceipts(es, { [T.refSeq]: T.message + ' (edited)' });
     assert.equal(changed.uses.find((u) => u.seq === T.refSeq).messageStatus, 'mismatch');
   } finally {
     provider.setCryptoProvider(null);

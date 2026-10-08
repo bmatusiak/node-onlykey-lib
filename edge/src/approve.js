@@ -17,7 +17,7 @@
  *      the key, and the person presses;
  *   6. answer with the budget, or a typed refusal.
  *
- * The key's own rules (the press, labels, R27, R18, R26) are unchanged: this
+ * The key's own rules (the press, labels, R27, R18) are unchanged: this
  * only decides what to ask the key for, and words what came back.
  */
 
@@ -79,8 +79,7 @@ async function approveRequest(msg, { edge, registered, seen, ownIdentities = [],
   if (!copy || !copy.ok || !(copy.head instanceof Uint8Array)) return refuse('copy_unverified');
 
   const h = await edge.head();
-  if (h.restoring) return refuse('restoring');
-  if (h.owed || h.overflow) return refuse('ticket_owed');
+  if (h.owed || h.overflow) return refuse('receipt_owed');
 
   let g;
   try {
@@ -93,8 +92,7 @@ async function approveRequest(msg, { edge, registered, seen, ownIdentities = [],
       timeoutMs,
     });
   } catch (e) {
-    if (e && e.status === 'ticket-owed') return refuse('ticket_owed');
-    if (e && e.status === 'restoring') return refuse('restoring');
+    if (e && e.status === 'receipt-owed') return refuse('receipt_owed');
     if (e && e.status === 'stale-head') return refuse('copy_unverified', 'the chain moved since the copy was checked');
     if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
     throw e;
@@ -151,7 +149,6 @@ async function approveRegister(msg, { edge, registered = [], seen, ask, onPress,
   try {
     r = await edge.agentAdd(fromHex(agent), { onPress, timeoutMs });
   } catch (e) {
-    if (e && e.status === 'restoring') return refuse('restoring');
     if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
     throw e;
   }
@@ -162,192 +159,6 @@ async function approveRegister(msg, { edge, registered = [], seen, ask, onPress,
     return refuse('invalid', `the key's link #${r.seq} is not this agent's registration`);
   }
   return { ok: true, agent, name: msg.name, seq: r.seq };
-}
-
-/**
- * R20 (okedge sync phase 2, P2a): a place that keeps copies asks to be added
- * (EDGE_PEER_ADD) - signed by the key it names, new, the person's Yes on the
- * sheet, then a PHYSICAL press; the key adds it to ITS list and links it
- * (peer-add, subject grants.peerSubject). The key's list is the truth - a sync
- * goes only to places on it - so "already" is read from the key, not the app.
- * -> {ok: true, peer, name, seq, index} | {ok: true, already} | {ok: false, refusal} | {dropped}
- *
- * @param {object} msg an EDGE_PEER_ADD
- * @param {object} o
- * @param {object} o.edge the Edge device service for THIS app's key
- * @param {Set<string>} o.seen nonces already taken
- * @param {(view: {peer: string, name: string, fingerprint: string}) => Promise<'approve'|'decline'|'timeout'>} o.ask the sheet
- * @param {() => void} [o.onPress] told when the key waits for the press
- * @param {number} [o.timeoutMs] the press wait
- * @returns {Promise<any>}
- */
-async function approvePeerAdd(msg, { edge, seen, ask, onPress, timeoutMs = 30000 }) {
-  const v = request.verifyPeerAdd(msg, { seen });
-  if (!v.ok) return { dropped: v.reason };
-  seen.add(msg.nonce.toLowerCase());
-  const peer = msg.peer.toLowerCase();
-  const list = await edge.peers();
-  const known = list.peers.find((p) => toHex(p.publicKey) === peer);
-  if (known) return { ok: true, peer, name: msg.name, already: true, index: known.index };
-  if (list.peers.length >= list.max) return refuse('invalid', `the key already knows ${list.max} places - remove one on the phone first`);
-  const answer = await ask({ peer, name: msg.name, fingerprint: request.fingerprint(peer) });
-  if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
-  if (answer !== 'approve') return refuse('declined');
-  let r;
-  try {
-    r = await edge.peerAdd(fromHex(peer), { onPress, timeoutMs });
-  } catch (e) {
-    if (e && e.status === 'restoring') return refuse('restoring');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
-    throw e;
-  }
-  /* the link the press wrote: this peer, pressed */
-  const [l] = await edge.pickup(r.seq, 1);
-  const f = chain.decodeLink(l.link);
-  if (f.op !== codes.OP.PEER_ADD || !(f.flags & codes.FLAG.PRESS_OBSERVED) || toHex(f.subject) !== toHex(grants.peerSubject(fromHex(peer)))) {
-    return refuse('invalid', `the key's link #${r.seq} is not this place's peer-add`);
-  }
-  return { ok: true, peer, name: msg.name, seq: r.seq, index: f.slot };
-}
-
-/**
- * okedge sync phase 2 (Brad, 2026-10-05): links a place that keeps copies
- * offers for THIS phone's copy. The caller has already merged them and checked
- * the merged copy verifies (R27 - it needs the copy store); this is the consent:
- * the place must be on the KEY's peer list, then the sheet, Yes, a PHYSICAL
- * press, and the key writes the `sync` link (subject sync.syncSubject). Only
- * after that link may the caller keep the merged copy.
- * -> {ok: true, seq, count} | {ok: false, refusal, detail?}
- *
- * @param {object} o
- * @param {string} o.peer the place's key, X || Y hex
- * @param {string} o.name the name it gave (shown, never trusted)
- * @param {Array<{link: Uint8Array}>} o.added the links that would be added, in seq order
- * @param {Uint8Array} o.head the phone copy's head after the merge (its newest link's head)
- * @param {Uint8Array|null} [o.keychainHash] SHA256 of the merged Key Chain list, when one moved (sync.keychainDigest)
- * @param {number} [o.keychainIn] Key Chain entries new to this phone
- * @param {number} [o.keychainOut] merged entries the place will take back
- * @param {object} o.edge the Edge device service for THIS app's key
- * @param {(view: {peer: string, name: string, fingerprint: string, count: number, ranges: number[][]}) => Promise<'approve'|'decline'|'timeout'>} o.ask
- * @param {() => void} [o.onPress]
- * @param {number} [o.timeoutMs]
- * @returns {Promise<any>}
- */
-async function approveSync({ peer, name, added, head, keychainHash = null, keychainIn = 0, keychainOut = 0, edge, ask, onPress, timeoutMs = 30000 }) {
-  const want = String(peer).toLowerCase();
-  const list = await edge.peers();
-  if (!list.peers.some((p) => toHex(p.publicKey) === want)) return refuse('invalid', 'that place is not on this key\'s list - add it first (okedge peer add)');
-  if (!added.length && !keychainIn && !keychainOut) return { ok: true, count: 0, seq: null };
-  const syncLib = require('./sync');
-  const ranges = syncLib.rangesOf(added.map((r) => chain.decodeLink(r.link).seq));
-  const answer = await ask({ peer: want, name, fingerprint: request.fingerprint(want), count: added.length, ranges, keychainIn, keychainOut });
-  if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
-  if (answer !== 'approve') return refuse('declined');
-  const fields = syncLib.syncFields({ peer: fromHex(want), added, head, keychainHash });
-  const subject = syncLib.syncSubject(fields);
-  let r;
-  try {
-    r = await edge.sync(fields, { onPress, timeoutMs });
-  } catch (e) {
-    if (e && e.status === 'restoring') return refuse('restoring');
-    if (e && e.status === 'no-such-peer') return refuse('invalid', 'the key says that place is not on its list');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
-    throw e;
-  }
-  /* the key computed the subject itself: it must be the one the phone computed */
-  const [l] = await edge.pickup(r.seq, 1);
-  const f = chain.decodeLink(l.link);
-  if (f.op !== codes.OP.SYNC || !(f.flags & codes.FLAG.PRESS_OBSERVED) || toHex(f.subject) !== toHex(subject)) {
-    return refuse('invalid', `the key's link #${r.seq} is not this sync's record`);
-  }
-  return { ok: true, seq: r.seq, count: added.length };
-}
-
-/**
- * R29 (P2b): a place on the key's list asks to pair this phone's key with
- * another key of yours. The place relays that key and could swap it, so the
- * sheet shows a 6-digit code made from BOTH keys and ids (grants.siblingCode):
- * the other phone, asked the same, shows the same code only when each got the
- * other's real key. The person checks they match, says Yes, and presses; the
- * key writes the sibling-add link (it refuses itself, a wrong id, a known one).
- * -> {ok: true, already?, seq?, index} | {ok: false, refusal, detail?} | {dropped}
- */
-async function approveSibling(msg, { edge, seen, ask, onPress, timeoutMs = 30000 }) {
-  const syncLib = require('./sync');
-  if (!msg || msg.type !== syncLib.SIBLING_TYPE) return { dropped: 'malformed' };
-  const v = syncLib.verify(msg, { seen });
-  if (!v.ok) return { dropped: v.reason };
-  seen.add(msg.nonce.toLowerCase());
-  const p = msg.payload;
-  const peer = msg.peer.toLowerCase();
-  const own = await edge.publicKey();
-  if (toHex(own.deviceId) !== p.deviceId.toLowerCase()) return refuse('invalid', 'that request is for another key');
-  const places = await edge.peers();
-  if (!places.peers.some((x) => toHex(x.publicKey) === peer)) return refuse('invalid', 'that place is not on this key\'s list - add it first (okedge peer add)');
-  const key = fromHex(p.key);
-  const id = fromHex(p.id);
-  if (toHex(chain.deviceIdOf(key)) !== toHex(id)) return refuse('invalid', 'the device id is not that key\'s own');
-  if (toHex(key) === toHex(own.publicKey)) return refuse('invalid', 'that is this key itself');
-  const list = await edge.siblings();
-  const known = list.siblings.find((s) => toHex(s.publicKey) === toHex(key));
-  if (known) return { ok: true, already: true, index: known.index };
-  if (list.siblings.length >= list.max) return refuse('invalid', `the key already has ${list.max} paired keys - unpair one first`);
-  const code = grants.siblingCode(own, { publicKey: key, deviceId: id });
-  const answer = await ask({ peer, place: request.fingerprint(peer), name: p.name, sibling: toHex(key), siblingId: toHex(id), code });
-  if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
-  if (answer !== 'approve') return refuse('declined');
-  let r;
-  try {
-    r = await edge.siblingAdd(key, { onPress, timeoutMs });
-  } catch (e) {
-    if (e && e.status === 'restoring') return refuse('restoring');
-    if (e && e.status === 'sibling-known') return { ok: true, already: true };
-    if (e && e.status === 'siblings-full') return refuse('invalid', 'the key already has four paired keys');
-    if (e && e.status === 'bad-key') return refuse('invalid', 'the key refused that key');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
-    throw e;
-  }
-  /* the link the press wrote: this key and id, pressed */
-  const [l] = await edge.pickup(r.seq, 1);
-  const f = chain.decodeLink(l.link);
-  if (f.op !== codes.OP.SIBLING_ADD || !(f.flags & codes.FLAG.PRESS_OBSERVED) || toHex(f.subject) !== toHex(grants.siblingSubject(key, id))) {
-    return refuse('invalid', `the key's link #${r.seq} is not this key's sibling-add`);
-  }
-  return { ok: true, seq: r.seq, index: list.siblings.length };
-}
-
-/**
- * R30 (P2c): the sibling's chain, as offered, already passed sync.anchorCheck
- * (the caller has the copies); this is the consent: the sibling must be on the
- * KEY's list at `index`, then the sheet, Yes, a PHYSICAL press, and the key
- * checks the checkpoint itself and writes the anchor link. Only after that link
- * may the caller keep the sibling's links.
- * -> {ok: true, seq} | {ok: false, refusal, detail?}
- */
-async function approveAnchor({ peer, name, index, chain: siblingId, checkpoint, count = 0, edge, ask, onPress, timeoutMs = 30000 }) {
-  const list = await edge.siblings();
-  const sib = list.siblings[index];
-  if (!sib || toHex(sib.deviceId) !== toHex(siblingId)) return refuse('invalid', 'that key is not paired with this one');
-  const answer = await ask({ peer: String(peer).toLowerCase(), place: request.fingerprint(String(peer).toLowerCase()), name, sibling: toHex(sib.publicKey), seq: checkpoint.seq, count });
-  if (answer === 'timeout') return refuse('timeout', 'nobody answered on the phone');
-  if (answer !== 'approve') return refuse('declined');
-  let r;
-  try {
-    r = await edge.anchor(index, checkpoint, { onPress, timeoutMs });
-  } catch (e) {
-    if (e && e.status === 'restoring') return refuse('restoring');
-    if (e && e.status === 'bad-checkpoint') return refuse('invalid', 'the key says that checkpoint is not signed by the paired key');
-    if (e && e.status === 'no-such-sibling') return refuse('invalid', 'the key says that key is not paired');
-    if (e && e.code === 'ETIMEDOUT') return refuse('timeout', noPress(e));
-    throw e;
-  }
-  const [l] = await edge.pickup(r.seq, 1);
-  const f = chain.decodeLink(l.link);
-  if (f.op !== codes.OP.ANCHOR || !(f.flags & codes.FLAG.PRESS_OBSERVED) || f.slot !== index || f.grantId !== checkpoint.seq
-    || toHex(f.subject) !== toHex(grants.anchorSubject({ deviceId: siblingId, ...checkpoint }))) {
-    return refuse('invalid', `the key's link #${r.seq} is not this anchor`);
-  }
-  return { ok: true, seq: r.seq };
 }
 
 /**
@@ -371,4 +182,4 @@ function agentInCopy(rows, agentHex) {
   return null;
 }
 
-module.exports = { approveRequest, approveRegister, approvePeerAdd, approveSync, approveSibling, approveAnchor, agentInCopy };
+module.exports = { approveRequest, approveRegister, agentInCopy };

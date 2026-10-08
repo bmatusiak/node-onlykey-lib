@@ -30,8 +30,8 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
             pcIn: number | null;
         };
     }>;
-    /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
-    ticketOwed: (seq: any, { code, message }: {
+    /** File an owed receipt with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
+    receiptOwed: (seq: any, { code, message }: {
         code?: string | undefined;
         message: any;
     }) => Promise<any>;
@@ -39,7 +39,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]
      * (identity on a derived code, R11a). ttlMinutes: 1..1440.
      * Rejects EEDGE_UNSUPPORTED, EEDGE_INVALID, EEDGE_REFUSED (with .refusal:
-     * declined, timeout, copy_unverified, ticket_owed, restoring, invalid),
+     * declined, timeout, copy_unverified, receipt_owed, restoring, invalid),
      * EEDGE_NO_ANSWER (dropped: not registered, replayed) or EEDGE_OPENING
      * (the answer is not a budget the key opened as asked).
      */
@@ -55,10 +55,10 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         /**
          * The head this budget holds (hex): what the agent's next use TX starts over,
          * and what `okedge exec --head` must name - proof the agent saw its own
-         * last ticket's reply (mcp-service.md §4.2a).
+         * last receipt's reply (mcp-service.md §4.2a).
          */
         head(): string;
-        /** the uses still waiting for their ticket (seqs) */
+        /** the uses still waiting for their receipt (seqs) */
         pending(): any[];
         /**
          * One use: TX start over the head this budget holds and SHA-256(bytes), run
@@ -78,15 +78,15 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
                 reveal: any;
             };
         }>;
-        /** File the ticket for a use; the new head is kept for the next use(). */
-        ticket(link: any, { code, message }: {
+        /** File the receipt for a use; the new head is kept for the next use(). */
+        receipt(link: any, { code, message }: {
             code?: string | undefined;
             message: any;
         }): Promise<any>;
         /**
-         * Revoke what is left - only once every use is ticketed (R16: the client
-         * tickets first, then ends). Ending with a ticket owed left budget 351's
-         * card waiting on a ticket after its end (Brad, 2026-10-06).
+         * Revoke what is left - only once every use is receipted (R16: the client
+         * receipts first, then ends). Ending with a receipt owed left budget 351's
+         * card waiting on a receipt after its end (Brad, 2026-10-06).
          */
         end(): Promise<void>;
     }>;
@@ -108,10 +108,10 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         /**
          * The head this budget holds (hex): what the agent's next use TX starts over,
          * and what `okedge exec --head` must name - proof the agent saw its own
-         * last ticket's reply (mcp-service.md §4.2a).
+         * last receipt's reply (mcp-service.md §4.2a).
          */
         head(): string;
-        /** the uses still waiting for their ticket (seqs) */
+        /** the uses still waiting for their receipt (seqs) */
         pending(): any[];
         /**
          * One use: TX start over the head this budget holds and SHA-256(bytes), run
@@ -131,15 +131,15 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
                 reveal: any;
             };
         }>;
-        /** File the ticket for a use; the new head is kept for the next use(). */
-        ticket(link: any, { code, message }: {
+        /** File the receipt for a use; the new head is kept for the next use(). */
+        receipt(link: any, { code, message }: {
             code?: string | undefined;
             message: any;
         }): Promise<any>;
         /**
-         * Revoke what is left - only once every use is ticketed (R16: the client
-         * tickets first, then ends). Ending with a ticket owed left budget 351's
-         * card waiting on a ticket after its end (Brad, 2026-10-06).
+         * Revoke what is left - only once every use is receipted (R16: the client
+         * receipts first, then ends). Ending with a receipt owed left budget 351's
+         * card waiting on a receipt after its end (Brad, 2026-10-06).
          */
         end(): Promise<void>;
     }>;
@@ -151,36 +151,8 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         already: boolean;
     }>;
     /**
-     * R20: ask the phone to add a place that keeps copies (this PC's copy
-     * store) as a known peer of the key - the person's Yes, then a press.
-     * peerSigner: request.peerSignerFromSecret(the place's own P-256 secret),
-     * not this agent's key. -> {already, seq?, index}; rejects EEDGE_REFUSED or
-     * EEDGE_NO_ANSWER.
-     */
-    peerAdd(peerSigner: any, name: any): Promise<{
-        already: boolean;
-        seq: any;
-        index: any;
-    }>;
-    /**
-     * R29 (P2b): ask the phone whose key is `deviceId` to pair it with the
-     * key `key` (X || Y; its id is derived) - the code on its sheet, Yes, a
-     * press. peerSigner: this place's own key (on that key's list). The caller
-     * asks the OTHER phone the same, the other way round.
-     * -> {already, seq?, index?}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
-     */
-    siblingAdd(peerSigner: any, { deviceId, key, name }: {
-        deviceId: any;
-        key: any;
-        name: any;
-    }): Promise<{
-        already: boolean;
-        seq: any;
-        index: any;
-    }>;
-    /**
      * The phone's own name (its Bluetooth / Android device name) as it says it
-     * - asked with a HAVE, so only from a place on the key's list. A label,
+     * - asked with a HAVE. A label,
      * never trusted: the person can rename it on each phone. -> string | null
      */
     phoneName(peerSigner: any, { deviceId, name }: {
@@ -189,7 +161,7 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
     }): Promise<any>;
     /**
      * R30 (P2c): the phone's own copy of its chain, every record it holds -
-     * GIVE, BATCH at a time. peerSigner: this place (on that key's list).
+     * GIVE, BATCH at a time. peerSigner: this computer's own sync key (copy.peerSigner).
      * -> [{link, head, reveal}] ; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
      */
     copyFromPhone(peerSigner: any, { deviceId }: {
@@ -201,35 +173,44 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
     }[]>;
     /**
      * BLOCKS (BLOCKS.md §3, Brad 2026-10-07): the key's seals (the checkpoints that
-     * close each block) and the sibling checkpoints its chain anchored, as the phone
-     * keeps them. A GIVE asked past the end: no links, just its last-batch fields.
+     * close each block), as the phone keeps them - and the phone's own latest owner
+     * statement (its nametag; 2026-10-08), so this computer can offer that phone's log to
+     * your other devices. A phone that has no nametag yet gives none. A GIVE asked past the end: no links, just its last-batch fields.
      * Nothing is trusted here - each seal is checked against the key's own public
      * key when the blocks are built (block.verifyBlock).
-     * -> {seals: [{seq, head, signature}], seen: [{deviceId, seq, head, signature}]}
+     * -> {seals: [{seq, head, signature}], statement: {deviceId, publicKey, seq, nametag, signature} | null}
      */
     sealsFromPhone(peerSigner: any, { deviceId }: {
         deviceId: any;
     }): Promise<{
         seals: any;
-        seen: any;
+        statement: {
+            deviceId: Uint8Array<ArrayBuffer>;
+            publicKey: Uint8Array<ArrayBuffer>;
+            seq: any;
+            nametag: string;
+            signature: Uint8Array<ArrayBuffer>;
+        } | null;
     }>;
     /**
-     * R30 (P2c): bring the phone whose key is `deviceId` its sibling's chain
-     * (`chain`, `records` up to the sibling's signed `checkpoint`) and ask
-     * it to anchor it: HAVE (what it holds of that chain), the LINKS it lacks,
-     * then ANCHOR - one sheet, Yes, a press, the anchor link.
-     * -> {sent, seq} ; rejects EEDGE_REFUSED (declined, timeout, a rollback or
-     * a changed history - with the phone's words) or EEDGE_NO_ANSWER.
+     * OFFER ANOTHER DEVICE'S LOG (Brad, 2026-10-08: "if it has the private ecc key to sign
+     * the block, then i want the log"): bring the phone whose key is `deviceId` the chain
+     * `chain` (`records` up to that device's signed `checkpoint`) with its owner
+     * `statement` - HAVE (what the phone holds of it), the LINKS it lacks, then OFFER. The
+     * phone HOLDS it; the person approves the merge later from the Edge tab's banner.
+     * -> {sent, held (true when the phone kept it), count}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
      */
-    anchorToPhone(peerSigner: any, { deviceId, chain, records, checkpoint, name }: {
+    offerToPhone(peerSigner: any, { deviceId, chain, records, checkpoint, statement, name }: {
         deviceId: any;
         chain: any;
         records: any;
         checkpoint: any;
+        statement: any;
         name: any;
     }): Promise<{
         sent: any;
-        seq: any;
+        held: boolean;
+        count: any;
     }>;
     /**
      * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
@@ -237,9 +218,10 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
      * and merge `keychain` (this place's public Key Chain list, entries) with
      * the phone's. Asks what the phone holds, sends only the links it lacks and
      * the whole list, in signed parts; COMMIT brings up ONE sheet on the phone;
-     * after its Yes and press, TAKEs the merged list back. peerSigner: this
-     * place's own key (on the key's list).
-     * -> {sent, seq (the sync link, or null when nothing moved), count, keychainIn,
+     * TAKEs the merged list back. The links themselves are HELD on the phone until
+     * the person approves them from the Edge tab's banner (Brad, 2026-10-08) - no key
+     * press, no sync link. peerSigner: this computer's own sync key (copy.peerSigner).
+     * -> {sent, seq (always null since 2026-10-08), count, keychainIn,
      *     keychainOut, keychain (the merged list, or null)}
      * rejects EEDGE_REFUSED (declined, timeout, a fork - with the phone's words) or EEDGE_NO_ANSWER.
      */
@@ -268,10 +250,10 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         /**
          * The head this budget holds (hex): what the agent's next use TX starts over,
          * and what `okedge exec --head` must name - proof the agent saw its own
-         * last ticket's reply (mcp-service.md §4.2a).
+         * last receipt's reply (mcp-service.md §4.2a).
          */
         head(): string;
-        /** the uses still waiting for their ticket (seqs) */
+        /** the uses still waiting for their receipt (seqs) */
         pending(): any[];
         /**
          * One use: TX start over the head this budget holds and SHA-256(bytes), run
@@ -291,15 +273,15 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
                 reveal: any;
             };
         }>;
-        /** File the ticket for a use; the new head is kept for the next use(). */
-        ticket(link: any, { code, message }: {
+        /** File the receipt for a use; the new head is kept for the next use(). */
+        receipt(link: any, { code, message }: {
             code?: string | undefined;
             message: any;
         }): Promise<any>;
         /**
-         * Revoke what is left - only once every use is ticketed (R16: the client
-         * tickets first, then ends). Ending with a ticket owed left budget 351's
-         * card waiting on a ticket after its end (Brad, 2026-10-06).
+         * Revoke what is left - only once every use is receipted (R16: the client
+         * receipts first, then ends). Ending with a receipt owed left budget 351's
+         * card waiting on a receipt after its end (Brad, 2026-10-06).
          */
         end(): Promise<void>;
     }>;

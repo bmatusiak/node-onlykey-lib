@@ -174,8 +174,8 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
         });
         timer = setTimeout(() => { off(); resolve(null); }, waitMs);
         /*
-         * A wait nobody is still awaiting must not keep the process alive: a ticket's
-         * note gives up after 4 s (client sendNote), and `onlykey-js edge ticket` then
+         * A wait nobody is still awaiting must not keep the process alive: a receipt's
+         * note gives up after 4 s (client sendNote), and `onlykey-js edge receipt` then
          * sat until this 120 s timer ran out (Pixel, 2026-10-06).
          */
         if (timer && typeof timer.unref === 'function') timer.unref();

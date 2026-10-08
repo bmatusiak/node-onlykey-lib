@@ -10,7 +10,7 @@
  *                                         first time, also name the agent's own identities
  *   onlykey-js edge agent [--wait s]      the OPTIONAL service (CLI.md §4): keeps the Bluetooth
  *                                         link open between commands - for speed only
- *   onlykey-js edge budget | continue | end | status | exec | ticket | watch | sync | peer | sibling
+ *   onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync
  *                                         edge/cli/commands.js
  *
  * NO SERVICE BY DEFAULT (CLI.md §4): a command finds the `edge agent` service if one
@@ -29,10 +29,9 @@ const USAGE = [
   'onlykey-js edge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES',
   'onlykey-js edge continue --ttl MINUTES [--caps n,n] | end | status',
   'onlykey-js edge exec --head H --intent "…" -- <command…>     the only way to spend a budget',
-  'onlykey-js edge ticket <seq> [--code OK] --msg "…"',
+  'onlykey-js edge receipt <seq> [--code OK] --msg "…"',
   'onlykey-js edge watch [--once] | sync [--status] | sync --with <address>',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
-  'onlykey-js edge peer add | list · sibling add <address> | list',
   'onlykey-js edge agent                                         the optional service',
   'add --test-mode to any of them: the testnet - its own home, its own chain on the phone (Enter testing mode)',
   'onlykey-js edge --test-mode clear                             delete the testnet on this computer (its home and Key Chain file)',
@@ -239,7 +238,7 @@ module.exports = function register(COMMANDS, h) {
   COMMANDS.edge = {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
-    usage: 'register | budget | continue | end | status | exec | ticket | watch | sync | blocks | peer | sibling | agent | --test-mode … | --test-mode clear',
+    usage: 'register | budget | continue | end | status | exec | receipt | watch | sync | blocks | agent | --test-mode … | --test-mode clear',
     summary: 'Edge: an agent uses the key inside a budget you approve on the phone - budget or no go',
     device: true,
     async run(io, opts, argv) {
@@ -250,7 +249,7 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'ticket', 'watch', 'sync', 'blocks', 'clear', 'peer', 'sibling', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
+      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - onlykey-js edge help`);
       const control = require('./control');
       const wait = opt(rest, '--wait');
@@ -353,7 +352,7 @@ module.exports = function register(COMMANDS, h) {
             io.out(h.row('gpg cert', path.join(st.home, 'agent-gpg.asc')));
           }
           io.out(h.row('control', svc.controlPath));
-          io.out('ready - onlykey-js edge budget / exec / ticket use this service; Ctrl-C to stop');
+          io.out('ready - onlykey-js edge budget / exec / receipt use this service; Ctrl-C to stop');
           /*
            * RELEASE WHEN IDLE (Brad, 2026-10-06): the link is let go once the key's
            * lane has been quiet 60 s - nothing running, nothing waiting. The phone

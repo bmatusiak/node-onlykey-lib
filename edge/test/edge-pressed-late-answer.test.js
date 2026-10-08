@@ -35,11 +35,11 @@ function lateAnswerKey(onSub) {
   };
 }
 
-test('a stale seq . head . tag during the press wait is passed over; the registration gets its own link', async () => {
+test('a stale seq . head during the press wait is passed over; the registration gets its own link', async () => {
   const t = lateAnswerKey(0x15);
   const edge = edgeOver(t);
-  const v = await edge.vouch(); /* what a late TICKET / WAIVE answer looks like: the key's current seq . head . tag */
-  t.setStale(report([...u32(v.seq), ...v.head, ...v.tag]));
+  const v = await edge.head(); /* what a late RECEIPT / WAIVE answer looks like: the key's current seq . head */
+  t.setStale(report([...u32(v.seq), ...v.head]));
   const r = await edge.agentAdd(new Uint8Array(32).fill(7), { timeoutMs: 2000 });
   assert.equal(r.seq, v.seq + 1);
   const [l] = await edge.pickup(r.seq, 1);

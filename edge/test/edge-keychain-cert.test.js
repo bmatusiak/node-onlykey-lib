@@ -24,7 +24,7 @@ const LABEL = `gpg://${UID}`;
 async function stack() {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32));
+  await edge.receipt(0, 0, new Uint8Array(32));
   const keys = new Map();
   const keyOf = (identity, keyType) => {
     const k = `${hex(agentProto.identityHash(identity))}/${keyType}`;

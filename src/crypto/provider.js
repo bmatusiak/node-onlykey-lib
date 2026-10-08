@@ -6,7 +6,7 @@
  *
  * WHY (A13, 2026-10-07): on a Galaxy A13 under Hermes, the phone's checks spent
  * ~1 s a sync in JS crypto - SHA-256 over the copy and the hash chains, P-256 on
- * checkpoints, the ticket message hashes - while the app already links OpenSSL
+ * checkpoints, the receipt message hashes - while the app already links OpenSSL
  * (okssl), which does the same in native code in a few ms. Brad: "try not to use
  * JS crypto if okssl can provide it as a faster version".
  *

@@ -74,7 +74,7 @@ let goneAsked = 0;
 async function setup({ cap = 4 } = {}) {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32)); /* the fake starts owing #0 */
+  await edge.receipt(0, 0, new Uint8Array(32)); /* the fake starts owing #0 */
   const keys = new Map();
   const keyOf = (identity) => {
     const k = hex(agentProto.identityHash(identity));
@@ -173,7 +173,7 @@ test('THE FIX, budget or no go: there is no shared endpoint - another process ca
   const f = await lastLink();
   assert.equal(JSON.stringify([f.decision, f.seq > before]), JSON.stringify([codes.DECISION.SELF_PRESS, true]), 'the exec\'s use was not paid');
   await ex.close();
-  assert.deepEqual((await agent.status()).keyOwed, [f.seq], 'the paid use owes its ticket');
+  assert.deepEqual((await agent.status()).keyOwed, [f.seq], 'the paid use owes its receipt');
 });
 test('the budget does not pay for a host that is not pinned, a forged bind, no bind, or a request for another session', async () => {
   const { agent, b, h, keyBlob, lastLink } = await setup();
@@ -194,7 +194,7 @@ test('the budget does not pay for a host that is not pinned, a forged bind, no b
   }
 });
 
-test('a stale --head is refused before anything opens; after a ticket the printed head works', async () => {
+test('a stale --head is refused before anything opens; after a receipt the printed head works', async () => {
   const { agent, b, h, keyBlob } = await setup();
   await assert.rejects(agent.openExec({ head: '00'.repeat(32), reason: 'x' }), { code: 'EEDGE_STALE_HEAD' });
   const before = b.head();
@@ -202,10 +202,10 @@ test('a stale --head is refused before anything opens; after a ticket the printe
   const sid = crypto.randomBytes(32);
   await sshClient(ex.sshPath, [h.bind(sid), signMsg(keyBlob, userauth(sid))]);
   const [link] = await ex.close();
-  /* the ticket is owed: refused for THAT first, before the command runs (daily-loop §3) */
-  await assert.rejects(agent.openExec({ head: b.head(), reason: 'next' }), { code: 'EEDGE_TICKET_OWED' });
-  const next = await agent.ticket(link.seq, { message: 'pushed' });
-  /* ticketed: the old head is stale now */
+  /* the receipt is owed: refused for THAT first, before the command runs (daily-loop §3) */
+  await assert.rejects(agent.openExec({ head: b.head(), reason: 'next' }), { code: 'EEDGE_RECEIPT_OWED' });
+  const next = await agent.receipt(link.seq, { message: 'pushed' });
+  /* receipted: the old head is stale now */
   await assert.rejects(agent.openExec({ head: before, reason: 'next' }), { code: 'EEDGE_STALE_HEAD' }, 'the head moved with the use');
   assert.equal(next, b.head());
   await (await agent.openExec({ head: next, reason: 'next push' })).close();

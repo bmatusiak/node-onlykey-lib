@@ -74,58 +74,6 @@ const VECTOR = {
   head: Buffer.alloc(32, 0xab),
   keychain: null,
 };
-test('the subject matches the spec formula byte for byte (a fixed vector, computed with node:crypto)', () => {
-  const crypto = require('node:crypto');
-  const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; };
-  const want = crypto.createHash('sha256').update(Buffer.concat([
-    Buffer.from('OKEDGE-SYNC-v1'), crypto.createHash('sha256').update(VECTOR.peer).digest(),
-    u32(VECTOR.first), u32(VECTOR.last), VECTOR.head, Buffer.alloc(32),
-  ])).digest('hex');
-  const all = links(270);
-  const got = sync.syncSubject(sync.syncFields({ peer: VECTOR.peer, added: [all[268], all[269]], head: VECTOR.head }));
-  assert.equal(hex(got), want);
-  /* pinned: the soft key's kit test checks the firmware against this same value */
-  assert.equal(want, 'b3966f6a90ea2c6ed3ba38af8614de19e54c322bbbbd30dbfa161dcbc3cb2470');
-  /* a Key Chain list that moved changes it; so does the head or the range */
-  assert.notEqual(hex(sync.syncSubject(sync.syncFields({ peer: VECTOR.peer, added: [all[268], all[269]], head: VECTOR.head, keychainHash: Buffer.alloc(32, 1) }))), want);
-  assert.notEqual(hex(sync.syncSubject(sync.syncFields({ peer: VECTOR.peer, added: [all[268]], head: VECTOR.head }))), want);
-});
-
-test('approveSync: a place on the key\'s list, Yes, the press - the key links op 20 with the subject, owing no ticket', async () => {
-  const edge = edgeOver(fakeKey());
-  const s = signer();
-  await edge.peerAdd(s.publicKey, { timeoutMs: 2000 });
-  const added = links(6).slice(2, 5);
-  const asked = [];
-  const r = await approve.approveSync({ peer: hex(s.publicKey), name: 'NITRO16 copies', added, head: added[added.length - 1].head, edge, ask: async (v) => { asked.push(v); return 'approve'; }, timeoutMs: 2000 });
-  assert.equal(r.ok, true);
-  assert.equal(r.count, 3);
-  assert.deepEqual(asked[0].ranges, [[2, 4]]);
-  assert.equal(asked[0].count, 3);
-  const [l] = await edge.pickup(r.seq, 1);
-  const f = chain.decodeLink(l.link);
-  assert.equal(f.op, codes.OP.SYNC);
-  assert.ok(f.flags & codes.FLAG.PRESS_OBSERVED);
-  assert.ok(!(f.flags & codes.FLAG.OWES_TICKET), 'a sync link owes a ticket');
-  /* the key computed it from the parts; the phone's own computation must agree */
-  assert.equal(hex(f.subject), hex(sync.syncSubject(sync.syncFields({ peer: s.publicKey, added, head: added[added.length - 1].head }))));
-});
-
-test('approveSync: a place NOT on the key\'s list never reaches the sheet; Decline writes nothing', async () => {
-  const edge = edgeOver(fakeKey());
-  const before = (await edge.head()).seq;
-  const stranger = signer();
-  const r = await approve.approveSync({ peer: hex(stranger.publicKey), name: 'x', added: links(3), head: new Uint8Array(32), edge, ask: async () => assert.fail('a stranger reached the sheet') });
-  assert.equal(r.refusal, 'invalid');
-  const s = signer();
-  await edge.peerAdd(s.publicKey, { timeoutMs: 2000 });
-  const mid = (await edge.head()).seq;
-  const d = await approve.approveSync({ peer: hex(s.publicKey), name: 'x', added: links(3), head: new Uint8Array(32), edge, ask: async () => 'decline' });
-  assert.equal(d.refusal, 'declined');
-  assert.equal((await edge.head()).seq, mid, 'a declined sync wrote a link');
-  assert.ok(mid > before);
-});
-
 /* ------------------------------------------------ the Key Chain list (merged, never "yours") */
 
 const list = require('../../keychain/src/list');
@@ -171,15 +119,6 @@ test('Key Chain parts are signed, re-checked on arrival, and never carry "yours"
   const commit = await sync.buildCommit({ signer: s, deviceId: DEVICE, sid: '01'.repeat(8), linkParts: 0, keychainParts: msgs.length });
   assert.deepEqual(sync.verify(commit), { ok: true });
   assert.deepEqual(sync.verify(await sync.buildTake({ signer: s, deviceId: DEVICE, sid: '01'.repeat(8), part: 0 })), { ok: true });
-});
-
-test('only the Key Chain moved: the sync fields name no seq range (0xFFFFFFFF), and carry the list digest', () => {
-  const digest = sync.keychainDigest([derived('ssh://a@pc', pubOf(1))]);
-  const f = sync.syncFields({ peer: VECTOR.peer, added: [], head: VECTOR.head, keychainHash: digest });
-  assert.equal(f.first, sync.NO_SEQ);
-  assert.equal(f.last, sync.NO_SEQ);
-  assert.equal(hex(f.keychain), hex(digest));
-  assert.throws(() => sync.syncFields({ peer: VECTOR.peer, added: [], head: VECTOR.head }), /nothing moved/);
 });
 
 test('the same entries built in a different key order are the same list: same text, same digest, nothing to move', () => {

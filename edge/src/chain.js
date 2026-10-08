@@ -13,11 +13,11 @@
  *   off size field
  *    0   4   seq (u32 LE, from 0)
  *    4   1   op (codes.OP)
- *    5   1   decision (codes.DECISION; for op = ticket, the ticket code)
+ *    5   1   decision (codes.DECISION; for op = receipt, the receipt code)
  *    6   1   slot
  *    7   1   flags (codes.FLAG)
  *    8  32   subject
- *   40   4   grant_id (u32 LE); for op = ticket, ref_seq
+ *   40   4   grant_id (u32 LE); for op = receipt, ref_seq
  *   44   2   grant_step (u16 LE)
  *   46  18   reserved (the key writes zeros; they are hashed like any byte)
  *
@@ -69,8 +69,8 @@ function encodeLink(f) {
   b[44] = step & 0xff;
   b[45] = step >>> 8;
   if (f.reserved) b.set(f.reserved.subarray(0, 18), 46);
-  /* R3 (2026-10-06): byte 63 = the link format's version (0 = before versions) */
-  if (f.version !== undefined) b[63] = f.version;
+  /* R3: byte 63 = the link format's version - 1 since the first release (Brad, 2026-10-08: "v1 = first release") */
+  b[63] = f.version !== undefined ? f.version : LINK_VERSION;
   /* R13b: a sign/decrypt link's intent, bytes 47-62 */
   if (f.intent) {
     if (!(f.intent instanceof Uint8Array) || f.intent.length !== 16) throw new TypeError('edge: intent must be 16 bytes');
@@ -87,7 +87,7 @@ function encodeLink(f) {
 function decodeLink(b) {
   if (!(b instanceof Uint8Array) || b.length !== LINK_BYTES) throw new TypeError(`edge: a link is ${LINK_BYTES} bytes`);
   const u32 = (o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
-  const isTicket = b[4] === OP.TICKET;
+  const isReceipt = b[4] === OP.RECEIPT;
   return {
     seq: u32(0),
     op: b[4],
@@ -97,19 +97,19 @@ function decodeLink(b) {
     subject: b.slice(8, 40),
     grantId: u32(40),
     grantStep: b[44] | (b[45] << 8),
-    /* the ticket reuses two fields (R16): its code and the seq it answers */
-    ...(isTicket ? { code: b[5], refSeq: u32(40) } : {}),
-    /* R3: the scope that paid (1-based) on a link that spends a budget; 0 on every other link and on links before R3 */
+    /* the receipt reuses two fields (R16): its code and the seq it answers */
+    ...(isReceipt ? { code: b[5], refSeq: u32(40) } : {}),
+    /* R3: the scope that paid (1-based) on a link that spends a budget; on a budget's opening, its scope count; 0 on every other link */
     scope: b[46],
     /*
-     * R13b: a sign/decrypt link carries the agent's intent in 47-62, self-pressed or
-     * pressed (zeros: none - every link before R13b). Every other link keeps 47-62 zero.
-     * R3: byte 63 = the format's version - 0 (before versions) and 1 are known.
+     * R13b: a sign/decrypt link carries the agent's intent in 47-62 (zeros: the use gave
+     * none). Every other link keeps 47-62 zero. R3: byte 63 = the format's version; v1 is
+     * the first release and the only one known - nothing older is read (2026-10-08).
      */
     intent: (b[4] === OP.SIGN || b[4] === OP.DECRYPT) && b.subarray(47, 63).some((x) => x !== 0) ? b.slice(47, 63) : null,
     version: b[63],
-    versionKnown: b[63] <= LINK_VERSION,
-    reservedZero: (b[4] === OP.SIGN || b[4] === OP.DECRYPT || b.subarray(47, 63).every((x) => x === 0)) && b[63] <= LINK_VERSION,
+    versionKnown: b[63] === LINK_VERSION,
+    reservedZero: (b[4] === OP.SIGN || b[4] === OP.DECRYPT || b.subarray(47, 63).every((x) => x === 0)) && b[63] === LINK_VERSION,
   };
 }
 

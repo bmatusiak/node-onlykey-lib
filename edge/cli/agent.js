@@ -33,7 +33,7 @@ const path = require('path');
 const agentSrv = require('../../cli/ssh-agent');
 const bindLib = require('../../cli/ssh-session-bind');
 const agentProto = require('../../src/protocol/agent');
-const { chain, tickets, codes } = require('../src');
+const { chain, receipts, codes } = require('../src');
 
 const EXEC_CAP_MS = 10 * 60 * 1000;
 
@@ -79,15 +79,15 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   const ring = async (h) => (h.seq === null || h.oldest === null ? [] : edge.pickup(h.oldest, h.seq - h.oldest + 1));
   /*
    * R16: what the KEY says is owed. HEAD gives the count; the seqs come from
-   * replaying the ring - an owed use is older than its ticket, so every owed use
+   * replaying the ring - an owed use is older than its receipt, so every owed use
    * still in the ring is found; the rest are older than the ring.
    */
   const keyOwed = async (h, rows = null) => {
     if (!h.owed && !h.overflow) return { seqs: [], older: 0 };
-    const seqs = tickets.keyDebts(rows || await ring(h)).owed;
+    const seqs = receipts.keyDebts(rows || await ring(h)).owed;
     return { seqs, older: Math.max(0, h.owed - seqs.length) + (h.overflow ? 1 : 0) };
   };
-  /* edge watch: what this agent knows about a link (reason, ticket), and its own events - kept short */
+  /* edge watch: what this agent knows about a link (reason, receipt), and its own events - kept short */
   const notes = new Map();
   const note = (seq, add) => {
     notes.set(seq, { ...(notes.get(seq) || {}), ...add });
@@ -99,7 +99,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     events.push({ n: ++eventN, at: new Date().toISOString(), kind, message });
     while (events.length > 64) events.shift();
   };
-  const owedText = (k) => [k.seqs.length ? `tickets for #${k.seqs.join(', #')}` : '', k.older ? `${k.older} older than the key's ring (waive on the phone)` : ''].filter(Boolean).join(' and ');
+  const owedText = (k) => [k.seqs.length ? `receipts for #${k.seqs.join(', #')}` : '', k.older ? `${k.older} older than the key's ring (waive on the phone)` : ''].filter(Boolean).join(' and ');
   let budget = null;          /* the work budget (edge/src/client.js budget), once asked for or resumed */
   const execs = new Map();    /* token -> the open exec */
 
@@ -130,8 +130,8 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
       /*
        * THE KEY SIGNED, THE ANSWER DID NOT COME BACK (the A13, 2026-10-07: a push's
        * use #738 was spent and owed, exec said "nothing under the budget", and no
-       * ticket was filed). An exec opens only when the key owes nothing, so what it
-       * owes now is this exec's: kept as its link, marked failed, for the ticket.
+       * receipt was filed). An exec opens only when the key owes nothing, so what it
+       * owes now is this exec's: kept as its link, marked failed, for the receipt.
        */
       if (edge) {
         const k = await keyOwed(await edge.head()).catch(() => ({ seqs: [] }));
@@ -144,13 +144,13 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     const { result, link } = used;
     exec.links.push({ ...link, what });
     note(link.seq, { reason: exec.reason, what });
-    log(`signed: link #${link.seq} (${what})${link.paid ? '' : ' - NOT paid by the budget'} - ticket owed for #${link.seq}`);
+    log(`signed: link #${link.seq} (${what})${link.paid ? '' : ' - NOT paid by the budget'} - receipt owed for #${link.seq}`);
     return result;
   }
 
   /**
    * Open an exec: `head` must be the budget's head (the agent saw its last
-   * ticket's reply), then a fresh endpoint and token for this one command.
+   * receipt's reply), then a fresh endpoint and token for this one command.
    * -> {sshPath, token, close}
    */
   async function openExec(o) {
@@ -166,15 +166,15 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget - ask for one first (onlykey-js edge budget)');
     /*
      * Refused BEFORE the command runs (daily-loop §3, must fail safely): a
-     * ticket still owed (R18 - the key would refuse the TX start anyway, mid-git),
+     * receipt still owed (R18 - the key would refuse the TX start anyway, mid-git),
      * the budget held or gone on the key (Hold from the phone), a stale head.
      */
     const owed = budget.pending();
-    if (owed.length) throw fail('EEDGE_TICKET_OWED', `ticket owed for #${owed.join(', #')} - onlykey-js edge ticket first`);
+    if (owed.length) throw fail('EEDGE_RECEIPT_OWED', `receipt owed for #${owed.join(', #')} - onlykey-js edge receipt first`);
     if (edge) {
       const h = await edge.head();
       const k = await keyOwed(h);
-      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - onlykey-js edge ticket them first`);
+      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - onlykey-js edge receipt them first`);
       if (!h.live.includes(budget.grantId) && onGone && !continued.has(budget.grantId)) {
         /*
          * The budget is gone - the soft key's idle restart, a lock (spec session,
@@ -195,7 +195,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
       if ((h.held || []).includes(budget.grantId)) throw fail('EEDGE_HELD', `budget ${budget.grantId} is on hold (from the phone) - Resume there first`);
     }
     if (String(head || '').toLowerCase() !== budget.head()) {
-      throw fail('EEDGE_STALE_HEAD', `--head is not the budget's head (${budget.head().slice(0, 16)}…): file the last ticket and use the head it printed`);
+      throw fail('EEDGE_STALE_HEAD', `--head is not the budget's head (${budget.head().slice(0, 16)}…): file the last receipt and use the head it printed`);
     }
     return openEndpoint({ reason, capMs });
   }
@@ -245,29 +245,29 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     setBudget(b) { budget = b; },
     execByToken: (token) => execs.get(token) || null,
     budget: () => budget,
-    async ticket(seq, { code = 'OK', message }) {
+    async receipt(seq, { code = 'OK', message }) {
       if (budget) {
-        await budget.ticket({ seq }, { code, message });
-        note(seq, { ticket: { code, message } });
+        await budget.receipt({ seq }, { code, message });
+        note(seq, { receipt: { code, message } });
         return budget.head();
       }
       /*
        * No budget in this process (it restarted, or the budget ended) but the key
-       * still owes a ticket for this use: file it straight to the key - the key
+       * still owes a receipt for this use: file it straight to the key - the key
        * only checks the seq is owed (R16). Spec rule 10 (2026-10-04): an owed
-       * ticket is filed, never waived by a script.
+       * receipt is filed, never waived by a script.
        */
       if (!edge && !client) throw fail('EEDGE_NO_BUDGET', 'no work budget');
-      /* through the client when there is one: it also sends the message to the phone (a pressed use's ticket showed "No message synced", Pixel #432) */
-      const r = client ? await client.ticketOwed(seq, { code, message }) : await edge.ticket(seq, codes.ticketByte(code), tickets.messageHash(message));
-      note(seq, { ticket: { code, message } });
+      /* through the client when there is one: it also sends the message to the phone (a pressed use's receipt showed "No message synced", Pixel #432) */
+      const r = client ? await client.receiptOwed(seq, { code, message }) : await edge.receipt(seq, codes.receiptByte(code), receipts.messageHash(message));
+      note(seq, { receipt: { code, message } });
       /* hex like budget.head(): raw bytes reach the CLI as an object ("head = [object Object]") */
       return Buffer.from(r.head).toString('hex');
     },
     /*
      * edge watch's feed (mcp-service.md: "the same live feed in a terminal",
      * okrn-edge-tab.md B7) - READ-ONLY: the key's links from `from` on, each with
-     * what this agent knows about it (the exec's reason, the ticket's message -
+     * what this agent knows about it (the exec's reason, the receipt's message -
      * the agent's own claims, shown as such), the links that fell out of the
      * key's ring before they were read, and this agent's events (refusals,
      * presses) since `since`.
@@ -289,8 +289,8 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
           out.links.push({ seq: f.seq, op: f.op, decision: f.decision, slot: f.slot, flags: f.flags, grantId: f.grantId, grantStep: f.grantStep, code: f.code, refSeq: f.refSeq,
             /* R13b: the intent welded into the link (hex), and the format version (R3) */
             intent: f.intent ? Buffer.from(f.intent).toString('hex') : null, version: f.version,
-            /* a ticket's message was noted on the use it answers */
-            note: notes.get(f.op === codes.OP.TICKET ? f.refSeq : f.seq) || null });
+            /* a receipt's message was noted on the use it answers */
+            note: notes.get(f.op === codes.OP.RECEIPT ? f.refSeq : f.seq) || null });
         }
       }
       out.live = h.live;
@@ -399,7 +399,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       if (g) { gpgEndpoints.delete(token); await g.close(); }
       return { links, head: agent.budget() ? agent.budget().head() : null };
     },
-    ticket: async ({ seq, code, message }) => ({ head: await agent.ticket(seq, { code: code || 'OK', message }) }),
+    receipt: async ({ seq, code, message }) => ({ head: await agent.receipt(seq, { code: code || 'OK', message }) }),
     /* edge sync, phase 1: the PC's own copy - reads only (R8), no press; --status changes nothing */
     sync: async ({ status, phone = true }) => {
       if (!edge) throw new Error('this agent service has no Edge key to sync from');
@@ -408,24 +408,19 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       const r = await copy.sync(edge, where, { status: !!status });
       if (status || !phone) return r;
       /*
-       * Phase 2 (Brad, 2026-10-05): this PC's copy fills the phone's - only a copy
-       * that verifies (R27), only from a place on the key's list (R20). The phone
-       * shows its sheet only when it lacks something; Yes and a press write the
-       * `sync` link there. Never repairs: a fork on the phone stops it, reported.
+       * Phase 2: this PC's copy fills the phone's - only a copy that verifies (R27).
+       * The phone HOLDS what it lacks until the person approves the merge from the
+       * Edge tab's banner (Brad, 2026-10-08) - no sheet pops up, no key press, no sync
+       * link. Any computer the person paired over Bluetooth may offer (peers dropped).
+       * Never repairs: a fork on the phone stops it, reported.
        */
       if (r.verdict.kind !== 'verified' && r.verdict.kind !== 'gap') {
         r.phone = { skipped: `this PC's copy does not verify (${r.verdict.kind}) - nothing is offered` };
         return r;
       }
       const signer = copy.peerSigner(where);
-      const mine = Buffer.from(signer.publicKey).toString('hex');
-      const list = await edge.peers();
-      if (!list.peers.some((p) => Buffer.from(p.publicKey).toString('hex') === mine)) {
-        r.phone = { skipped: 'this PC is not on the key\'s list of places that keep copies - onlykey-js edge peer add' };
-        return r;
-      }
       const c = copy.load(where, Buffer.from(r.deviceId, 'hex'));
-      /* this PC's public Key Chain list goes too, merged on the phone under the same sheet and press */
+      /* this PC's public Key Chain list goes too */
       const kcFile = require('../../keychain/cli/record');
       const myList = kcFile.load();
       try {
@@ -442,125 +437,84 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         r.phone = { refused: e.message };
       }
       /*
-       * The seals and the anchored sibling checkpoints that cut this copy into JSON
-       * blocks (BLOCKS.md §3) - asked for on their own: reading them needs no sheet and
-       * no press, so a sync the person declined (or did not answer) still brings them.
+       * The seals that cut this copy into JSON blocks (BLOCKS.md §3) - asked for on
+       * their own: reading them needs no approval, so a merge the person has not
+       * approved yet still brings them.
        */
       try {
-        r.blocks = copy.keepSeals(where, c.deviceId, await client.sealsFromPhone(signer, { deviceId: c.deviceId }));
+        const given = await client.sealsFromPhone(signer, { deviceId: c.deviceId });
+        r.blocks = copy.keepSeals(where, c.deviceId, given);
+        /* this phone's own statement (its nametag) and checkpoint: what lets this computer offer its log to your other devices */
+        if (given.statement) {
+          const mine = copy.load(where, c.deviceId);
+          mine.statement = given.statement;
+          mine.checkpoint = await edge.checkpoint();
+          copy.keepLog(where, { deviceId: c.deviceId, publicKey: mine.publicKey, records: mine.links, checkpoint: mine.checkpoint, statement: mine.statement });
+        }
       } catch (e) {
         r.blocksError = e.message;
+      }
+      /*
+       * Your other devices' logs this computer holds (from sync --with, a hard key's later):
+       * offered to this phone, which HOLDS each one until you approve the merge from its
+       * Edge tab's banner (Brad, 2026-10-08). The phone sorts them (devices.classify).
+       */
+      r.offered = [];
+      for (const other of copy.logsToOffer(where, c.deviceId)) {
+        try {
+          const o = await client.offerToPhone(signer, { deviceId: c.deviceId, chain: other.deviceId, records: other.links, checkpoint: other.checkpoint, statement: other.statement, name: `${require('os').hostname()}` });
+          r.offered.push({ deviceId: Buffer.from(other.deviceId).toString('hex'), nametag: other.statement.nametag, ...o });
+        } catch (e) {
+          r.offered.push({ deviceId: Buffer.from(other.deviceId).toString('hex'), nametag: other.statement.nametag, error: e.message });
+        }
       }
       return r;
     },
     /*
-     * edge sync phase 2, P2a (R20): add this PC's copy store to the KEY's list
-     * of places that keep copies - the phone's sheet, Yes, a press. The store's
-     * own P-256 key (edge-copy.peerSigner), never this agent's.
+     * sync --with (2026-10-08): carry each phone's log to the other - read from each phone
+     * (its copy, no press) with its key's signed checkpoint and the phone's own statement
+     * (its nametag), kept on this computer too, then OFFERED to the other phone, which holds
+     * it until you approve. No pairing, no press, no link: the owner signature is what
+     * tells each phone the other is yours (Brad: "pairing and sync is all app stuff").
      */
-    'peer-add': async ({ name }) => {
-      const signer = require('./copy').peerSigner(home || require('./control').edgeHome());
-      const key = Buffer.from(signer.publicKey).toString('hex');
-      const r = await client.peerAdd(signer, name || `${require('os').hostname()} copies`);
-      return { ...r, key };
-    },
-    /* the key's list (no press, R8); `thisPc` marks this PC's copy store */
-    peers: async () => {
-      if (!edge) throw new Error('this agent service has no Edge key to read the list from');
-      const mine = Buffer.from(require('./copy').peerSigner(home || require('./control').edgeHome()).publicKey).toString('hex');
-      const l = await edge.peers();
-      return {
-        k: l.k, max: l.max, mine,
-        peers: l.peers.map((p) => {
-          const key = Buffer.from(p.publicKey).toString('hex');
-          return { index: p.index, key, thisPc: key === mine };
-        }),
-      };
-    },
-    /*
-     * R29 (P2b): pair this agent's key with the key on another phone, both
-     * ways. openOther(address) opens a second link to that phone for the
-     * length of this request -> {edge, client, close}. This PC's copy store
-     * must be on both keys' lists first (each phone refuses a place it does
-     * not know): any key missing it gets the peer sheet + a press first.
-     * Then BOTH sibling sheets at once, so the person sees the two codes side
-     * by side; each phone pairs on its own Yes + press. One may pair while the
-     * other is declined - each result is reported.
-     */
-    'sibling-add': async ({ address, name = null, otherName = null }) => {
-      if (!edge) throw new Error('this agent service has no Edge key');
-      if (!openOther) throw new Error('this agent service cannot open a second phone');
-      if (!address) throw new Error('sibling-add needs the other phone\'s Bluetooth address');
-      const signer = require('./copy').peerSigner(home || require('./control').edgeHome());
-      const mine = Buffer.from(signer.publicKey).toString('hex');
-      const other = await openOther(address);
-      try {
-        const [ka, kb] = [await edge.publicKey(), await other.edge.publicKey()];
-        if (Buffer.compare(Buffer.from(ka.publicKey), Buffer.from(kb.publicKey)) === 0) throw new Error('both links reach the same key - give the OTHER phone\'s address');
-        const listed = async (e) => (await e.peers()).peers.some((p) => Buffer.from(p.publicKey).toString('hex') === mine);
-        const copies = `${require('os').hostname()} copies`;
-        const added = [];
-        if (!(await listed(other.edge))) { await other.client.peerAdd(signer, copies); added.push('other'); }
-        if (!(await listed(edge))) { await client.peerAdd(signer, copies); added.push('this'); }
-        /* the names each sheet shows: what was typed, else what each phone calls itself (a label - renamable on the phone) */
-        const thisName = name || (await client.phoneName(signer, { deviceId: ka.deviceId }).catch(() => null)) || selfName || 'the other phone';
-        const thatName = otherName || (await other.client.phoneName(signer, { deviceId: kb.deviceId }).catch(() => null)) || address;
-        const hex = (b) => Buffer.from(b).toString('hex');
-        const one = (p) => p.then((r) => ({ ok: true, ...r }), (e) => ({ ok: false, refusal: e.refusal || null, error: e.message }));
-        const [onOther, onThis] = await Promise.all([
-          one(other.client.siblingAdd(signer, { deviceId: kb.deviceId, key: ka.publicKey, name: thisName })),
-          one(client.siblingAdd(signer, { deviceId: ka.deviceId, key: kb.publicKey, name: thatName })),
-        ]);
-        return { peersAdded: added, this: { deviceId: hex(ka.deviceId), ...onThis }, other: { deviceId: hex(kb.deviceId), ...onOther } };
-      } finally {
-        await other.close().catch(() => undefined);
-      }
-    },
-    /*
-     * R30 (P2c): a sync between this agent's key and the key on another phone
-     * (paired both ways, R29), by cross-anchors. Each key's signed checkpoint is
-     * read from the key itself; each phone's copy of its own chain comes from
-     * that phone (GIVE, no press); then each phone gets the OTHER's chain up to
-     * the other's checkpoint and anchors it - both sheets at once, a press on
-     * each. Each phone checks the chain against the paired key and against what
-     * it anchored before (a rollback or a changed head is its alarm). One may
-     * anchor while the other is declined - each result is reported.
-     */
-    'sync-with': async ({ address, name = null, otherName = null }) => {
+    'sync-with': async ({ address }) => {
       if (!edge) throw new Error('this agent service has no Edge key');
       if (!openOther) throw new Error('this agent service cannot open a second phone');
       if (!address) throw new Error('sync --with needs the other phone\'s Bluetooth address');
-      const signer = require('./copy').peerSigner(home || require('./control').edgeHome());
+      const where = home || require('./control').edgeHome();
+      const copy = require('./copy');
+      const signer = copy.peerSigner(where);
       const hex = (b) => Buffer.from(b).toString('hex');
       const other = await openOther(address);
       try {
-        const [ka, kb] = [await edge.publicKey(), await other.edge.publicKey()];
-        if (hex(ka.publicKey) === hex(kb.publicKey)) throw new Error('both links reach the same key - give the OTHER phone\'s address');
-        const paired = async (e, k) => (await e.siblings()).siblings.some((s) => hex(s.publicKey) === hex(k.publicKey));
-        if (!(await paired(edge, kb)) || !(await paired(other.edge, ka))) throw new Error('the two keys are not paired both ways - onlykey-js edge sibling add first');
-        /* the checkpoints first: each phone's copy, read after, reaches at least that far */
-        const [cpA, cpB] = [await edge.checkpoint(), await other.edge.checkpoint()];
-        const thisName = name || (await client.phoneName(signer, { deviceId: ka.deviceId }).catch(() => null)) || selfName || 'the other phone';
-        const thatName = otherName || (await other.client.phoneName(signer, { deviceId: kb.deviceId }).catch(() => null)) || address;
-        const [recA, recB] = [await client.copyFromPhone(signer, { deviceId: ka.deviceId }), await other.client.copyFromPhone(signer, { deviceId: kb.deviceId })];
+        const sides = [{ edge, client, label: 'this phone' }, { edge: other.edge, client: other.client, label: 'the other phone' }];
+        for (const x of sides) {
+          const k = await x.edge.publicKey();
+          x.deviceId = k.deviceId;
+          x.publicKey = k.publicKey;
+        }
+        if (hex(sides[0].publicKey) === hex(sides[1].publicKey)) throw new Error('both links reach the same key - give the OTHER phone\'s address');
+        for (const x of sides) {
+          /* the checkpoint first: the phone's copy, read after, reaches at least that far */
+          x.checkpoint = await x.edge.checkpoint();
+          x.records = await x.client.copyFromPhone(signer, { deviceId: x.deviceId });
+          x.statement = (await x.client.sealsFromPhone(signer, { deviceId: x.deviceId })).statement;
+          if (!x.statement) throw new Error(`${x.label} has no nametag yet - set one in its Edge tab (Edge Management), then sync again`);
+          x.kept = copy.keepLog(where, { deviceId: x.deviceId, publicKey: x.publicKey, records: x.records, checkpoint: x.checkpoint, statement: x.statement });
+        }
         const one = (p) => p.then((r) => ({ ok: true, ...r }), (e) => ({ ok: false, refusal: e.refusal || null, error: e.message }));
-        const [onThis, onOther] = await Promise.all([
-          one(client.anchorToPhone(signer, { deviceId: ka.deviceId, chain: kb.deviceId, records: recB, checkpoint: cpB, name: thatName })),
-          one(other.client.anchorToPhone(signer, { deviceId: kb.deviceId, chain: ka.deviceId, records: recA, checkpoint: cpA, name: thisName })),
+        const [a, b] = sides;
+        const [onA, onB] = await Promise.all([
+          one(a.client.offerToPhone(signer, { deviceId: a.deviceId, chain: b.deviceId, records: b.records, checkpoint: b.checkpoint, statement: b.statement, name: require('os').hostname() })),
+          one(b.client.offerToPhone(signer, { deviceId: b.deviceId, chain: a.deviceId, records: a.records, checkpoint: a.checkpoint, statement: a.statement, name: require('os').hostname() })),
         ]);
         return {
-          this: { deviceId: hex(ka.deviceId), anchored: { seq: cpB.seq }, ...onThis },
-          other: { deviceId: hex(kb.deviceId), anchored: { seq: cpA.seq }, ...onOther },
+          this: { deviceId: hex(a.deviceId), nametag: a.statement.nametag, offered: { nametag: b.statement.nametag, seq: b.checkpoint.seq }, ...onA },
+          other: { deviceId: hex(b.deviceId), nametag: b.statement.nametag, offered: { nametag: a.statement.nametag, seq: a.checkpoint.seq }, ...onB },
         };
       } finally {
         await other.close().catch(() => undefined);
       }
-    },
-    /* R29: the keys this agent's key is paired with (no press) */
-    siblings: async () => {
-      if (!edge) throw new Error('this agent service has no Edge key to read the list from');
-      const l = await edge.siblings();
-      return { max: l.max, siblings: l.siblings.map((s) => ({ index: s.index, key: Buffer.from(s.publicKey).toString('hex'), deviceId: Buffer.from(s.deviceId).toString('hex') })) };
     },
     end: async () => {
       const b = agent.budget();

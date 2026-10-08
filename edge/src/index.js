@@ -10,11 +10,10 @@ module.exports = {
   codes: require('./codes'),
   chain: require('./chain'),
   grants: require('./grants'),
-  tickets: require('./tickets'),
+  receipts: require('./receipts'),
   copy: require('./copy'),
   /* B7: what a use was and whether it stands out - the phone's Live view and okedge watch */
-  live: require('./live'),
-  /* B7 stage 2: the agent's signed words about a use (reason, ticket message, a refused TX start) */
+  /* B7 stage 2: the agent's signed words about a use (reason, receipt message, a refused TX start) */
   note: require('./note'),
   /* L7 (2026-10-03): the budget request message, the app's side, the agent's side */
   request: require('./request'),
@@ -24,6 +23,7 @@ module.exports = {
   wire: require('./wire'),
   /* okedge sync phase 2 (2026-10-05): a place that keeps copies fills the phone's copy; the `sync` link */
   sync: require('./sync'),
+  devices: require('./devices'),
   /* a pure Bluetooth link test: the phone echoes, testing mode only (okedge ping) */
   ping: require('./ping'),
   block: require('./block'),

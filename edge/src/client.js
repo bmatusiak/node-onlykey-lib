@@ -8,7 +8,7 @@
  *   const client = createEdgeClient({ edge, channel, signer });
  *   const budget = await client.request({ reason, scopes, ttlMinutes });
  *   const { result, link } = await budget.use(bytes, (b) => sign(b));
- *   await budget.ticket(link, { code: 'OK', message: 'signed it' });
+ *   await budget.receipt(link, { code: 'OK', message: 'signed it' });
  *   await budget.end();
  *
  * - The request goes through `channel` (send(EDGE_REQUEST) -> the app's
@@ -22,7 +22,7 @@
  *   operation, and returns the link it caused - checked to be this use.
  *   It FAILS FAST: a refused TX start throws EEDGE_TX with the key's reason
  *   instead of sending an operation that would wait for a press nobody gives.
- * - use() refuses while this budget owes a ticket (EEDGE_TX 'ticket-owed').
+ * - use() refuses while this budget owes a receipt (EEDGE_TX 'receipt-owed').
  * - No Edge on this key: request() rejects EEDGE_UNSUPPORTED.
  * - The app answers nothing to a key it has not registered: EEDGE_NO_ANSWER.
  *   register(name) first - once, with a press on the phone.
@@ -36,7 +36,7 @@
 
 const request = require('./request');
 const grants = require('./grants');
-const tickets = require('./tickets');
+const receipts = require('./receipts');
 const chain = require('./chain');
 const codes = require('./codes');
 const note = require('./note');
@@ -61,7 +61,7 @@ const storeKey = (grantId) => `okedge.budget.${grantId}`;
 
 function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs = 4000 }) {
   /*
-   * B7 stage 2: EDGE_NOTE - the agent's words about a use, a ticket or a refused
+   * B7 stage 2: EDGE_NOTE - the agent's words about a use, a receipt or a refused
    * TX start, to the phone. Changes nothing anywhere, so it never fails what it
    * describes: no channel, an old phone, no answer within noteTimeoutMs - all
    * the same, the use stands.
@@ -122,12 +122,12 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       /**
        * The head this budget holds (hex): what the agent's next use TX starts over,
        * and what `okedge exec --head` must name - proof the agent saw its own
-       * last ticket's reply (mcp-service.md §4.2a).
+       * last receipt's reply (mcp-service.md §4.2a).
        */
       head() {
         return toHex(state.head);
       },
-      /** the uses still waiting for their ticket (seqs) */
+      /** the uses still waiting for their receipt (seqs) */
       pending() {
         return [...state.owed];
       },
@@ -138,7 +138,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
        */
       async use(bytes, op, { reason, intent = reason } = {}) {
         if (state.ended) throw fail('EEDGE_TX', 'edge: this budget has ended', { reason: 'ended' });
-        if (state.owed.length) throw fail('EEDGE_TX', `edge: a ticket is owed for #${state.owed[0]} - ticket it first`, { reason: 'ticket-owed' });
+        if (state.owed.length) throw fail('EEDGE_TX', `edge: a receipt is owed for #${state.owed[0]} - receipt it first`, { reason: 'receipt-owed' });
         const data = Uint8Array.from(bytes);
         const subject = grants.requestSubject(data);
         /*
@@ -148,15 +148,15 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
          * makes the key treat the use as a press, and the budget would never
          * pay again (found 2026-10-03 by the agent service's test: another
          * process signing during an exec). "Did the agent see its last
-         * ticket?" is asked separately (okedge exec --head vs head()).
+         * receipt?" is asked separately (okedge exec --head vs head()).
          */
         const before = await edge.head();
         state.head = before.head;
         /* R13b: the text exactly as the note carries it - the phone hashes what it receives */
         const said = intent !== undefined && intent !== null ? clip(String(intent), note.MAX_REASON) : null;
         try {
-          /* R13b: the reason goes into the link itself, before the signature exists - when the key can take it */
-          await edge.txStart(state.head, subject, before.canIntent && said ? { intent: grants.intentOf(said) } : {});
+          /* R13b: the reason goes into the link itself, before the signature exists */
+          await edge.txStart(state.head, subject, said ? { intent: grants.intentOf(said) } : {});
         } catch (e) {
           await sendNote({ seq: (await edge.head().catch(() => ({ seq: 0 }))).seq ?? 0, txRefused: String(e.status || e.message || 'refused').slice(0, note.MAX_TX_REFUSED) });
           throw fail('EEDGE_TX', `edge: the key refused the TX start (${e.status || e.message})`, { reason: e.status || 'refused' });
@@ -189,7 +189,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
           const r = grants.checkSelfPress({ genesis, uses: record.uses, step: f.grantStep, value: l.reveal, mac, subject });
           if (!r.ok) throw fail('EEDGE_LINK', `edge: the self-press's reveal does not belong to this budget (${r.reason})`);
         }
-        if (f.flags & codes.FLAG.OWES_TICKET) state.owed.push(f.seq);
+        if (f.flags & codes.FLAG.OWES_RECEIPT) state.owed.push(f.seq);
         if (paid) state.spent = Math.max(state.spent, f.grantStep);
         state.head = l.head;
         await save();
@@ -203,47 +203,47 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
         if (said && f.seq !== (before.seq === null ? 0 : before.seq + 1)) await sendNote({ seq: f.seq, reason: said });
         return { result, purpose: reason, link: { seq: f.seq, paid, paidBy, step: paid ? f.grantStep : null, reveal: paid ? l.reveal : null } };
       },
-      /** File the ticket for a use; the new head is kept for the next use(). */
-      async ticket(link, { code = 'OK', message }) {
+      /** File the receipt for a use; the new head is kept for the next use(). */
+      async receipt(link, { code = 'OK', message }) {
         let r;
         try {
           /*
-           * AN ANSWER THAT NEVER CAME (the A13, 2026-10-05: a ticket's answer took
-           * over 6 s, twice). A TICKET changes the key, so it is NEVER sent twice
+           * AN ANSWER THAT NEVER CAME (the A13, 2026-10-05: a receipt's answer took
+           * over 6 s, twice). A RECEIPT changes the key, so it is NEVER sent twice
            * (Brad, 2026-10-06): the key is asked instead - its newest link. If that
-           * is this use's ticket, it was filed and only the answer was lost;
+           * is this use's receipt, it was filed and only the answer was lost;
            * otherwise the error stands and the caller decides.
            */
-          r = await edge.ticket(link.seq, codes.ticketByte(code), tickets.messageHash(message)).catch(async (e) => {
+          r = await edge.receipt(link.seq, codes.receiptByte(code), receipts.messageHash(message)).catch(async (e) => {
             if (!/no answer to request/.test(String(e && e.message))) throw e;
             const h = await edge.head();
             const [newest] = h.seq === null ? [] : await edge.pickup(h.seq, 1);
             const f = newest && chain.decodeLink(newest.link);
-            if (f && f.op === codes.OP.TICKET && f.grantId === link.seq) return { seq: h.seq, head: h.head, lostAnswer: true };
+            if (f && f.op === codes.OP.RECEIPT && f.grantId === link.seq) return { seq: h.seq, head: h.head, lostAnswer: true };
             throw e;
           });
         } catch (e) {
           /*
            * THE KEY IS THE TRUTH ON WHAT IS OWED. Found on the A13 (2026-10-05):
-           * a ticket's answer came back after the 6 s wait, so the client kept
-           * the use as owed - but the key had linked the ticket, and every
-           * ticket after that answered "owes no ticket" while use() and exec
-           * refused, stuck. When the key says this use owes nothing, the ticket
+           * a receipt's answer came back after the 6 s wait, so the client kept
+           * the use as owed - but the key had linked the receipt, and every
+           * receipt after that answered "owes no receipt" while use() and exec
+           * refused, stuck. When the key says this use owes nothing, the receipt
            * was filed (its answer lost): clear it and take the key's head.
            */
-          if (!(e && e.status === 'no-ticket-waiting' && state.owed.includes(link.seq))) throw e;
+          if (!(e && e.status === 'no-receipt-waiting' && state.owed.includes(link.seq))) throw e;
           const h = await edge.head();
           r = { seq: h.seq, head: h.head, lostAnswer: true };
         }
         state.owed = state.owed.filter((s) => s !== link.seq);
         state.head = r.head;
         await save();
-        if (message !== undefined && message !== null) await sendNote({ seq: link.seq, ticketMsg: String(message) });
+        if (message !== undefined && message !== null) await sendNote({ seq: link.seq, receiptMsg: String(message) });
         /*
          * R16 (spec 2026-10-04): a used-up budget still COVERS its identities until it
-         * ends - a later pressed use of them owes a ticket - and it holds one of the
+         * ends - a later pressed use of them owes a receipt - and it holds one of the
          * key's live slots. So the client ends it itself the moment its last use is
-         * ticketed: a grant-end link, the slot freed. (The key does not end it on its
+         * receipted: a grant-end link, the slot freed. (The key does not end it on its
          * own: "used up" must not quietly drop the coverage.)
          */
         if (!state.ended && !state.owed.length && state.spent >= record.uses) {
@@ -253,16 +253,16 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
         return r;
       },
       /**
-       * Revoke what is left - only once every use is ticketed (R16: the client
-       * tickets first, then ends). Ending with a ticket owed left budget 351's
-       * card waiting on a ticket after its end (Brad, 2026-10-06).
+       * Revoke what is left - only once every use is receipted (R16: the client
+       * receipts first, then ends). Ending with a receipt owed left budget 351's
+       * card waiting on a receipt after its end (Brad, 2026-10-06).
        */
       async end() {
-        if (state.owed.length) throw fail('EEDGE_OWED', `edge: a ticket is owed for #${state.owed.join(', #')} - ticket it first, then end`);
+        if (state.owed.length) throw fail('EEDGE_OWED', `edge: a receipt is owed for #${state.owed.join(', #')} - receipt it first, then end`);
         return end();
       },
     };
-    /* revoke what is left (a grant-end link); also called by ticket() once the last use is ticketed */
+    /* revoke what is left (a grant-end link); also called by receipt() once the last use is receipted */
     async function end() {
       try {
         await edge.revoke(record.grantId);
@@ -275,15 +275,15 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
   }
 
   /*
-   * AN OWED TICKET IS ALWAYS FILEABLE (spec okrn-edge-tab.md, Budgets, 2026-10-06):
+   * AN OWED RECEIPT IS ALWAYS FILEABLE (spec okrn-edge-tab.md, Budgets, 2026-10-06):
    * after the budget ended - a lock, a reboot, its lifetime, or the client's own
-   * end - the key still owes the use's ticket and checks only that the seq is
+   * end - the key still owes the use's receipt and checks only that the seq is
    * owed (R16). So it is filed straight to the key, no budget needed, and the
    * person never has to waive what the agent can answer.
    */
-  async function ticketOwed(seq, { code = 'OK', message }) {
-    const r = await edge.ticket(seq, codes.ticketByte(code), tickets.messageHash(message));
-    if (message !== undefined && message !== null) await sendNote({ seq, ticketMsg: String(message) });
+  async function receiptOwed(seq, { code = 'OK', message }) {
+    const r = await edge.receipt(seq, codes.receiptByte(code), receipts.messageHash(message));
+    if (message !== undefined && message !== null) await sendNote({ seq, receiptMsg: String(message) });
     return r;
   }
 
@@ -350,13 +350,13 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       await channel.send({ type: pingLib.RECEIPT_TYPE, re: msg.id, exact: c.ok, why: c.why || null, ms, parts }, { oneWay: true }).catch(() => {});
       return { exact: c.ok, why: c.why, ms, bytes: n, wire, parts };
     },
-    /** File an owed ticket with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
-    ticketOwed,
+    /** File an owed receipt with no budget (after it ended): the key checks only that the seq is owed. -> {seq, head} */
+    receiptOwed,
     /**
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]
      * (identity on a derived code, R11a). ttlMinutes: 1..1440.
      * Rejects EEDGE_UNSUPPORTED, EEDGE_INVALID, EEDGE_REFUSED (with .refusal:
-     * declined, timeout, copy_unverified, ticket_owed, restoring, invalid),
+     * declined, timeout, copy_unverified, receipt_owed, restoring, invalid),
      * EEDGE_NO_ANSWER (dropped: not registered, replayed) or EEDGE_OPENING
      * (the answer is not a budget the key opened as asked).
      */
@@ -406,39 +406,8 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     },
 
     /**
-     * R20: ask the phone to add a place that keeps copies (this PC's copy
-     * store) as a known peer of the key - the person's Yes, then a press.
-     * peerSigner: request.peerSignerFromSecret(the place's own P-256 secret),
-     * not this agent's key. -> {already, seq?, index}; rejects EEDGE_REFUSED or
-     * EEDGE_NO_ANSWER.
-     */
-    async peerAdd(peerSigner, name) {
-      const answer = await channel.send(await request.buildPeerAdd({ signer: peerSigner, name }));
-      if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the app answered nothing - a bad signature or a replayed peer request');
-      if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: adding the peer was refused - ${answer.refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal: answer.refusal });
-      return { already: Boolean(answer.already), seq: answer.seq ?? null, index: answer.index };
-    },
-
-    /**
-     * R29 (P2b): ask the phone whose key is `deviceId` to pair it with the
-     * key `key` (X || Y; its id is derived) - the code on its sheet, Yes, a
-     * press. peerSigner: this place's own key (on that key's list). The caller
-     * asks the OTHER phone the same, the other way round.
-     * -> {already, seq?, index?}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
-     */
-    async siblingAdd(peerSigner, { deviceId, key, name }) {
-      const syncLib = require('./sync');
-      const xy = Uint8Array.from(key).length === 65 ? Uint8Array.from(key).slice(1) : Uint8Array.from(key);
-      const id = require('./chain').deviceIdOf(xy);
-      const answer = await channel.send(await syncLib.buildSibling({ signer: peerSigner, deviceId, key: xy, id, name }));
-      if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this place on the key\'s list (okedge peer add)?');
-      if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: pairing was refused - ${answer.refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal: answer.refusal });
-      return { already: Boolean(answer.already), seq: answer.seq ?? null, index: answer.index ?? null };
-    },
-
-    /**
      * The phone's own name (its Bluetooth / Android device name) as it says it
-     * - asked with a HAVE, so only from a place on the key's list. A label,
+     * - asked with a HAVE. A label,
      * never trusted: the person can rename it on each phone. -> string | null
      */
     async phoneName(peerSigner, { deviceId, name = 'this computer' }) {
@@ -450,7 +419,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
 
     /**
      * R30 (P2c): the phone's own copy of its chain, every record it holds -
-     * GIVE, BATCH at a time. peerSigner: this place (on that key's list).
+     * GIVE, BATCH at a time. peerSigner: this computer's own sync key (copy.peerSigner).
      * -> [{link, head, reveal}] ; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
      */
     async copyFromPhone(peerSigner, { deviceId }) {
@@ -458,7 +427,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       const out = [];
       for (let from = 0, guard = 0; from !== null && guard < 10000; guard += 1) {
         const a = await channel.send(await syncLib.buildGive({ signer: peerSigner, deviceId, from }));
-        if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this place on the key\'s list (okedge peer add)?');
+        if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?');
         if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone gave no copy - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
         const { fromHex } = require('../../src/bytes');
         for (const [l, h, r] of a.links || []) out.push({ link: fromHex(l), head: fromHex(h), reveal: r ? fromHex(r) : null });
@@ -469,50 +438,54 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
 
     /**
      * BLOCKS (BLOCKS.md §3, Brad 2026-10-07): the key's seals (the checkpoints that
-     * close each block) and the sibling checkpoints its chain anchored, as the phone
-     * keeps them. A GIVE asked past the end: no links, just its last-batch fields.
+     * close each block), as the phone keeps them - and the phone's own latest owner
+     * statement (its nametag; 2026-10-08), so this computer can offer that phone's log to
+     * your other devices. A phone that has no nametag yet gives none. A GIVE asked past the end: no links, just its last-batch fields.
      * Nothing is trusted here - each seal is checked against the key's own public
      * key when the blocks are built (block.verifyBlock).
-     * -> {seals: [{seq, head, signature}], seen: [{deviceId, seq, head, signature}]}
+     * -> {seals: [{seq, head, signature}], statement: {deviceId, publicKey, seq, nametag, signature} | null}
      */
     async sealsFromPhone(peerSigner, { deviceId }) {
       const syncLib = require('./sync');
       const { fromHex } = require('../../src/bytes');
       const a = await channel.send(await syncLib.buildGive({ signer: peerSigner, deviceId, from: 0xffffffff }));
-      if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this place on the key\'s list (onlykey-js edge peer add)?');
+      if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?');
       if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone gave no seals - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
       return {
         seals: (a.seals || []).map(([seq, head, sig]) => ({ seq, head: fromHex(head), signature: fromHex(sig) })),
-        seen: (a.seen || []).map(([id, seq, head, sig]) => ({ deviceId: fromHex(id), seq, head: fromHex(head), signature: fromHex(sig) })),
+        statement: a.statement && typeof a.statement === 'object' ? {
+          deviceId: fromHex(a.statement.deviceId), publicKey: fromHex(a.statement.publicKey),
+          seq: a.statement.seq ?? null, nametag: String(a.statement.nametag), signature: fromHex(a.statement.signature),
+        } : null,
       };
     },
 
     /**
-     * R30 (P2c): bring the phone whose key is `deviceId` its sibling's chain
-     * (`chain`, `records` up to the sibling's signed `checkpoint`) and ask
-     * it to anchor it: HAVE (what it holds of that chain), the LINKS it lacks,
-     * then ANCHOR - one sheet, Yes, a press, the anchor link.
-     * -> {sent, seq} ; rejects EEDGE_REFUSED (declined, timeout, a rollback or
-     * a changed history - with the phone's words) or EEDGE_NO_ANSWER.
+     * OFFER ANOTHER DEVICE'S LOG (Brad, 2026-10-08: "if it has the private ecc key to sign
+     * the block, then i want the log"): bring the phone whose key is `deviceId` the chain
+     * `chain` (`records` up to that device's signed `checkpoint`) with its owner
+     * `statement` - HAVE (what the phone holds of it), the LINKS it lacks, then OFFER. The
+     * phone HOLDS it; the person approves the merge later from the Edge tab's banner.
+     * -> {sent, held (true when the phone kept it), count}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
      */
-    async anchorToPhone(peerSigner, { deviceId, chain, records, checkpoint, name }) {
+    async offerToPhone(peerSigner, { deviceId, chain, records, checkpoint, statement, name }) {
       const syncLib = require('./sync');
       const { randomBytes } = require('../../src/vendor/exports/@noble/ciphers/utils.js');
       const { toHex: hex } = require('../../src/bytes');
       const ask = async (msg, what) => {
         const a = await channel.send(msg);
-        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to ${what} - is this place on the key's list (okedge peer add)?`);
-        if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the anchor - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
+        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to ${what} - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?`);
+        if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the log - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
         return a;
       };
       const upTo = records.filter((r) => require('./chain').decodeLink(r.link).seq <= checkpoint.seq);
-      const have = await ask(await syncLib.buildHave({ signer: peerSigner, deviceId, name, chain }), 'the sync');
+      const have = await ask(await syncLib.buildHave({ signer: peerSigner, deviceId, name, chain }), 'the offer');
       const lacks = syncLib.missing(upTo, have.ranges || []);
       const sid = hex(randomBytes(8));
       const linkMsgs = lacks.length ? await syncLib.buildLinks({ signer: peerSigner, deviceId, records: lacks, sid, chain }) : [];
       for (const m of linkMsgs) await ask(m, `part ${m.payload.part + 1} of ${m.payload.parts}`);
-      const done = await ask(await syncLib.buildAnchor({ signer: peerSigner, deviceId, sid, chain, linkParts: linkMsgs.length, checkpoint, name }), 'the anchor');
-      return { sent: lacks.length, seq: done.seq ?? null };
+      const done = await ask(await syncLib.buildOffer({ signer: peerSigner, deviceId, sid, chain, linkParts: linkMsgs.length, checkpoint, statement }), 'the offer');
+      return { sent: lacks.length, held: Boolean(done.held), count: done.count ?? lacks.length };
     },
 
     /**
@@ -521,9 +494,10 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
      * and merge `keychain` (this place's public Key Chain list, entries) with
      * the phone's. Asks what the phone holds, sends only the links it lacks and
      * the whole list, in signed parts; COMMIT brings up ONE sheet on the phone;
-     * after its Yes and press, TAKEs the merged list back. peerSigner: this
-     * place's own key (on the key's list).
-     * -> {sent, seq (the sync link, or null when nothing moved), count, keychainIn,
+     * TAKEs the merged list back. The links themselves are HELD on the phone until
+     * the person approves them from the Edge tab's banner (Brad, 2026-10-08) - no key
+     * press, no sync link. peerSigner: this computer's own sync key (copy.peerSigner).
+     * -> {sent, seq (always null since 2026-10-08), count, keychainIn,
      *     keychainOut, keychain (the merged list, or null)}
      * rejects EEDGE_REFUSED (declined, timeout, a fork - with the phone's words) or EEDGE_NO_ANSWER.
      */
@@ -533,7 +507,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
       const { toHex: hex } = require('../../src/bytes');
       const ask = async (msg, what) => {
         const a = await channel.send(msg);
-        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to ${what} - is this place on the key's list (okedge peer add)?`);
+        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to ${what} - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?`);
         if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the sync - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
         return a;
       };

@@ -35,7 +35,6 @@
  */
 const { OP } = require('./codes');
 const chain = require('./chain');
-const { anchorSubject } = require('./grants');
 const crypto = require('../../src/crypto/provider');
 const { toHex, fromHex } = require('../../src/bytes');
 
@@ -151,10 +150,8 @@ function linkBytes(f) {
  * @param {string|null} o.prev               the previous block's id (hex), null for the first
  * @param {Uint8Array[]} o.links             64-byte links, in seq order, ending at the checkpoint
  * @param {{seq: number, head: Uint8Array, signature: Uint8Array}} o.checkpoint  the key's seal
- * @param {{deviceId, seq, head, signature}[]} [o.seen]  the sibling checkpoints this block's
- *   ANCHOR links record (each must match an ANCHOR link's subject)
  */
-function buildBlock({ net, deviceId, start, prev = null, links, checkpoint, seen = [] }) {
+function buildBlock({ net, deviceId, start, prev = null, links, checkpoint }) {
   if (!NETS.includes(net)) throw new TypeError(`edge block: net must be ${NETS.join(' or ')}`);
   const block = {
     v: BLOCK_VERSION,
@@ -164,7 +161,6 @@ function buildBlock({ net, deviceId, start, prev = null, links, checkpoint, seen
     start: { seq: start.seq, head: hex(start.head) },
     links: links.map((l) => linkFields(Uint8Array.from(l))),
     checkpoint: { seq: checkpoint.seq, head: hex(checkpoint.head), sig: hex(checkpoint.signature) },
-    seen: seen.map((s) => ({ device: hex(s.deviceId), seq: s.seq, head: hex(s.head), sig: hex(s.signature) })),
   };
   canonical(block); /* throws now, not when someone first hashes it */
   return block;
@@ -183,10 +179,9 @@ function buildBlock({ net, deviceId, start, prev = null, links, checkpoint, seen
  * @param {Uint8Array} o.deviceId
  * @param {{link: Uint8Array}[]} o.records  the copy, in seq order
  * @param {{seq, head, signature}[]} o.seals  the key's checkpoints taken when a block closed
- * @param {{deviceId, seq, head, signature}[]} [o.seen]  sibling checkpoints this chain anchored
  * -> {blocks, open (links after the last seal), reason?}
  */
-function blocksFrom({ net, deviceId, records, seals, seen = [] }) {
+function blocksFrom({ net, deviceId, records, seals }) {
   const recs = (records || []).map((r) => Uint8Array.from(r.link || r));
   if (!recs.length) return { blocks: [], open: 0 };
   const startAt = chain.chainStart(recs.map((link) => ({ link })), deviceId);
@@ -194,7 +189,6 @@ function blocksFrom({ net, deviceId, records, seals, seen = [] }) {
     return { blocks: [], open: recs.length, reason: `the copy starts at #${chain.decodeLink(recs[0]).seq}, not at its chain's start` };
   }
   const bySeq = new Map(recs.map((l) => [chain.decodeLink(l).seq, l]));
-  const anchorOf = new Map(seen.map((s) => [hex(anchorSubject(s)), s]));
   const blocks = [];
   let start = { seq: startAt.fromSeq, head: startAt.fromHead };
   let prev = null;
@@ -205,8 +199,7 @@ function blocksFrom({ net, deviceId, records, seals, seen = [] }) {
       if (!bySeq.has(q)) return { blocks, open: recs.length - countUpTo(blocks), reason: `the copy has no link #${q}` };
       links.push(bySeq.get(q));
     }
-    const mine = links.filter((l) => chain.decodeLink(l).op === OP.ANCHOR).map((l) => anchorOf.get(hex(chain.decodeLink(l).subject))).filter(Boolean);
-    const b = buildBlock({ net, deviceId, start, prev, links, checkpoint: { seq: s.seq, head: Uint8Array.from(s.head), signature: Uint8Array.from(s.signature) }, seen: mine });
+    const b = buildBlock({ net, deviceId, start, prev, links, checkpoint: { seq: s.seq, head: Uint8Array.from(s.head), signature: Uint8Array.from(s.signature) } });
     blocks.push(b);
     prev = blockId(b);
     start = { seq: s.seq + 1, head: Uint8Array.from(s.head) };
@@ -249,13 +242,11 @@ function verifyBlock(block, publicKey, prevBlock = null) {
 
     let head = start.head;
     let seq = start.seq;
-    const anchors = new Set();
     for (const f of block.links) {
       if (f.seq !== seq) return fail('seq');
       const bytes = linkBytes(f);
       linkFields(bytes); /* throws on a link the key would not write */
       head = chain.weld(head, bytes);
-      if (f.op === 'anchor') anchors.add(f.subject);
       seq += 1;
     }
     /* the seal sits on the last link (an empty block: on the head it started from) */
@@ -263,11 +254,6 @@ function verifyBlock(block, publicKey, prevBlock = null) {
     if (toHex(head) !== block.checkpoint.head) return fail('checkpoint');
     const fields = { deviceId, seq: block.checkpoint.seq, head: fromHex(block.checkpoint.head) };
     if (!chain.verifyCheckpoint(fields, fromHex(block.checkpoint.sig), publicKey)) return fail('signature');
-
-    for (const s of block.seen) {
-      const subject = anchorSubject({ deviceId: fromHex(s.device), seq: s.seq, head: fromHex(s.head), signature: fromHex(s.sig) });
-      if (!anchors.has(hex(subject))) return fail('seen');
-    }
     return { ok: true, id };
   } catch (e) {
     return fail(`malformed: ${e.message}`);

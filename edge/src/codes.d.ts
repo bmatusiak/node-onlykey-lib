@@ -1,9 +1,9 @@
 /**
  * Edge v1 numbers: the byte values inside a 64-byte link, the domain tags the
- * hashes start with, and the ticket codes.
+ * hashes start with, and the receipt codes.
  *
  * WHY THIS FILE EXISTS: the Edge spec (onlykey-edge/build/firmware.md R2-R3,
- * R12-R16, TICKET-CODES.md) names the fields and their order but leaves the
+ * R12-R16, RECEIPT-CODES.md) names the fields and their order but leaves the
  * numbers to "the plan". The library, the Python vectors
  * (onlykey-edge/vectors/) and the firmware plugin must agree on them byte for
  * byte, so they are written down ONCE, here, and the vectors repeat them from
@@ -14,24 +14,14 @@
 export const OP: Readonly<{
     SIGN: 1;
     DECRYPT: 2;
-    FIDO_REG: 3;
-    FIDO_AUTH: 4;
-    HMAC: 5;
     GRANT_CREATE: 6;
     GRANT_END: 7;
-    TICKET: 8;
-    PEER_ADD: 9;
-    PEER_REMOVE: 10;
+    RECEIPT: 8;
     LOSS: 11;
-    WIPE: 12;
     GRANT_HOLD: 13;
     GRANT_RESUME: 14;
     AGENT_ADD: 15;
     CONTINUE: 16;
-    SIBLING_ADD: 17;
-    SIBLING_REMOVE: 18;
-    ANCHOR: 19;
-    SYNC: 20;
 }>;
 export const DECISION: Readonly<{
     APPROVE: 1;
@@ -42,10 +32,7 @@ export const DECISION: Readonly<{
 export const FLAG: Readonly<{
     PRESS_OBSERVED: 1;
     BUDGET_SPENT: 2;
-    PREV_NO_TICKET: 4;
-    HISTORY_AT_RISK: 8;
-    OWES_TICKET: 16;
-    STARTED: 32;
+    OWES_RECEIPT: 16;
 }>;
 export const TAG: Readonly<{
     GENESIS: "OKEDGE-GENESIS-v1";
@@ -54,13 +41,12 @@ export const TAG: Readonly<{
     CHECKPOINT: "OKEDGE-CKPT-v1";
     GRANT: "OKEDGE-GRANT-v1";
     DEVICE: "OKEDGE-DEVICE-v1";
-    TICKET: "OKEDGE-TICKET-v1";
-    RECEIPT: "OKEDGE-RCPT-v1";
+    RECEIPT: "OKEDGE-RECEIPT-v1";
     WAIVE: "OKEDGE-WAIVE-v1";
     TX: "OKEDGE-TX-v1";
     INTENT: "OKEDGE-INTENT-v1";
 }>;
-export const TICKET: Readonly<{
+export const RECEIPT: Readonly<{
     0: "OK";
     1: "OK_UNCONFIRMED";
     2: "PARTIAL";
@@ -135,59 +121,7 @@ export const STATUS: Readonly<{
         name: string;
         text: string;
     };
-    14: {
-        name: string;
-        text: string;
-    };
-    15: {
-        name: string;
-        text: string;
-    };
-    16: {
-        name: string;
-        text: string;
-    };
-    17: {
-        name: string;
-        text: string;
-    };
     18: {
-        name: string;
-        text: string;
-    };
-    19: {
-        name: string;
-        text: string;
-    };
-    20: {
-        name: string;
-        text: string;
-    };
-    21: {
-        name: string;
-        text: string;
-    };
-    22: {
-        name: string;
-        text: string;
-    };
-    23: {
-        name: string;
-        text: string;
-    };
-    24: {
-        name: string;
-        text: string;
-    };
-    25: {
-        name: string;
-        text: string;
-    };
-    26: {
-        name: string;
-        text: string;
-    };
-    27: {
         name: string;
         text: string;
     };
@@ -202,14 +136,14 @@ export function parseStatus(text: any): {
     name: any;
     text: any;
 } | null;
-export function ticketCode(code: any): {
+export function receiptCode(code: any): {
     code: any;
     name: any;
     known: boolean;
     alarm: boolean;
     class: number;
 };
-/** Name and alarm state of a ticket code: alarm = bit 7 OR not a v1 code. */
-export function ticketByte(code: any): number;
+/** Name and alarm state of a receipt code: alarm = bit 7 OR not a v1 code. */
+export function receiptByte(code: any): number;
 /** Reverse lookup for display: OP/DECISION value -> lower-case name, or null. */
 export function nameOf(table: any, value: any): string | null;

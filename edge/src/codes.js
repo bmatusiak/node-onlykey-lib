@@ -2,10 +2,10 @@
 
 /**
  * Edge v1 numbers: the byte values inside a 64-byte link, the domain tags the
- * hashes start with, and the ticket codes.
+ * hashes start with, and the receipt codes.
  *
  * WHY THIS FILE EXISTS: the Edge spec (onlykey-edge/build/firmware.md R2-R3,
- * R12-R16, TICKET-CODES.md) names the fields and their order but leaves the
+ * R12-R16, RECEIPT-CODES.md) names the fields and their order but leaves the
  * numbers to "the plan". The library, the Python vectors
  * (onlykey-edge/vectors/) and the firmware plugin must agree on them byte for
  * byte, so they are written down ONCE, here, and the vectors repeat them from
@@ -18,47 +18,29 @@
 const OP = Object.freeze({
   SIGN: 1,
   DECRYPT: 2,
-  FIDO_REG: 3,
-  FIDO_AUTH: 4,
-  HMAC: 5,
   GRANT_CREATE: 6,
   GRANT_END: 7,
-  TICKET: 8,
-  PEER_ADD: 9,
-  PEER_REMOVE: 10,
+  RECEIPT: 8,
   LOSS: 11,
-  WIPE: 12,
   /* firmware.md R15a - appended last so the numbers above never move */
   GRANT_HOLD: 13,
   GRANT_RESUME: 14,
   /* mcp-service.md 4.7a: an agent's key registered with a press (subject = grants.agentSubject) */
   AGENT_ADD: 15,
   /*
-   * Assigned 2026-10-04 for the spec session (firmware.md R20/R29/R30, okedge sync),
-   * appended so nothing above moves.
-   * CONTINUE (R28, written by the firmware since 2026-10-04) - the FIRST link of a
-   * device's own chain: the next seq after the chain it continues, welded onto the
-   * new genesis, grant_id = debts carried, subject = chain.continueSubject. Not
-   * written yet: SIBLING_ADD / SIBLING_REMOVE - another key with
-   * its own chain, added or removed with a press, subject SHA256("OKEDGE-SIBLING-v1"
-   * || pubkey || device_id) (R29); ANCHOR - written by the key only inside a sync
-   * Brad approved with a press: slot = sibling index, grant_id = sibling seq,
-   * subject SHA256("OKEDGE-ANCHOR-v1" || sibling device_id || seq || head ||
-   * checkpoint sig) (R30). PEER_ADD / PEER_REMOVE (9, 10) are the wire's 0x30 / 0x31.
+   * CONTINUE (R28) - the FIRST link of a device's own chain: the next seq after the chain
+   * it continues, welded onto the new genesis, grant_id = debts carried, subject =
+   * chain.continueSubject. Every restore writes one (2026-10-08).
    */
   CONTINUE: 16,
-  SIBLING_ADD: 17,
-  SIBLING_REMOVE: 18,
-  ANCHOR: 19,
   /*
-   * Brad, 2026-10-05: every approved sync writes a `sync` link - subject = SHA256 of
-   * what moved (sync.syncSubject), the press flag, no ticket owed. Wire sub-op 0x39
-   * (CHOSEN, pending the spec).
+   * v1 (2026-10-08): 3-5 (FIDO, HMAC - never linked), 9-10 (peers), 12 (wipe, R9 dropped)
+   * and 17-20 (siblings, anchor, sync) are unused: the key writes a link only for a press
+   * or a use an approved budget pays (Brad), and pairing and sync are the app's.
    */
-  SYNC: 20,
 });
 
-/* R3 `decision` (for op = ticket the byte is the ticket code instead). CHOSEN: 1-based. */
+/* R3 `decision` (for op = receipt the byte is the receipt code instead). CHOSEN: 1-based. */
 const DECISION = Object.freeze({
   APPROVE: 1,
   DENY: 2,
@@ -70,12 +52,8 @@ const DECISION = Object.freeze({
 const FLAG = Object.freeze({
   PRESS_OBSERVED: 0x01,
   BUDGET_SPENT: 0x02,
-  PREV_NO_TICKET: 0x04,
-  HISTORY_AT_RISK: 0x08,
-  /* R16 (2026-10-02 evening): set by the key at the sign - this use owes a ticket (started, or its op/slot covered by a budget) */
-  OWES_TICKET: 0x10,
-  /* R16: a TX start was waiting when the request was primed (a self-press, or a mismatched TX start that was pressed) */
-  STARTED: 0x20,
+  /* R16: set by the key on every budget use - it owes a receipt. (v1, 2026-10-08: bits 2, 3 and 5 are unused - no "previous use had no receipt", no receipts' "history at risk", no "started": a budget only pays a started request) */
+  OWES_RECEIPT: 0x10,
 });
 
 /* Domain tags, ASCII, exactly as the spec spells them (R2, R7, R12, R16, R21). */
@@ -87,9 +65,8 @@ const TAG = Object.freeze({
   GRANT: 'OKEDGE-GRANT-v1',
   /* CHOSEN: device_id = SHA256(DEVICE || the Edge public key X||Y)[0..16] - the key and edge JS both derive it */
   DEVICE: 'OKEDGE-DEVICE-v1',
-  TICKET: 'OKEDGE-TICKET-v1',
-  RECEIPT: 'OKEDGE-RCPT-v1',
-  /* firmware.md R18: a human's press clears every owed ticket at once */
+  RECEIPT: 'OKEDGE-RECEIPT-v1',
+  /* firmware.md R18: a human's press clears every owed receipt at once */
   WAIVE: 'OKEDGE-WAIVE-v1',
   /*
    * firmware.md R13a/R13b: a TX start is bound to the head, the exact request and
@@ -101,10 +78,10 @@ const TAG = Object.freeze({
 });
 
 /*
- * TICKET-CODES.md v1. Bit 7 set = alarm, with no lookup needed; a code not in
+ * RECEIPT-CODES.md v1. Bit 7 set = alarm, with no lookup needed; a code not in
  * this table is ALSO an alarm (fails closed: a future version or a forged mirror).
  */
-const TICKET = Object.freeze({
+const RECEIPT = Object.freeze({
   0x00: 'OK',
   0x01: 'OK_UNCONFIRMED',
   0x02: 'PARTIAL',
@@ -137,32 +114,14 @@ const STATUS = Object.freeze({
   0x05: { name: 'live-full', text: 'Four budgets are already live' },
   0x06: { name: 'sign-failed', text: 'The key could not sign' },
   0x07: { name: 'no-such-budget', text: 'No live budget has that id' },
-  0x08: { name: 'no-ticket-waiting', text: 'That use owes no ticket (or nothing is owed to waive)' },
+  0x08: { name: 'no-receipt-waiting', text: 'That use owes no receipt (or nothing is owed to waive)' },
   0x09: { name: 'not-held', text: 'The key no longer holds that link' },
   0x0a: { name: 'unknown-request', text: 'This key does not know that Edge request' },
   0x0b: { name: 'stale-head', text: 'The chain moved since that head - read the head and start again' },
-  0x0c: { name: 'ticket-owed', text: 'A use is waiting for its ticket - ticket it, or waive in the app' },
+  0x0c: { name: 'receipt-owed', text: 'A use is waiting for its receipt - receipt it, or waive in the app' },
   0x0d: { name: 'nothing-to-pay', text: 'No live budget (or every one is on hold)' },
-  /* R26 (CHOSEN numbers, pending the spec) */
-  0x0e: { name: 'restoring', text: 'The key was restored from a backup - finish the restore in the app first' },
-  0x0f: { name: 'replay-mismatch', text: 'That link is not the next one, or does not weld onto the key\x27s head' },
-  0x10: { name: 'replay-closed', text: 'Replay is closed: the key is not restoring, or already wrote a link of its own' },
-  /* R26 (2026-10-02): replay commits only on the key's own vouch tag */
-  0x11: { name: 'not-vouched', text: 'That replay is not vouched by the key - thrown away; everything since the backup is recorded as lost' },
+  /* 0x0e-0x11 (restore-then-replay) and 0x13-0x1b (peers, siblings, sync, anchors on the key) went 2026-10-08; their numbers stay unused */
   0x12: { name: 'bad-range', text: 'A loss is #from..#to, at or before the key\'s head' },
-  /* R20 known peers (okedge sync phase 2, 2026-10-05) */
-  0x13: { name: 'peers-full', text: 'The key already knows four places that keep copies - remove one first' },
-  0x14: { name: 'peer-known', text: 'That place is already known to the key' },
-  0x15: { name: 'bad-key', text: 'That key cannot be added - not a P-256 public key, or (siblings) this key itself or an id that is not its own' },
-  0x16: { name: 'no-such-peer', text: 'The key has no place at that index, or that place is not on its list' },
-  /* sync phase 2: SYNC's three parts arrived out of order (CHOSEN number) */
-  0x17: { name: 'sync-order', text: 'The sync record arrived out of order - nothing recorded; sync again' },
-  /* R29 siblings (P2b, CHOSEN numbers) */
-  0x18: { name: 'sibling-known', text: 'That phone is already paired with this key' },
-  0x19: { name: 'siblings-full', text: 'This key already has four paired phones - unpair one first' },
-  0x1a: { name: 'no-such-sibling', text: 'This key has no paired phone at that index' },
-  /* R30 anchors (P2c, CHOSEN number) */
-  0x1b: { name: 'bad-checkpoint', text: 'That checkpoint is not signed by the paired key - nothing anchored' },
   /* R13a (2026-10-06): the sign was not the request the agent started for - refused, no link; TX start again */
   0x1c: { name: 'tx-mismatch', text: 'That request was not the one the agent started for - refused (the TX start is used up)' },
 });
@@ -176,29 +135,29 @@ function parseStatus(text) {
   return { code, name: s ? s.name : 'unknown', text: s ? s.text : `Edge status 0x${m[1]}` };
 }
 
-/** Name and alarm state of a ticket code: alarm = bit 7 OR not a v1 code. */
+/** Name and alarm state of a receipt code: alarm = bit 7 OR not a v1 code. */
 /*
- * A TICKET CODE AS ITS BYTE (Brad, 2026-10-07: a failed push's ticket showed OK).
- * Every ticket was filed with ticketCode(code) - the DISPLAY record, an object - and
+ * A RECEIPT CODE AS ITS BYTE (Brad, 2026-10-07: a failed push's receipt showed OK).
+ * Every receipt was filed with receiptCode(code) - the DISPLAY record, an object - and
  * the plugin wrote Uint8Array.of(object): 0, OK, whatever was asked for. This turns
  * a name (TARGET_UNREACHABLE), a number (0x21) or its hex text ("0x21") into the
  * byte, and refuses anything else - never a silent OK.
  */
-function ticketByte(code) {
+function receiptByte(code) {
   if (typeof code === 'number') {
     if (Number.isInteger(code) && code >= 0 && code <= 0xff) return code;
   } else if (typeof code === 'string') {
     const t = code.trim();
     if (/^0x[0-9a-f]{1,2}$/i.test(t)) return parseInt(t, 16);
     if (/^[0-9]{1,3}$/.test(t) && Number(t) <= 0xff) return Number(t);
-    const hit = Object.entries(TICKET).find(([, name]) => name === t.toUpperCase());
+    const hit = Object.entries(RECEIPT).find(([, name]) => name === t.toUpperCase());
     if (hit) return Number(hit[0]);
   }
-  throw new RangeError(`edge: not a ticket code: ${JSON.stringify(code)} (one of ${Object.values(TICKET).join(', ')}, or a byte)`);
+  throw new RangeError(`edge: not a receipt code: ${JSON.stringify(code)} (one of ${Object.values(RECEIPT).join(', ')}, or a byte)`);
 }
 
-function ticketCode(code) {
-  const name = Object.prototype.hasOwnProperty.call(TICKET, code) ? TICKET[code] : null;
+function receiptCode(code) {
+  const name = Object.prototype.hasOwnProperty.call(RECEIPT, code) ? RECEIPT[code] : null;
   return {
     code,
     name,
@@ -215,4 +174,4 @@ function nameOf(table, value) {
   return null;
 }
 
-module.exports = { OP, DECISION, FLAG, TAG, TICKET, STATUS, parseStatus, ticketCode, ticketByte, nameOf };
+module.exports = { OP, DECISION, FLAG, TAG, RECEIPT, STATUS, parseStatus, receiptCode, receiptByte, nameOf };

@@ -37,7 +37,7 @@ const SHIM = path.resolve(__dirname, '..', 'cli', 'gpg-shim.js').replace(/\\/g, 
 async function stack() {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.ticket(0, 0, new Uint8Array(32));
+  await edge.receipt(0, 0, new Uint8Array(32));
   const keys = new Map();
   const keyOf = (identity) => {
     const k = hex(agentProto.identityHash(identity));
@@ -102,7 +102,7 @@ test('okedge budget, then `git commit -S` inside okedge exec: the commit is sign
     cap = capture();
     const code = await okedge.main(['exec', '--head', head, '--reason', 'commit: an Edge test', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'edge: signed by the agent'], cap.io);
     assert.equal(code, 0, cap.lines.join('\n'));
-    assert.ok(cap.lines.some((l) => /^signed: link #\d+ \(gpg\) - ticket owed for #\d+$/.test(l)), cap.lines.join('\n'));
+    assert.ok(cap.lines.some((l) => /^signed: link #\d+ \(gpg\) - receipt owed for #\d+$/.test(l)), cap.lines.join('\n'));
     assert.equal((await s.lastLink()).decision, codes.DECISION.SELF_PRESS, 'paid by the budget');
 
     /* the commit carries a signature that verifies against the agent's certificate */
@@ -119,10 +119,10 @@ test('okedge budget, then `git commit -S` inside okedge exec: the commit is sign
     await assert.doesNotReject(signatures[0].verified, 'the commit signature does not verify');
     assert.match(raw, /\ncommitter Claude \(agent\) <claude@test> /, 'the committer is the agent');
 
-    /* the ticket, then a stale head is refused by okedge itself, before the command runs */
+    /* the receipt, then a stale head is refused by okedge itself, before the command runs */
     const seq = Number(/link #(\d+)/.exec(cap.lines.find((l) => l.startsWith('signed:')))[1]);
     cap = capture();
-    assert.equal(await okedge.main(['ticket', String(seq), '--msg', 'committed edge test'], cap.io), 0, cap.lines.join('\n'));
+    assert.equal(await okedge.main(['receipt', String(seq), '--msg', 'committed edge test'], cap.io), 0, cap.lines.join('\n'));
     cap = capture();
     assert.equal(await okedge.main(['exec', '--head', head, '--reason', 'x', '--', 'git', '--version'], cap.io), 1);
     assert.match(cap.lines.join('\n'), /--head is not the budget's head/);
@@ -174,7 +174,7 @@ test('okedge exec returns the command\'s own exit code', async () => {
   }
 });
 
-test('okedge watch --once: one line per use with its reason, its ticket under it; an ordinary press shows nothing (not Edge, 2026-10-06)', async () => {
+test('okedge watch --once: one line per use with its reason, its receipt under it; an ordinary press shows nothing (not Edge, 2026-10-06)', async () => {
   const s = await stack();
   try {
     let cap = capture();
@@ -187,7 +187,7 @@ test('okedge watch --once: one line per use with its reason, its ticket under it
     cap = capture();
     await okedge.main(['exec', '--head', head, '--reason', 'commit: watch me', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'w'], cap.io);
     const seq = Number(/link #(\d+)/.exec(cap.lines.find((l) => l.startsWith('signed:')) || 'link #0')[1]);
-    await okedge.main(['ticket', String(seq), '--msg', 'committed\nwith a newline'], capture().io);
+    await okedge.main(['receipt', String(seq), '--msg', 'committed\nwith a newline'], capture().io);
     /* a pressed sign with the agent's key while the budget covers it (the shim outside an exec): an ordinary press, no link */
     await new Promise((resolve) => {
       const p = require('child_process').spawn(process.execPath, [SHIM, '--status-fd=2', '-bsau', 'x'], { env: { ...process.env, OKEDGE_GPG_TOKEN: '' } });
@@ -198,7 +198,7 @@ test('okedge watch --once: one line per use with its reason, its ticket under it
     assert.equal(await okedge.main(['watch', '--once'], cap.io), 0, cap.lines.join('\n'));
     const text = cap.lines.join('\n');
     assert.match(text, new RegExp(`#${seq} \\d\\d:\\d\\d:\\d\\d sign slot 221 · self-press · budget \\d+, use 1 · "commit: watch me"`));
-    assert.match(text, new RegExp(`↳ #\\d+ ticket for #${seq}: OK · "committed with a newline"`), 'the message on one plain line');
+    assert.match(text, new RegExp(`↳ #\\d+ receipt for #${seq}: OK · "committed with a newline"`), 'the message on one plain line');
     assert.doesNotMatch(text, /a press asked for under a live budget/, 'the B7 alarm is gone');
     assert.doesNotMatch(text, /sign slot 221 · pressed/, 'an ordinary press writes no link, so watch has no line for it');
   } finally {
@@ -218,7 +218,7 @@ test('okedge exec --press is gone (Brad, 2026-10-06, R13b: budget or no go) - re
   }
 });
 
-test('an owed ticket filed after the agent lost its budget: straight to the key, its message reaches the phone, the head prints as hex', async () => {
+test('an owed receipt filed after the agent lost its budget: straight to the key, its message reaches the phone, the head prints as hex', async () => {
   const s = await stack();
   try {
     let cap = capture();
@@ -231,14 +231,14 @@ test('an owed ticket filed after the agent lost its budget: straight to the key,
     cap = capture();
     assert.equal(await okedge.main(['exec', '--head', head, '--reason', 'commit: owed', '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', 'o'], cap.io), 0, cap.lines.join(' | '));
     const seq = Number(/link #(\d+)/.exec(cap.lines.find((l) => l.startsWith('signed:')))[1]);
-    /* the agent restarted: it has no budget, the key still owes the ticket */
+    /* the agent restarted: it has no budget, the key still owes the receipt */
     s.agent.setBudget(null);
     cap = capture();
-    assert.equal(await okedge.main(['ticket', String(seq), '--msg', 'committed o'], cap.io), 0, cap.lines.join(' | '));
+    assert.equal(await okedge.main(['receipt', String(seq), '--msg', 'committed o'], cap.io), 0, cap.lines.join(' | '));
     /* the head prints as hex (it printed "[object Object]" on this path, Pixel #431) */
     assert.match(cap.lines.join(' | '), /head = [0-9a-f]{64}/);
     /* and the phone gets the message (it showed "No message synced", Pixel #432) */
-    assert.ok(s.notes.some((n) => n.seq === seq && n.ticketMsg === 'committed o'), 'the ticket message reaches the phone');
+    assert.ok(s.notes.some((n) => n.seq === seq && n.receiptMsg === 'committed o'), 'the receipt message reaches the phone');
   } finally {
     await s.control.close();
   }
@@ -292,11 +292,11 @@ test('edge exec with no live budget is refused at once: no prompt, no link (CLI.
 });
 
 /*
- * A FAILED COMMAND FILES A FAILED TICKET (Brad, 2026-10-07: "when a push does not
- * reach, it should give back a failed ticket"): its use gets TARGET_UNREACHABLE
+ * A FAILED COMMAND FILES A FAILED RECEIPT (Brad, 2026-10-07: "when a push does not
+ * reach, it should give back a failed receipt"): its use gets TARGET_UNREACHABLE
  * (0x21) with the command and its exit code - not left owed, never OK.
  */
-test('edge exec: the command signs, then fails - its use gets a TARGET_UNREACHABLE ticket at once', async () => {
+test('edge exec: the command signs, then fails - its use gets a TARGET_UNREACHABLE receipt at once', async () => {
   const s = await stack();
   try {
     let cap = capture();
@@ -312,9 +312,9 @@ test('edge exec: the command signs, then fails - its use gets a TARGET_UNREACHAB
     const code = await okedge.main(['exec', '--head', head, '--intent', 'push: does not reach', '--', process.execPath, '-e', script], { ...cap.io, ask: localAsk(s.handlers) });
     assert.equal(code, 3, cap.lines.join(' | '));
     const last = await s.lastLink();
-    assert.equal(last.op, codes.OP.TICKET, 'the use is ticketed, not left owed');
+    assert.equal(last.op, codes.OP.RECEIPT, 'the use is receipted, not left owed');
     assert.equal(last.code, 0x21, 'TARGET_UNREACHABLE, not OK');
-    assert.ok(cap.lines.some((l) => /ticket filed \(TARGET_UNREACHABLE\)/.test(l)), cap.lines.join(' | '));
+    assert.ok(cap.lines.some((l) => /receipt filed \(TARGET_UNREACHABLE\)/.test(l)), cap.lines.join(' | '));
   } finally {
     await s.control.close();
   }
