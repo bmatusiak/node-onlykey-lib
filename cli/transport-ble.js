@@ -1489,6 +1489,61 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   return pipe;
 }
 
+/*
+ * THE PHONES IN REACH, for `onlykey-js devices --ble` (Brad, 2026-10-08: "devices
+ * --ble will ping and ask each device"; "--ble will just add bluetooth to the
+ * list"). Lists, never connects: each phone advertising the FIDO or the ok-rn
+ * service. A logged-out ok-rn does not advertise (its Bluetooth starts after the
+ * login), so it is not here.
+ *   Windows / macOS: a noble scan for `seconds` (rotating private addresses are
+ *   resolved to the identity address for a bonded phone, as for --address).
+ *   Linux: BlueZ's devices with those services (the phones this computer is bonded
+ *   with - the same set openBluezLink can open), RSSI when BlueZ saw it recently.
+ * -> [{address, name, rssi}] (address as --address takes it)
+ */
+async function scanPhones({ seconds = 6, platform = process.platform, loadNoble: ln = loadNoble, loadDbus: ld = loadDbus } = {}) {
+  const fidoish = (uuids) => uuids.some((u) => [bare(FIDO_UUID), bare(SERVICE_UUID), 'fffd', FIDO_UUID, SERVICE_UUID].includes(String(u).toLowerCase()));
+  if (platform === 'linux') {
+    const dbus = ld();
+    const bus = dbus.systemBus();
+    if (bus.on) bus.on('error', () => {});
+    try {
+      const root = await bus.getProxyObject(BLUEZ, '/');
+      const objects = unwrap(await root.getInterface(I_OM).GetManagedObjects());
+      const byAddress = new Map();
+      for (const i of Object.values(objects)) {
+        const d = i[I_DEVICE];
+        if (!d || !fidoish(d.UUIDs || [])) continue;
+        byAddress.set(addrKey(d.Address), { address: d.Address, name: d.Name || d.Alias || '', rssi: typeof d.RSSI === 'number' ? d.RSSI : null });
+      }
+      return [...byAddress.values()];
+    } finally {
+      try { bus.disconnect(); } catch { /* already closed */ }
+    }
+  }
+  const noble = ln();
+  await noble.waitForPoweredOnAsync(TIMEOUTS.powerMs);
+  const seen = new Map();
+  const onDiscover = (p) => {
+    const a = p.advertisement || {};
+    const prev = seen.get(p.id) || { name: '', uuids: new Set(), rssi: null, address: '' };
+    if (a.localName) prev.name = a.localName;
+    for (const u of a.serviceUuids || []) prev.uuids.add(String(u).toLowerCase());
+    if (typeof p.rssi === 'number') prev.rssi = p.rssi;
+    prev.address = p.address && p.address !== 'unknown' ? p.address : p.id;
+    seen.set(p.id, prev);
+  };
+  noble.on('discover', onDiscover);
+  try {
+    await noble.startScanningAsync([], true);
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  } finally {
+    noble.removeListener('discover', onDiscover);
+    await Promise.resolve(noble.stopScanningAsync()).catch(() => {});
+  }
+  return [...seen.values()].filter((v) => fidoish([...v.uuids])).map((v) => ({ address: v.address, name: v.name, rssi: v.rssi }));
+}
+
 function concatAll(list) {
   const out = new Uint8Array(list.reduce((n, x) => n + x.length, 0));
   let at = 0;
@@ -1497,7 +1552,7 @@ function concatAll(list) {
 }
 
 module.exports = {
-  createBlePipe, fragment, createAssembler, loadNoble, loadDbus, pickBluezDevice, findVendor, refusal,
+  createBlePipe, scanPhones, fragment, createAssembler, loadNoble, loadDbus, pickBluezDevice, findVendor, refusal,
   CMD_ERROR, CMD_REPORT, CMD_SEALED, CMD_PAIR, KIND_REPORT, KIND_CONTROL, KIND_REPORTS, CTRL_BATCH, CTRL_BYE, reportsPerWrite,
   SERVICE_UUID, REQUEST_UUID, RESPONSE_UUID, FIDO_UUID, TIMEOUTS,
 };

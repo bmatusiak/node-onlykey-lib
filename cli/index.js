@@ -309,6 +309,69 @@ COMMANDS.status = {
   },
 };
 
+/*
+ * WHICH KEYS THIS COMPUTER CAN USE, to pick a target (Brad, 2026-10-08: "onlykey-js
+ * devices helps us pick a target"; "normal onlykey-js devices will just be usb";
+ * "--ble will just add bluetooth to the list"; "will ping and ask each device").
+ * Not `pair list` (this computer's pairing records): every key found is ASKED -
+ * connected, the same OKCONNECT every command starts with, and its answer shown.
+ * Read only: no press, no PIN, nothing written - a hard key plugged in is safe.
+ * Each row ends with the argument that targets that key.
+ */
+COMMANDS.devices = {
+  mirrors: '(new)',
+  summary: 'the keys this computer can use, each asked what it is - USB; --ble adds the phones in reach; --json for programs',
+  options: { json: { type: 'boolean' }, seconds: { type: 'string' } },
+  /* it opens each key itself: no --path / --address of its own */
+  async run(io, opts) {
+    const dev = require('./devices');
+    /*
+     * --seconds (Brad, 2026-10-08): how long the Bluetooth search runs - shorter when the
+     * phones are close, longer for one far off. The Bluetooth search only, so it goes
+     * with --ble. On Linux the list is BlueZ's known phones, no search to time.
+     */
+    const seconds = opts.seconds === undefined ? dev.SCAN_SECONDS : Number(opts.seconds);
+    if (opts.seconds !== undefined && !opts.ble) throw usage('--seconds is how long the Bluetooth search runs - it goes with --ble');
+    if (!Number.isFinite(seconds) || seconds < 1 || seconds > 120) throw usage('--seconds takes a number from 1 to 120');
+    /*
+     * Text: each key printed as soon as it answered - one slow key must not hold the
+     * list back. --json (Brad, 2026-10-08: "now we add --json for machinecode output"):
+     * one array on stdout at the end, numbered the same way; notes go to stderr, so
+     * stdout is only the JSON.
+     */
+    const rows = [];
+    const note = opts.json ? io.err : io.out;
+    const show = (row) => {
+      rows.push({ n: rows.length + 1, ...row });
+      if (opts.json) return;
+      io.out(`${String(rows.length).padStart(2)}. ${row.transport.padEnd(4)} ${row.name}${row.rssi !== null && row.rssi !== undefined ? ` (${row.rssi} dBm)` : ''} - ${row.verdict}`);
+      io.out(`     ${row.details}`);
+      io.out(`     ${row.arg}`);
+    };
+    const onError = (e) => io.err(`devices: ${e.message}`);
+    /*
+     * Each transport in a child process of its own; this process loads no native
+     * add-on (cli/devices.js says why). A test hands in its bus, scan and pairing
+     * store (io.findUsb, io.scanPhones, io.pairingFor) and runs in one process.
+     */
+    if (io.findUsb) await dev.usbRows({ start: io.start, find: io.findUsb, onRow: show, onNote: note });
+    else await dev.viaChild('usb', { onRow: show, onNote: note, onError });
+    if (opts.ble) {
+      if (io.scanPhones) await dev.bleRows({ start: io.start, scan: () => io.scanPhones({ seconds }), pairingFor: io.pairingFor || (() => false), onRow: show, onNote: note });
+      else await dev.viaChild('ble', { onRow: show, onNote: note, onError, args: [String(seconds)] });
+    }
+    if (opts.json) {
+      io.out(JSON.stringify(rows, null, 2));
+      return rows.length ? 0 : 1;
+    }
+    if (!rows.length) {
+      io.out(opts.ble ? 'no OnlyKey on USB and no phone in reach' : 'no OnlyKey on USB (onlykey-js devices --ble adds the phones in reach)');
+      return 1;
+    }
+    return 0;
+  },
+};
+
 COMMANDS.capabilities = {
   mirrors: 'capabilities',
   summary: 'what this key\'s firmware can do, flag by flag',
@@ -2121,6 +2184,10 @@ async function main(argv, io = {}) {
      */
     writeFile: io.writeFile
       || ((file, text) => require('fs').promises.writeFile(file, text, { flag: 'wx', mode: 0o600 })),
+    /* devices only: a test's stand-ins for the USB bus, the radio and the pairing store (never real keys in a test) */
+    findUsb: io.findUsb,
+    scanPhones: io.scanPhones,
+    pairingFor: io.pairingFor,
     /* agent only: how long a foreground agent serves, and how a command runs under it. */
     untilStopped: io.untilStopped,
     runCommand: io.runCommand,
