@@ -34,6 +34,8 @@ const USAGE = [
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
   'onlykey-js edge peer add | list · sibling add <address> | list',
   'onlykey-js edge agent                                         the optional service',
+  'add --test-mode to any of them: the testnet - its own home, its own chain on the phone (Enter testing mode)',
+  'onlykey-js edge --test-mode clear                             delete the testnet on this computer (its home and Key Chain file)',
 ];
 
 const opt = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -131,6 +133,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
       timeoutMs: (Number(wait) || 180) * 1000,
       device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
       log: say,
+      net: NET,
     });
     /* timing logs are a dev-build switch only (edge/cli/dev; CLI.md §5) */
     const timed = dev && dev.timed ? dev.timed({ edge, wired, okcrypto, say }) : { channel: wired, okcrypto };
@@ -153,7 +156,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
           keyAnswers(await app2.services.device.connect(), h, 'edge');
           let edge2 = null;
           require('../plugin')({ transport: app2.services.transport }, (err, s) => { if (err) throw err; edge2 = s.edge; });
-          const channel2 = wire.createWireChannel(app2.services.transport, { timeoutMs: (Number(wait) || 180) * 1000 });
+          const channel2 = wire.createWireChannel(app2.services.transport, { timeoutMs: (Number(wait) || 180) * 1000, net: NET });
           return { edge: edge2, client: client.createEdgeClient({ edge: edge2, channel: channel2, signer, store }), close: () => app2.destroy() };
         } catch (e) {
           await app2.destroy().catch(() => undefined);
@@ -184,30 +187,80 @@ const DEV = (() => {
   }
 })();
 
+/*
+ * THE TESTNET (BLOCKS.md §5; Brad, 2026-10-07: "we should treat --test-mode as test
+ * net for cli for edge"; "everthing for test is throwaway"). --test-mode (anywhere
+ * before --) puts this run on the test chain: its own home (~/.onlykey-js/edge-test:
+ * agent, budgets, copies, control pipe), its own Key Chain file, every wire message
+ * stamped net: test - a phone on the live chain refuses it, and the other way round.
+ */
+let NET = 'live';
+function takeTestMode(argv, io) {
+  const control = require('./control');
+  const record = require('../../keychain/cli/record');
+  const os = require('os');
+  const live = path.join(os.homedir(), '.onlykey-js', 'edge');
+  const test = path.join(os.homedir(), '.onlykey-js', 'edge-test');
+  /* each run starts live: a run before it in the same process (a test) may have been on the testnet */
+  NET = 'live';
+  if (control.edgeHome() === test) control.setHome(null);
+  record.setFile(null);
+  const a = argv.slice();
+  const dd = a.indexOf('--');
+  const i = a.indexOf('--test-mode');
+  if (i < 0 || (dd >= 0 && i > dd)) return a;
+  a.splice(i, 1);
+  NET = 'test';
+  /* a home chosen with --edge-home (dev) stays; the default moves to the testnet's */
+  if (control.edgeHome() === live) control.setHome(test);
+  record.setFile(path.join(os.homedir(), '.onlykey-js', 'keychain-test.json'));
+  io.err("edge: TESTNET - the test chain (" + control.edgeHome() + ")");
+  return a;
+}
+
 module.exports = function register(COMMANDS, h) {
   const dev = DEV;
   COMMANDS.edge = {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
-    usage: 'register | budget | continue | end | status | exec | ticket | watch | sync | blocks | peer | sibling | agent',
+    usage: 'register | budget | continue | end | status | exec | ticket | watch | sync | blocks | peer | sibling | agent | --test-mode … | --test-mode clear',
     summary: 'Edge: an agent uses the key inside a budget you approve on the phone - budget or no go',
     device: true,
     async run(io, opts, argv) {
-      const args = dev && dev.prepare ? dev.prepare(argv) : argv;
+      const args = takeTestMode(dev && dev.prepare ? dev.prepare(argv) : argv, io);
       const [sub, ...rest] = args;
       if (!sub || sub === 'help') {
         for (const l of USAGE) io.out(l);
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'ticket', 'watch', 'sync', 'blocks', 'peer', 'sibling', ...Object.keys((dev && dev.commands) || {})];
+      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'ticket', 'watch', 'sync', 'blocks', 'clear', 'peer', 'sibling', ...Object.keys((dev && dev.commands) || {})];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - onlykey-js edge help`);
       const control = require('./control');
       const wait = opt(rest, '--wait');
 
+      /*
+       * CLEAR THE TESTNET on this computer (BLOCKS.md §5; Brad, 2026-10-07: "test-mode
+       * can help separate the storage side too, both phone and cli, so it can be
+       * cleared"): its home and its Key Chain file, gone. The testnet's only - the
+       * live chain's data is never cleared - and only the default test home, never a
+       * folder named with --edge-home.
+       */
+      if (sub === 'clear') {
+        if (NET !== 'test') throw h.usage('clear is the testnet\'s only: onlykey-js edge --test-mode clear (the live chain is never cleared)');
+        const os = require('os');
+        const testHome = path.join(os.homedir(), '.onlykey-js', 'edge-test');
+        if (control.edgeHome() !== testHome) throw h.usage(`clear removes only the testnet's own home (${testHome}), not ${control.edgeHome()}`);
+        const kc = require('../../keychain/cli/record').keychainFile();
+        const gone = [testHome, kc].filter((p) => fs.existsSync(p));
+        for (const p of gone) fs.rmSync(p, { recursive: true, force: true });
+        io.out(gone.length ? `testnet cleared on this computer: ${gone.join(', ')}` : 'nothing to clear: no testnet data on this computer');
+        return 0;
+      }
+
       /* BLOCKS (BLOCKS.md §3, Brad 2026-10-07): this PC's copy cut at the key's seals into JSON blocks - local, no phone */
       if (sub === 'blocks') {
-        const found = require('./copy').blocks(control.edgeHome(), { net: 'live' });
+        const found = require('./copy').blocks(control.edgeHome(), { net: NET });
         if (rest.includes('--json')) {
           io.out(JSON.stringify(found.flatMap((d) => d.blocks.map((b) => b.block)), null, 2));
           return found.every((d) => d.blocks.every((b) => b.ok)) ? 0 : 1;
@@ -237,7 +290,7 @@ module.exports = function register(COMMANDS, h) {
           keyAnswers(await device.connect(), h, 'edge register');
           let edge = null;
           require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
-          const c = client.createEdgeClient({ edge, channel: wire.createWireChannel(transport, { timeoutMs: (Number(wait) || 120) * 1000 }), signer, store });
+          const c = client.createEdgeClient({ edge, channel: wire.createWireChannel(transport, { timeoutMs: (Number(wait) || 120) * 1000, net: NET }), signer, store });
           const keyHex = Buffer.from(signer.publicKey).toString('hex');
           /* the phone's sheet shows the same fingerprint: compare them before you press */
           io.out(h.row('agent key', request.fingerprint(keyHex)));

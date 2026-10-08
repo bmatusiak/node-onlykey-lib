@@ -34,7 +34,15 @@ const TYPE_OF_KEYTYPE = { 1: 'ed25519', 2: 'p256', 3: 'secp256k1', 4: 'x25519' }
 /* okcrypto.derivePublicKey keytype -> the list's type (src/keychain/derive.js LABEL_TYPES) */
 const LABEL_TYPE_OF_KEYTYPE = { 1: 'p256', 2: 'secp256k1', 3: 'x25519' };
 
+/*
+ * The testnet's list is its own (onlykey-js edge --test-mode; BLOCKS.md §5): its soft
+ * key is another key with other keys, so its entries never land in the live list.
+ */
+let fileOverride = null;
+function setFile(file) { fileOverride = file ? path.resolve(file) : null; }
+
 function keychainFile() {
+  if (fileOverride) return fileOverride;
   return process.env.ONLYKEY_KEYCHAIN ? path.resolve(process.env.ONLYKEY_KEYCHAIN) : path.join(os.homedir(), '.onlykey-js', 'keychain.json');
 }
 
@@ -139,4 +147,4 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record }) {
   };
 }
 
-module.exports = { keychainFile, load, save, record, recordingStart, identityName };
+module.exports = { keychainFile, setFile, load, save, record, recordingStart, identityName };

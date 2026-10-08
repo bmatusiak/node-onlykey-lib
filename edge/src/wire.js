@@ -39,12 +39,12 @@ const newId = () => toHex(randomBytes(8));
 /**
  * @param {any} request
  * @param {any} answer
- * @param {{dev?: string, now?: () => number}} [opts]
+ * @param {{dev?: string, net?: string, now?: () => number}} [opts]  net: the chain the phone is on (BLOCKS.md §5)
  */
-function answerEnvelope(request, answer, { dev, now = Date.now } = {}) {
+function answerEnvelope(request, answer, { dev, net, now = Date.now } = {}) {
   const w = request && request.wire;
   if (!w || typeof w.id !== 'string' || !answer || typeof answer !== 'object') return answer;
-  return { ...answer, wire: { dev: String(dev || ''), id: newId(), ts: now(), re: { dev: String(w.dev || ''), id: w.id } } };
+  return { ...answer, wire: { dev: String(dev || ''), id: newId(), ts: now(), re: { dev: String(w.dev || ''), id: w.id }, ...(net ? { net } : {}) } };
 }
 const { inLane } = require('../../src/transport/lane');
 
@@ -111,7 +111,15 @@ function createAssembler() {
  * in between, so the wait is long. Held as one conversation in the key's lane
  * (transport/lane.js), so no other request from this host lands in it.
  */
-function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = null, log = () => {} } = {}) {
+/*
+ * THE CHAIN (BLOCKS.md §5; Brad, 2026-10-07: live and test "seperated ... like how bitcoin
+ * does it"): every request names the net this computer is on (onlykey-js edge
+ * --test-mode = test), and an answer from a phone on the other chain is turned into a
+ * refusal here - a testnet budget can never be asked of, or taken from, the live
+ * chain. The phone refuses the request too (ok-rn vendorBridge). An answer with no
+ * net is an older app's: live.
+ */
+function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = null, log = () => {}, net = 'live' } = {}) {
   /* this computer's id on the wire: given (its Part T pairing id), else one per run */
   const runId = newId();
   const devOf = () => String((typeof device === 'function' ? device() : device) || runId);
@@ -129,7 +137,7 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
       const id = newId();
       const times = (opts && opts.times) || {};
       times.start = Date.now();
-      const stamped = { ...message, wire: { dev, id, ts: times.start } };
+      const stamped = { ...message, wire: { dev, id, ts: times.start, net } };
       return inLane(transport, () => new Promise((resolve, reject) => {
         times.lane = Date.now();
         if (opts && opts.oneWay) {
@@ -157,6 +165,11 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
           clearTimeout(timer);
           off();
           times.done = Date.now();
+          const theirs = (got.message && got.message.wire && got.message.wire.net) || 'live';
+          if (theirs !== net) {
+            resolve({ ok: false, refusal: 'net', detail: theirs === 'test' ? 'this phone is on the testnet - add --test-mode' : 'this phone is on the live chain - drop --test-mode' });
+            return;
+          }
           resolve(got.message);
         });
         timer = setTimeout(() => { off(); resolve(null); }, waitMs);

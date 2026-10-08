@@ -54,3 +54,35 @@ test('envelope: an older app (no envelope in its answer) is still answered as be
 test('answerEnvelope: an older computer (no envelope) gets its answer unchanged', () => {
   assert.deepStrictEqual(wire.answerEnvelope({ type: 'note' }, { ok: 1 }, { dev: 'phone' }), { ok: 1 });
 });
+
+/* THE TESTNET (BLOCKS.md §5; Brad, 2026-10-07): live and test never answer each other */
+test('net: a request names its chain, and an answer from the other chain becomes a refusal - both ways', async () => {
+  for (const [mine, theirs] of [['test', 'live'], ['live', 'test']]) {
+    const t = fakeTransport();
+    const ch = wire.createWireChannel(t, { timeoutMs: 2000, net: mine });
+    const p = ch.send({ type: 'budget' });
+    await tick();
+    const req = t.lastRequest();
+    assert.strictEqual(req.wire.net, mine);
+    t.answer(wire.answerEnvelope(req, { ok: true, grantId: 7 }, { dev: 'phone', net: theirs }));
+    const got = await p;
+    assert.strictEqual(got.ok, false, `${mine} computer, ${theirs} phone`);
+    assert.strictEqual(got.refusal, 'net');
+    assert.match(got.detail, theirs === 'test' ? /on the testnet - add --test-mode/ : /on the live chain - drop --test-mode/);
+  }
+});
+
+test('net: the same chain is answered; an older app (no net) counts as live', async () => {
+  const t = fakeTransport();
+  const ch = wire.createWireChannel(t, { timeoutMs: 2000, net: 'test' });
+  const p = ch.send({ type: 'budget' });
+  await tick();
+  t.answer(wire.answerEnvelope(t.lastRequest(), { ok: true }, { dev: 'phone', net: 'test' }));
+  assert.strictEqual((await p).ok, true);
+  const t2 = fakeTransport();
+  const live = wire.createWireChannel(t2, { timeoutMs: 2000 });
+  const p2 = live.send({ type: 'budget' });
+  await tick();
+  t2.answer(wire.answerEnvelope(t2.lastRequest(), { ok: true }, { dev: 'phone' }));
+  assert.strictEqual((await p2).ok, true, 'a live computer and an app that names no net');
+});

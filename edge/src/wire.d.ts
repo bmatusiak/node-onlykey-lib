@@ -31,11 +31,12 @@ export function createAssembler(): {
  * in between, so the wait is long. Held as one conversation in the key's lane
  * (transport/lane.js), so no other request from this host lands in it.
  */
-export function createWireChannel(transport: any, { timeoutMs, iface, device, log }?: {
+export function createWireChannel(transport: any, { timeoutMs, iface, device, log, net }?: {
     timeoutMs?: number | undefined;
     iface?: number | undefined;
     device?: null | undefined;
     log?: (() => void) | undefined;
+    net?: string | undefined;
 }): {
     send(message: any, opts?: {}): any;
 };
@@ -43,9 +44,10 @@ export function createWireChannel(transport: any, { timeoutMs, iface, device, lo
 /**
  * @param {any} request
  * @param {any} answer
- * @param {{dev?: string, now?: () => number}} [opts]
+ * @param {{dev?: string, net?: string, now?: () => number}} [opts]  net: the chain the phone is on (BLOCKS.md §5)
  */
-export function answerEnvelope(request: any, answer: any, { dev, now }?: {
+export function answerEnvelope(request: any, answer: any, { dev, net, now }?: {
     dev?: string;
+    net?: string;
     now?: () => number;
 }): any;

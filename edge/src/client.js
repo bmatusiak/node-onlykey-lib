@@ -401,7 +401,7 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     async register(name) {
       const answer = await channel.send(await request.buildRegister({ signer, name }));
       if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the app answered nothing - a bad signature or a replayed registration');
-      if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: the registration was refused - ${answer.refusal}`, { refusal: answer.refusal });
+      if (!answer.ok) throw fail('EEDGE_REFUSED', `edge: the registration was refused - ${answer.refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal: answer.refusal });
       return { already: Boolean(answer.already) };
     },
 
