@@ -57,7 +57,43 @@ async function ping(args, { out, ask }) {
   return ok === count ? 0 : 1;
 }
 
+/*
+ * THE CLEAN START ON THIS COMPUTER (R31, firmware.md; Brad, 2026-10-07: "we are
+ * doing a reset"): the Edge records of the chain the reset ended go - its budgets
+ * (budgets.json) and its copies (copy-*.json). What stays: agent.key, peer.key,
+ * control.key, agent-gpg.asc (keys and the agent's own certificate - R31 keeps every
+ * key) and agent.json's settings (its old budget is dropped). The agent and this
+ * PC's copy store then register again with a press each. Local: no phone.
+ * -> the files removed
+ */
+function reset(home, out) {
+  const fs = require('fs');
+  const path = require('path');
+  const removed = [];
+  if (fs.existsSync(home)) {
+    for (const n of fs.readdirSync(home)) {
+      if (n === 'budgets.json' || /^copy-[0-9a-f]{16}\.json$/.test(n)) {
+        fs.rmSync(path.join(home, n), { force: true });
+        removed.push(n);
+      }
+    }
+    const cfg = path.join(home, 'agent.json');
+    if (fs.existsSync(cfg)) {
+      const c = JSON.parse(fs.readFileSync(cfg, 'utf8'));
+      if (c.budget !== undefined) {
+        delete c.budget;
+        fs.writeFileSync(cfg, JSON.stringify({ ...c, v: 1 }, null, 2), { mode: 0o600 });
+        removed.push('agent.json: its budget');
+      }
+    }
+  }
+  out(removed.length ? `edge reset (${home}): removed ${removed.join(', ')}` : `edge reset (${home}): nothing of an old chain here`);
+  out('kept: agent.key, peer.key, control.key, agent-gpg.asc and agent.json\'s settings - register the agent and this PC again (a press each)');
+  return removed;
+}
+
 module.exports = {
+  reset,
   identityOption: true,
   idleMs: Number(process.env.OKEDGE_IDLE_MS) || null,
   /* --edge-home <dir> (before any `--`), else OKEDGE_HOME: the Edge home for this run */

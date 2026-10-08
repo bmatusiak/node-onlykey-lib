@@ -250,7 +250,7 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'ticket', 'watch', 'sync', 'blocks', 'clear', 'peer', 'sibling', ...Object.keys((dev && dev.commands) || {})];
+      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'ticket', 'watch', 'sync', 'blocks', 'clear', 'peer', 'sibling', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - onlykey-js edge help`);
       const control = require('./control');
       const wait = opt(rest, '--wait');
@@ -262,6 +262,12 @@ module.exports = function register(COMMANDS, h) {
        * live chain's data is never cleared - and only the default test home, never a
        * folder named with --edge-home.
        */
+      /* the clean start on this computer (edge/cli/dev reset; dev builds only - the published package has no such command) */
+      if (sub === 'reset' && dev && dev.reset) {
+        dev.reset(control.edgeHome(), io.out);
+        return 0;
+      }
+
       if (sub === 'clear') {
         if (NET !== 'test') throw h.usage('clear is the testnet\'s only: onlykey-js edge --test-mode clear (the live chain is never cleared)');
         const os = require('os');

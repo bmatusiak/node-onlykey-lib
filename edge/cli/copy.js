@@ -163,6 +163,9 @@ function lines(r, { status = false } = {}) {
     if (p.keychainSaved === false) out.push(`Key Chain: the merged list dropped ${p.keychainMissing.length} of this PC's entries - NOT saved (${p.keychainMissing.join(', ')})`);
     else if (p.keychainOut) out.push(`Key Chain: this PC took ${p.keychainOut} entr${p.keychainOut === 1 ? 'y' : 'ies'} - ${p.keychain} in the list now`);
   }
+  /* the seals that cut the copy into JSON blocks (BLOCKS.md §3; read on their own, no press) */
+  if (r.blocks) out.push(`seals: ${r.blocks.seals} kept with this copy - onlykey-js edge blocks shows the blocks`);
+  else if (r.blocksError) out.push(`seals: not read - ${r.blocksError}`);
   return out;
 }
 
