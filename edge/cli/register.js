@@ -2,7 +2,7 @@
 
 /**
  * edge/cli/register.js - the `edge` command group of onlykey-js (CLI.md §2, decided
- * 2026-10-06: one CLI, `okedge` and `onlykey-edge-gpg` are gone).
+ * 2026-10-06: one CLI, `onlykey-js edge` and `onlykey-edge-gpg` are gone).
  *
  *   onlykey-js edge register <name> [--ssh ssh://user@host --gpg "Name <email>"
  *                               --committer-name N --committer-email E --expires 1y|<n>d|never]
@@ -39,7 +39,7 @@ const opt = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args
 
 /* the agent's request key (made once, owner-only) and the budgets this computer asked for */
 function agentKeys(home) {
-  const { request } = require('../../src/edge');
+  const { request } = require('../src');
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const file = path.join(home, 'agent.key');
   if (!fs.existsSync(file)) fs.writeFileSync(file, require('crypto').randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
@@ -94,9 +94,9 @@ function serviceUp(controlPath) {
  * own keys - for one command (serve: false) or for the service (serve: true).
  */
 async function openStack(io, opts, h, { serve, dev, wait }) {
-  const control = require('../../cli/edge-control');
-  const { client, wire } = require('../../src/edge');
-  const { startEdgeAgent, openWithOneRetry } = require('../../cli/edge-agent');
+  const control = require('./control');
+  const { client, wire } = require('../src');
+  const { startEdgeAgent, openWithOneRetry } = require('./agent');
   const home = control.edgeHome();
   const { config, save } = loadConfig(home);
   if (!config.ssh) {
@@ -104,7 +104,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
   }
   const { signer, store } = agentKeys(home);
   const say = (l) => io.err(`edge: ${l}`);
-  /* ENOVENDOR at start: one more try after ~5 s (edge-agent.js openWithOneRetry) */
+  /* ENOVENDOR at start: one more try after ~5 s (agent.js openWithOneRetry) */
   const app = await openWithOneRetry(async () => {
     const a = await io.start(h.deviceOpts(opts));
     try { await a.services.device.connect(); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
@@ -113,19 +113,19 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
   try {
     const { transport, okcrypto } = app.services;
     let edge = null;
-    require('../../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
+    require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
     /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */
     const wired = wire.createWireChannel(transport, {
       timeoutMs: (Number(wait) || 180) * 1000,
       device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
       log: say,
     });
-    /* timing logs are a dev-build switch only (cli/dev; CLI.md §5) */
+    /* timing logs are a dev-build switch only (edge/cli/dev; CLI.md §5) */
     const timed = dev && dev.timed ? dev.timed({ edge, wired, okcrypto, say }) : { channel: wired, okcrypto };
     const c = client.createEdgeClient({ edge, channel: timed.channel, signer, store });
     const svc = await startEdgeAgent({
       okcrypto: timed.okcrypto, client: c, edge, config, saveConfig: save, openpgp: require('../../src/crypto/pgp'),
-      shimCommand: path.resolve(__dirname, '../../cli/edge-gpg-shim.js').split(path.sep).join('/'),
+      shimCommand: path.resolve(__dirname, 'gpg-shim.js').split(path.sep).join('/'),
       /* for one command the command itself prints the signed line; the service logs it to its own console */
       log: serve ? say : (l) => { if (!l.startsWith('signed: link')) say(l); },
       /* no confirm: under budget or no go a sign is paid or refused, never pressed (CLI.md §3) */
@@ -140,7 +140,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
         try {
           await app2.services.device.connect();
           let edge2 = null;
-          require('../../plugins/edge')({ transport: app2.services.transport }, (err, s) => { if (err) throw err; edge2 = s.edge; });
+          require('../plugin')({ transport: app2.services.transport }, (err, s) => { if (err) throw err; edge2 = s.edge; });
           const channel2 = wire.createWireChannel(app2.services.transport, { timeoutMs: (Number(wait) || 180) * 1000 });
           return { edge: edge2, client: client.createEdgeClient({ edge: edge2, channel: channel2, signer, store }), close: () => app2.destroy() };
         } catch (e) {
@@ -157,8 +157,23 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
   }
 }
 
+/*
+ * EDGE'S DEV-BUILD SET (CLI.md §5): edge/cli/dev, loaded only when that folder is
+ * there. The published package leaves it out (package.json "files") and
+ * scripts/release-check.js fails if any of it is reachable.
+ */
+const DEV = (() => {
+  try {
+    return require('./dev');
+  } catch (e) {
+    /* only edge/cli/dev itself missing - a broken require inside it still throws */
+    if (e && e.code === 'MODULE_NOT_FOUND' && /'\.\/dev'/.test(e.message)) return null;
+    throw e;
+  }
+})();
+
 module.exports = function register(COMMANDS, h) {
-  const dev = h.dev && h.dev.edge ? h.dev.edge : null;
+  const dev = DEV;
   COMMANDS.edge = {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
@@ -175,7 +190,7 @@ module.exports = function register(COMMANDS, h) {
       /* an unknown subcommand is refused here, before anything connects to the phone */
       const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'ticket', 'watch', 'sync', 'peer', 'sibling', ...Object.keys((dev && dev.commands) || {})];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - onlykey-js edge help`);
-      const control = require('../../cli/edge-control');
+      const control = require('./control');
       const wait = opt(rest, '--wait');
 
       if (sub === 'register') {
@@ -184,14 +199,14 @@ module.exports = function register(COMMANDS, h) {
         const home = control.edgeHome();
         const { config, save } = loadConfig(home);
         if (applySetup(config, rest, h)) save(config);
-        const { client, wire, request } = require('../../src/edge');
+        const { client, wire, request } = require('../src');
         const { signer, store } = agentKeys(home);
         const app = await io.start(h.deviceOpts(opts));
         try {
           const { transport, device } = app.services;
           await device.connect();
           let edge = null;
-          require('../../plugins/edge')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
+          require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
           const c = client.createEdgeClient({ edge, channel: wire.createWireChannel(transport, { timeoutMs: (Number(wait) || 120) * 1000 }), signer, store });
           const keyHex = Buffer.from(signer.publicKey).toString('hex');
           /* the phone's sheet shows the same fingerprint: compare them before you press */

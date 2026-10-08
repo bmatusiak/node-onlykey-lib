@@ -3,8 +3,8 @@
  * plugin's folder. Only the boot (cli/boot.js) looks for them, and a missing folder is
  * then simply not listed. A feature plugin may require core.
  *
- * Until step 3b moves them into edge/, Edge's files still sit in core's folders
- * (src/edge, plugins/edge, cli/edge-*) and may use Key Chain - Edge consumes it.
+ * Between the plugins the arrow points one way: Edge consumes Key Chain, so Edge may
+ * require keychain/, and Key Chain never requires edge/ (it never knows about Edge).
  */
 'use strict';
 
@@ -15,10 +15,11 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const CORE = ['src', 'cli', 'plugins', 'scripts'];
-const EDGE_UNTIL_3B = (f) => /^src\/edge\/|^plugins\/edge\/|^cli\/edge-[a-z-]+\.js$/.test(f);
 const BOOT = 'cli/boot.js';
 
 function walk(dir, out = []) {
+  /* a build without that plugin has nothing to scan */
+  if (!fs.existsSync(path.join(ROOT, dir))) return out;
   for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
     if (e.name === 'node_modules' || e.name === 'vendor' || e.name === 'dev') continue;
     const p = `${dir}/${e.name}`;
@@ -28,11 +29,11 @@ function walk(dir, out = []) {
   return out;
 }
 
-/* every relative require in core that lands in a feature plugin's folder */
-function reachingInto(folder) {
+/* every relative require in core (or the given folders) that lands in a feature plugin's folder */
+function reachingInto(folder, from = CORE) {
   const hits = [];
-  for (const file of CORE.flatMap((d) => walk(d))) {
-    if (file === BOOT || EDGE_UNTIL_3B(file)) continue;
+  for (const file of from.flatMap((d) => walk(d))) {
+    if (file === BOOT) continue;
     const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
     for (const m of src.matchAll(/require\((['"])(\.{1,2}\/[^'"]+)\1\)/g)) {
       const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), m[2]));
@@ -48,4 +49,8 @@ test('core never requires keychain/ (only the boot looks for it)', () => {
 
 test('core never requires edge/ (only the boot looks for it)', () => {
   assert.deepEqual(reachingInto('edge'), []);
+});
+
+test('Key Chain never requires edge/ (Edge consumes Key Chain, not the other way)', () => {
+  assert.deepEqual(reachingInto('edge', ['keychain']), []);
 });

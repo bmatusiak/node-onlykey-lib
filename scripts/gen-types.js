@@ -23,7 +23,7 @@ const {execFileSync} = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
 /* the feature plugins' sources (step 3): their declarations sit beside them as well */
-const PLUGIN_SRC = [path.join(ROOT, 'keychain', 'src')];
+const PLUGIN_SRC = [path.join(ROOT, 'keychain', 'src'), path.join(ROOT, 'edge', 'src')];
 const KEEP = path.join(SRC, 'vendor');
 
 function removeGenerated(dir) {

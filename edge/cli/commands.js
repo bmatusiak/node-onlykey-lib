@@ -2,7 +2,7 @@
 
 /**
  * edge/cli/commands.js - `onlykey-js edge …` (CLI.md §2, decided 2026-10-06: one CLI;
- * `okedge` is gone). Agents and scripts use these; people use the phone's Edge tab.
+ * `onlykey-js edge` is gone). Agents and scripts use these; people use the phone's Edge tab.
  *
  *   edge budget --reason "…" --ssh N [--gpg N] --ttl MIN    ask for the work budget (Yes + a press on the phone)
  *   edge continue --ttl MIN [--caps n,n]                    continue it after a lock (ends the old one first)
@@ -27,7 +27,7 @@
  */
 
 const { spawn } = require('child_process');
-const { codes, live, grants } = require('../../src/edge');
+const { codes, live, grants } = require('../src');
 
 /* edge watch: what each link's op is called */
 const OP_NAME = {
@@ -95,7 +95,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
   if (typeof ask !== 'function') throw new Error('edge commands need ask (the service or the in-process stack)');
   const [cmd, ...args] = argv;
   try {
-    /* the dev build's own commands (cli/dev - left out of the published package, CLI.md §5) */
+    /* the dev build's own commands (edge/cli/dev - left out of the published package, CLI.md §5) */
     if (dev && dev.commands && Object.prototype.hasOwnProperty.call(dev.commands, cmd)) return await dev.commands[cmd](args, { out, err, ask });
     if (cmd === 'status') {
       const s = await ask('status');
@@ -158,12 +158,12 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const status = args.includes('--status');
       /* phase 2 may wait on the phone's sheet (2 min) and the press (25 s): longer than a plain read */
       const r = await ask('sync', { status }, { timeoutMs: status ? 120000 : 240000 });
-      for (const l of require('../../cli/edge-copy').lines(r, { status })) out(l);
+      for (const l of require('./copy').lines(r, { status })) out(l);
       return r.verdict.kind === 'tampered' ? 1 : 0;
     }
     if (cmd === 'peer') {
       /* sync phase 2, P2a (R20): the places a sync may send copies to - the key's list */
-      const { request } = require('../../src/edge');
+      const { request } = require('../src');
       const sub = args[0];
       if (sub === 'add') {
         const r0 = await ask('peers');
@@ -187,7 +187,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     }
     if (cmd === 'sibling') {
       /* sync phase 2, P2b (R29): another key of yours, paired with a press on each phone */
-      const { request } = require('../../src/edge');
+      const { request } = require('../src');
       const sub = args[0];
       if (sub === 'add' && args[1] && !args[1].startsWith('--')) {
         /* each phone may first ask to keep copies (peer), then both show the pairing sheet: minutes, not seconds */

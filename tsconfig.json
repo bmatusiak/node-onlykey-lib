@@ -26,6 +26,6 @@
     "rootDir": "."
   },
   // a feature plugin's own sources get theirs beside them too (step 3: keychain/, edge/)
-  "include": ["src/**/*.js", "keychain/src/**/*.js"],
+  "include": ["src/**/*.js", "keychain/src/**/*.js", "edge/src/**/*.js"],
   "exclude": ["src/vendor/**"]
 }
