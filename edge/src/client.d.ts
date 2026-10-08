@@ -200,6 +200,20 @@ export function createEdgeClient({ edge, channel, signer, store, noteTimeoutMs }
         reveal: Uint8Array<ArrayBuffer> | null;
     }[]>;
     /**
+     * BLOCKS (BLOCKS.md §3, Brad 2026-10-07): the key's seals (the checkpoints that
+     * close each block) and the sibling checkpoints its chain anchored, as the phone
+     * keeps them. A GIVE asked past the end: no links, just its last-batch fields.
+     * Nothing is trusted here - each seal is checked against the key's own public
+     * key when the blocks are built (block.verifyBlock).
+     * -> {seals: [{seq, head, signature}], seen: [{deviceId, seq, head, signature}]}
+     */
+    sealsFromPhone(peerSigner: any, { deviceId }: {
+        deviceId: any;
+    }): Promise<{
+        seals: any;
+        seen: any;
+    }>;
+    /**
      * R30 (P2c): bring the phone whose key is `deviceId` its sibling's chain
      * (`chain`, `records` up to the sibling's signed `checkpoint`) and ask
      * it to anchor it: HAVE (what it holds of that chain), the LINKS it lacks,

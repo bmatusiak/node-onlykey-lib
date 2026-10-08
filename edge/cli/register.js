@@ -31,6 +31,7 @@ const USAGE = [
   'onlykey-js edge exec --head H --intent "…" -- <command…>     the only way to spend a budget',
   'onlykey-js edge ticket <seq> [--code OK] --msg "…"',
   'onlykey-js edge watch [--once] | sync [--status] | sync --with <address>',
+  'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
   'onlykey-js edge peer add | list · sibling add <address> | list',
   'onlykey-js edge agent                                         the optional service',
 ];
@@ -188,7 +189,7 @@ module.exports = function register(COMMANDS, h) {
   COMMANDS.edge = {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
-    usage: 'register | budget | continue | end | status | exec | ticket | watch | sync | peer | sibling | agent',
+    usage: 'register | budget | continue | end | status | exec | ticket | watch | sync | blocks | peer | sibling | agent',
     summary: 'Edge: an agent uses the key inside a budget you approve on the phone - budget or no go',
     device: true,
     async run(io, opts, argv) {
@@ -199,10 +200,28 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'ticket', 'watch', 'sync', 'peer', 'sibling', ...Object.keys((dev && dev.commands) || {})];
+      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'ticket', 'watch', 'sync', 'blocks', 'peer', 'sibling', ...Object.keys((dev && dev.commands) || {})];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - onlykey-js edge help`);
       const control = require('./control');
       const wait = opt(rest, '--wait');
+
+      /* BLOCKS (BLOCKS.md §3, Brad 2026-10-07): this PC's copy cut at the key's seals into JSON blocks - local, no phone */
+      if (sub === 'blocks') {
+        const found = require('./copy').blocks(control.edgeHome(), { net: 'live' });
+        if (rest.includes('--json')) {
+          io.out(JSON.stringify(found.flatMap((d) => d.blocks.map((b) => b.block)), null, 2));
+          return found.every((d) => d.blocks.every((b) => b.ok)) ? 0 : 1;
+        }
+        if (!found.length) io.out('no copy yet - onlykey-js edge sync');
+        for (const d of found) {
+          io.out(h.row(`key ${d.deviceId.slice(0, 16)}`, `${d.blocks.length} block(s), ${d.open} link(s) after the last seal${d.reason ? ` - ${d.reason}` : ''}`));
+          for (const b of d.blocks) {
+            const L = b.block.links;
+            io.out(h.row(`  #${b.block.start.seq}-#${b.block.checkpoint.seq}`, `${b.id.slice(0, 16)}  ${L.length} link(s)  ${b.ok ? 'verified' : `does not verify: ${b.reason}`}`));
+          }
+        }
+        return found.every((d) => d.blocks.every((b) => b.ok)) ? 0 : 1;
+      }
 
       if (sub === 'register') {
         const name = rest[0] && !rest[0].startsWith('--') ? rest[0] : null;

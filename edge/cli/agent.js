@@ -438,6 +438,12 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
           if (!check.ok) r.phone.keychainMissing = check.missing;
           r.phone.keychain = r.phone.keychain.length;
         }
+        /* the seals and the anchored sibling checkpoints that cut this copy into JSON blocks (BLOCKS.md §3) */
+        try {
+          r.phone.blocks = copy.keepSeals(where, c.deviceId, await client.sealsFromPhone(signer, { deviceId: c.deviceId }));
+        } catch (e) {
+          r.phone.blocksError = e.message;
+        }
       } catch (e) {
         r.phone = { refused: e.message };
       }

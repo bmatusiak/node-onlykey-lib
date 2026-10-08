@@ -468,6 +468,26 @@ function createEdgeClient({ edge, channel, signer, store = null, noteTimeoutMs =
     },
 
     /**
+     * BLOCKS (BLOCKS.md §3, Brad 2026-10-07): the key's seals (the checkpoints that
+     * close each block) and the sibling checkpoints its chain anchored, as the phone
+     * keeps them. A GIVE asked past the end: no links, just its last-batch fields.
+     * Nothing is trusted here - each seal is checked against the key's own public
+     * key when the blocks are built (block.verifyBlock).
+     * -> {seals: [{seq, head, signature}], seen: [{deviceId, seq, head, signature}]}
+     */
+    async sealsFromPhone(peerSigner, { deviceId }) {
+      const syncLib = require('./sync');
+      const { fromHex } = require('../../src/bytes');
+      const a = await channel.send(await syncLib.buildGive({ signer: peerSigner, deviceId, from: 0xffffffff }));
+      if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this place on the key\'s list (onlykey-js edge peer add)?');
+      if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone gave no seals - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
+      return {
+        seals: (a.seals || []).map(([seq, head, sig]) => ({ seq, head: fromHex(head), signature: fromHex(sig) })),
+        seen: (a.seen || []).map(([id, seq, head, sig]) => ({ deviceId: fromHex(id), seq, head: fromHex(head), signature: fromHex(sig) })),
+      };
+    },
+
+    /**
      * R30 (P2c): bring the phone whose key is `deviceId` its sibling's chain
      * (`chain`, `records` up to the sibling's signed `checkpoint`) and ask
      * it to anchor it: HAVE (what it holds of that chain), the LINKS it lacks,

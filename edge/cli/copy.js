@@ -13,7 +13,11 @@
  * repairs stay on the phone.
  *
  * The copy: <edge home>/copy-<device id, 16 hex>.json
- *   {deviceId, links: [{link, head, reveal?}] (hex), lastSeen: {seq, head} | null}
+ *   {deviceId, links: [{link, head, reveal?}] (hex), lastSeen: {seq, head} | null,
+ *    publicKey, seals: [{seq, head, signature}], seen: [{deviceId, seq, head, signature}]}
+ * publicKey is the key's Edge key as the key gave it at the last sync; seals and seen
+ * come from the phone (it takes a seal when a budget ends) and cut the copy into
+ * JSON blocks (BLOCKS.md §3) - each checked against that key, nothing trusted.
  */
 const fs = require('fs');
 const path = require('path');
@@ -30,12 +34,15 @@ function copyFile(home, deviceId) {
 
 function load(home, deviceId) {
   const f = copyFile(home, deviceId);
-  if (!fs.existsSync(f)) return { deviceId, links: [], lastSeen: null };
+  if (!fs.existsSync(f)) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], seen: [] };
   const s = JSON.parse(fs.readFileSync(f, 'utf8'));
   return {
     deviceId,
     links: s.links.map((l) => ({ link: fromHex(l.link), head: fromHex(l.head), ...(l.reveal ? { reveal: fromHex(l.reveal) } : {}) })),
     lastSeen: s.lastSeen ? { seq: s.lastSeen.seq, head: fromHex(s.lastSeen.head) } : null,
+    publicKey: s.publicKey ? fromHex(s.publicKey) : null,
+    seals: (s.seals || []).map((x) => ({ seq: x.seq, head: fromHex(x.head), signature: fromHex(x.signature) })),
+    seen: (s.seen || []).map((x) => ({ deviceId: fromHex(x.deviceId), seq: x.seq, head: fromHex(x.head), signature: fromHex(x.signature) })),
   };
 }
 
@@ -45,6 +52,9 @@ function save(home, c) {
     deviceId: toHex(c.deviceId),
     links: c.links.map((l) => ({ link: toHex(l.link), head: toHex(l.head), ...(l.reveal ? { reveal: toHex(l.reveal) } : {}) })),
     lastSeen: c.lastSeen ? { seq: c.lastSeen.seq, head: toHex(c.lastSeen.head) } : null,
+    ...(c.publicKey ? { publicKey: toHex(c.publicKey) } : {}),
+    seals: (c.seals || []).map((x) => ({ seq: x.seq, head: toHex(x.head), signature: toHex(x.signature) })),
+    seen: (c.seen || []).map((x) => ({ deviceId: toHex(x.deviceId), seq: x.seq, head: toHex(x.head), signature: toHex(x.signature) })),
   };
   fs.writeFileSync(copyFile(home, c.deviceId), JSON.stringify(s, null, 1) + '\n', { mode: 0o600 });
 }
@@ -86,7 +96,7 @@ async function sync(edge, home, { status = false } = {}) {
   const h = await edge.head();
   const keySeq = h.seq === null ? -1 : h.seq;
   const ringFrom = h.oldest === null ? keySeq + 1 : h.oldest;
-  const candidate = { ...c, links: [...c.links] };
+  const candidate = { ...c, links: [...c.links], publicKey };
   let stopped = null;
   /*
    * --status reads too (reads change nothing, R8) and only skips the save: a copy
@@ -173,4 +183,43 @@ function peerSigner(home) {
   return request.peerSignerFromSecret(fromHex(fs.readFileSync(file, 'utf8').trim()));
 }
 
-module.exports = { sync, lines, load, copyFile, peerSigner };
+/*
+ * The phone's seals and the sibling checkpoints this chain anchored (GIVE's last
+ * batch, client.sealsFromPhone), kept beside the copy. Merged by seq: the phone
+ * may hold fewer than this PC already kept.
+ */
+function keepSeals(home, deviceId, { seals = [], seen = [] }) {
+  const c = load(home, deviceId);
+  const bySeq = new Map(c.seals.map((x) => [x.seq, x]));
+  for (const x of seals) bySeq.set(x.seq, x);
+  c.seals = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  const key = (x) => `${toHex(x.deviceId)}:${x.seq}`;
+  const seenBy = new Map(c.seen.map((x) => [key(x), x]));
+  for (const x of seen) seenBy.set(key(x), x);
+  c.seen = [...seenBy.values()];
+  save(home, c);
+  return { seals: c.seals.length, seen: c.seen.length };
+}
+
+/*
+ * Every copy in this home as JSON blocks (edge/src/block.js), each block checked
+ * against the key's public key kept at the last sync and against the block before
+ * it. -> [{deviceId, blocks: [{block, id, ok, reason?}], open, reason?}]
+ */
+function blocks(home, { net }) {
+  const { block } = require('../src');
+  if (!fs.existsSync(home)) return [];
+  return fs.readdirSync(home).filter((n) => /^copy-[0-9a-f]{16}\.json$/.test(n)).map((n) => {
+    const s = JSON.parse(fs.readFileSync(path.join(home, n), 'utf8'));
+    const c = load(home, fromHex(s.deviceId));
+    const r = block.blocksFrom({ net, deviceId: c.deviceId, records: c.links, seals: c.seals, seen: c.seen });
+    const out = [];
+    for (const b of r.blocks) {
+      const v = c.publicKey ? block.verifyBlock(b, c.publicKey, out.length ? out[out.length - 1].block : null) : { ok: false, reason: 'no public key kept - run onlykey-js edge sync' };
+      out.push({ block: b, id: block.blockId(b), ok: v.ok, ...(v.ok ? {} : { reason: v.reason }) });
+    }
+    return { deviceId: toHex(c.deviceId), blocks: out, open: r.open, ...(r.reason ? { reason: r.reason } : {}) };
+  });
+}
+
+module.exports = { sync, lines, load, copyFile, peerSigner, keepSeals, blocks };

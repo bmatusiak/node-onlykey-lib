@@ -26,4 +26,5 @@ module.exports = {
   sync: require('./sync'),
   /* a pure Bluetooth link test: the phone echoes, testing mode only (okedge ping) */
   ping: require('./ping'),
+  block: require('./block'),
 };
