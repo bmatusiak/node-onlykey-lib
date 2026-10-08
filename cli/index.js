@@ -142,6 +142,7 @@ async function withDevice(io, opts, fn) {
   try {
     const { device, okcrypto, config, transport } = app.services;
     const connected = await device.connect();
+    requireAnswered(connected.identity);
     return await fn({ device, okcrypto, config, transport, connected, identity: connected.identity });
   } finally {
     await app.destroy();
@@ -172,6 +173,21 @@ function requireUnlocked(identity, what, { firstUse = false } = {}) {
     throw new CliError('This OnlyKey has not been set up yet (it has no PIN). Set it up first.');
   }
   throw new CliError(`The OnlyKey answered "${identity.raw}", which is not an unlocked key.`);
+}
+
+/*
+ * A KEY THAT IS NOT THERE TO ANSWER (Brad, 2026-10-07: "the cli should see what
+ * the issue is, so the ai agent can say"). ok-rn's soft key halts on its
+ * inactivity lockout (CPU_RESTART) and stays gone until ok-rn restarts; its
+ * Bluetooth bridge then answers the connect with "Error soft key stopped, …"
+ * (okmsg kind 'stopped'). Every command stops right there with what to do,
+ * instead of a request timing out later as "no reply on interface 2".
+ */
+function requireAnswered(identity) {
+  if (!identity || identity.state !== 'error') return;
+  if (okmsg.errorKind(identity.raw) === 'stopped') {
+    throw new CliError('The soft key on the phone has stopped (ok-rn logged out by its inactivity lockout). Restart ok-rn on the phone and log in, then run this again.');
+  }
 }
 
 /**
@@ -2049,7 +2065,7 @@ const DEV = (() => {
  * the core's table through the `cli` service (cli/core.js); a folder left out of a
  * build is simply not listed (CLI.md §6).
  */
-const CLI_HELPERS = { row, usage, CliError, DeviceRefusal, parseExpires, deviceOpts, NAME, dev: DEV, withDevice, requireUnlocked, deviceWrite, promptSecret, own };
+const CLI_HELPERS = { row, usage, CliError, DeviceRefusal, parseExpires, deviceOpts, NAME, dev: DEV, withDevice, requireUnlocked, requireAnswered, deviceWrite, promptSecret, own };
 let booted = null;
 function bootCli() {
   if (!booted) {

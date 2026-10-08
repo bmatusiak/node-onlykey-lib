@@ -90,6 +90,17 @@ function serviceUp(controlPath) {
 }
 
 /*
+ * THE KEY MUST BE THERE AND OPEN before anything is asked of it (Brad,
+ * 2026-10-07): a halted soft key (ok-rn's inactivity lockout) or a locked key
+ * stops the command here with what to do - the agent reads it and tells Brad -
+ * instead of a request timing out as "no reply on interface 2".
+ */
+function keyAnswers(connected, h, what) {
+  if (h.requireAnswered) h.requireAnswered(connected && connected.identity);
+  if (h.requireUnlocked && connected && connected.identity) h.requireUnlocked(connected.identity, what);
+}
+
+/*
  * The stack - the phone, the key's Edge, the wire to the app, the agent with its
  * own keys - for one command (serve: false) or for the service (serve: true).
  */
@@ -107,7 +118,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
   /* ENOVENDOR at start: one more try after ~5 s (agent.js openWithOneRetry) */
   const app = await openWithOneRetry(async () => {
     const a = await io.start(h.deviceOpts(opts));
-    try { await a.services.device.connect(); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
+    try { keyAnswers(await a.services.device.connect(), h, 'edge'); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
     return a;
   }, { log: say });
   try {
@@ -138,7 +149,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
         if (!opts.ble) throw new Error('pairing another phone needs --ble (the other phone is reached over Bluetooth)');
         const app2 = await io.start(h.deviceOpts({ ...opts, address }));
         try {
-          await app2.services.device.connect();
+          keyAnswers(await app2.services.device.connect(), h, 'edge');
           let edge2 = null;
           require('../plugin')({ transport: app2.services.transport }, (err, s) => { if (err) throw err; edge2 = s.edge; });
           const channel2 = wire.createWireChannel(app2.services.transport, { timeoutMs: (Number(wait) || 180) * 1000 });
@@ -204,7 +215,7 @@ module.exports = function register(COMMANDS, h) {
         const app = await io.start(h.deviceOpts(opts));
         try {
           const { transport, device } = app.services;
-          await device.connect();
+          keyAnswers(await device.connect(), h, 'edge register');
           let edge = null;
           require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
           const c = client.createEdgeClient({ edge, channel: wire.createWireChannel(transport, { timeoutMs: (Number(wait) || 120) * 1000 }), signer, store });

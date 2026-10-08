@@ -403,8 +403,9 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
         + `was seen in ${timeouts.scanMs / 1000} s. Saw ${seen.size} Bluetooth devices`
         + (fido.length ? `; FIDO: ${fido.map(([id, v]) => `${v.name || '(no name)'} ${id}`).join(', ')}` : '; none advertising FIDO')
         + (named.length ? `; names: ${[...new Set(named)].slice(0, 8).join(', ')}` : '')
-        + '. Is ok-rn open with its soft key on and Bluetooth on in the phone, and is the phone '
-        + 'paired with this computer (Settings > Bluetooth & devices)?'));
+        /* ok-rn starts Bluetooth only after its login (App.tsx RadioStatus): logged out = not advertising */
+        + '. Is ok-rn open and logged in (it is not on Bluetooth while logged out), with Bluetooth on in the phone, '
+        + 'and is the phone paired with this computer (Settings > Bluetooth & devices)?'));
     }, quickMs || timeouts.scanMs);
     noble.on('discover', onDiscover);
     Promise.resolve(noble.startScanningAsync([], true)).catch((err) => done(bleError('ESCAN',

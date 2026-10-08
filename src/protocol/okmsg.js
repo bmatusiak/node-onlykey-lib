@@ -215,6 +215,14 @@ function errorKind(message) {
   if (/^Second Profile Mode may only be changed/i.test(said)) return 'refused';
   if (!/^Error/i.test(said)) return null;
 
+  /*
+   * NOT FIRMWARE: ok-rn's Bluetooth bridge says this for its soft key when the
+   * firmware has halted (CPU_RESTART - the inactivity lockout, the lock gesture).
+   * On a phone that halt is not a locked key but no key until ok-rn restarts,
+   * and before the bridge answered, a computer heard 3 s of silence (Brad,
+   * 2026-10-07). ok-rn vendorBridge.ts KEY_STOPPED is the sentence.
+   */
+  if (/soft key stopped/i.test(said)) return 'stopped';
   if (/device locked/i.test(said)) return 'locked';
   if (/not in config mode/i.test(said)) return 'configMode';
   if (/may not be changed|may only be changed/i.test(said)) return 'refused';
