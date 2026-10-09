@@ -17,14 +17,13 @@ const assert = require('node:assert');
 const crypto = require('crypto');
 const fs = require('fs');
 const net = require('net');
-const { request, approve, client, codes, chain } = require('../src');
+const { approve, client, codes, chain } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 const agentProto = require('../../src/protocol/agent');
 const wire = require('../../cli/ssh-wire');
 const bindLib = require('../../cli/ssh-session-bind');
 const { createEdgeAgent } = require('../cli/agent');
 
-const AGENT = request.signerFromSecret(new Uint8Array(32).fill(31));
 const hex = (b) => Buffer.from(b).toString('hex');
 const SSH_NAME = 'ssh://claude@test';
 const SSH_IDENTITY = { ssh: { user: 'claude', host: 'test' } };
@@ -89,23 +88,23 @@ async function setup({ cap = 4 } = {}) {
     },
   };
   const seen = new Set();
-  /* the phone remembers what it opened, for whom - a continue must match it (approve budgetOf) */
+  /* the phone remembers what it opened, for which paired computer - a continue must match it (approve budgetOf) */
   const opened = new Map();
   const channel = {
     async send(msg) {
       const r = await approve.approveRequest(msg, {
-        edge, registered: [hex(AGENT.publicKey)], seen, ask: async () => 'approve',
+        edge, from: 'pc-nitro16', seen, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
         budgetOf: (id) => opened.get(id) || null,
       });
-      if (r.ok && r.budget) opened.set(r.budget.grantId, { agent: msg.agent, scopes: msg.scopes });
+      if (r.ok && r.budget) opened.set(r.budget.grantId, { from: 'pc-nitro16', scopes: msg.scopes });
       return r.dropped ? null : r;
     },
   };
   /* the agent's budget store (continue reads the budget it continues from here) */
   const saved = new Map();
   const store = { get: async (k) => saved.get(k) ?? null, set: async (k, v) => { saved.set(k, v); }, delete: async (k) => { saved.delete(k); } };
-  const c = client.createEdgeClient({ edge, channel, signer: AGENT, store });
+  const c = client.createEdgeClient({ edge, channel, store });
   const b = await c.request({ reason: 'work: push and sign', scopes: [{ op: 'sign', slot: 221, cap, identity: SSH_NAME }], ttlMinutes: 60 });
   const raw = await device.publicKey(SSH_IDENTITY);
   const h = host();

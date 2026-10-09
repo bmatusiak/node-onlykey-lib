@@ -1,4 +1,3 @@
-export function agentSubject(agentKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export const NAMETAG_MAX: 64;
 /** A nametag as the person typed it -> its hash, the 32 bytes the key signs. Throws on an empty or too long one. */
 export function nametagHash(nametag: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;

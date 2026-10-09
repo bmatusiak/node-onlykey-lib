@@ -16,7 +16,7 @@
  *   {deviceId, links: [{link, head, reveal?}] (hex), lastSeen: {seq, head} | null,
  *    publicKey, seals: [{seq, head, signature}], checkpoint?, statement?}
  * One file per device: this phone's key, and since 2026-10-08 your OTHER devices' logs too
- * (sync --with, a hard key's later), each with that device's signed checkpoint and its
+ * (each phone synced in turn, a hard key's later), each with that device's signed checkpoint and its
  * owner statement (nametag) - what this computer offers your phones to merge.
  * publicKey is the key's Edge key as the key gave it at the last sync; seals
  * come from the phone (it takes a seal when a budget ends) and cut the copy into
@@ -162,14 +162,8 @@ function lines(r, { status = false } = {}) {
   const p = r.phone;
   if (p && p.skipped) out.push(`phone: not offered - ${p.skipped}`);
   else if (p && p.refused) out.push(`phone: ${p.refused}`);
-  else if (p && !p.count && !p.keychainIn && !p.keychainOut) out.push('phone: lacks nothing this PC holds, and the Key Chain lists already match');
-  else if (p) {
-    out.push(`phone: took ${p.count} link(s)${p.keychainHeld ? '' : ` and ${p.keychainIn || 0} Key Chain entr${p.keychainIn === 1 ? 'y' : 'ies'}`}`);
-    /* a list that would change the phone's waits in its Approve sheet (2026-10-08) - nothing to take back yet */
-    if (p.keychainHeld) out.push(`Key Chain: ${p.keychainIn} entr${p.keychainIn === 1 ? 'y' : 'ies'} held on the phone until you approve (Edge tab banner)`);
-    if (p.keychainSaved === false) out.push(`Key Chain: the merged list dropped ${p.keychainMissing.length} of this PC's entries - NOT saved (${p.keychainMissing.join(', ')})`);
-    else if (p.keychainOut && !p.keychainHeld && p.keychain !== null && p.keychain !== undefined) out.push(`Key Chain: this PC took ${p.keychainOut} entr${p.keychainOut === 1 ? 'y' : 'ies'} - ${p.keychain} in the list now`);
-  }
+  else if (p && !p.count) out.push('phone: lacks nothing this PC holds');
+  else if (p) out.push(`phone: took ${p.count} link(s)`);
   /* the seals that cut the copy into JSON blocks (BLOCKS.md §3; read on their own, no press) */
   if (r.blocks) out.push(`seals: ${r.blocks.seals} kept with this copy - onlykey-js edge blocks shows the blocks`);
   else if (r.blocksError) out.push(`seals: not read - ${r.blocksError}`);
@@ -183,7 +177,7 @@ function lines(r, { status = false } = {}) {
 
 /*
  * This computer's own sync key: <edge home>/peer.key, P-256 (made on first use, this
- * user only, like agent.key). It signs every sync message, so the phone knows which
+ * user only). It signs every sync message, so the phone knows which
  * computer offered a log. It is not the agent's key: the agent asks for budgets, the
  * store keeps copies. No peer list on the key or the phone since 2026-10-08 (Brad:
  * peers dropped) - a computer the person approved for Bluetooth may offer logs, and
@@ -247,6 +241,8 @@ function keepLog(home, { deviceId, publicKey, records, checkpoint, statement }) 
   const { sync: syncLib } = require('../src');
   const id = Uint8Array.from(deviceId);
   if (!statement || toHex(statement.deviceId) !== toHex(id) || toHex(statement.publicKey) !== toHex(publicKey)) return { kept: false, why: 'the statement does not name this device' };
+  /* nothing to merge yet: a device whose key has no link is not kept or offered (an older app's check would read NO_SEQ as a seq) */
+  if (checkpoint.seq === syncLib.NO_SEQ || !records.length) return { kept: false, why: 'its key has no link yet' };
   const check = syncLib.anchorCheck({ records, publicKey: Uint8Array.from(publicKey), checkpoint, anchors: [] });
   if (!check.ok) return { kept: false, why: `its chain does not check (${check.alarm}${check.detail ? `: ${check.detail}` : ''})` };
   const c = load(home, id);

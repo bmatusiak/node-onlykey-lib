@@ -197,6 +197,28 @@ test('edge: status codes - every code the firmware sends has words on the host',
   assert.equal(codes.parseStatus('Error something'), null);
 });
 
+/*
+ * AGENT_ADD is gone (Brad, 2026-10-08: "so the claude key thing is overkill" / "lets cut it out"):
+ * the firmware answers sub-op 0x15 like any request it does not know, and the plugin has no call for it.
+ */
+test('edge: sub-op 0x15 (the retired AGENT_ADD) is an unknown request - EDGE:0A, no link; no agentAdd on the plugin', async () => {
+  const t = fakeKey();
+  const edge = edgeOver(t);
+  assert.equal('agentAdd' in edge, false);
+  const before = await edge.head();
+  const got = [];
+  const off = t.on('report', (r) => got.push(r.data));
+  const frame = new Uint8Array(64);
+  frame.set([0xff, 0xff, 0xff, 0xff, 0xf8, 0x15, ...new Uint8Array(32).fill(7)]);
+  t.write(IFACE.VENDOR, frame);
+  await new Promise((r) => setTimeout(r, 20));
+  off();
+  assert.deepEqual([...got[0]], [...status(0x0a)]);
+  assert.equal(codes.parseStatus(Buffer.from(got[0]).toString('latin1').replace(/\0+$/, '')).name, 'unknown-request');
+  assert.equal((await edge.head()).seq, before.seq, 'nothing linked');
+  assert.equal(codes.OP.AGENT_ADD, 15, 'kept only as a label for reading old chains');
+});
+
 test('edge: LOSS {from, to} - a pressed loss link with the spec layout; a range past the head is refused (R24)', async () => {
   const edge = edgeOver(fakeKey());
   let asked = false;

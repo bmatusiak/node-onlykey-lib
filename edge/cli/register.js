@@ -4,10 +4,12 @@
  * edge/cli/register.js - the `edge` command group of onlykey-js (CLI.md §2, decided
  * 2026-10-06: one CLI, `onlykey-js edge` and `onlykey-edge-gpg` are gone).
  *
- *   onlykey-js edge register <name> [--ssh ssh://user@host --gpg "Name <email>"
+ *   onlykey-js edge setup --ssh ssh://user@host [--gpg "Name <email>"
  *                               --committer-name N --committer-email E --expires 1y|<n>d|never]
- *                                         register the agent's key with the phone (a press); the
- *                                         first time, also name the agent's own identities
+ *                                         name the agent's own identities, once (no phone). No
+ *                                         registration with the phone since 2026-10-08 (Brad: "so
+ *                                         the claude key thing is overkill"): the phone trusts this
+ *                                         computer by its Bluetooth pairing (onlykey-js pair)
  *   onlykey-js edge agent [--wait s]      the OPTIONAL service (CLI.md §4): keeps the Bluetooth
  *                                         link open between commands - for speed only
  *   onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync
@@ -25,12 +27,12 @@ const net = require('net');
 const path = require('path');
 
 const USAGE = [
-  'onlykey-js edge register <name> [--ssh ssh://user@host --gpg "Name <email>" --committer-name N --committer-email E --expires 1y|<n>d|never]',
+  'onlykey-js edge setup --ssh ssh://user@host [--gpg "Name <email>" --committer-name N --committer-email E --expires 1y|<n>d|never]',
   'onlykey-js edge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES',
   'onlykey-js edge continue --ttl MINUTES [--caps n,n] | end | status',
   'onlykey-js edge exec --head H --intent "…" -- <command…>     the only way to spend a budget',
   'onlykey-js edge receipt <seq> [--code OK] --msg "…"',
-  'onlykey-js edge watch [--once] | sync [--status] | sync --with <address>',
+  'onlykey-js edge watch [--once] | sync [--status]',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
   'onlykey-js edge agent                                         the optional service',
   'add --test-mode to any of them: the testnet - its own home, its own chain on the phone (Enter testing mode)',
@@ -39,13 +41,9 @@ const USAGE = [
 
 const opt = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 
-/* the agent's request key (made once, owner-only) and the budgets this computer asked for */
-function agentKeys(home) {
-  const { request } = require('../src');
+/* the budgets this computer asked for (no agent key since 2026-10-08: the Bluetooth pairing says who asks) */
+function budgetStore(home) {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  const file = path.join(home, 'agent.key');
-  if (!fs.existsSync(file)) fs.writeFileSync(file, require('crypto').randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
-  const signer = request.signerFromSecret(Uint8Array.from(Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'hex')));
   const storeFile = path.join(home, 'budgets.json');
   /*
    * Version 1 since the clean start (Brad, 2026-10-07: every schema v1): a store
@@ -59,7 +57,7 @@ function agentKeys(home) {
     async get(k) { return k === 'v' ? null : read()[k] || null; },
     async set(k, v) { const all = read(); all[k] = v; fs.writeFileSync(storeFile, JSON.stringify(all, null, 2), { mode: 0o600 }); },
   };
-  return { signer, store };
+  return { store };
 }
 
 /* agent.json: the agent's own identities, its certificate, its budget */
@@ -129,9 +127,9 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
   const home = control.edgeHome();
   const { config, save } = loadConfig(home);
   if (!config.ssh) {
-    throw h.usage('set up the agent once first: onlykey-js edge register <name> --ssh ssh://user@host --gpg "Name <email>"');
+    throw h.usage('set up the agent once first: onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>"');
   }
-  const { signer, store } = agentKeys(home);
+  const { store } = budgetStore(home);
   const say = (l) => io.err(`edge: ${l}`);
   /* ENOVENDOR at start: one more try after ~5 s (agent.js openWithOneRetry) */
   const app = await openWithOneRetry(async () => {
@@ -152,32 +150,16 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
     });
     /* timing logs are a dev-build switch only (edge/cli/dev; CLI.md §5) */
     const timed = dev && dev.timed ? dev.timed({ edge, wired, okcrypto, say }) : { channel: wired, okcrypto };
-    const c = client.createEdgeClient({ edge, channel: timed.channel, signer, store });
+    const c = client.createEdgeClient({ edge, channel: timed.channel, store });
     const svc = await startEdgeAgent({
       okcrypto: timed.okcrypto, client: c, edge, config, saveConfig: save, openpgp: require('../../src/crypto/pgp'),
       shimCommand: path.resolve(__dirname, 'gpg-shim.js').split(path.sep).join('/'),
       /* for one command the command itself prints the signed line; the service logs it to its own console */
       log: serve ? say : (l) => { if (!l.startsWith('signed: link')) say(l); },
       /* no confirm: under budget or no go a sign is paid or refused, never pressed (CLI.md §3) */
-      selfName: opts.address || null,
       linkStats: () => (typeof transport.linkStats === 'function' ? transport.linkStats() : null),
       /* a request nobody answered: let the Bluetooth link go (the next one connects fresh, hello first) */
       onSilence: opts.ble ? async () => { await transport.release('nobody answered').catch(() => {}); } : null,
-      /* R29 (edge sibling add): a second link, to the other phone, for one request */
-      openOther: async (address) => {
-        if (!opts.ble) throw new Error('pairing another phone needs --ble (the other phone is reached over Bluetooth)');
-        const app2 = await io.start(h.deviceOpts({ ...opts, address }));
-        try {
-          keyAnswers(await app2.services.device.connect(), h, 'edge');
-          let edge2 = null;
-          require('../plugin')({ transport: app2.services.transport }, (err, s) => { if (err) throw err; edge2 = s.edge; });
-          const channel2 = wire.createWireChannel(app2.services.transport, { timeoutMs: (Number(wait) || 180) * 1000, net: NET });
-          return { edge: edge2, client: client.createEdgeClient({ edge: edge2, channel: channel2, signer, store }), close: () => app2.destroy() };
-        } catch (e) {
-          await app2.destroy().catch(() => undefined);
-          throw e;
-        }
-      },
       serve,
     });
     return { app, transport, svc, config, home, close: async () => { await svc.close(); await app.destroy(); } };
@@ -238,7 +220,7 @@ module.exports = function register(COMMANDS, h) {
   COMMANDS.edge = {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
-    usage: 'register | budget | continue | end | status | exec | receipt | watch | sync | blocks | agent | --test-mode … | --test-mode clear',
+    usage: 'setup | budget | continue | end | status | exec | receipt | watch | sync | blocks | agent | --test-mode … | --test-mode clear',
     summary: 'Edge: an agent uses the key inside a budget you approve on the phone - budget or no go',
     device: true,
     async run(io, opts, argv) {
@@ -249,7 +231,7 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['register', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
+      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - onlykey-js edge help`);
       const control = require('./control');
       const wait = opt(rest, '--wait');
@@ -297,32 +279,15 @@ module.exports = function register(COMMANDS, h) {
         return found.every((d) => d.blocks.every((b) => b.ok)) ? 0 : 1;
       }
 
-      if (sub === 'register') {
-        const name = rest[0] && !rest[0].startsWith('--') ? rest[0] : null;
-        if (!name) throw h.usage('edge register <name the phone shows> [--ssh … --gpg …]');
+      if (sub === 'setup') {
+        /* the agent's own identities, once - nothing to do with the phone */
         const home = control.edgeHome();
         const { config, save } = loadConfig(home);
-        if (applySetup(config, rest, h)) save(config);
-        const { client, wire, request } = require('../src');
-        const { signer, store } = agentKeys(home);
-        const app = await io.start(h.deviceOpts(opts));
-        try {
-          const { transport, device } = app.services;
-          keyAnswers(await device.connect(), h, 'edge register');
-          let edge = null;
-          require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
-          const c = client.createEdgeClient({ edge, channel: wire.createWireChannel(transport, { timeoutMs: (Number(wait) || 120) * 1000, net: NET }), signer, store });
-          const keyHex = Buffer.from(signer.publicKey).toString('hex');
-          /* the phone's sheet shows the same fingerprint: compare them before you press */
-          io.out(h.row('agent key', request.fingerprint(keyHex)));
-          io.out(h.row('full key', keyHex));
-          io.out('Check the phone shows the same key, Register there, then press the key...');
-          const r = await c.register(name);
-          io.out(r.already ? 'already registered' : 'registered');
-          return 0;
-        } finally {
-          await app.destroy();
-        }
+        if (!applySetup(config, rest, h)) throw h.usage('edge setup --ssh ssh://user@host [--gpg "Name <email>" --committer-name N --committer-email E --expires 1y|<n>d|never]');
+        save(config);
+        io.out(h.row('ssh', config.ssh || '-'));
+        if (config.gpgUid) io.out(h.row('gpg', config.gpgUid));
+        return 0;
       }
 
       if (sub === 'agent') {
@@ -404,4 +369,4 @@ module.exports = function register(COMMANDS, h) {
 module.exports.USAGE = USAGE;
 /* the PC store's two files, for tests (version 1 since the clean start) */
 module.exports.loadConfig = loadConfig;
-module.exports.agentKeys = agentKeys;
+module.exports.budgetStore = budgetStore;

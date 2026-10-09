@@ -37,6 +37,21 @@ function timed({ edge, wired, okcrypto, say }) {
  * phone and back, checked by their SHA-256; testing mode, encrypted session only.
  * No key, no budget, nothing signed or written.
  */
+/*
+ * edge wipe --yes (dev): the key's DEBUG-only Edge wipe (R31) - a fresh chain, a new device id;
+ * private keys untouched. A production key refuses it. Brad, 2026-10-08: "need to reset the
+ * blockchain on the live to clear the contaminate" - "no bumping protocol or schema version".
+ */
+async function wipe(args, { out, ask }) {
+  if (!args.includes('--yes')) {
+    out('edge wipe erases this key\'s Edge chain (a new chain, a new device id; no private key touched). DEBUG firmware only. Add --yes.');
+    return 1;
+  }
+  await ask('wipe-debug', {}, { timeoutMs: 30000 });
+  out('the key\'s Edge region is wiped: a fresh chain starts at its next request (then: onlykey-js edge reset on this computer)');
+  return 0;
+}
+
 async function ping(args, { out, ask }) {
   const count = Math.max(1, Math.min(100, Number(opt(args, '--count')) || 1));
   const gap = Math.max(0, Number(opt(args, '--gap')) || 0);
@@ -60,10 +75,10 @@ async function ping(args, { out, ask }) {
 /*
  * THE CLEAN START ON THIS COMPUTER (R31, firmware.md; Brad, 2026-10-07: "we are
  * doing a reset"): the Edge records of the chain the reset ended go - its budgets
- * (budgets.json) and its copies (copy-*.json). What stays: agent.key, peer.key,
- * control.key, agent-gpg.asc (keys and the agent's own certificate - R31 keeps every
- * key) and agent.json's settings (its old budget is dropped). The agent and this
- * PC's copy store then register again with a press each. Local: no phone.
+ * (budgets.json) and its copies (copy-*.json). What stays: peer.key, control.key,
+ * agent-gpg.asc (keys and the agent's own certificate - R31 keeps every key) and
+ * agent.json's settings (its old budget is dropped). No registration to redo: the
+ * phone trusts this computer by its Bluetooth pairing. Local: no phone.
  * -> the files removed
  */
 function reset(home, out) {
@@ -88,7 +103,7 @@ function reset(home, out) {
     }
   }
   out(removed.length ? `edge reset (${home}): removed ${removed.join(', ')}` : `edge reset (${home}): nothing of an old chain here`);
-  out('kept: agent.key, peer.key, control.key, agent-gpg.asc and agent.json\'s settings - register the agent and this PC again (a press each)');
+  out('kept: peer.key, control.key, agent-gpg.asc and agent.json\'s settings');
   return removed;
 }
 
@@ -107,5 +122,5 @@ module.exports = {
     return a;
   },
   timed,
-  commands: { ping },
+  commands: { ping, wipe },
 };

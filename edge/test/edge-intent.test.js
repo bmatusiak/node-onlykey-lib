@@ -5,11 +5,9 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
-const { approve, client, chain, grants, request, note, codes } = require('../src');
+const { approve, client, chain, grants, note, codes } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 
-const AGENT = request.signerFromSecret(new Uint8Array(32).fill(41));
-const registered = [Buffer.from(AGENT.publicKey).toString('hex')];
 const ID = 'ssh://agent@nitro16';
 
 async function setup(opts = {}) {
@@ -20,12 +18,12 @@ async function setup(opts = {}) {
   const channel = {
     async send(msg) {
       if (msg.type === note.TYPE) return { ok: true };
-      const r = await approve.approveRequest(msg, { edge, registered, seen, ask: async () => 'approve',
+      const r = await approve.approveRequest(msg, { edge, from: 'pc-nitro16', seen, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000 });
       return r.dropped ? null : r;
     },
   };
-  const c = client.createEdgeClient({ edge, channel, signer: AGENT });
+  const c = client.createEdgeClient({ edge, channel });
   const sign = (x) => transport.use(x, { slot: 222 });
   return { transport, edge, c, sign };
 }

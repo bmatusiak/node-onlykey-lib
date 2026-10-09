@@ -1,38 +1,45 @@
 'use strict';
 
-/* B7 stage 2: EDGE_NOTE - signed by the registered agent key, changes nothing, dropped otherwise */
+/*
+ * B7 stage 2: EDGE_NOTE - from the paired computer, unsigned, changes nothing, dropped when malformed or replayed.
+ * No agent key since 2026-10-08 (Brad: "so the claude key thing is overkill" / "lets cut it out"): the
+ * Bluetooth pairing says which computer sent it, so a note carries no signature to check.
+ */
 const test = require('node:test');
 const assert = require('node:assert');
-const { note, request } = require('../src');
+const { note } = require('../src');
 
-const AGENT = request.signerFromSecret(new Uint8Array(32).fill(41));
-const OTHER = request.signerFromSecret(new Uint8Array(32).fill(42));
-const hex = (b) => Buffer.from(b).toString('hex');
-const registered = [hex(AGENT.publicKey)];
-
-test('a note from the registered agent verifies; each field is optional but one must be there', async () => {
-  const m = await note.build({ signer: AGENT, seq: 233, reason: 'git push origin master' });
-  assert.deepEqual(note.verify(m, { registered }), { ok: true });
-  const t = await note.build({ signer: AGENT, seq: 233, receiptMsg: 'pushed ok-rn' });
-  assert.deepEqual(note.verify(t, { registered }), { ok: true });
-  const r = await note.build({ signer: AGENT, seq: 240, txRefused: 'receipt_owed' });
-  assert.deepEqual(note.verify(r, { registered }), { ok: true });
-  await assert.rejects(note.build({ signer: AGENT, seq: 1 }), /nothing to say/);
+test('a note verifies; each field is optional but one must be there', async () => {
+  const m = await note.build({ seq: 233, reason: 'git push origin master' });
+  assert.deepEqual(note.verify(m), { ok: true });
+  assert.equal('signature' in m, false, 'no signature: the pairing is the gate');
+  const t = await note.build({ seq: 233, receiptMsg: 'pushed ok-rn' });
+  assert.deepEqual(note.verify(t), { ok: true });
+  const r = await note.build({ seq: 240, txRefused: 'receipt_owed' });
+  assert.deepEqual(note.verify(r), { ok: true });
+  await assert.rejects(note.build({ seq: 1 }), /nothing to say/);
 });
 
-test('dropped: an unregistered key, edited text, a replay, an oversize reason', async () => {
-  const m = await note.build({ signer: AGENT, seq: 7, reason: 'fine' });
-  assert.equal(note.verify(await note.build({ signer: OTHER, seq: 7, reason: 'fine' }), { registered }).reason, 'unregistered');
-  assert.equal(note.verify({ ...m, reason: 'not what it signed' }, { registered }).reason, 'bad-signature');
-  assert.equal(note.verify({ ...m, seq: 8 }, { registered }).reason, 'bad-signature');
-  assert.equal(note.verify(m, { registered, seen: new Set([m.nonce]) }).reason, 'replayed');
-  await assert.rejects(note.build({ signer: AGENT, seq: 7, reason: 'x'.repeat(note.MAX_REASON + 1) }), /at most 280/);
-  assert.equal(note.verify({ ...m, reason: 'x'.repeat(note.MAX_REASON + 1) }, { registered }).reason, 'bad-signature');
+test('dropped: a replay, a field past its size limit, a bad seq, nothing to say', async () => {
+  const m = await note.build({ seq: 7, reason: 'fine' });
+  assert.equal(note.verify(m, { seen: new Set([m.nonce]) }).reason, 'replayed');
+  await assert.rejects(note.build({ seq: 7, reason: 'x'.repeat(note.MAX_REASON + 1) }), /too long/);
+  /* the limits are in bytes, and the app enforces them too - a note it gets is not trusted to be build()'s */
+  assert.equal(note.verify({ ...m, reason: 'x'.repeat(note.MAX_REASON + 1) }).reason, 'malformed');
+  assert.equal(note.verify({ ...m, reason: '\u00e9'.repeat(note.MAX_REASON / 2 + 1) }).reason, 'malformed', 'bytes, not characters');
+  assert.equal(note.verify({ ...m, receiptMsg: 'x'.repeat(note.MAX_RECEIPT_MSG + 1) }).reason, 'malformed');
+  assert.equal(note.verify({ ...m, txRefused: 'x'.repeat(note.MAX_TX_REFUSED + 1) }).reason, 'malformed');
+  assert.deepEqual(note.verify({ ...m, reason: 'x'.repeat(note.MAX_REASON) }), { ok: true }, 'the limit itself fits');
+  assert.equal(note.verify({ ...m, seq: -1 }).reason, 'malformed');
+  assert.equal(note.verify({ ...m, reason: undefined }).reason, 'malformed');
 });
 
 test('no reason and an empty reason are different notes', async () => {
-  const empty = await note.build({ signer: AGENT, seq: 3, reason: '', receiptMsg: 'm' });
-  assert.equal(note.verify({ ...empty, reason: undefined }, { registered }).reason, 'bad-signature');
+  const empty = await note.build({ seq: 3, reason: '', receiptMsg: 'm' });
+  assert.equal(empty.reason, '');
+  assert.deepEqual(note.verify(empty), { ok: true });
+  assert.deepEqual(note.verify({ ...empty, receiptMsg: undefined }), { ok: true }, 'an empty reason is still something said');
+  assert.equal(note.verify({ ...empty, reason: undefined, receiptMsg: undefined }).reason, 'malformed');
 });
 
 /* the client sends them: the reason after a paid use, the message after its receipt, a refused TX start */
@@ -47,18 +54,18 @@ test('the edge client sends a note for a use (its reason), its receipt (the mess
   const channel = {
     async send(msg) {
       if (msg.type === note.TYPE) {
-        assert.deepEqual(note.verify(msg, { registered, seen }), { ok: true });
+        assert.deepEqual(note.verify(msg, { seen }), { ok: true });
         notes.push(msg);
         return { ok: true };
       }
       const r = await approve.approveRequest(msg, {
-        edge, registered, seen, ask: async () => 'approve',
+        edge, seen, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
       });
       return r.dropped ? null : r;
     },
   };
-  const c = client.createEdgeClient({ edge, channel, signer: AGENT });
+  const c = client.createEdgeClient({ edge, channel });
   const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: 'ssh://agent@nitro16' }], ttlMinutes: 10 });
   const used = await b.use(Uint8Array.from([1, 2]), (x) => transport.use(x, { slot: 222 }), { reason: 'git push origin master' });
   assert.deepEqual(notes.map((n) => [n.seq, n.reason]), [[used.link.seq, 'git push origin master']]);

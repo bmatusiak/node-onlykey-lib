@@ -9,8 +9,8 @@
  *   edge exec --head H --intent "…" -- <command…>           run one command; its signature is paid by the budget,
  *                                                           its intent welded into the link (R13b)
  *   edge receipt <seq> [--code OK] --msg "…"                 file the receipt; prints the next head
- *   edge sync [--status] | sync --with <address>            the PC's copy of the key's chain (R27), and your other devices' logs offered;
- *                                                           a phone holds an offered log until you approve the merge
+ *   edge sync [--status]                                    one phone at a time: its log into this PC's copy, and every other
+ *                                                           device's log this PC holds offered to it (held until approved)
  *   edge status | end                                       the budget, its head, receipts owed | end it
  *   edge watch [--once]                                     follow the key's links live (read-only)
  *
@@ -31,7 +31,7 @@ const { codes, grants } = require('../src');
 /* edge watch: what each link's op is called */
 const OP_NAME = {
   1: 'sign', 2: 'decrypt', 6: 'budget opened', 7: 'budget ended',
-  8: 'receipt', 11: 'LOSS', 13: 'hold', 14: 'resume', 15: 'agent registered', 16: 'continue',
+  8: 'receipt', 11: 'LOSS', 13: 'hold', 14: 'resume', 15: 'agent registered (retired)', 16: 'continue',
 };
 /* reasons and receipt messages are the agent's own untrusted text: one plain line, never interpreted */
 const plain = (t) => String(t).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
@@ -140,17 +140,6 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     }
     if (cmd === 'sync') {
       /* mcp-service.md 4.2b: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone, which holds it until the person approves the merge (2026-10-08) */
-      if (args.includes('--with')) {
-        /* each phone's log offered to the other - held there until you approve (2026-10-08) */
-        const address = opt(args, '--with');
-        if (!address || address.startsWith('--')) { err('onlykey-js edge sync --with <the other phone\'s Bluetooth address>'); return 2; }
-        const r = await ask('sync-with', { address }, { timeoutMs: 300000 });
-        for (const [what, x] of [['this phone', r.this], ['the other phone', r.other]]) {
-          if (!x.ok) out(`${what} ("${x.nametag}"): not offered - ${x.error}`);
-          else out(`${what} ("${x.nametag}"): holds "${x.offered.nametag}" up to #${x.offered.seq} (${x.sent} link${x.sent === 1 ? '' : 's'} sent) - approve it from its Edge tab banner`);
-        }
-        return r.this.ok && r.other.ok ? 0 : 1;
-      }
       const status = args.includes('--status');
       const r = await ask('sync', { status }, { timeoutMs: 120000 });
       for (const l of require('./copy').lines(r, { status })) out(l);
@@ -242,7 +231,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         await new Promise((r) => setTimeout(r, 2000));
       }
     }
-    err('onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync | register | agent');
+    err('onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync | setup | agent');
     return 2;
   } catch (e) {
     err(`onlykey-js edge: ${e.message}`);

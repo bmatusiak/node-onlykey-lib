@@ -12,7 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const copy = require('../cli/copy');
-const { loadConfig, agentKeys } = require('../cli/register');
+const { loadConfig, budgetStore } = require('../cli/register');
 
 const id = new Uint8Array(16).fill(3);
 const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okv1-'));
@@ -34,11 +34,13 @@ test('a budget store from before the clean start is read as empty; what is writt
   try {
     fs.mkdirSync(h, { recursive: true });
     fs.writeFileSync(path.join(h, 'budgets.json'), JSON.stringify({ 'okedge.budget.7': '{"grantId":7}' }));
-    const { store } = agentKeys(h);
+    /* budgetStore was agentKeys until 2026-10-08 (Brad: "lets cut it out") - the store only, no agent.key */
+    const { store } = budgetStore(h);
     assert.equal(await store.get('okedge.budget.7'), null);
     await store.set('okedge.budget.9', '{"grantId":9}');
     const all = JSON.parse(fs.readFileSync(path.join(h, 'budgets.json'), 'utf8'));
     assert.deepEqual(all, { v: 1, 'okedge.budget.9': '{"grantId":9}' });
+    assert.equal(fs.existsSync(path.join(h, 'agent.key')), false, 'no agent key is made any more');
   } finally {
     fs.rmSync(h, { recursive: true, force: true });
   }

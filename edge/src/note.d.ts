@@ -2,18 +2,8 @@ export const TYPE: "EDGE_NOTE";
 export const MAX_REASON: 280;
 export const MAX_RECEIPT_MSG: 1024;
 export const MAX_TX_REFUSED: 64;
-/** The signed bytes of a note. */
-export function body({ agent, nonce, seq, reason, receiptMsg, txRefused }: {
-    agent: any;
-    nonce: any;
-    seq: any;
-    reason: any;
-    receiptMsg: any;
-    txRefused: any;
-}): Uint8Array<ArrayBuffer>;
-/** The agent side: a signed note about `seq`. */
-export function build({ signer, seq, reason, receiptMsg, txRefused, nonce }: {
-    signer: any;
+/** The asking side: a note about `seq`. */
+export function build({ seq, reason, receiptMsg, txRefused, nonce }: {
     seq: any;
     reason: any;
     receiptMsg: any;
@@ -25,17 +15,14 @@ export function build({ signer, seq, reason, receiptMsg, txRefused, nonce }: {
     reason?: string | undefined;
     type: string;
     v: number;
-    agent: string;
     nonce: string;
     seq: any;
 }>;
 /**
- * The app side: a note from a registered agent, signed, well formed and new.
- * registered: agent public keys (hex) registered with a press; seen: nonces
- * already taken. -> {ok} or {ok: false, reason: 'malformed' | 'unregistered' |
- * 'bad-signature' | 'replayed'}. An app DROPS the rest.
+ * The app side: a note well formed and new. seen: nonces already taken. -> {ok} or {ok: false,
+ * reason: 'malformed' | 'replayed'}. An app DROPS the rest. Who sent it is the paired computer.
  */
-export function verify(msg: any, { registered, seen }?: {}): {
+export function verify(msg: any, { seen }?: {}): {
     ok: boolean;
     reason: string;
 } | {

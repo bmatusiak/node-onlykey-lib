@@ -65,7 +65,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
   /* one approved use that owes (R16: the key marked it owes_receipt - a pressed use on a covered slot), so there is something to pick up and receipt */
   append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_RECEIPT, subject: new Uint8Array(32).fill(9) });
   owed = [0];
-  /* seq . head: RECEIPT's, WAIVE's, LOSS's and AGENT_ADD's answer (no vouch tag since 2026-10-08) */
+  /* seq . head: RECEIPT's, WAIVE's and LOSS's answer (no vouch tag since 2026-10-08) */
   const seqHead = () => report([...u32(held.length - 1), ...head]);
   let staged = {}; /* R11a: GRANT_LABEL's labels, by scope index, for the next GRANT_CREATE */
 
@@ -180,19 +180,19 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         if (next <= held.length - 1 && next >= held.length - 8) subject.set(H(held[next].link).slice(0, 28), 4);
         append({ op: codes.OP.LOSS, decision: 1, flags: 1, grantId: from, subject });
         emit(seqHead());
-      } else if (sub === 0x15) {
-        /* 4.7a AGENT_ADD {agent key}, pressed */
-        append({ op: codes.OP.AGENT_ADD, decision: 1, flags: 1, grantId: 0, subject: grants.agentSubject(arg.slice(0, 32)) });
-        emit(seqHead());
       } else {
+        /* any other sub-op, 0x15 too (AGENT_ADD, retired 2026-10-08 - Brad: "lets cut it out"): EDGE_UNKNOWN_REQUEST, as the firmware */
         emit(status(0x0a));
       }
     },
   };
   transport.writes = writes;
   transport.started = () => started;
-  /* a test link that IS Edge's own (a pressed agent registration, no receipt owed) - ordinary presses write none (2026-10-06) */
-  transport.edgeRecord = () => append({ op: codes.OP.AGENT_ADD, decision: codes.DECISION.APPROVE, slot: 0, flags: codes.FLAG.PRESS_OBSERVED, subject: require('node:crypto').randomBytes(32) });
+  /*
+   * a test link that IS Edge's own (a pressed sign a budget paid, no receipt owed) - ordinary presses write none (2026-10-06).
+   * It was a pressed agent registration until 2026-10-08 (Brad: "so the claude key thing is overkill"): AGENT_ADD is gone.
+   */
+  transport.edgeRecord = () => append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED, subject: require('node:crypto').randomBytes(32) });
   /* the soft key's idle restart / a lock: live budgets live in RAM and are gone, with no link written */
   transport.restart = () => { live.length = 0; onHold.clear(); };
   /*

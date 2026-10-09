@@ -30,9 +30,10 @@ const { codes, chain, receipts, copy: copyCheck } = require('../src');
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, STATEMENT: 0x06,
+  /* R31: DEBUG firmware only - a production key answers it as unknown (EDGE:0A) */
+  WIPE_DEBUG: 0x7e,
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
   RECEIPT: 0x20, WAIVE: 0x21, TX_START: 0x22, LOSS: 0x34,
-  AGENT_ADD: 0x15,
   /*
    * No peer, sibling, sync, anchor, vouch or replay sub-op (Brad, 2026-10-08): pairing and
    * sync are the app's ("pairing and sync is all app stuff, not firmware"), and a restore
@@ -367,6 +368,17 @@ function setup(imports, register) {
      * Another device of yours checks it with grants.verifyStatement against ITS owner key.
      * -> {deviceId, publicKey, seq (null = no link yet), nametag, ownerKey, signature}
      */
+    /**
+     * R31, DEBUG FIRMWARE ONLY: the key erases its Edge region (state, salt) and starts a fresh
+     * chain - a new device id; no key outside the Edge region is touched. A production key
+     * answers it as an unknown request, so this rejects there. For a dev reset (Brad,
+     * 2026-10-08: "need to reset the blockchain on the live to clear the contaminate").
+     */
+    async wipeDebug(opts) {
+      await call(SUB.WIPE_DEBUG, new Uint8Array(0), opts);
+      return { wiped: true };
+    },
+
     async statement(nametag, opts) {
       const { grants } = require('../src');
       const tag = String(nametag ?? '').trim();
@@ -568,17 +580,6 @@ function setup(imports, register) {
       },
     },
 
-    /**
-     * mcp-service.md 4.7a: register an agent's key - the person's Yes in the
-     * app first, then a PHYSICAL press; the key links op = agent-add with
-     * subject grants.agentSubject(key). -> {seq, head}
-     */
-    async agentAdd(agentKey, { onPress, timeoutMs = 30000 } = {}) {
-      if (!(agentKey instanceof Uint8Array) || agentKey.length !== 32) throw new TypeError('Edge: agentAdd needs a 32-byte Ed25519 key');
-      const pending = pressed(SUB.AGENT_ADD, agentKey, { timeoutMs, newLink: true }, onPress);
-      const [r] = await pending;
-      return seqHead(r);
-    },
 
     /**
      * R24: the person accepts #from..#to as unrecoverable - a PHYSICAL press

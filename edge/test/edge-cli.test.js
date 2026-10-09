@@ -22,7 +22,7 @@ require('../cli/control').setHome(HOME); /* a test home: setHome, never the env 
 
 const openpgp = require('../../src/vendor/openpgp/openpgp.js');
 const pgpCert = require('../../src/crypto/pgp-cert.js');
-const { request, approve, client, codes, chain, grants } = require('../src');
+const { approve, client, codes, chain, grants } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 const agentProto = require('../../src/protocol/agent');
 const { createEdgeAgent, controlHandlers } = require('../cli/agent');
@@ -30,7 +30,6 @@ const { serveControl } = require('../cli/control');
 /* onlykey-js edge's commands (edge/cli/commands.js; okedge is gone, 2026-10-06) over the real control endpoint, with the dev set */
 const okedge = { main: (args, io = {}) => require('../cli/commands').main(args, { ask: require('../cli/control').ask, dev: require('../cli/dev'), ...io }) };
 
-const AGENT = request.signerFromSecret(new Uint8Array(32).fill(41));
 const hex = (b) => Buffer.from(b).toString('hex');
 const SHIM = path.resolve(__dirname, '..', 'cli', 'gpg-shim.js').replace(/\\/g, '/');
 
@@ -57,13 +56,13 @@ async function stack() {
     async send(msg) {
       if (msg.type === require('../src').note.TYPE) { notes.push(msg); return { ok: true }; }
       const r = await approve.approveRequest(msg, {
-        edge, registered: [hex(AGENT.publicKey)], seen, ask: async () => 'approve',
+        edge, from: 'pc-nitro16', seen, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
       });
       return r.dropped ? null : r;
     },
   };
-  const c = client.createEdgeClient({ edge, channel, signer: AGENT });
+  const c = client.createEdgeClient({ edge, channel });
   const sshIdentity = { ssh: { user: 'claude', host: 'test' } };
   const gpgIdentity = { gpg: 'Claude (agent) <claude@test>' };
   const sshRaw = await device.publicKey(sshIdentity);

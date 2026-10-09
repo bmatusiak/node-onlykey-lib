@@ -25,7 +25,7 @@ const OP = Object.freeze({
   /* firmware.md R15a - appended last so the numbers above never move */
   GRANT_HOLD: 13,
   GRANT_RESUME: 14,
-  /* mcp-service.md 4.7a: an agent's key registered with a press (subject = grants.agentSubject) */
+  /* RETIRED 2026-10-08 (Brad: "so the claude key thing is overkill"): the key no longer writes it; kept so a chain that has one still reads; never reused */
   AGENT_ADD: 15,
   /*
    * CONTINUE (R28) - the FIRST link of a device's own chain: the next seq after the chain

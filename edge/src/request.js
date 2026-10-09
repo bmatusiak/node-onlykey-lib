@@ -9,7 +9,6 @@
  * the APP (ok-rn), never to the key, and the app builds what the key gets:
  *
  *   { type: 'EDGE_REQUEST', v: 1,
- *     agent:  the agent service's registered Ed25519 public key (hex),
  *     nonce:  16 random bytes (hex) - an app drops one it has seen,
  *     reason: the text the person reads,
  *     scopes: [{ op: 'sign' | 'decrypt', slot, cap, identity? }],
@@ -17,36 +16,29 @@
  *             required on a derived code (R11a), never a hash,
  *     lifetime: minutes, REQUIRED (1 minute .. 24 hours; never the key's 12 h default),
  *     continue?: a budget id - "continues <budget>": the same scopes, new
- *             uses and a new lifetime, opened with a press like a new budget,
- *     signature: Ed25519 over body(), by the agent key (hex) }
+ *             uses and a new lifetime, opened with a press like a new budget }
  *
  * Every hash the key gets - the identity labels, the reason hash - the APP
  * makes from the names and the text. A request carrying hashes of its own
  * (reasonHash, label, labels ...) is not read for them: nothing here looks.
  *
- * Before an agent may ask, its key is registered ONCE, with a press:
- *
- *   { type: 'EDGE_REGISTER', v: 1, agent, name, nonce, signature }
- *
- * signed by the agent key itself (it holds the secret). Until then an app
- * refuses the agent's requests without reading them.
+ * WHO ASKS is the Bluetooth pairing (Brad, 2026-10-08: "so the claude key thing is overkill";
+ * "lets cut it out"): the phone takes a request only inside the encrypted session of a computer
+ * paired with its 6-digit code, and names that computer on the sheet. No agent key, no signature,
+ * no registration - the pairing already proves which computer it is, and Revoke cuts it off.
  *
  * Channels: Bluetooth first (the phone's vendor bridge keeps it for the app),
  * the Worker mailbox later (sealed). Pure: no device, no Node built-ins.
  */
 
 const crypto = require('../../src/crypto/provider');
-const { ed25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 const { randomBytes } = require('../../src/vendor/exports/@noble/ciphers/utils.js');
-const { utf8ToBytes, toHex, fromHex } = require('../../src/bytes');
+const { utf8ToBytes, toHex } = require('../../src/bytes');
 const { OP } = require('./codes');
 const grants = require('./grants');
 
 const TYPE = 'EDGE_REQUEST';
-const REGISTER_TYPE = 'EDGE_REGISTER';
-const BODY_TAG = 'OKEDGE-REQUEST-v1';
-const REGISTER_TAG = 'OKEDGE-REGISTER-v1';
 /* D4 (Brad, 2026-10-03): at most 300 uses per budget */
 const MAX_REQUEST_USES = 300;
 /* CHOSEN: a request names its lifetime, 1 minute to 24 hours; the firmware's own default (12 h) is not implied */
@@ -57,85 +49,19 @@ const MAX_LIFETIME_MINUTES = 24 * 60;
 const REFUSALS = Object.freeze(['declined', 'timeout', 'copy_unverified', 'receipt_owed', 'still_live', 'invalid', 'busy']);
 const OPS = Object.freeze({ sign: OP.SIGN, decrypt: OP.DECRYPT });
 
-const u16 = (n) => Uint8Array.of(n & 0xff, (n >>> 8) & 0xff);
-const u32 = (n) => Uint8Array.of(n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff);
+const isHex = (s, n) => typeof s === 'string' && s.length === n * 2 && /^[0-9a-f]+$/i.test(s);
 const isU32 = (n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
-const concat = (parts) => {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) { out.set(p, at); at += p.length; }
-  return out;
-};
 
-/*
- * The signed bytes: one unambiguous encoding, so the app checks exactly what
- * the agent signed - every length is written, nothing is JSON-dependent.
- */
-function body({ agent, nonce, reason, scopes, lifetime, continue: cont }) {
-  const reasonBytes = utf8ToBytes(String(reason));
-  if (reasonBytes.length > 0xffff) throw new RangeError('edge request: the reason is too long');
-  const parts = [utf8ToBytes(BODY_TAG), fromHex(agent), fromHex(nonce), u16(reasonBytes.length), reasonBytes, Uint8Array.of(scopes.length)];
-  for (const s of scopes) {
-    const name = utf8ToBytes(s.identity || '');
-    if (name.length > 0xff) throw new RangeError('edge request: an identity name is too long');
-    parts.push(Uint8Array.of(OPS[s.op] || 0, s.slot & 0xff), u16(s.cap), Uint8Array.of(name.length), name);
-  }
-  parts.push(u16(lifetime));
-  /* a continue adds its tail; a request without one ends at the lifetime (the length tells them apart) */
-  if (cont !== undefined && cont !== null) parts.push(Uint8Array.of(1), u32(cont));
-  return concat(parts);
-}
-
-/**
- * The agent side: a signed request. signer: {publicKey: 32 bytes,
- * sign(bytes) -> 64 bytes (sync or async)} - the agent service's own key.
- */
-async function build({ signer, reason, scopes, lifetime, continueOf = null, nonce = randomBytes(16) }) {
-  const msg = {
+/** The asking side (an agent on a paired computer): a request. */
+async function build({ reason, scopes, lifetime, continueOf = null, nonce = randomBytes(16) }) {
+  return {
     type: TYPE, v: 1,
-    agent: toHex(signer.publicKey),
     nonce: toHex(nonce),
     reason: String(reason),
     scopes: scopes.map((s) => ({ op: s.op, slot: s.slot, cap: s.cap, ...(s.identity ? { identity: String(s.identity) } : {}) })),
     lifetime,
     ...(continueOf !== null && continueOf !== undefined ? { continue: continueOf } : {}),
   };
-  msg.signature = toHex(await signer.sign(body(msg)));
-  return msg;
-}
-
-/* the signed bytes of a registration: proof the agent holds the key it registers */
-function registerBody({ agent, nonce, name }) {
-  const n = utf8ToBytes(String(name));
-  if (n.length > 0xff) throw new RangeError('edge register: the name is too long');
-  return concat([utf8ToBytes(REGISTER_TAG), fromHex(agent), fromHex(nonce), Uint8Array.of(n.length), n]);
-}
-
-/** The agent side: ask to be registered, under a name the person reads. */
-async function buildRegister({ signer, name, nonce = randomBytes(16) }) {
-  const msg = { type: REGISTER_TYPE, v: 1, agent: toHex(signer.publicKey), name: String(name), nonce: toHex(nonce) };
-  msg.signature = toHex(await signer.sign(registerBody(msg)));
-  return msg;
-}
-
-/** The app side: a registration signed by the key it names, and new. -> {ok} or {ok: false, reason} */
-function verifyRegister(msg, { seen } = {}) {
-  if (!msg || msg.type !== REGISTER_TYPE || msg.v !== 1 || !isHex(msg.agent, 32) || !isHex(msg.nonce, 16) || !isHex(msg.signature, 64)
-    || typeof msg.name !== 'string' || !msg.name.trim() || utf8ToBytes(msg.name).length > 0xff) {
-    return { ok: false, reason: 'malformed' };
-  }
-  let good = false;
-  try {
-    good = crypto.ed25519Verify(fromHex(msg.signature), registerBody(msg), fromHex(msg.agent));
-  } catch { good = false; }
-  if (!good) return { ok: false, reason: 'bad-signature' };
-  if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
-  return { ok: true };
-}
-
-/* an Ed25519 signer from a 32-byte secret - the agent service's key, for tests and the CLI */
-function signerFromSecret(secret) {
-  return { publicKey: ed25519.getPublicKey(secret), sign: (bytes) => ed25519.sign(bytes, secret) };
 }
 
 /*
@@ -150,36 +76,18 @@ function peerSignerFromSecret(secret) {
   };
 }
 
-/* the agent key as the sheet and the agent both print it, so the person can compare: first 8 . last 8 hex */
-function fingerprint(agentHex) {
-  const h = String(agentHex).toLowerCase();
-  return `${h.slice(0, 8)}…${h.slice(-8)}`;
-}
-
-const isHex = (s, n) => typeof s === 'string' && s.length === n * 2 && /^[0-9a-f]+$/i.test(s);
-
 /**
- * The app side, first: is it a request from a registered agent, signed, and
- * new? registered: agent public keys (hex) the person registered with a press;
- * seen: the nonces already taken (a Set the app keeps). -> {ok} or {ok: false,
- * reason: 'malformed' | 'unregistered' | 'bad-signature' | 'replayed'}. An app
- * DROPS these - it answers nothing.
+ * The app side, first: is it a well-formed request, and new? seen: the nonces already taken
+ * (a Set the app keeps). -> {ok} or {ok: false, reason: 'malformed' | 'replayed'}. An app DROPS
+ * these - it answers nothing. Who asks was settled before: the paired computer's encrypted
+ * session (the phone's vendor bridge).
  */
-function verify(msg, { registered, seen }) {
-  /* who asks, first: an agent not registered is refused before anything else in its request is read */
-  if (!msg || msg.type !== TYPE || !isHex(msg.agent, 32)) return { ok: false, reason: 'malformed' };
-  const agent = msg.agent.toLowerCase();
-  if (!(registered || []).some((k) => String(k).toLowerCase() === agent)) return { ok: false, reason: 'unregistered' };
-  if (msg.v !== 1 || !isHex(msg.nonce, 16) || !isHex(msg.signature, 64)
+function verify(msg, { seen } = {}) {
+  if (!msg || msg.type !== TYPE || msg.v !== 1 || !isHex(msg.nonce, 16)
     || typeof msg.reason !== 'string' || !Array.isArray(msg.scopes) || !Number.isInteger(msg.lifetime)
     || (msg.continue !== undefined && !isU32(msg.continue))) {
     return { ok: false, reason: 'malformed' };
   }
-  let good = false;
-  try {
-    good = crypto.ed25519Verify(fromHex(msg.signature), body(msg), fromHex(msg.agent));
-  } catch { good = false; }
-  if (!good) return { ok: false, reason: 'bad-signature' };
   if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
   return { ok: true };
 }
@@ -220,26 +128,23 @@ function reasonHash(reason) {
 }
 
 /**
- * What the approval sheet shows: the text, the names, the caps, the lifetime,
- * who asks. ownIdentities: the person's own identity names (ok-rn's list,
- * starting with ssh://bmatusiak@localhost) - a scope naming one is marked own,
- * and the sheet shows a red warning and asks a second confirm (Brad, 2026-10-03).
+ * What the approval sheet shows: the text, the names (the identities the agent asks
+ * for), the caps, the lifetime (who asks - the paired computer - the app adds). No "yours" mark and no red warning since
+ * 2026-10-08 (Brad: "the agent can look at my keychain ... it can ask me to use it";
+ * he reads the identities on the sheet and decides).
  */
-function view(msg, { ownIdentities = [], covered = [] } = {}) {
-  const own = new Set(ownIdentities.map((n) => String(n)));
-  const scopes = msg.scopes.map((s) => ({ ...s, own: Boolean(s.identity && own.has(s.identity)) }));
+function view(msg, { covered = [] } = {}) {
+  const scopes = msg.scopes.map((s) => ({ ...s }));
   return {
-    agent: msg.agent,
     reason: msg.reason,
     lifetime: msg.lifetime,
     uses: msg.scopes.reduce((n, s) => n + s.cap, 0),
     scopes,
-    ownWarning: scopes.some((s) => s.own),
     continues: msg.continue === undefined ? null : msg.continue,
     /*
      * 4.7a: live budgets that already cover an identity (or slot) this request
      * names - "this agent already has N uses left on <identity> until <time>".
-     * [{identity?, slot, usesLeft, endsAt?, grantId, sameAgent}], from the app.
+     * [{identity?, slot, usesLeft, endsAt?, grantId, sameComputer}], from the app.
      */
     covered,
   };
@@ -255,8 +160,7 @@ function sameScopes(a, b) {
 }
 
 module.exports = {
-  TYPE, REGISTER_TYPE, MAX_REQUEST_USES, MAX_LIFETIME_MINUTES, REFUSALS,
-  body, build, signerFromSecret, verify, check, grantScopes, reasonHash, view, sameScopes,
-  registerBody, buildRegister, verifyRegister, fingerprint,
+  TYPE, MAX_REQUEST_USES, MAX_LIFETIME_MINUTES, REFUSALS,
+  build, verify, check, grantScopes, reasonHash, view, sameScopes,
   peerSignerFromSecret,
 };

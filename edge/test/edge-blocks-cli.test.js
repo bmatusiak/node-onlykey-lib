@@ -47,14 +47,30 @@ async function run(argv) {
   return { code, out, err };
 }
 
-test('sealsFromPhone reads the phone\'s last-batch fields: seals and anchored checkpoints', async () => {
+/*
+ * The GIVE is signed with this computer's sync key (peer.key); the client itself takes no
+ * signer since 2026-10-08 (Brad: "so the claude key thing is overkill"). What comes back:
+ * the seals, and the owner statement (null when the phone sends none) - no anchors.
+ */
+test('sealsFromPhone reads the phone\'s last-batch fields: the seals, and the statement when there is one', async () => {
   const s = sealAt(3);
-  const phone = { send: async (msg) => ({ ok: true, links: [], next: null, seals: [[s.seq, toHex(s.head), toHex(s.signature)]], seen: [] }) };
-  const c = client.createEdgeClient({ edge: {}, channel: phone, signer: require('../src/request').signerFromSecret(new Uint8Array(32).fill(2)) });
-  const got = await c.sealsFromPhone(require('../src/request').signerFromSecret(new Uint8Array(32).fill(2)), { deviceId: id });
+  const peer = require('../src/request').peerSignerFromSecret(new Uint8Array(32).fill(2));
+  const sent = [];
+  const phone = { send: async (msg) => { sent.push(msg); return { ok: true, links: [], next: null, seals: [[s.seq, toHex(s.head), toHex(s.signature)]], seen: [] }; } };
+  const c = client.createEdgeClient({ edge: {}, channel: phone });
+  const got = await c.sealsFromPhone(peer, { deviceId: id });
+  assert.deepEqual(Object.keys(got).sort(), ['seals', 'statement']);
   assert.equal(got.seals.length, 1);
   assert.equal(got.seals[0].seq, 3);
   assert.equal(toHex(got.seals[0].head), toHex(s.head));
+  assert.equal(toHex(got.seals[0].signature), toHex(s.signature));
+  assert.equal(got.statement, null, 'no statement from the phone');
+  assert.equal(sent[0].peer, toHex(peer.publicKey), 'the GIVE names this computer\'s sync key');
+  /* a phone that refuses, or answers nothing */
+  const refusing = client.createEdgeClient({ edge: {}, channel: { send: async () => ({ ok: false, refusal: 'busy' }) } });
+  await assert.rejects(refusing.sealsFromPhone(peer, { deviceId: id }), { code: 'EEDGE_REFUSED' });
+  const silent = client.createEdgeClient({ edge: {}, channel: { send: async () => null } });
+  await assert.rejects(silent.sealsFromPhone(peer, { deviceId: id }), (e) => e.code === 'EEDGE_NO_ANSWER' && /paired/.test(e.message));
 });
 
 test('keepSeals merges by seq, and edge blocks lists the verified blocks without a phone', async () => {

@@ -11,12 +11,11 @@ const assert = require('node:assert');
 const crypto = require('crypto');
 
 const openpgp = require('../../src/vendor/openpgp/openpgp.js');
-const { request, approve, client, chain } = require('../src');
+const { approve, client, chain } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 const agentProto = require('../../src/protocol/agent');
 const certLib = require('../../keychain/src/cert');
 
-const AGENT = request.signerFromSecret(new Uint8Array(32).fill(43));
 const hex = (b) => Buffer.from(b).toString('hex');
 const UID = 'Claude (test) 2026 <claude+agent@test>';
 const LABEL = `gpg://${UID}`;
@@ -48,13 +47,13 @@ async function stack() {
   const channel = {
     async send(msg) {
       const r = await approve.approveRequest(msg, {
-        edge, registered: [hex(AGENT.publicKey)], seen, ask: async () => 'approve',
+        edge, from: 'pc-nitro16', seen, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
       });
       return r.dropped ? null : r;
     },
   };
-  const c = client.createEdgeClient({ edge, channel, signer: AGENT });
+  const c = client.createEdgeClient({ edge, channel });
   /* a live budget that covers THIS label */
   const b = await c.request({ reason: 'work', scopes: [{ op: 'sign', slot: 221, cap: 4, identity: LABEL }], ttlMinutes: 60 });
   const links = async (n) => {

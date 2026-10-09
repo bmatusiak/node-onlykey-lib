@@ -330,7 +330,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
  * sign code (221), told apart by label (R11a); sizes come from the request
  * (D4, at most 300 together).
  */
-function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null, home = null, openOther = null, selfName = null }) {
+function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null, home = null }) {
   /*
    * identity: name another identity in the ssh scope (edge budget --identity) - for
    * rule-10 tests with an identity the phone marks as test. Such a budget cannot
@@ -357,6 +357,8 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
     feed: async ({ from = null, since = 0 }) => agent.feed({ from, since }),
     /* edge ping: a pure link test - the phone echoes (testing mode, encrypted only); no key, no budget */
     ping: async ({ size, wait }) => client.ping({ size, ...(wait ? { timeoutMs: Math.min(120, Number(wait)) * 1000 } : {}) }),
+    /* edge wipe (dev): the key's DEBUG-only Edge wipe - a production key refuses it */
+    'wipe-debug': async () => edge.wipeDebug(),
     budget: async ({ reason, uses, ttl }) => {
       const b = await client.request({ reason, scopes: scopes(uses || {}), ttlMinutes: ttl });
       agent.setBudget(b);
@@ -420,19 +422,12 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       }
       const signer = copy.peerSigner(where);
       const c = copy.load(where, Buffer.from(r.deviceId, 'hex'));
-      /* this PC's public Key Chain list goes too */
-      const kcFile = require('../../keychain/cli/record');
-      const myList = kcFile.load();
+      /*
+       * Device logs only: the Key Chain list is not Edge's (Brad, 2026-10-08: "Move it out of
+       * Edge") - it is the Key Chain plugin's and syncs on its own.
+       */
       try {
-        r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: `${require('os').hostname()} copies`, keychain: myList });
-        if (r.phone.keychain) {
-          /* the merged list back: kept only if it still holds every entry this PC had */
-          const check = require('../src').sync.checkTaken(myList, r.phone.keychain);
-          if (check.ok) kcFile.save(check.entries);
-          r.phone.keychainSaved = check.ok;
-          if (!check.ok) r.phone.keychainMissing = check.missing;
-          r.phone.keychain = r.phone.keychain.length;
-        }
+        r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: require('os').hostname() });
       } catch (e) {
         r.phone = { refused: e.message };
       }
@@ -455,9 +450,10 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         r.blocksError = e.message;
       }
       /*
-       * Your other devices' logs this computer holds (from sync --with, a hard key's later):
-       * offered to this phone, which HOLDS each one until you approve the merge from its
-       * Edge tab's banner (Brad, 2026-10-08). The phone sorts them (devices.classify).
+       * Your other devices' logs this computer holds (from syncing each of them, one phone at a
+       * time - Brad, 2026-10-08: "sync should only be 1 device at a time"; a hard key's later):
+       * offered to this phone, which HOLDS each one until you approve the merge from its Edge
+       * tab's banner. The phone sorts them (devices.classify).
        */
       r.offered = [];
       for (const other of copy.logsToOffer(where, c.deviceId)) {
@@ -469,52 +465,6 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         }
       }
       return r;
-    },
-    /*
-     * sync --with (2026-10-08): carry each phone's log to the other - read from each phone
-     * (its copy, no press) with its key's signed checkpoint and the phone's own statement
-     * (its nametag), kept on this computer too, then OFFERED to the other phone, which holds
-     * it until you approve. No pairing, no press, no link: the owner signature is what
-     * tells each phone the other is yours (Brad: "pairing and sync is all app stuff").
-     */
-    'sync-with': async ({ address }) => {
-      if (!edge) throw new Error('this agent service has no Edge key');
-      if (!openOther) throw new Error('this agent service cannot open a second phone');
-      if (!address) throw new Error('sync --with needs the other phone\'s Bluetooth address');
-      const where = home || require('./control').edgeHome();
-      const copy = require('./copy');
-      const signer = copy.peerSigner(where);
-      const hex = (b) => Buffer.from(b).toString('hex');
-      const other = await openOther(address);
-      try {
-        const sides = [{ edge, client, label: 'this phone' }, { edge: other.edge, client: other.client, label: 'the other phone' }];
-        for (const x of sides) {
-          const k = await x.edge.publicKey();
-          x.deviceId = k.deviceId;
-          x.publicKey = k.publicKey;
-        }
-        if (hex(sides[0].publicKey) === hex(sides[1].publicKey)) throw new Error('both links reach the same key - give the OTHER phone\'s address');
-        for (const x of sides) {
-          /* the checkpoint first: the phone's copy, read after, reaches at least that far */
-          x.checkpoint = await x.edge.checkpoint();
-          x.records = await x.client.copyFromPhone(signer, { deviceId: x.deviceId });
-          x.statement = (await x.client.sealsFromPhone(signer, { deviceId: x.deviceId })).statement;
-          if (!x.statement) throw new Error(`${x.label} has no nametag yet - set one in its Edge tab (Edge Management), then sync again`);
-          x.kept = copy.keepLog(where, { deviceId: x.deviceId, publicKey: x.publicKey, records: x.records, checkpoint: x.checkpoint, statement: x.statement });
-        }
-        const one = (p) => p.then((r) => ({ ok: true, ...r }), (e) => ({ ok: false, refusal: e.refusal || null, error: e.message }));
-        const [a, b] = sides;
-        const [onA, onB] = await Promise.all([
-          one(a.client.offerToPhone(signer, { deviceId: a.deviceId, chain: b.deviceId, records: b.records, checkpoint: b.checkpoint, statement: b.statement, name: require('os').hostname() })),
-          one(b.client.offerToPhone(signer, { deviceId: b.deviceId, chain: a.deviceId, records: a.records, checkpoint: a.checkpoint, statement: a.statement, name: require('os').hostname() })),
-        ]);
-        return {
-          this: { deviceId: hex(a.deviceId), nametag: a.statement.nametag, offered: { nametag: b.statement.nametag, seq: b.checkpoint.seq }, ...onA },
-          other: { deviceId: hex(b.deviceId), nametag: b.statement.nametag, offered: { nametag: a.statement.nametag, seq: a.checkpoint.seq }, ...onB },
-        };
-      } finally {
-        await other.close().catch(() => undefined);
-      }
     },
     end: async () => {
       const b = agent.budget();
@@ -577,7 +527,7 @@ async function openWithOneRetry(open, { waitMs = 5000, log = () => {} } = {}) {
   }
 }
 
-async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, openOther = null, selfName = null, onSilence = null, linkStats = null, serve = true }) {
+async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, onSilence = null, linkStats = null, serve = true }) {
   const wire = require('../../cli/ssh-wire');
   const sshPub = require('../../src/crypto/ssh-pub');
   const pgpCert = require('../../src/crypto/pgp-cert');
@@ -648,7 +598,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
     }
   }
 
-  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge, openOther, selfName });
+  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge });
   /* okedge status also says how the Bluetooth link has been: connects, reconnects, failures */
   const plainStatus = handlers.status;
   handlers.status = async (req) => ({ ...(await plainStatus(req)), link: linkStats ? linkStats() : null });

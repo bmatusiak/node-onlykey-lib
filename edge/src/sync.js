@@ -326,6 +326,12 @@ function anchorCheck({ records, publicKey, checkpoint, anchors = [] }) {
   const deviceId = chainLib.deviceIdOf(publicKey);
   const cp = { seq: checkpoint.seq, head: Uint8Array.from(checkpoint.head) };
   if (!chainLib.verifyCheckpoint({ deviceId, ...cp }, checkpoint.signature, publicKey)) return { ok: false, alarm: 'bad-checkpoint', seq: cp.seq };
+  /*
+   * A key with no link yet signs NO_SEQ (0xffffffff): an empty chain, checked at once. Read as a
+   * seq, the check counted toward four billion and the computer's sync hung (a new Pixel's first
+   * sync, 2026-10-08). A link offered past an empty checkpoint is not this chain's.
+   */
+  if (cp.seq === NO_SEQ) return records.length ? { ok: false, alarm: 'tampered', seq: cp.seq, detail: 'links offered past an empty checkpoint' } : { ok: true, verifiedThrough: -1, open: false };
   const newest = anchors.reduce((m, a) => (m === null || a.seq > m.seq ? a : m), null);
   if (newest && cp.seq < newest.seq) return { ok: false, alarm: 'rollback', seq: newest.seq, detail: `its head is #${cp.seq}, older than #${newest.seq} anchored before` };
   const upTo = records.filter((r) => chainLib.decodeLink(r.link).seq <= cp.seq);

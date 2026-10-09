@@ -30,14 +30,24 @@ function haltedPhone() {
   return pipe;
 }
 
-test('edge register against a halted soft key: stops at connect and says to restart ok-rn', async () => {
+/*
+ * was `edge register` until 2026-10-08 (Brad: "so the claude key thing is overkill" / "lets cut it out"):
+ * `edge setup` no longer touches the phone, so the command that connects here is `edge status`.
+ */
+test('edge status against a halted soft key: stops at connect and says to restart ok-rn', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-halted-'));
   const out = [];
   const err = [];
+  const io = {
+    out: (l) => out.push(l),
+    err: (l) => err.push(l),
+    start: () => assert.fail('setup connected to the phone'),
+  };
   try {
-    const code = await main(['edge', '--edge-home', home, 'register', 'test-agent', '--ssh', 'ssh://claude@test', '--gpg', 'Claude <claude@test>'], {
-      out: (l) => out.push(l),
-      err: (l) => err.push(l),
+    /* the agent's identities first - local, no phone */
+    assert.equal(await main(['edge', '--edge-home', home, 'setup', '--ssh', 'ssh://claude@test', '--gpg', 'Claude <claude@test>'], io), 0);
+    const code = await main(['edge', '--edge-home', home, 'status'], {
+      ...io,
       start: (opts) => startDesktop({ ...opts, pipe: haltedPhone() }),
     });
     assert.equal(code, 1);

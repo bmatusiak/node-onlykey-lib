@@ -249,15 +249,6 @@ function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signat
 }
 
 /*
- * AGENT_ADD's subject (mcp-service.md 4.7a): SHA256("OKEDGE-AGENT-v1" ||
- * the agent's Ed25519 key). The key links the registration; the app keeps the
- * list, and a copy shows when each agent was added with a press.
- */
-function agentSubject(agentKey) {
-  return H('OKEDGE-AGENT-v1', bytes32(agentKey, 'agentKey'));
-}
-
-/*
  * No peer, sibling or anchor subjects since 2026-10-08: pairing and sync are the app's
  * (Brad: "pairing and sync is all app stuff, not firmware"), so the key links none of them.
  */
@@ -312,7 +303,7 @@ function verifyStatement(statement, ownerKey) {
 }
 
 module.exports = {
-  agentSubject, NAMETAG_MAX, nametagHash, statementDigest, verifyStatement,
+  NAMETAG_MAX, nametagHash, statementDigest, verifyStatement,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, txToken, intentOf, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel,

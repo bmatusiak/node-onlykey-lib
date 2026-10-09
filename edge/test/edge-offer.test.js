@@ -85,3 +85,25 @@ test('an OFFER without a statement, or with a malformed checkpoint, is dropped b
     { ...good, payload: { ...good.payload, statement: { ...good.payload.statement, nametag: '  ' } } },
   ]) assert.equal(sync.verify(bad).ok, false);
 });
+
+
+/*
+ * A key with no link yet (a new phone's first sync, 2026-10-08) signs its checkpoint as NO_SEQ.
+ * The check read it as a seq and counted toward four billion: the computer's sync hung after the
+ * key's CHECKPOINT. Now: an empty chain checks at once, and the computer keeps nothing to offer.
+ */
+test('an empty chain (checkpoint NO_SEQ) checks at once and is not kept to offer', async () => {
+  const secret = p256.utils.randomSecretKey();
+  const e = edgeOver(fakeKey({ secret }));
+  const { publicKey, deviceId } = await e.publicKey();
+  const head = chain.genesis(deviceId);
+  const signature = chain.signCheckpoint({ deviceId, seq: sync.NO_SEQ, head }, secret);
+  const checkpoint = { seq: sync.NO_SEQ, head, signature };
+  const t0 = Date.now();
+  assert.deepEqual(sync.anchorCheck({ records: [], publicKey, checkpoint, anchors: [] }), { ok: true, verifiedThrough: -1, open: false });
+  assert.ok(Date.now() - t0 < 1000, 'checked at once');
+  const other = await deviceLog(1);
+  assert.equal(sync.anchorCheck({ records: other.log.records, publicKey, checkpoint, anchors: [] }).ok, false, 'links past an empty checkpoint');
+  const statement = await e.statement('Pixel');
+  assert.deepEqual(copy.keepLog(tmp(), { deviceId, publicKey, records: [], checkpoint, statement }), { kept: false, why: 'its key has no link yet' });
+});
