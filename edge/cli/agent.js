@@ -407,8 +407,15 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       if (!edge) throw new Error('this agent service has no Edge key to sync from');
       const where = home || require('./control').edgeHome();
       const copy = require('./copy');
-      const r = await copy.sync(edge, where, { status: !!status });
+      let r = await copy.sync(edge, where, { status: !!status });
       if (status || !phone) return r;
+      /* a gap only the phone can fill (a late or reset computer): its own copy, checked against the key (copy.sync) */
+      if (r.verdict.kind === 'gap') {
+        try {
+          const history = await client.copyFromPhone(copy.peerSigner(where), { deviceId: Buffer.from(r.deviceId, 'hex') });
+          if (history.length) r = await copy.sync(edge, where, { history });
+        } catch (e) { r.historyError = e.message; }
+      }
       /*
        * Phase 2: this PC's copy fills the phone's - only a copy that verifies (R27).
        * The phone HOLDS what it lacks until the person approves the merge from the
@@ -439,12 +446,16 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       try {
         const given = await client.sealsFromPhone(signer, { deviceId: c.deviceId });
         r.blocks = copy.keepSeals(where, c.deviceId, given);
+        if (given.openings && given.openings.length) r.openings = copy.keepOpenings(where, c.deviceId, given.openings);
+        if (given.notes) r.notes = copy.keepNotes(where, c.deviceId, given.notes);
         /* this phone's own statement (its nametag) and checkpoint: what lets this computer offer its log to your other devices */
         if (given.statement) {
           const mine = copy.load(where, c.deviceId);
           mine.statement = given.statement;
           mine.checkpoint = await edge.checkpoint();
-          copy.keepLog(where, { deviceId: c.deviceId, publicKey: mine.publicKey, records: mine.links, checkpoint: mine.checkpoint, statement: mine.statement });
+          r.log = copy.keepLog(where, { deviceId: c.deviceId, publicKey: mine.publicKey, records: mine.links, checkpoint: mine.checkpoint, statement: mine.statement });
+        } else {
+          r.log = { kept: false, why: 'the phone gave no nametag statement' };
         }
       } catch (e) {
         r.blocksError = e.message;
@@ -458,7 +469,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       r.offered = [];
       for (const other of copy.logsToOffer(where, c.deviceId)) {
         try {
-          const o = await client.offerToPhone(signer, { deviceId: c.deviceId, chain: other.deviceId, records: other.links, checkpoint: other.checkpoint, statement: other.statement, name: `${require('os').hostname()}` });
+          const o = await client.offerToPhone(signer, { deviceId: c.deviceId, chain: other.deviceId, records: other.links, checkpoint: other.checkpoint, statement: other.statement, openings: other.openings || [], notes: other.notes || null, name: `${require('os').hostname()}` });
           r.offered.push({ deviceId: Buffer.from(other.deviceId).toString('hex'), nametag: other.statement.nametag, ...o });
         } catch (e) {
           r.offered.push({ deviceId: Buffer.from(other.deviceId).toString('hex'), nametag: other.statement.nametag, error: e.message });

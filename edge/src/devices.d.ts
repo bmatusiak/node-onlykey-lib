@@ -58,3 +58,37 @@ export function remember(devices: any, statement: any, { at }?: {
 }): any;
 /** A device's stored statements as verifyStatement takes them. */
 export function statementsOf(device: any): any;
+export function checkOpenings({ deviceId, publicKey, records, openings }: {
+    deviceId: any;
+    publicKey: any;
+    records: any;
+    openings: any;
+}): {
+    from?: any;
+    opened?: any;
+    grantId: any;
+    reason: any;
+    scopes: any;
+    uses: any;
+    lifetime: any;
+    genesis: string;
+    signature: string;
+}[];
+export function shapeNotes(notes: any): {
+    reasons: {};
+    messages: {};
+    seen: {};
+};
+export function completeness({ deviceId, publicKey, records, openings, notes }: {
+    deviceId: any;
+    publicKey: any;
+    records: any;
+    openings: any;
+    notes: any;
+}): {
+    ok: boolean;
+    missing: string[];
+} | {
+    ok: boolean;
+    missing?: undefined;
+};

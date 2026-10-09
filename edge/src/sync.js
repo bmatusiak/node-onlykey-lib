@@ -140,7 +140,9 @@ function verify(msg, { seen } = {}) {
     if (!isHex(p.sid, 8) || !isHex(p.chain, 16) || !Number.isInteger(p.linkParts) || p.linkParts < 0 || p.linkParts > 255
       || !c || !u32ok(c.seq) || !isHex(c.head, 32) || !isHex(c.signature, 64)
       || !st || !isHex(st.publicKey, 64) || !(st.seq === null || u32ok(st.seq)) || typeof st.nametag !== 'string' || !st.nametag.trim()
-      || utf8ToBytes(st.nametag).length > 0xff || !isHex(st.signature, 64)) {
+      || utf8ToBytes(st.nametag).length > 0xff || !isHex(st.signature, 64)
+      || (p.openings !== undefined && (!Array.isArray(p.openings) || p.openings.length > 500 || p.openings.some((o) => !o || typeof o !== 'object')))
+      || (p.notes !== undefined && (!p.notes || typeof p.notes !== 'object'))) {
       return { ok: false, reason: 'malformed' };
     }
   }
@@ -283,11 +285,15 @@ async function buildKeychain({ signer, deviceId, sid, entries }) {
  * checkpoint: {seq, head, signature}; statement: {publicKey, seq, nametag, signature} (as
  * plugin.statement gives it, or as that device's phone kept it).
  */
-function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement }) {
+function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement, openings = [], notes = null }) {
   return sign(OFFER_TYPE, signer, {
     sid, deviceId: toHex(deviceId), chain: toHex(chainId), linkParts,
     checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature) },
     statement: { publicKey: toHex(statement.publicKey), seq: statement.seq ?? null, nametag: String(statement.nametag), signature: toHex(statement.signature) },
+    /* the budgets' opening words (devices.checkOpenings) - the receiving phone checks each against the log */
+    openings: (openings || []).slice(0, 500),
+    /* its notes, intents and receipt messages by seq - each screen checks them against the chain's hashes */
+    notes: require('./devices').shapeNotes(notes),
   });
 }
 

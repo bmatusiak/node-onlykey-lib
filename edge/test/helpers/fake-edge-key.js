@@ -107,7 +107,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       } else if (sub === 0x20) {
         const ref = arg[0] | (arg[1] << 8);
         if (!owed.includes(ref)) return emit(status(0x08));
-        append({ op: codes.OP.RECEIPT, decision: arg[4], subject: new Uint8Array(32), grantId: ref });
+        /* the subject as the firmware makes it: the use's head, the code, the message hash - so a message can be checked against it (devices.completeness) */
+        append({ op: codes.OP.RECEIPT, decision: arg[4], subject: receipts.receiptSubject({ refSeq: ref, refHead: held[ref].head, code: arg[4], msgHash: arg.slice(5, 37) }), grantId: ref });
         owed = owed.filter((q) => q !== ref);
         emit(seqHead());
       } else if (sub === 0x22) {

@@ -97,4 +97,118 @@ function statementsOf(device) {
   }));
 }
 
-module.exports = { classify, nametagOf, remember, statementsOf };
+/*
+ * FULL CARDS FOR YOUR OTHER DEVICES (Brad, 2026-10-09: "full cards, i want to see them in the
+ * budget history list"). A budget's words - reason, scopes with identity names, lifetime - live
+ * only on the phone that opened it; the chain holds their hash (the grant-create subject). An
+ * OPENING travels with that device's log, and is kept only when grants.verifyBudgetOpening
+ * proves it against the log itself: the grant-create link, the head before it, and the key's
+ * checkpoint signature from the press. Words that were made up do not match the subject.
+ *
+ *   opening: {grantId, reason, scopes: [{op, slot, cap, identity?}], uses, lifetime, genesis
+ *             (hex), signature (hex), opened? (ms, the opening phone's clock), from? (who asked)}
+ * -> the openings that check, as given (unknown fields dropped)
+ */
+function checkOpenings({ deviceId, publicKey, records, openings }) {
+  const chainLib = require('./chain');
+  const grants = require('./grants');
+  const receipts = require('./receipts');
+  const { fromHex } = require('../../src/bytes');
+  const id = Uint8Array.from(deviceId);
+  const pub = Uint8Array.from(publicKey);
+  const bySeq = new Map(records.map((r) => [chainLib.decodeLink(r.link).seq, r]));
+  const out = [];
+  for (const o of Array.isArray(openings) ? openings : []) {
+    try {
+      if (!o || !Number.isInteger(o.grantId) || typeof o.reason !== 'string' || o.reason.length > 4096 || !Array.isArray(o.scopes)
+        || o.scopes.length < 1 || o.scopes.length > 4 || !Number.isInteger(o.uses)) continue;
+      const scopes = o.scopes.map((s) => ({ op: s.op, slot: s.slot, cap: s.cap, ...(s.identity ? { identity: String(s.identity) } : {}) }));
+      const open = records.map((r) => chainLib.decodeLink(r.link)).find((f) => f.op === require('./codes').OP.GRANT_CREATE && f.grantId === o.grantId);
+      if (!open) continue;
+      const link = bySeq.get(open.seq);
+      const prevHead = open.seq === 0 ? chainLib.genesis(id) : bySeq.get(open.seq - 1) && bySeq.get(open.seq - 1).head;
+      if (!prevHead) continue;
+      const v = grants.verifyBudgetOpening({
+        deviceId: id, publicKey: pub, link: link.link, prevHead, head: link.head, signature: fromHex(String(o.signature)),
+        scopes, reasonHash: receipts.messageHash(o.reason), genesis: fromHex(String(o.genesis)), uses: o.uses, lifetime: o.lifetime || 0,
+      });
+      if (!v.ok) continue;
+      out.push({
+        grantId: o.grantId, reason: o.reason, scopes, uses: o.uses, lifetime: o.lifetime || 0, genesis: String(o.genesis).toLowerCase(),
+        signature: String(o.signature).toLowerCase(), ...(Number.isFinite(o.opened) ? { opened: o.opened } : {}), ...(typeof o.from === 'string' ? { from: o.from.slice(0, 64) } : {}),
+      });
+    } catch { /* not an opening of this log */ }
+  }
+  return out;
+}
+
+/*
+ * A DEVICE'S NOTES, as they travel with its log (Brad, 2026-10-09: "all the data i see on the a13
+ * should be just like on the pixel"): the intent each use was for and each receipt's message, by
+ * seq - the words the chain holds only as hashes (the intent welded into the use's link, the
+ * message hash in the receipt link). Every screen checks them against those hashes when it draws
+ * them, so here they are only bounded and shaped: {reasons: {seq: text}, messages: {seq: text}}.
+ */
+function shapeNotes(notes) {
+  const out = { reasons: {}, messages: {}, seen: {} };
+  if (!notes || typeof notes !== 'object') return out;
+  for (const [kind, max] of [['reasons', 280], ['messages', 1024]]) {
+    const src = notes[kind] && typeof notes[kind] === 'object' ? notes[kind] : {};
+    for (const [k, v] of Object.entries(src).slice(-2000)) {
+      const seq = Number(k);
+      if (Number.isInteger(seq) && seq >= 0 && typeof v === 'string' && v.length <= max) out[kind][seq] = v;
+    }
+  }
+  /* when that device first stored each link (ITS clock - links carry no time), so its log reads the same everywhere */
+  const seen = notes.seen && typeof notes.seen === 'object' ? notes.seen : {};
+  for (const [k, v] of Object.entries(seen).slice(-2000)) {
+    const seq = Number(k);
+    if (Number.isInteger(seq) && seq >= 0 && Number.isFinite(v) && v > 0) out.seen[seq] = v;
+  }
+  return out;
+}
+
+/*
+ * A LOG IS COMPLETE BEFORE IT ENTERS ANOTHER DATA STORE (Brad, 2026-10-09: "dont use shortcut to
+ * validate syncd data, before mergering into another data store"; "a data store must contain all
+ * info about the usage of the credental, including the result"). Every use of the credential,
+ * checked against the chain itself - nothing taken on the sender's word:
+ *   - every budget opened in the log: its opening words, proved (checkOpenings);
+ *   - every use that carries an intent: the intent's words, matching the hash welded into its link;
+ *   - every use that owes a result: its RESULT - a receipt whose message matches the receipt's
+ *     hash, or a waive. A use still waiting, missing its receipt, or with a receipt alarm is not
+ *     complete yet.
+ * -> {ok: true} | {ok: false, missing: [why, ...]} (at most 20 reasons)
+ */
+function completeness({ deviceId, publicKey, records, openings, notes }) {
+  const chainLib = require('./chain');
+  const grants = require('./grants');
+  const receipts = require('./receipts');
+  const { OP } = require('./codes');
+  const { toHex: hex } = require('../../src/bytes');
+  const shaped = shapeNotes(notes);
+  const missing = [];
+  const decoded = records.map((r) => ({ r, f: chainLib.decodeLink(r.link) }));
+  const proved = new Set(checkOpenings({ deviceId, publicKey, records, openings }).map((o) => o.grantId));
+  for (const { f } of decoded) {
+    if (f.op === OP.GRANT_CREATE && !proved.has(f.grantId)) missing.push(`budget ${f.grantId}: its opening words did not arrive or do not match #${f.seq}`);
+  }
+  for (const { f } of decoded) {
+    const intent = f.intent instanceof Uint8Array && f.intent.some((b) => b !== 0) ? f.intent : null;
+    if (!intent) continue;
+    const text = shaped.reasons[f.seq];
+    if (text === undefined) missing.push(`#${f.seq}: its intent did not arrive`);
+    else if (hex(grants.intentOf(text)) !== hex(intent)) missing.push(`#${f.seq}: its intent does not match the chain`);
+  }
+  const paired = receipts.pairReceipts(records.map((r) => ({ link: r.link, head: r.head })), shaped.messages);
+  for (const u of paired.uses) {
+    if (u.status === 'no-receipt-owed') continue;
+    if (u.status === 'waived' || u.status === 'waived-unlisted') continue;
+    if (u.status !== 'receipted') { missing.push(`#${u.seq}: no result (${u.status})`); continue; }
+    if (u.message === null || u.message === undefined) missing.push(`#${u.seq}: the message of receipt #${u.receipt.seq} ${u.messageStatus === 'mismatch' ? 'does not match the chain' : 'did not arrive'}`);
+  }
+  for (const o of paired.orphans) missing.push(`#${o.seq}: a receipt that answers no use (${o.reason})`);
+  return missing.length ? { ok: false, missing: missing.slice(0, 20) } : { ok: true };
+}
+
+module.exports = { classify, nametagOf, remember, statementsOf, checkOpenings, shapeNotes, completeness };

@@ -183,6 +183,12 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
             nametag: string;
             signature: Uint8Array<ArrayBuffer>;
         } | null;
+        openings: any;
+        notes: {
+            reasons: {};
+            messages: {};
+            seen: {};
+        };
     }>;
     /**
      * OFFER ANOTHER DEVICE'S LOG (Brad, 2026-10-08: "if it has the private ecc key to sign
@@ -192,12 +198,14 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
      * phone HOLDS it; the person approves the merge later from the Edge tab's banner.
      * -> {sent, held (true when the phone kept it), count}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
      */
-    offerToPhone(peerSigner: any, { deviceId, chain, records, checkpoint, statement, name }: {
+    offerToPhone(peerSigner: any, { deviceId, chain, records, checkpoint, statement, openings, notes, name }: {
         deviceId: any;
         chain: any;
         records: any;
         checkpoint: any;
         statement: any;
+        openings?: never[] | undefined;
+        notes?: null | undefined;
         name: any;
     }): Promise<{
         sent: any;

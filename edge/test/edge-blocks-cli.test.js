@@ -59,7 +59,7 @@ test('sealsFromPhone reads the phone\'s last-batch fields: the seals, and the st
   const phone = { send: async (msg) => { sent.push(msg); return { ok: true, links: [], next: null, seals: [[s.seq, toHex(s.head), toHex(s.signature)]], seen: [] }; } };
   const c = client.createEdgeClient({ edge: {}, channel: phone });
   const got = await c.sealsFromPhone(peer, { deviceId: id });
-  assert.deepEqual(Object.keys(got).sort(), ['seals', 'statement']);
+  assert.deepEqual(Object.keys(got).sort(), ['notes', 'openings', 'seals', 'statement']);
   assert.equal(got.seals.length, 1);
   assert.equal(got.seals[0].seq, 3);
   assert.equal(toHex(got.seals[0].head), toHex(s.head));

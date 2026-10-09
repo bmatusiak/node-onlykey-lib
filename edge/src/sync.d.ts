@@ -26,7 +26,7 @@ export function buildGive({ signer, deviceId, from }: {
  * checkpoint: {seq, head, signature}; statement: {publicKey, seq, nametag, signature} (as
  * plugin.statement gives it, or as that device's phone kept it).
  */
-export function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement }: {
+export function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement, openings, notes }: {
     signer: any;
     deviceId: any;
     sid: any;
@@ -34,6 +34,8 @@ export function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, c
     linkParts: any;
     checkpoint: any;
     statement: any;
+    openings?: never[] | undefined;
+    notes?: null | undefined;
 }): Promise<{
     type: any;
     v: number;

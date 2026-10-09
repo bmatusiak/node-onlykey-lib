@@ -37,16 +37,18 @@ function copyFile(home, deviceId) {
 
 function load(home, deviceId) {
   const f = copyFile(home, deviceId);
-  if (!fs.existsSync(f)) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], checkpoint: null, statement: null };
+  if (!fs.existsSync(f)) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], checkpoint: null, statement: null, openings: [] };
   const s = JSON.parse(fs.readFileSync(f, 'utf8'));
   /* version 1 since the clean start: an older copy is the old chain's - read as no copy */
-  if (s.v !== 1) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], checkpoint: null, statement: null };
+  if (s.v !== 1) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], checkpoint: null, statement: null, openings: [] };
   return {
     deviceId,
     links: s.links.map((l) => ({ link: fromHex(l.link), head: fromHex(l.head), ...(l.reveal ? { reveal: fromHex(l.reveal) } : {}) })),
     lastSeen: s.lastSeen ? { seq: s.lastSeen.seq, head: fromHex(s.lastSeen.head) } : null,
     publicKey: s.publicKey ? fromHex(s.publicKey) : null,
     seals: (s.seals || []).map((x) => ({ seq: x.seq, head: fromHex(x.head), signature: fromHex(x.signature) })),
+    openings: Array.isArray(s.openings) ? s.openings : [],
+    notes: s.notes && typeof s.notes === 'object' ? s.notes : { reasons: {}, messages: {} },
     checkpoint: s.checkpoint ? { seq: s.checkpoint.seq, head: fromHex(s.checkpoint.head), signature: fromHex(s.checkpoint.signature) } : null,
     statement: s.statement ? { deviceId: fromHex(s.statement.deviceId), publicKey: fromHex(s.statement.publicKey), seq: s.statement.seq ?? null, nametag: s.statement.nametag, signature: fromHex(s.statement.signature) } : null,
   };
@@ -61,6 +63,8 @@ function save(home, c) {
     lastSeen: c.lastSeen ? { seq: c.lastSeen.seq, head: toHex(c.lastSeen.head) } : null,
     ...(c.publicKey ? { publicKey: toHex(c.publicKey) } : {}),
     seals: (c.seals || []).map((x) => ({ seq: x.seq, head: toHex(x.head), signature: toHex(x.signature) })),
+    ...(c.openings && c.openings.length ? { openings: c.openings } : {}),
+    ...(c.notes ? { notes: c.notes } : {}),
     ...(c.checkpoint ? { checkpoint: { seq: c.checkpoint.seq, head: toHex(c.checkpoint.head), signature: toHex(c.checkpoint.signature) } } : {}),
     ...(c.statement ? { statement: { deviceId: toHex(c.statement.deviceId), publicKey: toHex(c.statement.publicKey), seq: c.statement.seq ?? null, nametag: c.statement.nametag, signature: toHex(c.statement.signature) } } : {}),
   };
@@ -98,7 +102,7 @@ function verdictOf(a) {
  * edge: the Edge plugin (head, pickup, publicKey). -> a report; changes only the
  * PC's copy file, and only when what it would store verifies (no tampering).
  */
-async function sync(edge, home, { status = false } = {}) {
+async function sync(edge, home, { status = false, history = null } = {}) {
   const { publicKey, deviceId } = await edge.publicKey();
   const c = load(home, deviceId);
   const h = await edge.head();
@@ -106,6 +110,27 @@ async function sync(edge, home, { status = false } = {}) {
   const ringFrom = h.oldest === null ? keySeq + 1 : h.oldest;
   const candidate = { ...c, links: [...c.links], publicKey };
   let stopped = null;
+  /*
+   * THE PHONE'S HISTORY FILLS A GAP (2026-10-08, walking the setup flow): the key's ring holds
+   * only its newest links, so a computer that joins late - or whose copy was reset - began at
+   * the ring and could never check the chain from its genesis, so it never kept the phone's
+   * statement and never offered its log. `history`: the phone's own copy (client.copyFromPhone).
+   * Taken only as a run that follows from the start; assess() below then judges ALL of it
+   * against the KEY's head and ring - a link that does not weld onto the key's own chain makes
+   * the copy "does not verify", and nothing is kept.
+   */
+  if (history && history.length && (!candidate.links.length || seqOf(candidate.links[0]) > 0)) {
+    const run = [];
+    for (const r of [...history].sort((x, y) => seqOf(x) - seqOf(y))) {
+      const prev = run[run.length - 1];
+      if (!prev ? seqOf(r) === 0 && follows(null, r) : seqOf(r) === seqOf(prev) + 1 && follows(prev, r)) run.push(r);
+      else if (prev && seqOf(r) <= seqOf(prev)) continue;
+      else break;
+    }
+    const after = run.length ? seqOf(run[run.length - 1]) : -1;
+    const rest = candidate.links.filter((r) => seqOf(r) > after);
+    if (run.length && (!rest.length || follows(run[run.length - 1], rest[0]))) candidate.links = [...run, ...rest];
+  }
   /*
    * --status reads too (reads change nothing, R8) and only skips the save: a copy
    * that has not read the newest links yet is behind, not tampered - judging it
@@ -164,6 +189,8 @@ function lines(r, { status = false } = {}) {
   else if (p && p.refused) out.push(`phone: ${p.refused}`);
   else if (p && !p.count) out.push('phone: lacks nothing this PC holds');
   else if (p) out.push(`phone: took ${p.count} link(s)`);
+  /* whether this computer can now offer this phone's log to your other devices (keepLog) */
+  if (r.log) out.push(r.log.kept ? 'log: kept to offer to your other devices' : `log: not kept to offer - ${r.log.why}`);
   /* the seals that cut the copy into JSON blocks (BLOCKS.md §3; read on their own, no press) */
   if (r.blocks) out.push(`seals: ${r.blocks.seals} kept with this copy - onlykey-js edge blocks shows the blocks`);
   else if (r.blocksError) out.push(`seals: not read - ${r.blocksError}`);
@@ -247,6 +274,9 @@ function keepLog(home, { deviceId, publicKey, records, checkpoint, statement }) 
   if (!check.ok) return { kept: false, why: `its chain does not check (${check.alarm}${check.detail ? `: ${check.detail}` : ''})` };
   const c = load(home, id);
   if (c.checkpoint && c.checkpoint.seq > checkpoint.seq) return { kept: false, why: `this computer already holds it up to #${c.checkpoint.seq}` };
+  /* complete before it is kept to offer: every use's words and result, checked against the chain (devices.completeness) */
+  const full = require('../src').devices.completeness({ deviceId: id, publicKey, records: records.filter((r) => seqOf(r) <= checkpoint.seq), openings: c.openings || [], notes: c.notes || null });
+  if (!full.ok) return { kept: false, why: `not complete - ${full.missing.slice(0, 3).join('; ')}${full.missing.length > 3 ? ` (+${full.missing.length - 3} more)` : ''}` };
   c.publicKey = Uint8Array.from(publicKey);
   c.links = records.filter((r) => seqOf(r) <= checkpoint.seq).map((r) => ({ link: Uint8Array.from(r.link), head: Uint8Array.from(r.head), ...(r.reveal ? { reveal: Uint8Array.from(r.reveal) } : {}) }));
   c.checkpoint = checkpoint;
@@ -266,4 +296,32 @@ function logsToOffer(home, exceptId) {
     .map((j) => load(home, fromHex(j.deviceId)));
 }
 
-module.exports = { sync, lines, load, copyFile, peerSigner, keepSeals, keepLog, logsToOffer, blocks };
+/**
+ * The budgets' opening words a phone gave (full cards on your other devices - Brad, 2026-10-09):
+ * kept only those that check against this copy's own links (devices.checkOpenings), merged by
+ * budget. -> {kept: n, of: given}
+ */
+function keepOpenings(home, deviceId, openings) {
+  const { devices } = require('../src');
+  const c = load(home, Uint8Array.from(deviceId));
+  if (!c.publicKey || !c.links.length) return { kept: 0, of: (openings || []).length };
+  const good = devices.checkOpenings({ deviceId, publicKey: c.publicKey, records: c.links, openings });
+  const byId = new Map((c.openings || []).map((o) => [o.grantId, o]));
+  for (const o of good) byId.set(o.grantId, o);
+  c.openings = [...byId.values()].sort((a, b) => a.grantId - b.grantId);
+  save(home, c);
+  return { kept: good.length, of: (openings || []).length };
+}
+
+/** A phone's notes (intents, receipt messages by seq), kept with its copy and merged - checked against the chain where they are shown. */
+function keepNotes(home, deviceId, notes) {
+  const { devices } = require('../src');
+  const c = load(home, Uint8Array.from(deviceId));
+  const got = devices.shapeNotes(notes);
+  const was = c.notes || { reasons: {}, messages: {} };
+  c.notes = { reasons: { ...was.reasons, ...got.reasons }, messages: { ...was.messages, ...got.messages }, seen: { ...(was.seen || {}), ...got.seen } };
+  save(home, c);
+  return { reasons: Object.keys(got.reasons).length, messages: Object.keys(got.messages).length };
+}
+
+module.exports = { sync, lines, load, copyFile, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };
