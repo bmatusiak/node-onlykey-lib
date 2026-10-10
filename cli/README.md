@@ -144,7 +144,7 @@ without the folder the command is simply not there. It also decodes the soft key
 agent`, and `--test-mode` for the testnet: an AI agent signs under a budget the person approved
 on the phone, each use bound to its request and receipted. Another plugin, used the same way: the
 core never requires `edge/`. Every option, and what each command may do: `onlykey-edge/CLI.md`.
-The protocol and its rules: `onlykey-edge/edge/SPEC.md`.
+The protocol and its rules: `ok-rn/android/okemu/plugins/edge/SPEC.md`.
 
 Every press any command asks for is said first with the fingerprint of the exact bytes sent
 (`(message ab12 cd34 ef56 0011)`); a soft key's press sheet shows the same fingerprint from the
