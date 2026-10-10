@@ -79,7 +79,9 @@ async function stack() {
   const handlers = controlHandlers({ agent, client: c, ssh: { name: 'ssh://claude@test' }, gpg, openpgp, shimCommand: SHIM });
   const control = await serveControl({ handlers });
   const lastLink = async () => { const hd = await edge.head(); return chain.decodeLink((await edge.pickup(hd.seq, 1))[0].link); };
-  return { agent, control, handlers, cert, lastLink, edge, notes };
+  /* the latest link of an op: a spent budget is ended right after its last receipt, so the receipt is not always the very last link */
+  const lastOf = async (op) => { const hd = await edge.head(); for (let q = hd.seq; q >= Math.max(0, hd.seq - 4); q--) { const l = chain.decodeLink((await edge.pickup(q, 1))[0].link); if (l.op === op) return l; } return null; };
+  return { agent, control, handlers, cert, lastLink, lastOf, edge, notes };
 }
 
 function capture() {
@@ -310,8 +312,8 @@ test('edge exec: the command signs, then fails - its use gets a TARGET_UNREACHAB
     cap = capture();
     const code = await okedge.main(['exec', '--head', head, '--intent', 'push: does not reach', '--', process.execPath, '-e', script], { ...cap.io, ask: localAsk(s.handlers) });
     assert.equal(code, 3, cap.lines.join(' | '));
-    const last = await s.lastLink();
-    assert.equal(last.op, codes.OP.RECEIPT, 'the use is receipted, not left owed');
+    const last = await s.lastOf(codes.OP.RECEIPT);
+    assert.ok(last, 'the use is receipted, not left owed');
     assert.equal(last.code, 0x21, 'TARGET_UNREACHABLE, not OK');
     assert.ok(cap.lines.some((l) => /receipt filed \(TARGET_UNREACHABLE\)/.test(l)), cap.lines.join(' | '));
   } finally {

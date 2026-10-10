@@ -322,7 +322,7 @@ test('receipts: R16 - a direct press with neither owes_receipt nor started owes 
   assert.ok(receipts.keyDebts(es).owed.includes(c));
 });
 
-test('receipts: a deny does not clear a debt; past the key\'s 4, the oldest can only be waived (missing)', () => {
+test('receipts: a deny does not clear a debt; past the key\'s 4, the oldest can only be settled (missing)', () => {
   const es = entries();
   grow(es, { op: codes.OP.DECRYPT, decision: codes.DECISION.DENY, slot: 1, subject: new Uint8Array(32) });
   let by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u.status]));
@@ -334,35 +334,35 @@ test('receipts: a deny does not clear a debt; past the key\'s 4, the oldest can 
   assert.deepEqual([by[5], by[7], by[8], by[9]], ['waiting', 'waiting', 'waiting', 'waiting']);
 });
 
-/* the WAIVE link the key writes (firmware R18): 0x8F, the press flag, grant_id = oldest waived, subject over the list */
-function waive(es, seqs, overflow) {
+/* the SETTLE link the key writes (firmware R18): 0x8F, the press flag, grant_id = oldest settled, subject over the list */
+function settle(es, seqs, overflow) {
   return grow(es, {
     op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: seqs[0],
-    subject: receipts.waiveSubject(seqs, overflow),
+    subject: receipts.settleSubject(seqs, overflow),
   });
 }
 
-test('receipts: the WAIVE subject matches the Python reading', () => {
-  assert.equal(toHex(receipts.waiveSubject(V.waive.seqs, Boolean(V.waive.overflow))), V.waive.subject);
-  assert.equal(toHex(receipts.waiveSubject([5, 6, 7, 8], true)), V.waive.overflowSubject);
+test('receipts: the SETTLE subject matches the Python reading', () => {
+  assert.equal(toHex(receipts.settleSubject(V.settle.seqs, Boolean(V.settle.overflow))), V.settle.subject);
+  assert.equal(toHex(receipts.settleSubject([5, 6, 7, 8], true)), V.settle.overflowSubject);
 });
 
-test('receipts: a WAIVE clears every use it lists - and, with overflow, the older ones too', () => {
+test('receipts: a SETTLE clears every use it lists - and, with overflow, the older ones too', () => {
   const es = entries();
-  const w = waive(es, [1, 5], false);
+  const w = settle(es, [1, 5], false);
   let by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u]));
-  assert.deepEqual([by[1].status, by[1].waivedBy, by[5].status], ['waived', w, 'waived']);
-  /* overflow: five owed, the key lists the latest 4; the oldest is covered as "waived, not listed" */
+  assert.deepEqual([by[1].status, by[1].settledBy, by[5].status], ['settled', w, 'settled']);
+  /* overflow: five owed, the key lists the latest 4; the oldest is covered as "settled, not listed" */
   const es2 = entries();
   pressedUse(es2); pressedUse(es2); pressedUse(es2);
-  const w2 = waive(es2, [5, 6, 7, 8], true);
+  const w2 = settle(es2, [5, 6, 7, 8], true);
   by = Object.fromEntries(receipts.pairReceipts(es2).uses.map((u) => [u.seq, u]));
-  assert.equal(by[1].status, 'waived-unlisted');
-  assert.deepEqual([5, 6, 7, 8].map((q) => by[q].status), ['waived', 'waived', 'waived', 'waived']);
-  assert.equal(by[8].waivedBy, w2);
+  assert.equal(by[1].status, 'settled-unlisted');
+  assert.deepEqual([5, 6, 7, 8].map((q) => by[q].status), ['settled', 'settled', 'settled', 'settled']);
+  assert.equal(by[8].settledBy, w2);
 });
 
-test('receipts: an agent\'s own 0x8F receipt is not a waive - it pays one use and is an alarm', () => {
+test('receipts: an agent\'s own 0x8F receipt is not a settle - it pays one use and is an alarm', () => {
   const es = entries();
   const ref = 5;
   const l = chain.encodeLink({
@@ -435,8 +435,8 @@ test('receipts: the key\'s list does not refill - 5 owed, one receipt: 3 waiting
   assert.deepEqual([d.owed, d.overflow], [[5, 6, 7], true]);
   const by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u.status]));
   assert.deepEqual([by[1], by[5], by[6], by[7], by[8]], ['missing', 'waiting', 'waiting', 'waiting', 'receipted']);
-  /* the waive over exactly this list and overflow clears both */
-  grow(es, { op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: 5, subject: receipts.waiveSubject([5, 6, 7], true) });
+  /* the settle over exactly this list and overflow clears both */
+  grow(es, { op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: 5, subject: receipts.settleSubject([5, 6, 7], true) });
   d = receipts.keyDebts(es);
   assert.deepEqual([d.owed, d.overflow], [[], false]);
 });

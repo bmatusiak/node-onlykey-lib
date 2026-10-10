@@ -33,7 +33,7 @@ const SUB = Object.freeze({
   /* R31: DEBUG firmware only - a production key answers it as unknown (EDGE:0A) */
   WIPE_DEBUG: 0x7e,
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
-  RECEIPT: 0x20, WAIVE: 0x21, TX_START: 0x22, LOSS: 0x34,
+  RECEIPT: 0x20, SETTLE: 0x21, TX_START: 0x22, LOSS: 0x34,
   /*
    * No peer, sibling, sync, anchor, vouch or replay sub-op (Brad, 2026-10-08): pairing and
    * sync are the app's ("pairing and sync is all app stuff, not firmware"), and a restore
@@ -47,7 +47,7 @@ const SUB = Object.freeze({
  * head (R27).
  */
 const GRANT_HEAD_BYTES = 6;
-/* seq . head: RECEIPT's, WAIVE's and LOSS's answer */
+/* seq . head: RECEIPT's, SETTLE's and LOSS's answer */
 const seqHead = (r) => ({ seq: (r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24)) >>> 0, head: r.slice(4, 36) });
 const SEQ_NONE = 0xffffffff;
 const HELD = 8;
@@ -515,10 +515,10 @@ function setup(imports, register) {
     /**
      * R18: clear every owed receipt at once - a PHYSICAL press (the person's Yes
      * in the app first). Linked as a receipt 0x8F with the press flag
-     * (receipts.waiveSubject). -> {seq, head} after the waive link.
+     * (receipts.settleSubject). -> {seq, head} after the settle link.
      */
-    async waive({ onPress, timeoutMs = 30000 } = {}) {
-      const pending = pressed(SUB.WAIVE, null, { timeoutMs, newLink: true }, onPress);
+    async settle({ onPress, timeoutMs = 30000 } = {}) {
+      const pending = pressed(SUB.SETTLE, null, { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
       return seqHead(r);
     },

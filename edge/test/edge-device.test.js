@@ -98,7 +98,7 @@ test('edge: EDGE:xx refusals become named errors', async () => {
   assert.equal(t.head.length, 32);
 });
 
-test('edge: TX start, hold/resume and WAIVE - the spec change (R13a, R15a, R18)', async () => {
+test('edge: TX start, hold/resume and SETTLE - the spec change (R13a, R15a, R18)', async () => {
   const transport = fakeKey();
   const edge = edgeOver(transport);
   const startedToken = () => transport.started();
@@ -108,8 +108,8 @@ test('edge: TX start, hold/resume and WAIVE - the spec change (R13a, R15a, R18)'
   const S = new Uint8Array(32).fill(4); /* the subject of the request a TX start is for */
   await assert.rejects(edge.txStart(h.head, S), (e) => e.status === 'receipt-owed');
   await assert.rejects(edge.grant({ scopes: [{ op: 1, slot: 2, cap: 2 }], reasonHash: new Uint8Array(32), verifiedHead: h.head }), (e) => e.status === 'receipt-owed');
-  /* WAIVE clears it */
-  const w = await edge.waive();
+  /* SETTLE clears it */
+  const w = await edge.settle();
   assert.equal(w.seq, 1);
   h = await edge.head();
   assert.equal(h.owed, 0);
@@ -143,7 +143,7 @@ test('edge: grants.create / resume verify the copy first, send the verified head
   const edge = edgeOver(transport);
   let copy = await copyOf(edge);
   assert.equal((await edge.grants.check(copy)).ok, true, 'a copy of exactly what the key holds verifies');
-  await edge.waive();
+  await edge.settle();
   copy = await copyOf(edge);
   const scopes = [{ op: 1, slot: 2, cap: 2 }];
   const reasonHash = new Uint8Array(32).fill(7);
@@ -281,12 +281,12 @@ test('edge: R11a - a derived-code scope without an identity is refused before an
 test('edge: grants.check with the key one link ahead of the copy takes the short path and keeps its state (A13, 2026-10-06)', async () => {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.waive();
+  await edge.settle();
   const first = await copyOf(edge);
   assert.equal((await edge.grants.check(first, { keyTail: true })).ok, true);
   assert.equal(edge.grants.lastPath, 'full: first check');
   /* a link lands on the key after the copy was read (an agent's receipt, between the sync and this check) */
-  await edge.waive();
+  await edge.settle();
   const behind = { links: (await copyOf(edge)).links.slice(0, -1), openings: {} };
   assert.equal((await edge.grants.check(behind, { keyTail: true })).ok, true, 'for a display, the key\'s newest link is checked from the key, not called a gap');
   assert.equal(edge.grants.lastPath, 'new-links');
@@ -300,15 +300,15 @@ test('edge: grants.check with the key one link ahead of the copy takes the short
 test('edge: grants.check reads one moment of the key - a link landing mid-check is checked again, not kept as a failure (Pixel, 2026-10-06)', async () => {
   const transport = fakeKey();
   const edge = edgeOver(transport);
-  await edge.waive();
+  await edge.settle();
   assert.equal((await edge.grants.check(await copyOf(edge), { keyTail: true })).ok, true);
-  await edge.waive();
+  await edge.settle();
   const copy = await copyOf(edge);
   /* an agent's receipt lands between the head read and the checkpoint read, once */
   const checkpoint = edge.checkpoint.bind(edge);
   let raced = false;
   edge.checkpoint = async () => {
-    if (!raced) { raced = true; await edge.waive(); }
+    if (!raced) { raced = true; await edge.settle(); }
     return checkpoint();
   };
   assert.equal((await edge.grants.check(copy, { keyTail: true })).ok, true, 'checked again over the new head');

@@ -102,7 +102,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         out(`budget ${s.budget}: ${used} · head ${s.head}`);
         const keyOwed = s.keyOwed || [];
         if (keyOwed.length || s.keyOwedOlder) {
-          out(`the key owes ${keyOwed.length ? `receipts for #${keyOwed.join(', #')}` : ''}${keyOwed.length && s.keyOwedOlder ? ' and ' : ''}${s.keyOwedOlder ? `${s.keyOwedOlder} older (waive on the phone)` : ''}`);
+          out(`the key owes ${keyOwed.length ? `receipts for #${keyOwed.join(', #')}` : ''}${keyOwed.length && s.keyOwedOlder ? ' and ' : ''}${s.keyOwedOlder ? `${s.keyOwedOlder} older (settle on the phone)` : ''}`);
           for (const q of keyOwed) out(`  #${q}: ${s.owed.includes(q) ? "this budget's use" : "a pressed sign with the agent's key (R16)"} - onlykey-js edge receipt ${q} --msg "…"`);
         } else if (s.owed.length) out(`receipt owed for #${s.owed.join(', #')}`);
       }
@@ -207,10 +207,10 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       return code;
     }
     if (cmd === 'watch') {
-      /* read-only: it cannot approve, hold or waive - that stays on the phone */
+      /* read-only: it cannot approve, hold or settle - that stays on the phone */
       const once = args.includes('--once');
       const color = !once && Boolean(process.stdout.isTTY);
-      out('watching the key - read-only (approve, hold and waive stay on the phone); Ctrl-C to stop');
+      out('watching the key - read-only (approve, hold and settle stay on the phone); Ctrl-C to stop');
       let from = -1;
       let since = 0;
       let liveBudget = null;

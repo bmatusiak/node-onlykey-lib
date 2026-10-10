@@ -241,14 +241,14 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
         await save();
         if (message !== undefined && message !== null) await sendNote({ seq: link.seq, receiptMsg: String(message) });
         /*
-         * R16 (spec 2026-10-04): a used-up budget still COVERS its identities until it
-         * ends - a later pressed use of them owes a receipt - and it holds one of the
-         * key's live slots. So the client ends it itself the moment its last use is
-         * receipted: a grant-end link, the slot freed. (The key does not end it on its
-         * own: "used up" must not quietly drop the coverage.)
+         * A FULFILLED BUDGET COMPLETES ON THE KEY (Brad, 2026-10-10: "budgets should auto
+         * complete once fufilled"): the receipt for its last open use makes the key write the
+         * grant-end link itself (END.COMPLETED) - no step here, so a host that stops early
+         * still leaves no spent budget live. The head in the answer is after that link.
          */
         if (!state.ended && !state.owed.length && state.spent >= record.uses) {
-          await end();
+          state.ended = true;
+          await save();
           return { ...r, ended: true };
         }
         return r;
@@ -280,7 +280,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
    * after the budget ended - a lock, a reboot, its lifetime, or the client's own
    * end - the key still owes the use's receipt and checks only that the seq is
    * owed (R16). So it is filed straight to the key, no budget needed, and the
-   * person never has to waive what the agent can answer.
+   * person never has to settle what the agent can answer.
    */
   async function receiptOwed(seq, { code = 'OK', message }) {
     const r = await edge.receipt(seq, codes.receiptByte(code), receipts.messageHash(message));

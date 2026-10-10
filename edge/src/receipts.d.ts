@@ -20,7 +20,7 @@ export function receiptSubject({ refSeq, refHead, code, msgHash }: {
  *    orphans: receipts for a seq that is not a use (or not one that came
  *             before), or a second receipt for the same use
  */
-export function waiveSubject(seqs: any, overflow: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export function settleSubject(seqs: any, overflow: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export function pairReceipts(entries: any, messages?: {}): {
     uses: {
         seq: number;
@@ -37,8 +37,8 @@ export function pairReceipts(entries: any, messages?: {}): {
         message: string | null;
         /** @type {'none' | 'match' | 'mismatch' | 'unchecked' | null} */
         messageStatus: "none" | "match" | "mismatch" | "unchecked" | null;
-        /** @type {number | null} the waive link that cleared it, if a waive did */
-        waivedBy: number | null;
+        /** @type {number | null} the settle link that cleared it, if a settle did */
+        settledBy: number | null;
     }[];
     orphans: {
         seq: number;
@@ -50,9 +50,9 @@ export function pairReceipts(entries: any, messages?: {}): {
  * The key's own debt list, replayed over the chain (firmware R16-R18), so a
  * host can compare its copy with what HEAD reports (R27):
  *   - an approved sign/decrypt is pushed; past OWED_MAX the oldest falls off
- *     for good and `overflow` is set (only a waive clears it);
+ *     for good and `overflow` is set (only a settle clears it);
  *   - a receipt pays its ref_seq if that use is still on the list;
- *   - a WAIVE (0x8F, the press flag, the subject over exactly this list and
+ *   - a SETTLE (0x8F, the press flag, the subject over exactly this list and
  *     this overflow) clears the list and the overflow.
  * Nothing else changes it: a deny, a timeout, a grant-end, a LOSS.
  *

@@ -39,7 +39,7 @@ function lateAnswerKey(onSub) {
 test('a stale seq . head during the press wait is passed over; the loss gets its own link', async () => {
   const t = lateAnswerKey(0x34);
   const edge = edgeOver(t);
-  const v = await edge.head(); /* what a late RECEIPT / WAIVE answer looks like: the key's current seq . head */
+  const v = await edge.head(); /* what a late RECEIPT / SETTLE answer looks like: the key's current seq . head */
   t.setStale(report([...u32(v.seq), ...v.head]));
   const r = await edge.loss({ from: 0, to: 0, timeoutMs: 2000 });
   assert.equal(r.seq, v.seq + 1);

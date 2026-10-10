@@ -85,7 +85,7 @@ test('change any field and the block fails - and its id moves', () => {
   const id = block.blockId(b);
   const edits = [
     ['a link\'s grant', (x) => { x.links[1].grant = 13; }],
-    ['a link\'s op', (x) => { x.links[2].op = 'waive'; }],
+    ['a link\'s op', (x) => { x.links[2].op = 'settle'; }],
     ['a link\'s intent', (x) => { x.links[1].intent = 'cd'.repeat(16); }],
     ['a link removed', (x) => { x.links.splice(2, 1); }],
     ['the seal\'s head', (x) => { x.checkpoint.head = '00'.repeat(32); }],

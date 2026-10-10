@@ -48,6 +48,18 @@ const DECISION = Object.freeze({
   SELF_PRESS: 4,
 });
 
+/*
+ * How a budget ended: the `decision` byte of its grant-end link (firmware end_budget). Brad,
+ * 2026-10-10: "budgets should auto complete once fufilled" - the key ends a budget itself when
+ * its last use is receipted; a revoke or a settle ends it early, a settle flagged incomplete.
+ * Expiry and a lock or reboot write no link.
+ */
+const END = Object.freeze({
+  COMPLETED: 1,
+  REVOKED: 2,
+  SETTLED: 3,
+});
+
 /* R3 `flags`, as the spec numbers the bits. */
 const FLAG = Object.freeze({
   PRESS_OBSERVED: 0x01,
@@ -67,7 +79,7 @@ const TAG = Object.freeze({
   DEVICE: 'OKEDGE-DEVICE-v1',
   RECEIPT: 'OKEDGE-RECEIPT-v1',
   /* firmware.md R18: a human's press clears every owed receipt at once */
-  WAIVE: 'OKEDGE-WAIVE-v1',
+  SETTLE: 'OKEDGE-SETTLE-v1',
   /*
    * firmware.md R13a/R13b: a TX start is bound to the head, the exact request and
    * what the use is for (the intent, welded into the link). One label since the
@@ -114,11 +126,11 @@ const STATUS = Object.freeze({
   0x05: { name: 'live-full', text: 'Four budgets are already live' },
   0x06: { name: 'sign-failed', text: 'The key could not sign' },
   0x07: { name: 'no-such-budget', text: 'No live budget has that id' },
-  0x08: { name: 'no-receipt-waiting', text: 'That use owes no receipt (or nothing is owed to waive)' },
+  0x08: { name: 'no-receipt-waiting', text: 'That use owes no receipt (or nothing is owed to settle)' },
   0x09: { name: 'not-held', text: 'The key no longer holds that link' },
   0x0a: { name: 'unknown-request', text: 'This key does not know that Edge request' },
   0x0b: { name: 'stale-head', text: 'The chain moved since that head - read the head and start again' },
-  0x0c: { name: 'receipt-owed', text: 'A use is waiting for its receipt - receipt it, or waive in the app' },
+  0x0c: { name: 'receipt-owed', text: 'A use is waiting for its receipt - receipt it, or settle in the app' },
   0x0d: { name: 'nothing-to-pay', text: 'No live budget (or every one is on hold)' },
   /* 0x0e-0x11 (restore-then-replay) and 0x13-0x1b (peers, siblings, sync, anchors on the key) went 2026-10-08; their numbers stay unused */
   0x12: { name: 'bad-range', text: 'A loss is #from..#to, at or before the key\'s head' },
@@ -174,4 +186,4 @@ function nameOf(table, value) {
   return null;
 }
 
-module.exports = { OP, DECISION, FLAG, TAG, RECEIPT, STATUS, parseStatus, receiptCode, receiptByte, nameOf };
+module.exports = { OP, DECISION, END, FLAG, TAG, RECEIPT, STATUS, parseStatus, receiptCode, receiptByte, nameOf };

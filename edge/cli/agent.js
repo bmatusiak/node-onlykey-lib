@@ -99,7 +99,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     events.push({ n: ++eventN, at: new Date().toISOString(), kind, message });
     while (events.length > 64) events.shift();
   };
-  const owedText = (k) => [k.seqs.length ? `receipts for #${k.seqs.join(', #')}` : '', k.older ? `${k.older} older than the key's ring (waive on the phone)` : ''].filter(Boolean).join(' and ');
+  const owedText = (k) => [k.seqs.length ? `receipts for #${k.seqs.join(', #')}` : '', k.older ? `${k.older} older than the key's ring (settle on the phone)` : ''].filter(Boolean).join(' and ');
   let budget = null;          /* the work budget (edge/src/client.js budget), once asked for or resumed */
   const execs = new Map();    /* token -> the open exec */
 
@@ -255,7 +255,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
        * No budget in this process (it restarted, or the budget ended) but the key
        * still owes a receipt for this use: file it straight to the key - the key
        * only checks the seq is owed (R16). Spec rule 10 (2026-10-04): an owed
-       * receipt is filed, never waived by a script.
+       * receipt is filed, never settled by a script.
        */
       if (!edge && !client) throw fail('EEDGE_NO_BUDGET', 'no work budget');
       /* through the client when there is one: it also sends the message to the phone (a pressed use's receipt showed "No message synced", Pixel #432) */

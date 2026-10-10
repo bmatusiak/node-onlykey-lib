@@ -176,7 +176,7 @@ function shapeNotes(notes) {
  *   - every budget opened in the log: its opening words, proved (checkOpenings);
  *   - every use that carries an intent: the intent's words, matching the hash welded into its link;
  *   - every use that owes a result: its RESULT - a receipt whose message matches the receipt's
- *     hash, or a waive. A use still waiting, missing its receipt, or with a receipt alarm is not
+ *     hash, or a settle. A use still waiting, missing its receipt, or with a receipt alarm is not
  *     complete yet.
  * -> {ok: true} | {ok: false, missing: [why, ...]} (at most 20 reasons)
  */
@@ -203,7 +203,7 @@ function completeness({ deviceId, publicKey, records, openings, notes }) {
   const paired = receipts.pairReceipts(records.map((r) => ({ link: r.link, head: r.head })), shaped.messages);
   for (const u of paired.uses) {
     if (u.status === 'no-receipt-owed') continue;
-    if (u.status === 'waived' || u.status === 'waived-unlisted') continue;
+    if (u.status === 'settled' || u.status === 'settled-unlisted') continue;
     if (u.status !== 'receipted') { missing.push(`#${u.seq}: no result (${u.status})`); continue; }
     if (u.message === null || u.message === undefined) missing.push(`#${u.seq}: the message of receipt #${u.receipt.seq} ${u.messageStatus === 'mismatch' ? 'does not match the chain' : 'did not arrive'}`);
   }

@@ -237,7 +237,7 @@ test('L7: no Edge on this key - request() rejects EEDGE_UNSUPPORTED', async () =
 /*
  * R16, the client's side (spec okrn-edge-tab.md, Budgets, 2026-10-06): it
  * receipts first, then ends - and an owed receipt is always fileable, even after
- * the budget ended (a lock, its lifetime), with no budget and no waive.
+ * the budget ended (a lock, its lifetime), with no budget and no settle.
  */
 test('end is refused while a use owes its receipt', async () => {
   const { transport, edge } = await readyKey();
@@ -250,7 +250,7 @@ test('end is refused while a use owes its receipt', async () => {
   assert.equal((await edge.head()).live.includes(budget.grantId), false, 'ended once the receipt was in');
 });
 
-test('an owed receipt is filed after the budget ended - no budget, no waive', async () => {
+test('an owed receipt is filed after the budget ended - no budget, no settle', async () => {
   const { transport, edge } = await readyKey();
   const c = client.createEdgeClient({ edge, channel: phone(edge) });
   const budget = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: AGENT_ID }], ttlMinutes: 60 });
@@ -260,6 +260,57 @@ test('an owed receipt is filed after the budget ended - no budget, no waive', as
   assert.equal((await edge.head()).owed, 1, 'the key still owes it');
   await c.receiptOwed(one.link.seq, { message: 'pushed before the lock' });
   assert.equal((await edge.head()).owed, 0, 'filed without the budget');
+});
+
+/*
+ * SETTLE ENDS THE BUDGET (Brad, 2026-10-10: "its more secure to just end the budget instead of
+ * allowing it to be continue to be used; this will force a new budget to be created by the agent").
+ * Before, the debt was cleared and the same budget went on paying - a press that let the agent
+ * past its receipt. Now the settle ends every live budget first, each with its grant-end link.
+ */
+/*
+ * A FULFILLED BUDGET COMPLETES ITSELF (Brad, 2026-10-10: "budgets should auto complete once
+ * fufilled"): the receipt for its last open use makes the KEY write the grant-end link - no
+ * revoke from the host - and the link says it completed. A revoke says revoked.
+ */
+test('the key ends a budget itself once every use is made and receipted (END.COMPLETED); a revoke says REVOKED', async () => {
+  const { transport, edge } = await readyKey();
+  let revokes = 0;
+  const watched = { ...edge, revoke: async (...a) => { revokes += 1; return edge.revoke(...a); } };
+  const c = client.createEdgeClient({ edge: watched, channel: phone(edge) });
+  const budget = await c.request({ reason: 'one push', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 60 });
+  const one = await budget.use(Uint8Array.from([1]), (bytes) => transport.use(bytes, { slot: 222 }));
+  assert.equal((await edge.head()).live.includes(budget.grantId), true, 'spent but not yet receipted: still live');
+  const r = await budget.receipt(one.link, { message: 'pushed' });
+  assert.equal(r.ended, true);
+  const hd = await edge.head();
+  assert.equal(hd.live.includes(budget.grantId), false, 'the fulfilled budget is over');
+  const end = chain.decodeLink((await edge.pickup(hd.seq, 1))[0].link);
+  assert.deepEqual([end.op, end.grantId, end.decision], [codes.OP.GRANT_END, budget.grantId, codes.END.COMPLETED], 'the key ended it, as completed');
+  assert.equal(revokes, 0, 'the host sent no revoke');
+  assert.deepEqual(Buffer.from(r.head), Buffer.from(hd.head), 'the receipt answer is the head after the end link');
+
+  const b2 = await c.request({ reason: 'stopped early', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }], ttlMinutes: 60 });
+  await b2.end();
+  const hd2 = await edge.head();
+  const end2 = chain.decodeLink((await edge.pickup(hd2.seq, 1))[0].link);
+  assert.deepEqual([end2.op, end2.grantId, end2.decision], [codes.OP.GRANT_END, b2.grantId, codes.END.REVOKED]);
+});
+
+test('a settle ends every live budget first (grant-end links), then the receipt - more uses need a new budget', async () => {
+  const { transport, edge } = await readyKey();
+  const c = client.createEdgeClient({ edge, channel: phone(edge) });
+  const budget = await c.request({ reason: 'sign the release', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: AGENT_ID }], ttlMinutes: 60 });
+  await budget.use(Uint8Array.from([1]), (bytes) => transport.use(bytes, { slot: 222 }));
+  assert.equal((await edge.head()).owed, 1, 'the use owes - the signer died before its receipt');
+  await edge.settle();
+  const hd = await edge.head();
+  assert.equal(hd.owed, 0, 'the debt is cleared');
+  assert.equal(hd.live.includes(budget.grantId), false, 'and the budget is over');
+  const [end, settled] = (await edge.pickup(hd.seq - 1, 2)).map((r) => chain.decodeLink(r.link));
+  assert.deepEqual([end.op, end.grantId, end.decision], [codes.OP.GRANT_END, budget.grantId, codes.END.SETTLED], 'its grant-end link first, ended as settled');
+  assert.deepEqual([settled.op, settled.decision], [codes.OP.RECEIPT, 0x8f], 'then the settle, a needs-review receipt');
+  await assert.rejects(budget.use(Uint8Array.from([2]), (bytes) => transport.use(bytes, { slot: 222 })), 'the old budget pays for nothing');
 });
 
 test('a receipt whose answer never came is NEVER sent twice: the key is asked instead (Brad, 2026-10-06)', async () => {

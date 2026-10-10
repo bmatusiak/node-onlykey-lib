@@ -81,14 +81,14 @@
     "head": "59b93278e9d9edf2439503551c5351fb79c23ee09654ce59e7987665cd2136ff",
     "digest": "5b22cbf1544708d32abca25cea0a199a916f47b786db4fdab1f799f8f73e7365"
   },
-  "waive": {
+  "settle": {
     "seqs": [
       1,
       5
     ],
     "overflow": 0,
-    "subject": "8860d3d88e5e64530a03541373d6a68cc8d71b8fccd3111da0aead2394593ff6",
-    "overflowSubject": "5f68bc34a6c55cbf1a696502dfcaeb38c1e4a92b89da290a22f7b533841182e5"
+    "subject": "97ab4130c31aace0e011dadefdf2b9027d8f0023027d091204e96eddce4c8209",
+    "overflowSubject": "1a30085a090473b78f14967ca7e2afaa5487efb6132ede98de80fc7ea789487c"
   },
   "deviceFromPub": {
     "pub": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",

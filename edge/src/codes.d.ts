@@ -29,6 +29,11 @@ export const DECISION: Readonly<{
     TIMEOUT: 3;
     SELF_PRESS: 4;
 }>;
+export const END: Readonly<{
+    COMPLETED: 1;
+    REVOKED: 2;
+    SETTLED: 3;
+}>;
 export const FLAG: Readonly<{
     PRESS_OBSERVED: 1;
     BUDGET_SPENT: 2;
@@ -42,7 +47,7 @@ export const TAG: Readonly<{
     GRANT: "OKEDGE-GRANT-v1";
     DEVICE: "OKEDGE-DEVICE-v1";
     RECEIPT: "OKEDGE-RECEIPT-v1";
-    WAIVE: "OKEDGE-WAIVE-v1";
+    SETTLE: "OKEDGE-SETTLE-v1";
     TX: "OKEDGE-TX-v1";
     INTENT: "OKEDGE-INTENT-v1";
 }>;

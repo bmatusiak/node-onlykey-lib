@@ -56,6 +56,15 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
     started = false; /* R13a: any link clears the TX start */
     return seq;
   };
+  /* as the firmware's end_budget: out of the live list and a grant-end link (revoke, and every live budget at a settle) */
+  const endBudget = (id, how) => {
+    const i = live.indexOf(id);
+    if (i < 0) return;
+    live.splice(i, 1);
+    budgets.delete(id);
+    onHold.delete(id);
+    append({ op: codes.OP.GRANT_END, decision: how, slot: 0, flags: 0, grantId: id, subject: new Uint8Array(32) });
+  };
   const checkpoint = () => {
     const seq = held.length - 1;
     const sig = chain.signCheckpoint({ deviceId: myDevice, seq, head }, secret);
@@ -65,7 +74,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
   /* one approved use that owes (R16: the key marked it owes_receipt - a pressed use on a covered slot), so there is something to pick up and receipt */
   append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_RECEIPT, subject: new Uint8Array(32).fill(9) });
   owed = [0];
-  /* seq . head: RECEIPT's, WAIVE's and LOSS's answer (no vouch tag since 2026-10-08) */
+  /* seq . head: RECEIPT's, SETTLE's and LOSS's answer (no vouch tag since 2026-10-08) */
   const seqHead = () => report([...u32(held.length - 1), ...head]);
   let staged = {}; /* R11a: GRANT_LABEL's labels, by scope index, for the next GRANT_CREATE */
 
@@ -110,6 +119,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         /* the subject as the firmware makes it: the use's head, the code, the message hash - so a message can be checked against it (devices.completeness) */
         append({ op: codes.OP.RECEIPT, decision: arg[4], subject: receipts.receiptSubject({ refSeq: ref, refHead: held[ref].head, code: arg[4], msgHash: arg.slice(5, 37) }), grantId: ref });
         owed = owed.filter((q) => q !== ref);
+        /* as the firmware's complete_fulfilled: nothing owed, every live budget whose uses are all made ends itself */
+        if (!owed.length) for (const id of [...live]) { const b = budgets.get(id); if (b && b.used >= b.uses) endBudget(id, codes.END.COMPLETED); }
         emit(seqHead());
       } else if (sub === 0x22) {
         /* R13a: a token over head + the request's subject; the fake keeps it (a real key checks it at the sign) */
@@ -131,7 +142,9 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         append({ op: sub === 0x13 ? codes.OP.GRANT_HOLD : codes.OP.GRANT_RESUME, decision: codes.DECISION.APPROVE, slot: 0, flags: sub === 0x14 ? codes.FLAG.PRESS_OBSERVED : 0, grantId: id, subject: new Uint8Array(32) });
         emit(status(0x00));
       } else if (sub === 0x21) {
-        append({ op: codes.OP.RECEIPT, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: receipts.waiveSubject(owed, false) });
+        /* as the firmware's settle_pressed: every live budget ends first, each with its grant-end link (Brad, 2026-10-10) */
+        for (const id of [...live]) endBudget(id, codes.END.SETTLED);
+        append({ op: codes.OP.RECEIPT, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: receipts.settleSubject(owed, false) });
         owed = [];
         emit(seqHead());
       } else if (sub === 0x11) {
@@ -165,10 +178,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         checkpoint();
       } else if (sub === 0x12) {
         const id = arg[0] | (arg[1] << 8);
-        const i = live.indexOf(id);
-        if (i < 0) return emit(status(0x07));
-        live.splice(i, 1);
-        budgets.delete(id);
+        if (!live.includes(id)) return emit(status(0x07));
+        endBudget(id, codes.END.REVOKED);
         emit(status(0x00));
       } else if (sub === 0x34) {
         /* R24: {from, to}, pressed; refused past the head */

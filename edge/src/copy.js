@@ -33,7 +33,7 @@
  * person's pressed acceptance that #from..#to is gone (grant_id = from,
  * subject = to, u32 LE). Then the debts are replayed from after the last
  * covered gap: what the lost range owed is unknown, so if the key still owes
- * for it the counts disagree and the copy fails `debts` - a waive settles it.
+ * for it the counts disagree and the copy fails `debts` - a settle settles it.
  * Never "verify from a checkpoint" alone as a way out.
  *
  * WHAT COUNTS AS VERIFIED (firmware.md R27, tab spec B2; found on the Pixel
