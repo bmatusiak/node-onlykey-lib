@@ -37,11 +37,11 @@ const OP_NAME = {
 const plain = (t) => String(t).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
 
 /**
- * edge watch's lines for one feed (mcp-service.md: one line per use, its
- * reason, then its receipt; alarms highlighted - okrn-edge-tab.md B7): an alarm
- * receipt (bit 7 or an unknown code), a press asked for under a live budget, an
- * TX start that did not match its request, a refused exec, a budget ended, a LOSS or
- * a wipe, links lost from the key's ring.
+ * edge watch's lines for one feed (APP.md: one line per use, its
+ * reason, then its receipt; alarms highlighted - APP.md B7): an alarm
+ * receipt (bit 7 or an unknown code), a TX start that did not match its request,
+ * a refused exec, a budget revoked or settled, a LOSS, links lost from the key's
+ * ring; a completed budget is said plainly.
  */
 function watchLines(feed, { color = false, time = new Date() } = {}) {
   const red = (t) => (color ? `\u001b[31;1m${t}\u001b[0m` : t);
@@ -76,8 +76,19 @@ function watchLines(feed, { color = false, time = new Date() } = {}) {
       lines.push(mismatch ? red(`${line}  ⚠ intent does not match its text`) : line);
       continue;
     }
+    /*
+     * HOW A BUDGET ENDED, from the key's own end link (codes.END; Brad, 2026-10-10: "budgets
+     * should auto complete once fufilled"): completed is the normal end, said plainly; a
+     * revoke or a settle ended it early, and a settle leaves uses unfinished - flagged.
+     */
+    if (l.op === codes.OP.GRANT_END) {
+      const how = l.decision === codes.END.COMPLETED ? 'completed' : l.decision === codes.END.REVOKED ? 'revoked' : l.decision === codes.END.SETTLED ? 'settled - ended early, incomplete' : 'ended';
+      const line = `#${l.seq} ${at} budget ${l.grantId} ${how}`;
+      lines.push(l.decision === codes.END.COMPLETED ? line : red(`${line}  ⚠`));
+      continue;
+    }
     const line = `#${l.seq} ${at} ${OP_NAME[l.op] || `op ${l.op}`}${l.grantId ? ` ${l.grantId}` : ''}`;
-    lines.push([codes.OP.GRANT_END, codes.OP.LOSS].includes(l.op) ? red(`${line}  ⚠`) : line);
+    lines.push(l.op === codes.OP.LOSS ? red(`${line}  ⚠`) : line);
   }
   for (const e of feed.events || []) lines.push(red(`⚠ agent: ${plain(e.message)}`));
   return lines;
@@ -102,8 +113,8 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         out(`budget ${s.budget}: ${used} · head ${s.head}`);
         const keyOwed = s.keyOwed || [];
         if (keyOwed.length || s.keyOwedOlder) {
-          out(`the key owes ${keyOwed.length ? `receipts for #${keyOwed.join(', #')}` : ''}${keyOwed.length && s.keyOwedOlder ? ' and ' : ''}${s.keyOwedOlder ? `${s.keyOwedOlder} older (settle on the phone)` : ''}`);
-          for (const q of keyOwed) out(`  #${q}: ${s.owed.includes(q) ? "this budget's use" : "a pressed sign with the agent's key (R16)"} - onlykey-js edge receipt ${q} --msg "…"`);
+          out(`the key owes ${keyOwed.length ? `a receipt for #${keyOwed[0]}` : "a receipt for a use older than the key's ring (settle on the phone)"}`);
+          for (const q of keyOwed) out(`  #${q}: ${s.owed.includes(q) ? "this budget's use" : "an owed use from before this budget (R16)"} - onlykey-js edge receipt ${q} --msg "…"`);
         } else if (s.owed.length) out(`receipt owed for #${s.owed.join(', #')}`);
       }
       if (s.link) out(`bluetooth: ${s.link.connects} connect(s), ${s.link.reconnects} reconnect(s), ${s.link.reconnectsFailed} failed${s.link.lastUpMs !== null ? `; last link up in ${s.link.lastUpMs} ms` : ''}`);
@@ -139,7 +150,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       return 0;
     }
     if (cmd === 'sync') {
-      /* mcp-service.md 4.2b: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone, which holds it until the person approves the merge (2026-10-08) */
+      /* APP.md: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone, which holds it until the person approves the merge (2026-10-08) */
       const status = args.includes('--status');
       const r = await ask('sync', { status }, { timeoutMs: 120000 });
       for (const l of require('./copy').lines(r, { status })) out(l);

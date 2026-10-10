@@ -3,7 +3,7 @@
 /*
  * L7 - Edge from an app (edge/src/request.js, approve.js, client.js), on the
  * fake key, with the APP's side (what ok-rn runs) in-process as the channel.
- * mcp-service.md 4.7a: one EDGE_REQUEST from a paired computer (no agent key since
+ * APP.md: one EDGE_REQUEST from a paired computer (no agent key since
  * 2026-10-08 - Brad: "so the claude key thing is overkill"; the pairing is the gate);
  * the app drops malformed or replayed ones, checks caps (<= 300) and lifetime,
  * shows text and names, makes labels and the reason
@@ -235,7 +235,7 @@ test('L7: no Edge on this key - request() rejects EEDGE_UNSUPPORTED', async () =
 });
 
 /*
- * R16, the client's side (spec okrn-edge-tab.md, Budgets, 2026-10-06): it
+ * R16, the client's side (spec APP.md, Budgets, 2026-10-06): it
  * receipts first, then ends - and an owed receipt is always fileable, even after
  * the budget ended (a lock, its lifetime), with no budget and no settle.
  */

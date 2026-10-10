@@ -35,7 +35,7 @@ const TYPE_OF_KEYTYPE = { 1: 'ed25519', 2: 'p256', 3: 'secp256k1', 4: 'x25519' }
 const LABEL_TYPE_OF_KEYTYPE = { 1: 'p256', 2: 'secp256k1', 3: 'x25519' };
 
 /*
- * The testnet's list is its own (onlykey-js edge --test-mode; BLOCKS.md §5): its soft
+ * The testnet's list is its own (onlykey-js edge --test-mode; BLOCKS.md): its soft
  * key is another key with other keys, so its entries never land in the live list.
  */
 let fileOverride = null;

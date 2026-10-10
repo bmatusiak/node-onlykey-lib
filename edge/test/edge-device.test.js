@@ -216,7 +216,7 @@ test('edge: sub-op 0x15 (the retired AGENT_ADD) is an unknown request - EDGE:0A,
   assert.deepEqual([...got[0]], [...status(0x0a)]);
   assert.equal(codes.parseStatus(Buffer.from(got[0]).toString('latin1').replace(/\0+$/, '')).name, 'unknown-request');
   assert.equal((await edge.head()).seq, before.seq, 'nothing linked');
-  assert.equal(codes.OP.AGENT_ADD, 15, 'kept only as a label for reading old chains');
+  assert.ok(!Object.values(codes.OP).includes(15), 'op 15 is reserved: no name, never read, never reused');
 });
 
 test('edge: LOSS {from, to} - a pressed loss link with the spec layout; a range past the head is refused (R24)', async () => {
@@ -286,7 +286,7 @@ test('edge: grants.check with the key one link ahead of the copy takes the short
   assert.equal((await edge.grants.check(first, { keyTail: true })).ok, true);
   assert.equal(edge.grants.lastPath, 'full: first check');
   /* a link lands on the key after the copy was read (an agent's receipt, between the sync and this check) */
-  await edge.settle();
+  transport.edgeRecord();
   const behind = { links: (await copyOf(edge)).links.slice(0, -1), openings: {} };
   assert.equal((await edge.grants.check(behind, { keyTail: true })).ok, true, 'for a display, the key\'s newest link is checked from the key, not called a gap');
   assert.equal(edge.grants.lastPath, 'new-links');
@@ -302,13 +302,13 @@ test('edge: grants.check reads one moment of the key - a link landing mid-check 
   const edge = edgeOver(transport);
   await edge.settle();
   assert.equal((await edge.grants.check(await copyOf(edge), { keyTail: true })).ok, true);
-  await edge.settle();
+  transport.edgeRecord();
   const copy = await copyOf(edge);
   /* an agent's receipt lands between the head read and the checkpoint read, once */
   const checkpoint = edge.checkpoint.bind(edge);
   let raced = false;
   edge.checkpoint = async () => {
-    if (!raced) { raced = true; await edge.settle(); }
+    if (!raced) { raced = true; transport.edgeRecord(); }
     return checkpoint();
   };
   assert.equal((await edge.grants.check(copy, { keyTail: true })).ok, true, 'checked again over the new head');

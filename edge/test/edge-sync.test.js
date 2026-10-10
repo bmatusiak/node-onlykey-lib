@@ -1,6 +1,6 @@
 'use strict';
 
-/* okedge sync, phase 1: the PC's own copy - read, verify (R27), keep; report, never repair */
+/* onlykey-js edge sync, phase 1: the PC's own copy - read, verify (R27), keep; report, never repair */
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('crypto');

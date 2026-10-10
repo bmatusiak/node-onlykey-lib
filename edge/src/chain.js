@@ -4,7 +4,7 @@
  * Edge chain (spec L1): the 64-byte link, the welds, and verifying a run of
  * links against the key.
  *
- * THE CHAIN (firmware.md R2-R3). The key records every decision as a 64-byte
+ * THE CHAIN (SPEC.md R2-R3). The key records every decision as a 64-byte
  * link and keeps only the HEAD:
  *
  *   head[-1] = SHA256("OKEDGE-GENESIS-v1" || device_id)
@@ -23,7 +23,7 @@
  *
  * WHO IS TRUSTED. Hosts keep the full chain; the key keeps the head and a
  * small ring. A host's copy (a "mirror") is UNTRUSTED: anyone with the phone
- * or the Worker can edit it. Only these are trusted, and only if the caller
+ * or a computer that keeps a copy can edit it. Only these are trusted, and only if the caller
  * got them from the key this session (spec B4):
  *   - the start: genesis(device_id), or a head the caller already verified;
  *   - `anchors`: (seq, head) pairs whose signature was checked (checkpoints);
@@ -119,7 +119,7 @@ function genesis(deviceId) {
 }
 
 /*
- * R28 continue (onlykey-edge firmware.md, decided 2026-10-04): a device moving to
+ * R28 continue (onlykey-edge SPEC.md, decided 2026-10-04): a device moving to
  * its own chain - a pre-R28 key after the update, or a backup restored onto another
  * device - writes as its FIRST link op CONTINUE, at the next seq after the chain it
  * continues, welded onto its NEW genesis. Its subject commits to the chain it came

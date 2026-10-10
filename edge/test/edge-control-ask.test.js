@@ -29,7 +29,7 @@ test('never set up here (no control key): "no edge agent is running", at once', 
   assert.ok(Date.now() - t0 < 1000);
 });
 
-test('set up, but no agent listening: okedge budget says "no edge agent is running" at once, and never "Waiting for the phone"', async () => {
+test('set up, but no agent listening: onlykey-js edge budget says "no edge agent is running" at once, and never "Waiting for the phone"', async () => {
   controlKey({ create: true });
   const cap = capture();
   const t0 = Date.now();

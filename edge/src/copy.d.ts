@@ -155,7 +155,7 @@ export function checkContinue(link: any, oldCopy: any): {
 } | {
     ok: boolean;
     oldSeq: number;
-    debts: any[];
+    debts: number[];
     debtsChecked: boolean;
     reason?: undefined;
 };

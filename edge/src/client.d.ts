@@ -38,7 +38,7 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]
      * (identity on a derived code, R11a). ttlMinutes: 1..1440.
      * Rejects EEDGE_UNSUPPORTED, EEDGE_INVALID, EEDGE_REFUSED (with .refusal:
-     * declined, timeout, copy_unverified, receipt_owed, restoring, invalid),
+     * declined, timeout, copy_unverified, receipt_owed, still_live, invalid, busy),
      * EEDGE_NO_ANSWER (dropped: not paired, replayed) or EEDGE_OPENING
      * (the answer is not a budget the key opened as asked).
      */
@@ -53,8 +53,8 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
         scopes: any;
         /**
          * The head this budget holds (hex): what the agent's next use TX starts over,
-         * and what `okedge exec --head` must name - proof the agent saw its own
-         * last receipt's reply (mcp-service.md §4.2a).
+         * and what `onlykey-js edge exec --head` must name - proof the agent saw its own
+         * last receipt's reply (APP.md).
          */
         head(): string;
         /** the uses still waiting for their receipt (seqs) */
@@ -106,8 +106,8 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
         scopes: any;
         /**
          * The head this budget holds (hex): what the agent's next use TX starts over,
-         * and what `okedge exec --head` must name - proof the agent saw its own
-         * last receipt's reply (mcp-service.md §4.2a).
+         * and what `onlykey-js edge exec --head` must name - proof the agent saw its own
+         * last receipt's reply (APP.md).
          */
         head(): string;
         /** the uses still waiting for their receipt (seqs) */
@@ -164,7 +164,7 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
         reveal: Uint8Array<ArrayBuffer> | null;
     }[]>;
     /**
-     * BLOCKS (BLOCKS.md §3, Brad 2026-10-07): the key's seals (the checkpoints that
+     * BLOCKS (BLOCKS.md, Brad 2026-10-07): the key's seals (the checkpoints that
      * close each block), as the phone keeps them - and the phone's own latest owner
      * statement (its nametag; 2026-10-08), so this computer can offer that phone's log to
      * your other devices. A phone that has no nametag yet gives none. A GIVE asked past the end: no links, just its last-batch fields.
@@ -213,39 +213,23 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
         count: any;
     }>;
     /**
-     * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
+     * onlykey-js edge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
      * date from `records` (this place's verified copy, [{link, head, reveal}])
-     * and merge `keychain` (this place's public Key Chain list, entries) with
-     * the phone's. Asks what the phone holds, sends only the links it lacks and
-     * the whole list, in signed parts; COMMIT; TAKEs the merged list back. A Key Chain list that
-     * would change the phone's is HELD there too (keychainHeld) - "Own links direct, Key Chain held". The links themselves are HELD on the phone until
-     * the person approves them from the Edge tab's banner (Brad, 2026-10-08) - no key
+     * Asks what the phone holds and sends only the links it lacks, in signed parts, then
+     * COMMIT. The phone merges its own links at once; another device's log is HELD there
+     * until the person approves it from the Edge tab's banner (Brad, 2026-10-08) - no key
      * press, no sync link. peerSigner: this computer's own sync key (copy.peerSigner).
-     * -> {sent, seq (always null since 2026-10-08), count, keychainIn,
-     *     keychainOut, keychainHeld, keychain (the merged list, or null)}
+     * -> {sent, seq (always null), count}
      * rejects EEDGE_REFUSED (declined, timeout, a fork - with the phone's words) or EEDGE_NO_ANSWER.
      */
-    syncToPhone(peerSigner: any, { deviceId, records, name, keychain }: {
+    syncToPhone(peerSigner: any, { deviceId, records, name }: {
         deviceId: any;
         records: any;
         name: any;
-        keychain?: null | undefined;
     }): Promise<{
-        sent: number;
-        seq: null;
-        count: number;
-        keychainIn: number;
-        keychainOut: number;
-        keychain: null;
-        keychainHeld?: undefined;
-    } | {
         sent: any;
         seq: any;
         count: any;
-        keychainIn: any;
-        keychainOut: any;
-        keychainHeld: boolean;
-        keychain: any;
     }>;
     /**
      * Pick up a budget another process asked for (with the same store). The
@@ -258,8 +242,8 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
         scopes: any;
         /**
          * The head this budget holds (hex): what the agent's next use TX starts over,
-         * and what `okedge exec --head` must name - proof the agent saw its own
-         * last receipt's reply (mcp-service.md §4.2a).
+         * and what `onlykey-js edge exec --head` must name - proof the agent saw its own
+         * last receipt's reply (APP.md).
          */
         head(): string;
         /** the uses still waiting for their receipt (seqs) */

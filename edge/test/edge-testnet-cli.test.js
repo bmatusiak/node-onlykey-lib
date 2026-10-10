@@ -1,5 +1,5 @@
 /*
- * `onlykey-js edge --test-mode` (BLOCKS.md §5; Brad, 2026-10-07: "we should treat
+ * `onlykey-js edge --test-mode` (BLOCKS.md; Brad, 2026-10-07: "we should treat
  * --test-mode as test net for cli for edge"; "everthing for test is throwaway"):
  * its own home, its own Key Chain file, TESTNET said first - and the next run
  * without it is back on the live chain.

@@ -55,7 +55,7 @@ test('answerEnvelope: an older computer (no envelope) gets its answer unchanged'
   assert.deepStrictEqual(wire.answerEnvelope({ type: 'note' }, { ok: 1 }, { dev: 'phone' }), { ok: 1 });
 });
 
-/* THE TESTNET (BLOCKS.md §5; Brad, 2026-10-07): live and test never answer each other */
+/* THE TESTNET (BLOCKS.md; Brad, 2026-10-07): live and test never answer each other */
 test('net: a request names its chain, and an answer from the other chain becomes a refusal - both ways', async () => {
   for (const [mine, theirs] of [['test', 'live'], ['live', 'test']]) {
     const t = fakeTransport();

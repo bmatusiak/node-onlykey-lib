@@ -1,5 +1,5 @@
 'use strict';
-/* okedge ping (Brad, 2026-10-06): random bytes to the phone and back, checked by their SHA-256. */
+/* onlykey-js edge ping (Brad, 2026-10-06): random bytes to the phone and back, checked by their SHA-256. */
 const test = require('node:test');
 const assert = require('node:assert');
 const { ping, client } = require('../src');

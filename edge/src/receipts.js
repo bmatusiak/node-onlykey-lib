@@ -11,7 +11,7 @@
  *                    || code (u8) || msg_hash)
  *   msg_hash = SHA256(message as UTF-8)
  *
- * CHOSEN: `linkhash[ref_seq]` in firmware.md R16 is read as head[ref_seq] (the
+ * CHOSEN: `linkhash[ref_seq]` in SPEC.md R16 is read as head[ref_seq] (the
  * weld after that link), which commits to the whole history up to it and is
  * kept beside each link in the key's ring (R5).
  *
@@ -61,60 +61,39 @@ const OWES = (u) => u.status !== 'no-receipt-owed';
  *             before), or a second receipt for the same use
  */
 /*
- * SETTLE (firmware.md R18): a human's press clears every owed receipt at once.
- * The key links it as a receipt (code 0x8F, the press flag, grant_id field =
- * the oldest seq it settles) whose subject lists what it settled:
- *   SHA256("OKEDGE-SETTLE-v1" || each settled seq (u32 LE, oldest first) || overflow (1 byte))
+ * SETTLE (SPEC.md R18): a person's press clears the owed receipt. The key links it as a
+ * receipt (code 0x8F, the press flag, grant_id field = the settled seq) whose subject names it:
+ *   SHA256("OKEDGE-SETTLE-v1" || the settled seq (u32 LE))
  */
-function settleSubject(seqs, overflow) {
-  return H(TAG.SETTLE, ...seqs.map((s) => u32le(s)), u8(overflow ? 1 : 0));
+function settleSubject(seq) {
+  return H(TAG.SETTLE, u32le(seq));
 }
 
-/* the key keeps up to this many owed uses (firmware R16); older ones only a settle clears */
-const OWED_MAX = 4;
-
-/* a sign/decrypt that went through owes a receipt, pressed or self-pressed (R16) */
+/* a self-pressed sign/decrypt the key marked owes_receipt owes one (R16) */
 const OWING = new Set([DECISION.APPROVE, DECISION.SELF_PRESS]);
 
 /**
- * The key's own debt list, replayed over the chain (firmware R16-R18), so a
- * host can compare its copy with what HEAD reports (R27):
- *   - an approved sign/decrypt is pushed; past OWED_MAX the oldest falls off
- *     for good and `overflow` is set (only a settle clears it);
- *   - a receipt pays its ref_seq if that use is still on the list;
- *   - a SETTLE (0x8F, the press flag, the subject over exactly this list and
- *     this overflow) clears the list and the overflow.
- * Nothing else changes it: a deny, a timeout, a grant-end, a LOSS.
- *
- * The list does not refill: once a use fell off, a later receipt for a newer
- * one does not bring it back. (Taking "the newest 4 unpaid" instead disagrees
- * with the key after a 5th use and one receipt - 4 waiting by that count, 3
- * owed + overflow on the key.)
- *
- * Replay from the chain's first link; a copy that starts later cannot know
- * the list it started with.
- * -> {owed: [seq, oldest first], overflow, dropped: [seq] (fell off, never paid by a receipt)}
+ * The key's debt, replayed over the chain (SPEC.md R16-R18), so a host can compare its copy
+ * with what HEAD reports (R27). The key keeps ONE owed use: nothing starts while one is owed
+ * (Brad, 2026-10-10: "Drop the owed list = yes").
+ *   - a use the key marked owes_receipt becomes the owed use;
+ *   - a receipt for it pays it;
+ *   - a SETTLE (0x8F, the press flag, the subject over its seq) clears it.
+ * Replay from the chain's first link; a copy that starts later cannot know what it started with.
+ * -> {owed: [seq] or []}
  */
 function keyDebts(entries) {
-  let owed = [];
-  let overflow = false;
-  const dropped = [];
+  let owed = null;
   for (const e of entries) {
     const f = decodeLink(e instanceof Uint8Array ? e : e.link);
     /* R16: the KEY decided at the sign, and wrote it into the link (owes_receipt) - the chain could not replay it */
-    if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && OWING.has(f.decision) && (f.flags & FLAG.OWES_RECEIPT)) {
-      if (owed.length === OWED_MAX) { dropped.push(owed.shift()); overflow = true; }
-      owed.push(f.seq);
-    } else if (f.op === OP.RECEIPT) {
-      if (f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED) && same(f.subject, settleSubject(owed, overflow))) {
-        owed = [];
-        overflow = false;
-      } else {
-        owed = owed.filter((q) => q !== f.refSeq);
-      }
+    if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && OWING.has(f.decision) && (f.flags & FLAG.OWES_RECEIPT)) owed = f.seq;
+    else if (f.op === OP.RECEIPT && owed !== null) {
+      const settled = f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED) && same(f.subject, settleSubject(owed));
+      if (settled || f.refSeq === owed) owed = null;
     }
   }
-  return { owed, overflow, dropped };
+  return { owed: owed === null ? [] : [owed] };
 }
 
 function pairReceipts(entries, messages = {}) {
@@ -147,20 +126,10 @@ function pairReceipts(entries, messages = {}) {
   for (const r of rows) {
     const f = decodeLink(r.link);
     if (f.op !== OP.RECEIPT) continue;
-    /* a SETTLE: 0x8F with the press flag, whose subject recomputes from the uses it cleared */
-    if (f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED)) {
-      const owed = uses.filter((u) => u.seq < f.seq && u.seq >= f.refSeq && !u.receipt && !u.settledBy && OWES(u));
-      const listed = owed.map((u) => u.seq);
-      const overflow = same(f.subject, settleSubject(listed, true));
-      if (overflow || same(f.subject, settleSubject(listed, false))) {
-        for (const u of owed) { u.status = 'settled'; u.settledBy = f.seq; }
-        if (overflow) {
-          for (const u of uses) {
-            if (u.seq < f.refSeq && !u.receipt && !u.settledBy && OWES(u)) { u.status = 'settled-unlisted'; u.settledBy = f.seq; }
-          }
-        }
-        continue;
-      }
+    /* a SETTLE: 0x8F with the press flag, whose subject is over the use it cleared */
+    if (f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED) && same(f.subject, settleSubject(f.refSeq))) {
+      const u = useAt.get(f.refSeq);
+      if (u && u.seq < f.seq && !u.receipt && !u.settledBy && OWES(u)) { u.status = 'settled'; u.settledBy = f.seq; continue; }
     }
     const use = useAt.get(f.refSeq);
     if (!use || f.refSeq >= f.seq) { orphans.push({ seq: f.seq, refSeq: f.refSeq, reason: 'not-a-use' }); continue; }
@@ -185,15 +154,13 @@ function pairReceipts(entries, messages = {}) {
     }
   }
   /*
-   * WAITING vs MISSING (firmware.md R16, as the owner changed it 2026-10-02):
-   * every approved use - pressed or self-pressed - owes a receipt, and the key
-   * keeps the latest OWED_MAX owed uses, any of which still takes its receipt
-   * ("waiting"). An older one fell off the key's list: only a settle clears it
-   * ("missing"). Nothing else - a deny, a timeout, a lock - clears a debt.
+   * WAITING vs MISSING (SPEC.md R16): the use the key still owes takes its receipt ("waiting");
+   * any other unreceipted use that owed is "missing" - only a settle would have cleared it.
+   * Nothing else - a lock, a reboot, an end - clears a debt.
    */
   const onKey = new Set(keyDebts(rows).owed);
   for (const u of uses) if (u.status === 'missing' && onKey.has(u.seq)) u.status = 'waiting';
   return { uses, orphans };
 }
 
-module.exports = { messageHash, receiptSubject, settleSubject, pairReceipts, keyDebts, OWED_MAX };
+module.exports = { messageHash, receiptSubject, settleSubject, pairReceipts, keyDebts };

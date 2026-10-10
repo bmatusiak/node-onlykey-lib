@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * L7 - EDGE FROM AN APP (onlykey-edge okrn-edge-tab.md 4.1 L7; first users
+ * L7 - EDGE FROM AN APP (onlykey-edge APP.md L7; first users
  * apk-signer and the agent service). One small API, so an app never handles
  * TX start, heads or debts by hand:
  *
@@ -122,8 +122,8 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       scopes: record.scopes,
       /**
        * The head this budget holds (hex): what the agent's next use TX starts over,
-       * and what `okedge exec --head` must name - proof the agent saw its own
-       * last receipt's reply (mcp-service.md §4.2a).
+       * and what `onlykey-js edge exec --head` must name - proof the agent saw its own
+       * last receipt's reply (APP.md).
        */
       head() {
         return toHex(state.head);
@@ -149,7 +149,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
          * makes the key treat the use as a press, and the budget would never
          * pay again (found 2026-10-03 by the agent service's test: another
          * process signing during an exec). "Did the agent see its last
-         * receipt?" is asked separately (okedge exec --head vs head()).
+         * receipt?" is asked separately (onlykey-js edge exec --head vs head()).
          */
         const before = await edge.head();
         state.head = before.head;
@@ -276,7 +276,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
   }
 
   /*
-   * AN OWED RECEIPT IS ALWAYS FILEABLE (spec okrn-edge-tab.md, Budgets, 2026-10-06):
+   * AN OWED RECEIPT IS ALWAYS FILEABLE (spec APP.md, Budgets, 2026-10-06):
    * after the budget ended - a lock, a reboot, its lifetime, or the client's own
    * end - the key still owes the use's receipt and checks only that the seq is
    * owed (R16). So it is filed straight to the key, no budget needed, and the
@@ -319,7 +319,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
 
   return {
     /*
-     * okedge ping (Brad, 2026-10-06): a pure link test - size random bytes out,
+     * onlykey-js edge ping (Brad, 2026-10-06): a pure link test - size random bytes out,
      * named by their SHA-256; the phone sends them straight back (testing mode,
      * encrypted session only) and the answer is checked byte for byte. Touches
      * no key and no budget. -> {exact, ms, bytes, wire, why?} (exact, not ok: the
@@ -357,7 +357,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
      * Ask for a budget. scopes: [{op: 'sign'|'decrypt', slot, cap, identity?}]
      * (identity on a derived code, R11a). ttlMinutes: 1..1440.
      * Rejects EEDGE_UNSUPPORTED, EEDGE_INVALID, EEDGE_REFUSED (with .refusal:
-     * declined, timeout, copy_unverified, receipt_owed, restoring, invalid),
+     * declined, timeout, copy_unverified, receipt_owed, still_live, invalid, busy),
      * EEDGE_NO_ANSWER (dropped: not paired, replayed) or EEDGE_OPENING
      * (the answer is not a budget the key opened as asked).
      */
@@ -427,7 +427,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
     },
 
     /**
-     * BLOCKS (BLOCKS.md §3, Brad 2026-10-07): the key's seals (the checkpoints that
+     * BLOCKS (BLOCKS.md, Brad 2026-10-07): the key's seals (the checkpoints that
      * close each block), as the phone keeps them - and the phone's own latest owner
      * statement (its nametag; 2026-10-08), so this computer can offer that phone's log to
      * your other devices. A phone that has no nametag yet gives none. A GIVE asked past the end: no links, just its last-batch fields.
@@ -483,19 +483,16 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
     },
 
     /**
-     * okedge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
+     * onlykey-js edge sync phase 2: bring the PHONE's copy of chain `deviceId` up to
      * date from `records` (this place's verified copy, [{link, head, reveal}])
-     * and merge `keychain` (this place's public Key Chain list, entries) with
-     * the phone's. Asks what the phone holds, sends only the links it lacks and
-     * the whole list, in signed parts; COMMIT; TAKEs the merged list back. A Key Chain list that
-     * would change the phone's is HELD there too (keychainHeld) - "Own links direct, Key Chain held". The links themselves are HELD on the phone until
-     * the person approves them from the Edge tab's banner (Brad, 2026-10-08) - no key
+     * Asks what the phone holds and sends only the links it lacks, in signed parts, then
+     * COMMIT. The phone merges its own links at once; another device's log is HELD there
+     * until the person approves it from the Edge tab's banner (Brad, 2026-10-08) - no key
      * press, no sync link. peerSigner: this computer's own sync key (copy.peerSigner).
-     * -> {sent, seq (always null since 2026-10-08), count, keychainIn,
-     *     keychainOut, keychainHeld, keychain (the merged list, or null)}
+     * -> {sent, seq (always null), count}
      * rejects EEDGE_REFUSED (declined, timeout, a fork - with the phone's words) or EEDGE_NO_ANSWER.
      */
-    async syncToPhone(peerSigner, { deviceId, records, name, keychain = null }) {
+    async syncToPhone(peerSigner, { deviceId, records, name }) {
       const syncLib = require('./sync');
       const { randomBytes } = require('../../src/vendor/exports/@noble/ciphers/utils.js');
       const { toHex: hex } = require('../../src/bytes');
@@ -509,22 +506,10 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       const lacks = syncLib.missing(records, have.ranges || []);
       const sid = hex(randomBytes(8));
       const linkMsgs = lacks.length ? await syncLib.buildLinks({ signer: peerSigner, deviceId, records: lacks, sid }) : [];
-      /* the same list on both sides (the phone said its digest): nothing to send - an empty sync no longer carries the list both ways */
-      const same = keychain && have.keychainDigest && hex(syncLib.keychainDigest(keychain)) === String(have.keychainDigest).toLowerCase();
-      const kcMsgs = keychain && !same ? await syncLib.buildKeychain({ signer: peerSigner, deviceId, sid, entries: keychain }) : [];
-      if (!linkMsgs.length && !kcMsgs.length) return { sent: 0, seq: null, count: 0, keychainIn: 0, keychainOut: 0, keychain: null };
-      for (const m of [...linkMsgs, ...kcMsgs]) await ask(m, `part ${m.payload.part + 1} of ${m.payload.parts}`);
-      const done = await ask(await syncLib.buildCommit({ signer: peerSigner, deviceId, sid, linkParts: linkMsgs.length, keychainParts: kcMsgs.length }), 'the commit');
-      let merged = null;
-      if (done.takeParts) {
-        const plain = [];
-        for (let part = 0; part < done.takeParts; part += 1) {
-          const t = await ask(await syncLib.buildTake({ signer: peerSigner, deviceId, sid, part }), `the merged list, part ${part + 1}`);
-          plain.push(...t.entries);
-        }
-        merged = syncLib.keychainEntriesOf(plain);
-      }
-      return { sent: lacks.length, seq: done.seq ?? null, count: done.count ?? 0, keychainIn: done.keychainIn ?? 0, keychainOut: done.keychainOut ?? 0, keychainHeld: !!done.keychainHeld, keychain: merged };
+      if (!linkMsgs.length) return { sent: 0, seq: null, count: 0 };
+      for (const m of linkMsgs) await ask(m, `part ${m.payload.part + 1} of ${m.payload.parts}`);
+      const done = await ask(await syncLib.buildCommit({ signer: peerSigner, deviceId, sid, linkParts: linkMsgs.length }), 'the commit');
+      return { sent: lacks.length, seq: done.seq ?? null, count: done.count ?? 0 };
     },
 
     /**

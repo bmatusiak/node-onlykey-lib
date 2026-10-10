@@ -44,7 +44,7 @@ export function createWireChannel(transport: any, { timeoutMs, iface, device, lo
 /**
  * @param {any} request
  * @param {any} answer
- * @param {{dev?: string, net?: string, now?: () => number}} [opts]  net: the chain the phone is on (BLOCKS.md §5)
+ * @param {{dev?: string, net?: string, now?: () => number}} [opts]  net: the chain the phone is on (BLOCKS.md)
  */
 export function answerEnvelope(request: any, answer: any, { dev, net, now }?: {
     dev?: string;

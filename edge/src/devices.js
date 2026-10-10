@@ -203,7 +203,7 @@ function completeness({ deviceId, publicKey, records, openings, notes }) {
   const paired = receipts.pairReceipts(records.map((r) => ({ link: r.link, head: r.head })), shaped.messages);
   for (const u of paired.uses) {
     if (u.status === 'no-receipt-owed') continue;
-    if (u.status === 'settled' || u.status === 'settled-unlisted') continue;
+    if (u.status === 'settled') continue;
     if (u.status !== 'receipted') { missing.push(`#${u.seq}: no result (${u.status})`); continue; }
     if (u.message === null || u.message === undefined) missing.push(`#${u.seq}: the message of receipt #${u.receipt.seq} ${u.messageStatus === 'mismatch' ? 'does not match the chain' : 'did not arrive'}`);
   }

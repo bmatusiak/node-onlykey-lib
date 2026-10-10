@@ -2,7 +2,7 @@
 
 /**
  * EDGE_NOTE - the agent's own words about what it did (B7 stage 2, onlykey-edge
- * build/okrn-edge-tab.md "Decided 2026-10-04"). Over the same channel as
+ * APP.md "Decided 2026-10-04"). Over the same channel as
  * EDGE_REQUEST (0xF7 on Bluetooth; the Worker mailbox later):
  *
  *   {type: 'EDGE_NOTE', v: 1, nonce, seq, reason?, receiptMsg?, txRefused?}
@@ -13,7 +13,7 @@
  * check is the phone's, at display time, because a note can arrive before the link it talks
  * about is synced.
  *
- *   reason      why the agent made the use (okedge exec --reason): its claim,
+ *   reason      why the agent made the use (onlykey-js edge exec --reason): its claim,
  *               shown quoted, plain text, at most 280 bytes
  *   receiptMsg   the receipt's message: shown only when it hashes to the receipt's
  *               msg_hash (receipts.pairReceipts does that check)

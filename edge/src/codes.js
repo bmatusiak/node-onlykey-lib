@@ -4,7 +4,7 @@
  * Edge v1 numbers: the byte values inside a 64-byte link, the domain tags the
  * hashes start with, and the receipt codes.
  *
- * WHY THIS FILE EXISTS: the Edge spec (onlykey-edge/build/firmware.md R2-R3,
+ * WHY THIS FILE EXISTS: the Edge spec (SPEC.md R2-R3,
  * R12-R16, RECEIPT-CODES.md) names the fields and their order but leaves the
  * numbers to "the plan". The library, the Python vectors
  * (onlykey-edge/vectors/) and the firmware plugin must agree on them byte for
@@ -22,11 +22,10 @@ const OP = Object.freeze({
   GRANT_END: 7,
   RECEIPT: 8,
   LOSS: 11,
-  /* firmware.md R15a - appended last so the numbers above never move */
+  /* SPEC.md R15a - appended last so the numbers above never move */
   GRANT_HOLD: 13,
   GRANT_RESUME: 14,
-  /* RETIRED 2026-10-08 (Brad: "so the claude key thing is overkill"): the key no longer writes it; kept so a chain that has one still reads; never reused */
-  AGENT_ADD: 15,
+  /* 15 is reserved: it was agent registration, retired 2026-10-08 (Brad: "so the claude key thing is overkill"); never reused, never read */
   /*
    * CONTINUE (R28) - the FIRST link of a device's own chain: the next seq after the chain
    * it continues, welded onto the new genesis, grant_id = debts carried, subject =
@@ -78,10 +77,10 @@ const TAG = Object.freeze({
   /* CHOSEN: device_id = SHA256(DEVICE || the Edge public key X||Y)[0..16] - the key and edge JS both derive it */
   DEVICE: 'OKEDGE-DEVICE-v1',
   RECEIPT: 'OKEDGE-RECEIPT-v1',
-  /* firmware.md R18: a human's press clears every owed receipt at once */
+  /* SPEC.md R18: a human's press clears every owed receipt at once */
   SETTLE: 'OKEDGE-SETTLE-v1',
   /*
-   * firmware.md R13a/R13b: a TX start is bound to the head, the exact request and
+   * SPEC.md R13a/R13b: a TX start is bound to the head, the exact request and
    * what the use is for (the intent, welded into the link). One label since the
    * rename (2026-10-07): the ARM-v1/-v2 split is gone.
    */

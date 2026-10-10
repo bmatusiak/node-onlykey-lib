@@ -142,9 +142,10 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         append({ op: sub === 0x13 ? codes.OP.GRANT_HOLD : codes.OP.GRANT_RESUME, decision: codes.DECISION.APPROVE, slot: 0, flags: sub === 0x14 ? codes.FLAG.PRESS_OBSERVED : 0, grantId: id, subject: new Uint8Array(32) });
         emit(status(0x00));
       } else if (sub === 0x21) {
-        /* as the firmware's settle_pressed: every live budget ends first, each with its grant-end link (Brad, 2026-10-10) */
+        /* as the firmware's settle_pressed: nothing owed is refused; else every live budget ends first, each with its grant-end link (Brad, 2026-10-10) */
+        if (!owed.length) return emit(status(0x08));
         for (const id of [...live]) endBudget(id, codes.END.SETTLED);
-        append({ op: codes.OP.RECEIPT, decision: 0x8f, flags: 1, grantId: owed[0] || 0, subject: receipts.settleSubject(owed, false) });
+        append({ op: codes.OP.RECEIPT, decision: 0x8f, flags: 1, grantId: owed[0], subject: receipts.settleSubject(owed[0]) });
         owed = [];
         emit(seqHead());
       } else if (sub === 0x11) {
@@ -238,7 +239,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       const F = codes.FLAG;
       const seq = append({ op: codes.OP.SIGN, decision: codes.DECISION.SELF_PRESS, slot, flags: F.BUDGET_SPENT | F.OWES_RECEIPT,
         subject, grantId: id, grantStep: b.used, scope: scopes.length ? si + 1 : 0, ...(intent ? { intent } : {}) }, grants.reveal(b.seed, b.uses, b.used));
-      owed.push(seq);
+      owed = [seq]; /* one slot, as the key: nothing starts while one is owed */
       return { seq, paid: true };
     }
     started = false;

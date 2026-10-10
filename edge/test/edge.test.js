@@ -37,12 +37,12 @@ test('vectors: links decode to the fields Python packed, and re-encode byte for 
     assert.equal(toHex(chain.encodeLink(f)), e.link);
     assert.ok(f.reservedZero);
   }
-  const t = chain.decodeLink(fromHex(V.chain[3].link));
+  const t = chain.decodeLink(fromHex(V.chain[4].link));
   assert.equal(t.op, codes.OP.RECEIPT);
-  assert.equal(t.refSeq, 2);
+  assert.equal(t.refSeq, 3);
   assert.equal(t.code, 0);
-  const s = chain.decodeLink(fromHex(V.chain[2].link));
-  assert.deepEqual([s.seq, s.op, s.decision, s.slot, s.grantId, s.grantStep], [2, codes.OP.SIGN, codes.DECISION.SELF_PRESS, 101, 7, 2]);
+  const s = chain.decodeLink(fromHex(V.chain[3].link));
+  assert.deepEqual([s.seq, s.op, s.decision, s.slot, s.grantId, s.grantStep], [3, codes.OP.SIGN, codes.DECISION.SELF_PRESS, 101, 7, 2]);
 });
 
 test('vectors: the budget genesis and every reveal + MAC check out', () => {
@@ -285,16 +285,14 @@ test('budget opening: every forged part fails with its own reason', () => {
 
 const T = V.receipt;
 
-test('receipts: every approved use owes one - receipted, waiting, alarm, or owes none; the message only when it matches', () => {
+test('receipts: every budget use owes one - receipted, or waiting while the key owes it; the message only when it matches', () => {
   const r = receipts.pairReceipts(entries(), { [T.refSeq]: T.message });
   const by = Object.fromEntries(r.uses.map((u) => [u.seq, u]));
-  /* R16 (Brad, 2026-10-02): pressed or self-pressed, every approved use owes; the key keeps the latest 4 */
-  assert.equal(by[1].status, 'waiting');
-  assert.equal(by[2].status, 'receipted');
-  assert.equal(by[2].receipt.name, 'OK');
-  assert.equal(by[2].message, T.message);
-  assert.equal(by[4].status, 'no-receipt-owed'); // denied decrypt
-  assert.equal(by[5].status, 'waiting'); // a human press owes too
+  assert.equal(by[1].status, 'receipted');
+  assert.equal(by[3].status, 'receipted');
+  assert.equal(by[3].receipt.name, 'OK');
+  assert.equal(by[3].message, T.message);
+  assert.equal(by[5].status, 'waiting', 'the key still owes #5');
   assert.deepEqual(r.orphans, []);
 });
 
@@ -304,99 +302,66 @@ function grow(es, fields) {
   es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) });
   return es.length - 1;
 }
-/* a pressed use on a slot a budget covers: it owes (R16 - the key sets owes_receipt, bit 4) */
-const pressedUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_RECEIPT, subject: new Uint8Array(32).fill(es.length) });
-/* the person's own direct press on a slot no budget covers: linked, owes nothing (R16) */
-const directUse = (es) => grow(es, { op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 3, flags: codes.FLAG.PRESS_OBSERVED, subject: new Uint8Array(32).fill(es.length) });
 
-test('receipts: R16 - a direct press with neither owes_receipt nor started owes nothing; the key decided at the sign', () => {
+/*
+ * ONE OWED USE (Brad, 2026-10-10: "Drop the owed list = yes"): nothing starts while a receipt is
+ * owed, so the key keeps one owed use, or none. A receipt for it pays it; a settle clears it.
+ */
+test('receipts: the key owes one use at a time - its receipt pays it, and then nothing is owed', () => {
   const es = entries();
-  const before = receipts.keyDebts(es);
-  const d = directUse(es);
-  const u = receipts.pairReceipts(es).uses.find((x) => x.seq === d);
-  assert.equal(u.status, 'no-receipt-owed');
-  assert.deepEqual(receipts.keyDebts(es), before, 'a direct press added a debt');
-  /* the same press on a covered slot owes */
-  const c = pressedUse(es);
-  assert.equal(receipts.pairReceipts(es).uses.find((x) => x.seq === c).status, 'waiting');
-  assert.ok(receipts.keyDebts(es).owed.includes(c));
+  assert.deepEqual(receipts.keyDebts(es).owed, [5]);
+  grow(es, { op: codes.OP.RECEIPT, decision: 0x00, grantId: 5, subject: receipts.receiptSubject({ refSeq: 5, refHead: es[5].head, code: 0, msgHash: receipts.messageHash('tagged') }) });
+  assert.deepEqual(receipts.keyDebts(es).owed, []);
+  assert.equal(receipts.pairReceipts(es).uses.find((u) => u.seq === 5).status, 'receipted');
 });
 
-test('receipts: a deny does not clear a debt; past the key\'s 4, the oldest can only be settled (missing)', () => {
-  const es = entries();
-  grow(es, { op: codes.OP.DECRYPT, decision: codes.DECISION.DENY, slot: 1, subject: new Uint8Array(32) });
-  let by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u.status]));
-  assert.equal(by[5], 'waiting', 'a deny in between does not clear the debt');
-  /* 1 and 5 owe; three more uses make 5 owed - the oldest (1) falls off the key's list */
-  pressedUse(es); pressedUse(es); pressedUse(es);
-  by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u.status]));
-  assert.equal(by[1], 'missing');
-  assert.deepEqual([by[5], by[7], by[8], by[9]], ['waiting', 'waiting', 'waiting', 'waiting']);
-});
-
-/* the SETTLE link the key writes (firmware R18): 0x8F, the press flag, grant_id = oldest settled, subject over the list */
-function settle(es, seqs, overflow) {
-  return grow(es, {
-    op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: seqs[0],
-    subject: receipts.settleSubject(seqs, overflow),
-  });
+/* the SETTLE link the key writes (SPEC.md R18): 0x8F, the press flag, grant_id = the settled seq, subject over it */
+function settle(es, seq) {
+  return grow(es, { op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: seq, subject: receipts.settleSubject(seq) });
 }
 
 test('receipts: the SETTLE subject matches the Python reading', () => {
-  assert.equal(toHex(receipts.settleSubject(V.settle.seqs, Boolean(V.settle.overflow))), V.settle.subject);
-  assert.equal(toHex(receipts.settleSubject([5, 6, 7, 8], true)), V.settle.overflowSubject);
+  assert.equal(toHex(receipts.settleSubject(V.settle.seq)), V.settle.subject);
 });
 
-test('receipts: a SETTLE clears every use it lists - and, with overflow, the older ones too', () => {
+test('receipts: a SETTLE clears the owed use', () => {
   const es = entries();
-  const w = settle(es, [1, 5], false);
-  let by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u]));
-  assert.deepEqual([by[1].status, by[1].settledBy, by[5].status], ['settled', w, 'settled']);
-  /* overflow: five owed, the key lists the latest 4; the oldest is covered as "settled, not listed" */
-  const es2 = entries();
-  pressedUse(es2); pressedUse(es2); pressedUse(es2);
-  const w2 = settle(es2, [5, 6, 7, 8], true);
-  by = Object.fromEntries(receipts.pairReceipts(es2).uses.map((u) => [u.seq, u]));
-  assert.equal(by[1].status, 'settled-unlisted');
-  assert.deepEqual([5, 6, 7, 8].map((q) => by[q].status), ['settled', 'settled', 'settled', 'settled']);
-  assert.equal(by[8].settledBy, w2);
+  const w = settle(es, 5);
+  const u = receipts.pairReceipts(es).uses.find((x) => x.seq === 5);
+  assert.deepEqual([u.status, u.settledBy], ['settled', w]);
+  assert.deepEqual(receipts.keyDebts(es).owed, []);
 });
 
-test('receipts: an agent\'s own 0x8F receipt is not a settle - it pays one use and is an alarm', () => {
+test('receipts: an agent\'s own 0x8F receipt is not a settle - it pays its use and is an alarm', () => {
   const es = entries();
   const ref = 5;
-  const l = chain.encodeLink({
-    seq: es.length, op: codes.OP.RECEIPT, decision: 0x8f, grantId: ref,
-    subject: receipts.receiptSubject({ refSeq: ref, refHead: es[ref].head, code: 0x8f, msgHash: receipts.messageHash('look at this') }),
-  });
-  es.push({ link: l, head: chain.weld(es[es.length - 1].head, l) });
-  const by = Object.fromEntries(receipts.pairReceipts(es, { [ref]: 'look at this' }).uses.map((u) => [u.seq, u]));
-  assert.equal(by[5].status, 'alarm');
-  assert.equal(by[5].message, 'look at this');
-  assert.equal(by[1].status, 'waiting', 'it paid only its own use');
+  grow(es, { op: codes.OP.RECEIPT, decision: 0x8f, grantId: ref, subject: receipts.receiptSubject({ refSeq: ref, refHead: es[ref].head, code: 0x8f, msgHash: receipts.messageHash('look at this') }) });
+  const u = receipts.pairReceipts(es, { [ref]: 'look at this' }).uses.find((x) => x.seq === ref);
+  assert.deepEqual([u.status, u.message, u.settledBy], ['alarm', 'look at this', null]);
 });
 
 test('receipts: a message that does not match its hash is never shown as text', () => {
   const r = receipts.pairReceipts(entries(), { [T.refSeq]: T.message + ' (edited)' });
-  const u = r.uses.find((x) => x.seq === 2);
+  const u = r.uses.find((x) => x.seq === 3);
   assert.equal(u.message, null);
   assert.equal(u.messageStatus, 'mismatch');
 });
 
+/* the opening and use #1, then a receipt (seq 2) with this code for refSeq */
 function withReceipt(code, refSeq) {
-  const es = entries().slice(0, 3);
+  const es = entries().slice(0, 2);
   const refHead = es[refSeq].head;
   const l = chain.encodeLink({
-    seq: 3, op: codes.OP.RECEIPT, decision: code, grantId: refSeq,
+    seq: 2, op: codes.OP.RECEIPT, decision: code, grantId: refSeq,
     subject: receipts.receiptSubject({ refSeq, refHead, code, msgHash: receipts.messageHash('m') }),
   });
-  es.push({ link: l, head: chain.weld(es[2].head, l) });
+  es.push({ link: l, head: chain.weld(es[1].head, l) });
   return es;
 }
 
 test('receipts: bit 7 and an unknown code are both alarms (fails closed)', () => {
   for (const code of [0x81, 0x42, 0x0f]) {
-    const u = receipts.pairReceipts(withReceipt(code, 2), { 2: 'm' }).uses.find((x) => x.seq === 2);
+    const u = receipts.pairReceipts(withReceipt(code, 1), { 1: 'm' }).uses.find((x) => x.seq === 1);
     assert.equal(u.status, 'alarm', `code 0x${code.toString(16)}`);
   }
   assert.equal(codes.receiptCode(0x42).known, false);
@@ -404,8 +369,8 @@ test('receipts: bit 7 and an unknown code are both alarms (fails closed)', () =>
 
 test('receipts: a receipt for the wrong seq is an orphan, and the use it skipped is still waiting', () => {
   const r = receipts.pairReceipts(withReceipt(0x00, 0)); // seq 0 is the grant-create, not a use
-  assert.deepEqual(r.orphans, [{ seq: 3, refSeq: 0, reason: 'not-a-use' }]);
-  assert.equal(r.uses.find((x) => x.seq === 2).status, 'waiting');
+  assert.deepEqual(r.orphans, [{ seq: 2, refSeq: 0, reason: 'not-a-use' }]);
+  assert.equal(r.uses.find((x) => x.seq === 1).status, 'waiting');
 });
 
 /* ---- Hermes ---- */
@@ -417,28 +382,11 @@ test('Hermes: the whole library runs with Buffer, TextEncoder/Decoder and crypto
     const r = chain.verify(entries(), { deviceId, expectHead: keyHead() });
     assert.equal(r.ok, true);
     const p = receipts.pairReceipts(entries(), { [T.refSeq]: T.message });
-    assert.equal(p.uses.find((x) => x.seq === 2).message, T.message);
+    assert.equal(p.uses.find((x) => x.seq === 3).message, T.message);
     assert.deepEqual(grants.checkSpends(G(), V.grant.uses, [spend(0), spend(1)]), { ok: true, spent: 2 });
   } finally {
     for (const [k, v] of Object.entries(saved)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
   }
-});
-
-test('receipts: the key\'s list does not refill - 5 owed, one receipt: 3 waiting + 1 missing, as HEAD says 3 + overflow', () => {
-  const es = entries();
-  pressedUse(es); pressedUse(es); pressedUse(es); /* owed: 1, 5, 6, 7, 8 -> 1 fell off */
-  let d = receipts.keyDebts(es);
-  assert.deepEqual([d.owed, d.overflow, d.dropped], [[5, 6, 7, 8], true, [1]]);
-  /* a receipt for 8 (refHead = head[8]) */
-  grow(es, { op: codes.OP.RECEIPT, decision: 0x00, grantId: 8, subject: receipts.receiptSubject({ refSeq: 8, refHead: es[8].head, code: 0, msgHash: receipts.messageHash('x') }) });
-  d = receipts.keyDebts(es);
-  assert.deepEqual([d.owed, d.overflow], [[5, 6, 7], true]);
-  const by = Object.fromEntries(receipts.pairReceipts(es).uses.map((u) => [u.seq, u.status]));
-  assert.deepEqual([by[1], by[5], by[6], by[7], by[8]], ['missing', 'waiting', 'waiting', 'waiting', 'receipted']);
-  /* the settle over exactly this list and overflow clears both */
-  grow(es, { op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: 5, subject: receipts.settleSubject([5, 6, 7], true) });
-  d = receipts.keyDebts(es);
-  assert.deepEqual([d.owed, d.overflow], [[], false]);
 });
 
 /* R11a: an identity NAME becomes the derive label exactly as the agents hash it, and the grant subject commits to it */

@@ -2,7 +2,7 @@
 
 /**
  * EDGE_REQUEST - a budget request, the same message on every channel
- * (onlykey-edge build/mcp-service.md 4.7a, decided 2026-10-03).
+ * (onlykey-edge APP.md, decided 2026-10-03).
  *
  * The key only ever sees hashes - the reason hash, the identity labels - but
  * the person must approve the TEXT and the NAMES. So a budget request goes to

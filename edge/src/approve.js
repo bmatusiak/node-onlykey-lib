@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * THE APP'S SIDE OF A BUDGET REQUEST (onlykey-edge mcp-service.md 4.7a): what
+ * THE APP'S SIDE OF A BUDGET REQUEST (onlykey-edge APP.md): what
  * ok-rn runs when an EDGE_REQUEST arrives - everything but the screen, which
  * comes in as `ask`. One implementation, so every app that approves budgets
  * applies the same rules:
@@ -74,7 +74,7 @@ async function approveRequest(msg, { edge, from = null, seen, ask, verifyCopy, b
   if (!copy || !copy.ok || !(copy.head instanceof Uint8Array)) return refuse('copy_unverified');
 
   const h = await edge.head();
-  if (h.owed || h.overflow) return refuse('receipt_owed');
+  if (h.owed) return refuse('receipt_owed');
 
   let g;
   try {

@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * The agent service (edge/cli/agent.js; onlykey-edge mcp-service.md §4.2a,
+ * The agent service (edge/cli/agent.js; onlykey-edge APP.md,
  * decided 2026-10-03), on the fake Edge key, with the phone's side in-process.
  * The rules under test:
  * - each exec gets its own endpoint; the budget pays once, only for a sign on

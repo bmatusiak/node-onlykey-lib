@@ -5,7 +5,7 @@ const { utf8ToBytes } = require('../../src/bytes');
 /**
  * Edge budgets ("grants", spec L2): checking a self-press.
  *
- * THE CONSTRUCTION (firmware.md R11-R13; bmatusiak/provable). When a person
+ * THE CONSTRUCTION (SPEC.md R11-R13; bmatusiak/provable). When a person
  * clasps a budget of n uses (n = the sum of its scopes' caps, <= 1024), the key
  * draws a secret seed and publishes only
  *
@@ -35,7 +35,7 @@ function u16le(n) {
 }
 
 /*
- * One budget's chain: at most 1024 uses (firmware.md R11; Brad, 2026-10-02:
+ * One budget's chain: at most 1024 uses (SPEC.md R11; Brad, 2026-10-02:
  * back from 255, "too few once the VM and the Pi are in the loop"). Caps stay
  * u16 per scope. The cost: up to 1,024 SHA-256 runs at the press (G) and per
  * reveal; RAM and flash are unchanged.

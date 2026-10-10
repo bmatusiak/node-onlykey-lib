@@ -165,7 +165,7 @@ export function buildCertificate(openpgp: object, { userId, userIds, curve, crea
 /**
  * A DETACHED signature over `data` by a derived key, as `gpg -bsa` prints it -
  * what git stores in a signed commit (the agent service's gpg shim; onlykey-edge
- * mcp-service.md §4.2a: "the gpg shim signs itself, no Gpg4win; it holds only the
+ * APP.md: "the gpg shim signs itself, no Gpg4win; it holds only the
  * agent's key"). The same hook and the same checks as buildCertificate: the
  * digest openpgp.js computes goes to the device (`sign`), and the signature is
  * checked against the device's own key before it is encoded.

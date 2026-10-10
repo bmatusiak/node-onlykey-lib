@@ -1,14 +1,15 @@
 'use strict';
 
 /**
- * `okedge sync`, phase 1 (onlykey-edge build/mcp-service.md §4.2b; spec session
- * 2026-10-04): the PC keeps its OWN copy of the key's chain. It reads the links
+ * `onlykey-js edge sync` (onlykey-edge BLOCKS.md): the PC keeps its OWN copy of the key's chain. It reads the links
  * the key still holds (PICKUP - a read the key answers unlocked, R8, so no press)
  * and keeps them only after the whole copy verifies against the key (R27).
  *
- * Phase 1 moves nothing anywhere else: no phone copy, no Key Chain list, no other
- * device, no ANCHOR - those change something, and need a sheet + Yes + a press
- * (phase 2). It never moves budgets, debts, agent registrations or "yours" marks,
+ * Reading the key moves nothing anywhere else. Phase 2 (sync.js, client.js) brings
+ * a phone its own links (merged at once, no press) and offers it your other
+ * devices' logs (HELD on the phone until approved from a banner); until 2026-10-08
+ * that took a sheet + Yes + a press and the key kept anchors. It never moves
+ * budgets, debts or "yours" marks,
  * and it REPORTS problems (a gap, a fork, tampering); it never repairs them - the
  * repairs stay on the phone.
  *
@@ -20,7 +21,7 @@
  * owner statement (nametag) - what this computer offers your phones to merge.
  * publicKey is the key's Edge key as the key gave it at the last sync; seals
  * come from the phone (it takes a seal when a budget ends) and cut the copy into
- * JSON blocks (BLOCKS.md §3) - each checked against that key, nothing trusted.
+ * JSON blocks (BLOCKS.md) - each checked against that key, nothing trusted.
  */
 const fs = require('fs');
 const path = require('path');
@@ -177,7 +178,7 @@ async function sync(edge, home, { status = false, history = null } = {}) {
 function lines(r, { status = false } = {}) {
   const out = [];
   out.push(`key ${r.deviceId.slice(0, 16)}: head #${r.key.seq} (${r.key.head.slice(0, 12)}...), holds #${r.key.ringFrom}..#${r.key.seq}`);
-  out.push(`PC copy: ${r.copy.count - (status ? r.copy.added : 0)} link(s)${status ? (r.copy.added ? `, ${r.copy.added} to read (okedge sync)` : ', up to date') : `, ${r.copy.added} new${r.copy.saved ? '' : ' - NOT kept'}`}`);
+  out.push(`PC copy: ${r.copy.count - (status ? r.copy.added : 0)} link(s)${status ? (r.copy.added ? `, ${r.copy.added} to read (onlykey-js edge sync)` : ', up to date') : `, ${r.copy.added} new${r.copy.saved ? '' : ' - NOT kept'}`}`);
   const v = r.verdict;
   if (v.kind === 'verified') out.push(`verified through #${v.through}`);
   else if (v.kind === 'gap') out.push(`gap: ${v.gaps.map((g) => (g.from === g.to ? `#${g.from}` : `#${g.from}-#${g.to}`)).join(', ')} - links no copy here holds (repairs are the phone's)`);
@@ -191,7 +192,7 @@ function lines(r, { status = false } = {}) {
   else if (p) out.push(`phone: took ${p.count} link(s)`);
   /* whether this computer can now offer this phone's log to your other devices (keepLog) */
   if (r.log) out.push(r.log.kept ? 'log: kept to offer to your other devices' : `log: not kept to offer - ${r.log.why}`);
-  /* the seals that cut the copy into JSON blocks (BLOCKS.md §3; read on their own, no press) */
+  /* the seals that cut the copy into JSON blocks (BLOCKS.md; read on their own, no press) */
   if (r.blocks) out.push(`seals: ${r.blocks.seals} kept with this copy - onlykey-js edge blocks shows the blocks`);
   else if (r.blocksError) out.push(`seals: not read - ${r.blocksError}`);
   /* your other devices' logs this PC holds, offered to the phone - held there until you approve (2026-10-08) */
@@ -205,8 +206,8 @@ function lines(r, { status = false } = {}) {
 /*
  * This computer's own sync key: <edge home>/peer.key, P-256 (made on first use, this
  * user only). It signs every sync message, so the phone knows which
- * computer offered a log. It is not the agent's key: the agent asks for budgets, the
- * store keeps copies. No peer list on the key or the phone since 2026-10-08 (Brad:
+ * computer offered a log. The agent that asks for budgets has no key of its own (the
+ * Bluetooth pairing names the computer since 2026-10-08). No peer list on the key or the phone since 2026-10-08 (Brad:
  * peers dropped) - a computer the person approved for Bluetooth may offer logs, and
  * the phone holds them until the person approves the merge.
  */

@@ -2,7 +2,7 @@
 
 /*
  * L7 step 2 - EDGE_REQUEST over the Bluetooth vendor channel (edge/src/wire.js)
- * and continue (mcp-service.md 4.7a, 2026-10-03). On the fake key, with the APP's
+ * and continue (APP.md, 2026-10-03). On the fake key, with the APP's
  * side (what ok-rn runs) in-process. No agent registration since 2026-10-08 (Brad:
  * "so the claude key thing is overkill" / "lets cut it out"): who asks is the paired
  * computer, so a continue must come from the computer whose budget it continues.
@@ -215,7 +215,7 @@ test('the key giving up on the press ("Timeout occured ...") is a timeout - the 
   const msg = await request.build({ reason: 'r', scopes: [{ op: 'sign', slot: 1, cap: 1 }], lifetime: 10 });
   /* the head read before the grant answers normally - only the press times out */
   const r = await approve.approveRequest(msg, {
-    edge: { ...edge, head: async () => ({ owed: 0, overflow: false, live: [] }) }, seen: new Set(), ask: async () => 'approve',
+    edge: { ...edge, head: async () => ({ owed: 0, live: [] }) }, seen: new Set(), ask: async () => 'approve',
     verifyCopy: async () => ({ ok: true, head: new Uint8Array(32) }), timeoutMs: 2000,
   });
   assert.equal(r.refusal, 'timeout');

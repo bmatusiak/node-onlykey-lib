@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * EDGE_REQUEST ON THE WIRE: the Bluetooth channel of mcp-service.md 4.7a.
+ * EDGE_REQUEST ON THE WIRE: the Bluetooth channel of APP.md.
  *
  * A budget request goes to the APP, never to the key. Over the soft key's
  * Bluetooth vendor channel it travels as its own message code, OKEDGE_REQUEST
@@ -27,7 +27,7 @@ const { randomBytes } = require('../../src/vendor/exports/@noble/ciphers/utils.j
  * THE ENVELOPE (Brad, 2026-10-06): every message names its sender and itself -
  * wire: {dev, id, ts} - and an answer names the request it answers - re: {dev,
  * id}. The wire has no request ids otherwise, so a late answer to a request that
- * already gave up was taken by the NEXT request (seen with okedge ping: "a
+ * already gave up was taken by the NEXT request (seen with onlykey-js edge ping: "a
  * different id came back"). An answer whose re is not the request waiting is
  * dropped. Outside every signature (they cover named fields only) and inside the
  * encrypted session: it sorts answers, it proves nothing - nonces and the session
@@ -39,7 +39,7 @@ const newId = () => toHex(randomBytes(8));
 /**
  * @param {any} request
  * @param {any} answer
- * @param {{dev?: string, net?: string, now?: () => number}} [opts]  net: the chain the phone is on (BLOCKS.md §5)
+ * @param {{dev?: string, net?: string, now?: () => number}} [opts]  net: the chain the phone is on (BLOCKS.md)
  */
 function answerEnvelope(request, answer, { dev, net, now = Date.now } = {}) {
   const w = request && request.wire;
@@ -112,7 +112,7 @@ function createAssembler() {
  * (transport/lane.js), so no other request from this host lands in it.
  */
 /*
- * THE CHAIN (BLOCKS.md §5; Brad, 2026-10-07: live and test "seperated ... like how bitcoin
+ * THE CHAIN (BLOCKS.md; Brad, 2026-10-07: live and test "seperated ... like how bitcoin
  * does it"): every request names the net this computer is on (onlykey-js edge
  * --test-mode = test), and an answer from a phone on the other chain is turned into a
  * refusal here - a testnet budget can never be asked of, or taken from, the live
@@ -127,7 +127,7 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
     /*
      * opts.timeoutMs: this message's own wait (a ping waits seconds, not the sheet's minutes).
      * opts.times: filled with this computer's own clock - start, written (the last write
-     * acknowledged), firstIn (the answer's first piece), done - for okedge ping - and lane
+     * acknowledged), firstIn (the answer's first piece), done - for onlykey-js edge ping - and lane
      * (when it got the key's lane: start..lane is queue time, not the radio).
      * opts.oneWay: nothing comes back (a ping's receipt): resolves null once written.
      */

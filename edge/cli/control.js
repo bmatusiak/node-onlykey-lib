@@ -2,7 +2,7 @@
 
 /**
  * edge/cli/control.js - how `onlykey-js edge` and the gpg shim reach the agent service
- * (onlykey-edge mcp-service.md §4.2a). One JSON line per request, one per
+ * (onlykey-edge APP.md). One JSON line per request, one per
  * answer, on a local endpoint:
  *
  *   POSIX    ~/.onlykey-js/edge/control.sock  (directory 0700, socket 0600)

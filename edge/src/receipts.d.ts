@@ -20,7 +20,7 @@ export function receiptSubject({ refSeq, refHead, code, msgHash }: {
  *    orphans: receipts for a seq that is not a use (or not one that came
  *             before), or a second receipt for the same use
  */
-export function settleSubject(seqs: any, overflow: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export function settleSubject(seq: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 export function pairReceipts(entries: any, messages?: {}): {
     uses: {
         seq: number;
@@ -47,27 +47,15 @@ export function pairReceipts(entries: any, messages?: {}): {
     }[];
 };
 /**
- * The key's own debt list, replayed over the chain (firmware R16-R18), so a
- * host can compare its copy with what HEAD reports (R27):
- *   - an approved sign/decrypt is pushed; past OWED_MAX the oldest falls off
- *     for good and `overflow` is set (only a settle clears it);
- *   - a receipt pays its ref_seq if that use is still on the list;
- *   - a SETTLE (0x8F, the press flag, the subject over exactly this list and
- *     this overflow) clears the list and the overflow.
- * Nothing else changes it: a deny, a timeout, a grant-end, a LOSS.
- *
- * The list does not refill: once a use fell off, a later receipt for a newer
- * one does not bring it back. (Taking "the newest 4 unpaid" instead disagrees
- * with the key after a 5th use and one receipt - 4 waiting by that count, 3
- * owed + overflow on the key.)
- *
- * Replay from the chain's first link; a copy that starts later cannot know
- * the list it started with.
- * -> {owed: [seq, oldest first], overflow, dropped: [seq] (fell off, never paid by a receipt)}
+ * The key's debt, replayed over the chain (SPEC.md R16-R18), so a host can compare its copy
+ * with what HEAD reports (R27). The key keeps ONE owed use: nothing starts while one is owed
+ * (Brad, 2026-10-10: "Drop the owed list = yes").
+ *   - a use the key marked owes_receipt becomes the owed use;
+ *   - a receipt for it pays it;
+ *   - a SETTLE (0x8F, the press flag, the subject over its seq) clears it.
+ * Replay from the chain's first link; a copy that starts later cannot know what it started with.
+ * -> {owed: [seq] or []}
  */
 export function keyDebts(entries: any): {
-    owed: any[];
-    overflow: boolean;
-    dropped: any[];
+    owed: number[];
 };
-export const OWED_MAX: 4;

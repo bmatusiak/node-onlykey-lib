@@ -1,21 +1,26 @@
 'use strict';
 
 /**
- * okedge sync, phase 2 (onlykey-edge build/mcp-service.md §4.2b; Brad,
+ * onlykey-js edge sync, phase 2 (onlykey-edge APP.md; Brad,
  * 2026-10-05): a place that keeps copies (this PC's copy store first) brings
  * the PHONE's copy of the key's chain up to date - the links the phone lacks,
  * from a copy the PC verified (R27). Pure: no device, no Node built-ins.
  *
- * The rules this follows (Brad / the spec session):
- *  - only a place on the KEY's peer list (R20) may offer links;
- *  - a sync that changes anything shows a sheet, takes Yes and a press, and the
- *    press writes a `sync` link (op 20) whose subject is SHA256 of what moved;
- *    it owes no receipt;
- *  - it moves history only - never budgets, debts, registrations or "yours";
+ * The rules this follows (Brad / the spec session; as of 2026-10-08):
+ *  - a computer the person approved for Bluetooth (paired with its 6-digit code)
+ *    may offer links; until 2026-10-08 that was a place on the KEY's peer list
+ *    (R20), and the key and the phone keep no peer list now;
+ *  - the phone's OWN links merge at once (its own key's, checked against its
+ *    signature) - no sheet, no press, no link on the key. Until 2026-10-08 a sync
+ *    took Yes and a press and the key wrote a `sync` link (op 20); that op is unused;
+ *  - another device's log is HELD on the phone (OFFER) until the person approves
+ *    it from the Edge tab's banner, merged only when complete;
+ *  - it moves history only - never budgets, debts or "yours";
  *  - it REPORTS, never repairs: a link that disagrees with one the phone
  *    already holds is a fork, and the whole sync stops there.
  *
- * Two messages, each signed by the place's own P-256 key (request.peerSigner):
+ * Each message is signed by the place's own P-256 key (request.peerSigner); the
+ * first two:
  *
  *   EDGE_SYNC_HAVE  {deviceId, name}        -> the phone's answer: {ok, ranges}
  *   EDGE_SYNC_LINKS {sid, deviceId, part, parts, links: [[link, head, reveal|null] hex]}
@@ -34,16 +39,7 @@ const { H, u32le } = require('./hash');
 
 const HAVE_TYPE = 'EDGE_SYNC_HAVE';
 const LINKS_TYPE = 'EDGE_SYNC_LINKS';
-/*
- * The Key Chain public list (Brad / the spec, 2026-10-05: "merged, never marking
- * anything yours"). The place sends its WHOLE list in parts; COMMIT asks the
- * phone to merge links and list and show ONE sheet; after the press the place
- * TAKEs back the merged list, so both hold the same one - the sync link's last
- * field is its digest.
- */
-const KEYCHAIN_TYPE = 'EDGE_SYNC_KEYCHAIN';
 const COMMIT_TYPE = 'EDGE_SYNC_COMMIT';
-const TAKE_TYPE = 'EDGE_SYNC_TAKE';
 /*
  * GIVE asks a phone for its own copy of its chain (read-only, history only); HAVE and
  * LINKS carry `chain` = whose links they are (absent: the phone's own). No sibling or
@@ -58,10 +54,9 @@ const GIVE_TYPE = 'EDGE_SYNC_GIVE';
  * "hold these blocks in the app until approved and merged"). devices.classify sorts it.
  */
 const OFFER_TYPE = 'EDGE_SYNC_OFFER';
-const TYPES = [HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, GIVE_TYPE, OFFER_TYPE];
+const TYPES = [HAVE_TYPE, LINKS_TYPE, COMMIT_TYPE, GIVE_TYPE, OFFER_TYPE];
 /* a Key Chain part: JSON text up to this many characters (the wire carries ~14 KB a message) */
-const KEYCHAIN_PART_CHARS = 8000;
-/* no link moved, only the Key Chain list: the sync link's seq fields (CHOSEN, pending the spec) */
+/* "no seq": a checkpoint of a key with no link yet (anchorCheck); it once filled the retired sync link's seq fields when only the Key Chain list moved */
 const NO_SEQ = 0xffffffff;
 const TAG = 'OKEDGE-SYNC-MSG-v1';
 const BATCH = 40;
@@ -127,10 +122,7 @@ function verify(msg, { seen } = {}) {
     }
   }
   const partOk = () => isHex(p.sid, 8) && Number.isInteger(p.part) && Number.isInteger(p.parts) && p.part >= 0 && p.part < p.parts && p.parts <= 255;
-  if (msg.type === KEYCHAIN_TYPE && (!partOk() || !Array.isArray(p.entries))) return { ok: false, reason: 'malformed' };
-  if (msg.type === COMMIT_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.linkParts) || !Number.isInteger(p.keychainParts)
-    || p.linkParts < 0 || p.keychainParts < 0 || p.linkParts > 255 || p.keychainParts > 255)) return { ok: false, reason: 'malformed' };
-  if (msg.type === TAKE_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.part) || p.part < 0 || p.part > 255)) return { ok: false, reason: 'malformed' };
+  if (msg.type === COMMIT_TYPE && (!isHex(p.sid, 8) || !Number.isInteger(p.linkParts) || p.linkParts < 0 || p.linkParts > 255)) return { ok: false, reason: 'malformed' };
   if (p.chain !== undefined && !isHex(p.chain, 16)) return { ok: false, reason: 'malformed' };
   if (msg.type === GIVE_TYPE && (!Number.isInteger(p.from) || p.from < 0 || p.from > 0xffffffff)) return { ok: false, reason: 'malformed' };
   if (msg.type === OFFER_TYPE) {
@@ -207,78 +199,13 @@ function merge(have, offered) {
 
 const bytesOf = (b) => (b instanceof Uint8Array ? b : fromHex(b));
 
-/* ------------------------------------------------ the Key Chain list */
-
-const list = require('../../keychain/src/list');
-
-/*
- * CANONICAL: keys sorted at every level. The same entry built two ways (the
- * phone joining twins, the computer parsing what it took back) had its keys in
- * a different order - identical content, different text - so every sync counted
- * the same entries as new to the computer and asked for a press again (the A13,
- * 2026-10-05), and the two sides' digests of one list could differ.
- */
+/* CANONICAL: keys sorted at every level, so the same payload always signs as the same bytes */
 function canon(v) {
   if (Array.isArray(v)) return v.map(canon);
   if (v && typeof v === 'object') return Object.keys(v).sort().reduce((o, k) => { o[k] = canon(v[k]); return o; }, {});
   return v;
 }
 
-/*
- * What a list IS, for comparing and for the digest - not when each key was last
- * used. lastSeen moves by itself: the agent derives its identities on every
- * start, the soft key records it, and every sync after counted that as new and
- * asked for a press (the A13, 2026-10-05: 2 entries, every time). It still
- * travels with a sync that moves something real; it never makes one.
- */
-const VOLATILE = ['lastSeen'];
-
-/** The entries as list.serialize writes them (public key hex), id order, keys sorted, no lastSeen - one text for one list, on any side. */
-function keychainText(entries) {
-  const sorted = [...entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const doc = JSON.parse(list.serialize(sorted));
-  doc.entries = doc.entries.map((e) => { const o = { ...e }; for (const k of VOLATILE) delete o[k]; return o; });
-  return JSON.stringify(canon(doc));
-}
-
-/** SHA256 of the list in id order - the sync link's last field when a list moved. */
-function keychainDigest(entries) {
-  return crypto.sha256(utf8ToBytes(keychainText(entries)));
-}
-
-/** Entries as plain JSON objects (public key hex), split into parts of about KEYCHAIN_PART_CHARS. */
-function keychainParts(entries) {
-  /* the full entries, lastSeen included - only the comparison leaves it out */
-  const plain = JSON.parse(list.serialize([...entries].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)))).entries;
-  const parts = [];
-  let cur = [];
-  let size = 0;
-  for (const e of plain) {
-    const n = JSON.stringify(e).length;
-    if (cur.length && size + n > KEYCHAIN_PART_CHARS) { parts.push(cur); cur = []; size = 0; }
-    cur.push(e);
-    size += n;
-  }
-  parts.push(cur);
-  return parts;
-}
-
-/** Plain entry objects back to entries - every one checked again (list.parse refuses anything private or "yours"). */
-function keychainEntriesOf(plain) {
-  return list.parse(JSON.stringify({ format: list.FORMAT, version: list.VERSION, entries: plain }));
-}
-
-/** The place's side: its whole list, signed parts under the sync's sid. */
-async function buildKeychain({ signer, deviceId, sid, entries }) {
-  const parts = keychainParts(entries);
-  const out = [];
-  for (let part = 0; part < parts.length; part += 1) {
-    out.push(await sign(KEYCHAIN_TYPE, signer, { sid, deviceId: toHex(deviceId), part, parts: parts.length, entries: parts[part] }));
-  }
-  return out;
-}
-
-/** The place's side: "that is everything - merge it and ask". pcIds: the ids its list holds. */
 /**
  * The computer's side: "that is device `chain`'s log up to its signed checkpoint, with its
  * statement" - for the phone whose key is `deviceId` to HOLD until the person approves.
@@ -297,8 +224,9 @@ function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoi
   });
 }
 
-function buildCommit({ signer, deviceId, sid, linkParts, keychainParts: kcParts }) {
-  return sign(COMMIT_TYPE, signer, { sid, deviceId: toHex(deviceId), linkParts, keychainParts: kcParts });
+/** The place's side: "that is every part" - the phone merges its own links at once (no sheet, no press since 2026-10-08). */
+function buildCommit({ signer, deviceId, sid, linkParts }) {
+  return sign(COMMIT_TYPE, signer, { sid, deviceId: toHex(deviceId), linkParts });
 }
 
 /** R30: the place asks the phone whose key is `deviceId` for its copy of its own chain, from seq `from` (BATCH at a time). */
@@ -314,11 +242,12 @@ function buildGive({ signer, deviceId, from = 0 }) {
  *   publicKey:  that device's checkpoint key (X || Y), as its statement names it
  *   checkpoint: {seq, head, signature} read from that device's key
  *   anchors:    [{seq, head}] the points of that chain this phone merged before
- * ALARMS (spec R30: "a sibling anchors a head its own chain doesn't contain:
- * one device's rollback or tampering is proven by the other"):
- *   bad-checkpoint - not signed by the sibling's key;
- *   rollback       - the sibling's head is now older than one already anchored;
- *   changed        - at a seq already anchored, the sibling's chain now holds another head;
+ * ALARMS (spec R30, written when the key kept siblings: "a sibling anchors a head its
+ * own chain doesn't contain: one device's rollback or tampering is proven by the other";
+ * the check now runs on the phone, against heads it merged before):
+ *   bad-checkpoint - not signed by that device's key;
+ *   rollback       - that device's head is now older than one this phone merged before;
+ *   changed        - at a seq merged before, that device's chain now holds another head;
  *   tampered       - the links do not verify up to the signed checkpoint.
  * -> {ok: true, verifiedThrough, open} | {ok: false, alarm, seq?, detail?}
  *
@@ -351,37 +280,8 @@ function anchorCheck({ records, publicKey, checkpoint, anchors = [] }) {
   return { ok: true, verifiedThrough: v.chain.verifiedThrough, open: v.open };
 }
 
-/** The place's side, after the press: one part of the merged list. */
-function buildTake({ signer, deviceId, sid, part }) {
-  return sign(TAKE_TYPE, signer, { sid, deviceId: toHex(deviceId), part });
-}
-
-/**
- * The phone's side: its list + the place's. -> {merged, in (entries new to the
- * phone, or joined with a twin), out (merged entries the place does not hold as
- * they are)} - out is what TAKE will give back.
- */
-function keychainPlan(phoneEntries, placeEntries) {
-  const m = list.merge(phoneEntries, placeEntries);
-  const mine = new Map(placeEntries.map((e) => [e.id, keychainText([e])]));
-  const out = m.entries.filter((e) => mine.get(e.id) !== keychainText([e]));
-  /* in: new to the phone, joined with a twin, or given fields it lacked */
-  return { merged: m.entries, in: m.added + m.paired + m.joined, out: out.length };
-}
-
-/**
- * The place's side, after TAKE: the merged list must hold every entry the place
- * had (by id, or joined into a twin) - a phone that dropped one is refused.
- * -> {ok, entries} | {ok: false, missing: [id]}
- */
-function checkTaken(placeEntries, taken) {
-  const ids = new Set(taken.map((e) => e.id));
-  const missing = placeEntries.filter((e) => !ids.has(e.id) && !list.findTwin(taken, e)).map((e) => e.id);
-  return missing.length ? { ok: false, missing } : { ok: true, entries: taken };
-}
-
 module.exports = {
-  HAVE_TYPE, LINKS_TYPE, KEYCHAIN_TYPE, COMMIT_TYPE, TAKE_TYPE, GIVE_TYPE, OFFER_TYPE, BATCH, NO_SEQ, buildGive, buildOffer, anchorCheck,
-  keychainText, keychainDigest, keychainParts, keychainEntriesOf, buildKeychain, buildCommit, buildTake, keychainPlan, checkTaken,
+  HAVE_TYPE, LINKS_TYPE, COMMIT_TYPE, GIVE_TYPE, OFFER_TYPE, BATCH, NO_SEQ, buildGive, buildOffer, anchorCheck,
+  buildCommit,
   body, buildHave, buildLinks, verify, recordsOf, rangesOf, missing, merge,
 };

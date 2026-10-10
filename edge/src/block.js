@@ -5,7 +5,7 @@
  * actually what i wanted"; "i dont want every transaction").
  *
  * WHAT A BLOCK IS. The key keeps its small 64-byte links and signs a checkpoint
- * over its head when a block closes - a budget ends, or a sync (BLOCKS.md §1).
+ * over its head when a block closes - a budget ends, or a sync (BLOCKS.md).
  * A block is the links between two such seals, written as ONE canonical JSON
  * document. The key never sees the JSON: it still welds binary links and signs
  * its head. The JSON is what a host keeps, shows, exports and hands to anyone

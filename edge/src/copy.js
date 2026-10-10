@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Edge copy check (firmware.md R27, Brad 2026-10-02): may this host ask the key
+ * Edge copy check (SPEC.md R27, Brad 2026-10-02): may this host ask the key
  * for a budget, or a resume? Only if its OWN copy of the chain verifies, up to
  * the key's live HEAD. A host whose copy does not verify sends nothing, and
  * says why (the tab's sheet, the MCP's `history_mismatch`).
@@ -14,8 +14,6 @@
  * the full check lives here, once, for every host.
  *
  * What must hold, in order (the first failure is the answer):
- *   restoring        the key is mid-restore (R26): the restore is finished in
- *                    ok-rn, by a person, before anything else
  *   chain            every weld from genesis up to the live HEAD (chain.verify)
  *   gap              links missing anywhere from genesis to HEAD
  *   checkpoint       the latest checkpoint's signature, over a head in this copy
@@ -36,7 +34,7 @@
  * for it the counts disagree and the copy fails `debts` - a settle settles it.
  * Never "verify from a checkpoint" alone as a way out.
  *
- * WHAT COUNTS AS VERIFIED (firmware.md R27, tab spec B2; found on the Pixel
+ * WHAT COUNTS AS VERIFIED (SPEC.md R27, tab spec B2; found on the Pixel
  * 2026-10-02, where a key restart left the copy #30-#36 and #48 and the banner
  * offered #0-#47 as lost): anchors are heads the key itself stands behind - the
  * genesis, its live HEAD, and every checkpoint whose signature verifies under
@@ -78,7 +76,7 @@ function lossesIn(entries) {
  * before them is gone - a key keeps only its last few, and only its latest
  * after a restart). The copy's link must equal the key's, byte for byte. What
  * remains of a gap is what is really missing: the only range a person should
- * be offered to accept as lost (spec okrn-edge-tab.md 4.3).
+ * be offered to accept as lost (spec APP.md).
  */
 function heldSeqs(entries, held) {
   const out = new Set();
@@ -93,7 +91,7 @@ function heldSeqs(entries, held) {
 }
 
 /*
- * THE LINK AFTER A LOSS (firmware.md R24, Brad 2026-10-02): its predecessor is
+ * THE LINK AFTER A LOSS (SPEC.md R24, Brad 2026-10-02): its predecessor is
  * gone, so its own bytes cannot be welded. A LOSS {A..B} the key wrote while it
  * held #B+1 names it - the first 28 bytes of SHA-256(link B+1), from the key's
  * memory - and a verified LOSS's word is the key's: the copy's #B+1 is kept
@@ -162,7 +160,7 @@ function uncoveredGaps(entries, gaps, held) {
  * (copy.checkpoints). Only signatures that verify under key.publicKey count.
  */
 /*
- * SEALED (BLOCKS.md §2a; Brad, 2026-10-07: "we only need to verify the new stuff").
+ * SEALED (BLOCKS.md; Brad, 2026-10-07: "we only need to verify the new stuff").
  * sealed = {seq, head}: a checkpoint the CALLER checked THIS session against the
  * key's public key - a seal the key signed when a budget had ended. It stands in
  * for every signature at or below it: those checks, one per budget ever opened,
@@ -294,10 +292,10 @@ function verifyCopyKept(copy, key, prev = null) {
   if (okPrev && sameKeyHead(prev.keyHead, kh) && prev.hash === hash) return { result: prev.result, state: prev, path: 'skipped' };
   let why = null;
   const whyNot = () => !prev ? 'first check' : !(prev.result && prev.result.ok) ? 'last result not ok' : !okPrev ? 'openings changed' :
-    kh.restoring ? 'key restoring' : kh.seq === null ? 'no key head' : !(prev.count > 0) ? 'nothing verified before' :
+    kh.seq === null ? 'no key head' : !(prev.count > 0) ? 'nothing verified before' :
     prev.count > entries.length ? 'copy shrank' : !(entries.length > prev.count || kh.seq > prev.keyHead.seq) ? 'key head changed, no new links' :
     entriesHash(entries, prev.count) !== prev.prefixHash ? 'an older link changed' : 'unknown';
-  if (okPrev && !kh.restoring && kh.seq !== null && prev.count > 0 && prev.count <= entries.length &&
+  if (okPrev && kh.seq !== null && prev.count > 0 && prev.count <= entries.length &&
       (entries.length > prev.count || kh.seq > prev.keyHead.seq) && entriesHash(entries, prev.count) === prev.prefixHash) {
     const out = {};
     const r = verifyCore(copy, key, prev, out);
@@ -312,7 +310,7 @@ function verifyCopyKept(copy, key, prev = null) {
 }
 
 function sameKeyHead(a, b) {
-  return a && b && a.seq === b.seq && same(a.head, b.head) && (a.owed || 0) === (b.owed || 0) && Boolean(a.overflow) === Boolean(b.overflow) && Boolean(a.restoring) === Boolean(b.restoring);
+  return a && b && a.seq === b.seq && same(a.head, b.head) && (a.owed || 0) === (b.owed || 0);
 }
 /* what the state was verified over: every stored link with its head and reveal, in order */
 function entriesHash(entries, count) {
@@ -339,7 +337,6 @@ function openingsHash(openings, grantIds) {
 function verifyCore(copy, key, prev, out) {
   const fail = (reason, extra = {}) => ({ ok: false, reason, ...extra });
   const h = key.head;
-  if (h.restoring) return fail('restoring');
   const deviceId = chain.deviceIdOf(key.publicKey);
   const entries = (copy.links || []).map((e) => (e instanceof Uint8Array ? { link: e } : e));
   const raw = entries.map((e) => e.link);
@@ -506,8 +503,8 @@ function verifyCore(copy, key, prev, out) {
 
   /* the debts the copy implies (from after the last covered gap), against the debts the key reports */
   const d = keyDebts(raw.filter((l) => chain.decodeLink(l).seq > lastGapEnd));
-  if (d.owed.length !== h.owed || d.overflow !== Boolean(h.overflow)) {
-    return fail('debts', { detail: { copy: { owed: d.owed, overflow: d.overflow }, key: { owed: h.owed, overflow: Boolean(h.overflow) } } });
+  if (d.owed.length !== h.owed) {
+    return fail('debts', { detail: { copy: { owed: d.owed }, key: { owed: h.owed } } });
   }
   const result = { ok: true, verifiedThrough: h.seq, head: h.head };
   const last = entries.length ? entries[entries.length - 1] : null;
@@ -515,7 +512,7 @@ function verifyCore(copy, key, prev, out) {
   const lastHead = last ? headAt(lastSeq) : null;
   if (last && lastHead) {
     out.state = {
-      keyHead: { seq: h.seq, head: h.head, owed: h.owed || 0, overflow: Boolean(h.overflow), restoring: Boolean(h.restoring) },
+      keyHead: { seq: h.seq, head: h.head, owed: h.owed || 0 },
       count: entries.length, lastSeq, lastHead, lastGapEnd, spends, openingScopes,
       grants: [...spends.keys()], openingsHash: openingsHash(openings, [...spends.keys()]), result,
     };

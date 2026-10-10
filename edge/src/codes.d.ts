@@ -2,7 +2,7 @@
  * Edge v1 numbers: the byte values inside a 64-byte link, the domain tags the
  * hashes start with, and the receipt codes.
  *
- * WHY THIS FILE EXISTS: the Edge spec (onlykey-edge/build/firmware.md R2-R3,
+ * WHY THIS FILE EXISTS: the Edge spec (SPEC.md R2-R3,
  * R12-R16, RECEIPT-CODES.md) names the fields and their order but leaves the
  * numbers to "the plan". The library, the Python vectors
  * (onlykey-edge/vectors/) and the firmware plugin must agree on them byte for
@@ -20,7 +20,6 @@ export const OP: Readonly<{
     LOSS: 11;
     GRANT_HOLD: 13;
     GRANT_RESUME: 14;
-    AGENT_ADD: 15;
     CONTINUE: 16;
 }>;
 export const DECISION: Readonly<{

@@ -3,7 +3,7 @@
 /**
  * cli/ssh-session-bind.js - which server an ssh connection is talking to,
  * PROVEN, so an Edge budget pays only for the hosts it was opened for
- * (onlykey-edge build/mcp-service.md §4.2a, decided 2026-10-03: "check the
+ * (onlykey-edge APP.md, decided 2026-10-03: "check the
  * host key against the pinned github.com keys before the budget pays").
  *
  * OpenSSH 8.9+ sends the agent `session-bind@openssh.com` on every

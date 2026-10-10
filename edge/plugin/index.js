@@ -1,5 +1,5 @@
 /*
- * edge - the device calls for OnlyKey Edge (spec okrn-edge-tab.md L4/L5).
+ * edge - the device calls for OnlyKey Edge (spec APP.md/L5).
  *
  * The firmware half is minimal by design (owner, 2026-10-02): the key is a
  * notary that welds each decision, decides budget self-presses, makes one
@@ -76,14 +76,14 @@ function hexHead(bytes) {
 
 /*
  * Is this report a HEAD answer? The key pads its 61 bytes with zeros and its
- * flags are small: three zero bytes, a 4-bit hold mask, owed <= OWED_MAX, two
- * booleans. A signature passes all of that about once in 2^32. (Byte 60 is the
+ * flags are small: three zero bytes, a 4-bit hold mask, owed 0 or 1, byte 58
+ * zero. A signature passes all of that about once in 2^32. (Byte 60 is the
  * refused-TX start counter since B7 stage 2; older firmware sends 0 there.)
  */
 function isHeadReply(r) {
   /* bytes 61-63 zero (v1: every key takes TX start {token, intent}; no capability byte) */
   if (r.length < 64 || r[61] | r[62] | r[63]) return false;
-  return r[56] < 16 && r[57] <= receipts.OWED_MAX && r[58] <= 1 && r[59] <= 1;
+  return r[56] < 16 && r[57] <= 1 && r[58] === 0 && r[59] <= 1;
 }
 
 /*
@@ -332,7 +332,7 @@ function setup(imports, register) {
     /**
      * {seq (null = no link yet), head, oldest (oldest pickable seq, or null),
      *  live: [budget ids], held: [the live ids on hold (R15a)], owed: number of
-     *  uses owing a receipt (R16), overflow: an owed use fell off the key's list,
+     *  uses owing a receipt, 0 or 1 (R16),
      *  refusedTx: TX starts the key refused since power-up, RAM only (B7 stage 2;
      *  0 on firmware before it) - a refused TX start writes no link, so this is the
      *  key's own evidence; the phone alarms when it rises}
@@ -350,7 +350,6 @@ function setup(imports, register) {
         live: ids.filter(Boolean),
         held: ids.filter((id, i) => id && (mask >> i) & 1),
         owed: r[57],
-        overflow: Boolean(r[58]),
         refusedTx: r[60],
       };
     },
@@ -481,9 +480,10 @@ function setup(imports, register) {
      * exactly the bytes the next sign/decrypt will submit. The key gets only
      * the token SHA256("OKEDGE-TX-v1" || head || subject || intent) and pays for the next
      * request only if it recomputes the same token from its own head and that
-     * request; anything else uses the TX start up and needs a press. Refused -
-     * EdgeError 'receipt-owed', 'nothing-to-pay' - when a receipt is
-     * owed, or no live budget off hold and unexpired could pay. A stale head shows at the sign (as a press), not here.
+     * request; any other request - or the same one after the head moved - is
+     * refused at the sign (EDGE:1C, no press, no link) and uses the TX start up.
+     * Refused here - EdgeError 'receipt-owed', 'nothing-to-pay' - when a receipt
+     * is owed, or no live budget off hold and unexpired could pay.
      */
     /** R13a + R13b: TX start {token, intent} - always 48 bytes; the intent is 16 zero bytes when opts.intent (grants.intentOf) is not given */
     async txStart(head, subject, opts = {}) {

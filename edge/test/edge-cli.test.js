@@ -3,7 +3,7 @@
 /*
  * The agent service end to end on the fake Edge key: the control endpoint,
  * `onlykey-js edge`, and the gpg shim run by a REAL `git commit -S` in a scratch repo
- * (onlykey-edge daily-loop.md §5 step 1, minus the emulator). The phone's side
+ * (onlykey-edge SPEC.md step 1, minus the emulator). The phone's side
  * is in-process (approve.approveRequest). Checks: the budget opens through
  * okedge; a commit signed inside `onlykey-js edge exec` carries a signature openpgp
  * verifies against the agent's certificate, and the key's link is paid by the
@@ -89,7 +89,7 @@ function capture() {
   return { lines, io: { out: (s) => lines.push(s), err: (s) => lines.push(`ERR ${s}`) } };
 }
 
-test('okedge budget, then `git commit -S` inside okedge exec: the commit is signed by the agent\'s key and paid by the budget', async () => {
+test('onlykey-js edge budget, then `git commit -S` inside onlykey-js edge exec: the commit is signed by the agent\'s key and paid by the budget', async () => {
   const s = await stack();
   try {
     let cap = capture();
@@ -160,7 +160,7 @@ test('the gpg shim outside an exec is refused - budget or no go: no signature, n
   }
 });
 
-test('okedge exec returns the command\'s own exit code', async () => {
+test('onlykey-js edge exec returns the command\'s own exit code', async () => {
   const s = await stack();
   try {
     let cap = capture();
@@ -175,7 +175,7 @@ test('okedge exec returns the command\'s own exit code', async () => {
   }
 });
 
-test('okedge watch --once: one line per use with its reason, its receipt under it; an ordinary press shows nothing (not Edge, 2026-10-06)', async () => {
+test('onlykey-js edge watch --once: one line per use with its reason, its receipt under it; an ordinary press shows nothing (not Edge, 2026-10-06)', async () => {
   const s = await stack();
   try {
     let cap = capture();
@@ -208,7 +208,7 @@ test('okedge watch --once: one line per use with its reason, its receipt under i
   }
 });
 
-test('okedge exec --press is gone (Brad, 2026-10-06, R13b: budget or no go) - refused before anything runs', async () => {
+test('onlykey-js edge exec --press is gone (Brad, 2026-10-06, R13b: budget or no go) - refused before anything runs', async () => {
   const s = await stack();
   try {
     const cap = capture();

@@ -129,6 +129,27 @@ by the tests, not yet by a live Gpg4win.
 There is no firmware update command - that is not something this program can
 do - and no backup or restore, which need their own safety design first.
 
+## keychain - the Key Chain plugin (`keychain/`)
+
+`onlykey-js keychain list | show | export | import | cert | slots | pub | derive | gen`: the keys
+an OnlyKey holds or derives, kept in a list on this computer (`~/.onlykey-js/keychain.json`) with
+their names, public keys and artifacts. It is a plugin: the core never requires `keychain/`, and
+without the folder the command is simply not there. It also decodes the soft key's press record
+(`keychain/src/press.js`) and names a derived identity's label from the list
+(`derive.labelHashOf`). Its spec: `onlykey-edge/features/KEY-CHAIN-SPEC.md`.
+
+## edge - OnlyKey Edge (`edge/`)
+
+`onlykey-js edge setup | budget | continue | end | status | exec | receipt | watch | sync | blocks |
+agent`, and `--test-mode` for the testnet: an AI agent signs under a budget the person approved
+on the phone, each use bound to its request and receipted. Another plugin, used the same way: the
+core never requires `edge/`. Every option, and what each command may do: `onlykey-edge/CLI.md`.
+The protocol and its rules: `onlykey-edge/edge/SPEC.md`.
+
+Every press any command asks for is said first with the fingerprint of the exact bytes sent
+(`(message ab12 cd34 ef56 0011)`); a soft key's press sheet shows the same fingerprint from the
+firmware.
+
 ## node-hid is an optional PEER dependency
 
 Reaching a USB key from Node needs `node-hid` (hidapi), a native addon. It is

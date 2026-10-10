@@ -1,6 +1,6 @@
 'use strict';
 /*
- * R28 (onlykey-edge firmware.md, decided 2026-10-04): one chain per physical
+ * R28 (onlykey-edge SPEC.md, decided 2026-10-04): one chain per physical
  * device. A device moving to its own chain writes a CONTINUE link first - the next
  * seq after the chain it continues, welded onto its NEW genesis - and a host's copy
  * of the new chain starts there. The firmware side is the plugin's kit test.

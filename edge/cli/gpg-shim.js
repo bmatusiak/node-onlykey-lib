@@ -3,7 +3,7 @@
 
 /**
  * edge/cli/gpg-shim.js - what git runs as gpg.program inside `onlykey-js edge exec`
- * (onlykey-edge mcp-service.md §4.2 / §4.2a: "a gpg-compatible signing shim";
+ * (onlykey-edge APP.md / §4.2a: "a gpg-compatible signing shim";
  * decided 2026-10-03: it signs itself, no Gpg4win, and holds only the agent's key).
  *
  * git signs a commit by running `<gpg.program> --status-fd=2 -bsau <key>`,
@@ -13,7 +13,8 @@
  * signature (edge/cli/agent.js, the agent's own derived PGP key); the exec's
  * one-time token (OKEDGE_GPG_TOKEN, set by `onlykey-js edge exec`) is what lets the
  * work budget pay for it. Without the token - or once the exec's one use is
- * spent - the key asks for a press. Verifying is not this program's job: it
+ * spent - the sign is refused (budget or no go); a pressed gpg sign is the
+ * ordinary `onlykey-js gpg-agent`. Verifying is not this program's job: it
  * refuses --verify and points at gpg.
  */
 

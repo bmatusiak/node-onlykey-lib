@@ -2,7 +2,7 @@
 
 /**
  * edge/cli/agent.js - the agent service (Edge Phase 2; onlykey-edge
- * build/mcp-service.md §4.2 / §4.2a, decided 2026-10-03; PROPOSAL-edge-agent.md).
+ * APP.md / §4.2a, decided 2026-10-03; PROPOSAL-APP.md).
  *
  * WHAT IT IS FOR. git calls an ssh-agent and a gpg program; neither protocol
  * can carry "this signature is for this reason, after this head". So the
@@ -12,10 +12,10 @@
  * THE ONE RULE THAT MAKES IT SAFE (the spec session's fix): each exec gets its
  * OWN endpoint - a fresh owner-only SSH_AUTH_SOCK and a one-time gpg-shim
  * token - closed when the command exits (cap 10 min). The budget pays only
- * for a sign that arrives on THAT endpoint, once. The shared ssh-agent
- * endpoint never pays: a sign there is always a press. So another process
- * signing while an exec runs cannot spend the exec's use - it is not on the
- * exec's endpoint, and does not know its token.
+ * for a sign that arrives on THAT endpoint, once; there is no shared endpoint,
+ * and a sign the budget cannot pay is refused, never pressed. So another
+ * process signing while an exec runs cannot spend the exec's use - it is not on
+ * the exec's endpoint, and does not know its token.
  *
  * And for ssh, the budget pays only when the connection is bound
  * (session-bind@openssh.com, verified) to a PINNED host - github.com by
@@ -83,9 +83,9 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
    * still in the ring is found; the rest are older than the ring.
    */
   const keyOwed = async (h, rows = null) => {
-    if (!h.owed && !h.overflow) return { seqs: [], older: 0 };
+    if (!h.owed) return { seqs: [], older: 0 };
     const seqs = receipts.keyDebts(rows || await ring(h)).owed;
-    return { seqs, older: Math.max(0, h.owed - seqs.length) + (h.overflow ? 1 : 0) };
+    return { seqs, older: Math.max(0, h.owed - seqs.length) };
   };
   /* edge watch: what this agent knows about a link (reason, receipt), and its own events - kept short */
   const notes = new Map();
@@ -99,7 +99,8 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     events.push({ n: ++eventN, at: new Date().toISOString(), kind, message });
     while (events.length > 64) events.shift();
   };
-  const owedText = (k) => [k.seqs.length ? `receipts for #${k.seqs.join(', #')}` : '', k.older ? `${k.older} older than the key's ring (settle on the phone)` : ''].filter(Boolean).join(' and ');
+  /* the key owes one use at a time; its seq is known when the use is still in the key's ring */
+  const owedText = (k) => (k.seqs.length ? `a receipt for #${k.seqs[0]}` : "a receipt for a use older than the key's ring (settle on the phone)");
   let budget = null;          /* the work budget (edge/src/client.js budget), once asked for or resumed */
   const execs = new Map();    /* token -> the open exec */
 
@@ -174,7 +175,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     if (edge) {
       const h = await edge.head();
       const k = await keyOwed(h);
-      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - onlykey-js edge receipt them first`);
+      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - onlykey-js edge receipt it first`);
       if (!h.live.includes(budget.grantId) && onGone && !continued.has(budget.grantId)) {
         /*
          * The budget is gone - the soft key's idle restart, a lock (spec session,
@@ -265,8 +266,8 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
       return Buffer.from(r.head).toString('hex');
     },
     /*
-     * edge watch's feed (mcp-service.md: "the same live feed in a terminal",
-     * okrn-edge-tab.md B7) - READ-ONLY: the key's links from `from` on, each with
+     * edge watch's feed (APP.md: "the same live feed in a terminal",
+     * APP.md B7) - READ-ONLY: the key's links from `from` on, each with
      * what this agent knows about it (the exec's reason, the receipt's message -
      * the agent's own claims, shown as such), the links that fell out of the
      * key's ring before they were read, and this agent's events (refusals,
@@ -439,7 +440,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
         r.phone = { refused: e.message };
       }
       /*
-       * The seals that cut this copy into JSON blocks (BLOCKS.md §3) - asked for on
+       * The seals that cut this copy into JSON blocks (BLOCKS.md) - asked for on
        * their own: reading them needs no approval, so a merge the person has not
        * approved yet still brings them.
        */
@@ -493,8 +494,8 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
  * derived identities, separate from the person's - ed25519, agent derivation
  * v2), makes its PGP certificate ONCE (two signatures by the device - presses
  * on a real key) and keeps it in agent.json, resumes a budget the store still
- * has, and serves: the shared ssh-agent endpoint (never paid), the control
- * endpoint (onlykey-js edge, the gpg shim). Exec endpoints open per command.
+ * has, and serves the control endpoint (onlykey-js edge, the gpg shim). Exec
+ * endpoints open per command; there is no shared ssh-agent endpoint.
  *
  * @param {object} o
  * @param {object} o.okcrypto the app's okcrypto service (agent.publicKey / agent.sign)
@@ -587,7 +588,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
   /*
    * The automatic continue (spec session, 2026-10-03): only for a budget the
    * key lost to a lock or restart - one it ENDED (revoked on the phone, ended by
-   * okedge end) has a grant-end link in the ring, and is left ended.
+   * onlykey-js edge end) has a grant-end link in the ring, and is left ended.
    */
   const onGone = async (old) => {
     if (edge) {
@@ -615,7 +616,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
   }
 
   const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge });
-  /* okedge status also says how the Bluetooth link has been: connects, reconnects, failures */
+  /* onlykey-js edge status also says how the Bluetooth link has been: connects, reconnects, failures */
   const plainStatus = handlers.status;
   handlers.status = async (req) => ({ ...(await plainStatus(req)), link: linkStats ? linkStats() : null });
   for (const op of ['budget', 'continue', 'end']) {

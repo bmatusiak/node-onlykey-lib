@@ -73,7 +73,7 @@ async function ping(args, { out, ask }) {
 }
 
 /*
- * THE CLEAN START ON THIS COMPUTER (R31, firmware.md; Brad, 2026-10-07: "we are
+ * THE CLEAN START ON THIS COMPUTER (R31, SPEC.md; Brad, 2026-10-07: "we are
  * doing a reset"): the Edge records of the chain the reset ended go - its budgets
  * (budgets.json) and its copies (copy-*.json). What stays: peer.key, control.key,
  * agent-gpg.asc (keys and the agent's own certificate - R31 keeps every key) and

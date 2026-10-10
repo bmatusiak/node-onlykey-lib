@@ -185,7 +185,7 @@ const DEV = (() => {
 })();
 
 /*
- * THE TESTNET (BLOCKS.md §5; Brad, 2026-10-07: "we should treat --test-mode as test
+ * THE TESTNET (BLOCKS.md; Brad, 2026-10-07: "we should treat --test-mode as test
  * net for cli for edge"; "everthing for test is throwaway"). --test-mode (anywhere
  * before --) puts this run on the test chain: its own home (~/.onlykey-js/edge-test:
  * agent, budgets, copies, control pipe), its own Key Chain file, every wire message
@@ -237,7 +237,7 @@ module.exports = function register(COMMANDS, h) {
       const wait = opt(rest, '--wait');
 
       /*
-       * CLEAR THE TESTNET on this computer (BLOCKS.md §5; Brad, 2026-10-07: "test-mode
+       * CLEAR THE TESTNET on this computer (BLOCKS.md; Brad, 2026-10-07: "test-mode
        * can help separate the storage side too, both phone and cli, so it can be
        * cleared"): its home and its Key Chain file, gone. The testnet's only - the
        * live chain's data is never cleared - and only the default test home, never a
@@ -261,7 +261,7 @@ module.exports = function register(COMMANDS, h) {
         return 0;
       }
 
-      /* BLOCKS (BLOCKS.md §3, Brad 2026-10-07): this PC's copy cut at the key's seals into JSON blocks - local, no phone */
+      /* BLOCKS (BLOCKS.md, Brad 2026-10-07): this PC's copy cut at the key's seals into JSON blocks - local, no phone */
       if (sub === 'blocks') {
         const found = require('./copy').blocks(control.edgeHome(), { net: NET });
         if (rest.includes('--json')) {

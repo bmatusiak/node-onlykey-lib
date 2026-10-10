@@ -1,6 +1,6 @@
 'use strict';
 /*
- * edge copy check (firmware.md R27): a host may ask for a budget or a resume
+ * edge copy check (SPEC.md R27): a host may ask for a budget or a resume
  * only when its own copy verifies up to the key's live HEAD. The chain here is
  * built the way the firmware builds it (the same link format, welds, budget
  * opening, reveals, receipts), so each failure below is one a real copy can
@@ -57,7 +57,7 @@ function story({ scopes: given = null, spendScopes = [], openingScope = null } =
   const seq = links.length - 1;
   const key = {
     publicKey: PUB,
-    head: { seq, head, owed: 0, overflow: false, restoring: false },
+    head: { seq, head, owed: 0 },
     checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) },
   };
   return { links, openings, key, grantId };
@@ -73,7 +73,6 @@ test('copy: every way a copy can fail is named, and the first one is the answer'
   const s = story();
   const check = (c, key = s.key) => copy.verifyCopy({ links: s.links, openings: s.openings, ...c }, key);
 
-  assert.equal(check({}, { ...s.key, head: { ...s.key.head, restoring: true } }).reason, 'restoring');
 
   const flipped = s.links.map((e, i) => (i === 2 ? { ...e, link: Uint8Array.from(e.link, (x, k) => (k === 8 ? x ^ 1 : x)) } : e));
   assert.equal(check({ links: flipped }).reason, 'chain');
@@ -95,12 +94,12 @@ test('copy: every way a copy can fail is named, and the first one is the answer'
 
   const owes = check({}, { ...s.key, head: { ...s.key.head, owed: 1 } });
   assert.equal(owes.reason, 'debts');
-  assert.deepEqual(owes.detail, { copy: { owed: [], overflow: false }, key: { owed: 1, overflow: false } });
+  assert.deepEqual(owes.detail, { copy: { owed: [] }, key: { owed: 1 } });
 });
 
 test('copy: an empty key verifies only an empty copy', () => {
   const genesis = chain.genesis(DEVICE);
-  const key = { publicKey: PUB, head: { seq: null, head: genesis, owed: 0, overflow: false }, checkpoint: null };
+  const key = { publicKey: PUB, head: { seq: null, head: genesis, owed: 0 }, checkpoint: null };
   assert.equal(copy.verifyCopy({ links: [] }, key).ok, true);
   assert.equal(copy.verifyCopy({ links: story().links.slice(0, 1) }, key).reason, 'chain');
 });
@@ -153,7 +152,7 @@ test('copy: a link the key still holds is not part of a loss - only what is real
 });
 
 /*
- * WHAT COUNTS AS VERIFIED (firmware.md R27, tab B2; found on the Pixel
+ * WHAT COUNTS AS VERIFIED (SPEC.md R27, tab B2; found on the Pixel
  * 2026-10-02): anchors are the genesis, the key's live HEAD and every
  * checkpoint whose signature verifies under the KEY's public key. The copy here
  * lost #0 and #3-#5 (the key restarted, so it holds only its head #6), but keeps
@@ -213,7 +212,7 @@ test('copy: a key with no public key anchors on its genesis and HEAD only', () =
 });
 
 /*
- * THE LINK AFTER A LOSS (firmware.md R24, Brad 2026-10-02): a LOSS {A..B}
+ * THE LINK AFTER A LOSS (SPEC.md R24, Brad 2026-10-02): a LOSS {A..B}
  * written while the key held #B+1 carries the first 28 bytes of SHA-256(#B+1)
  * after `to`, from the key's own memory; the library counts #B+1 verified when
  * the copy's link hashes to it. Not held: zeros, and #B+1 stays in the range
@@ -374,7 +373,7 @@ test('copy: a checkpoint past the verified head that does not verify is a failur
  */
 function keyAt(s, seq) {
   const head = s.links[seq].head;
-  return { ...s.key, head: { seq, head, owed: 0, overflow: false, restoring: false }, checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) }, held: [] };
+  return { ...s.key, head: { seq, head, owed: 0 }, checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) }, held: [] };
 }
 
 test('kept: full first, then skipped, then only the new links - and the same answer as the full check', () => {
@@ -464,7 +463,7 @@ test('version: the byte is inside the welded 64 bytes - changing it breaks the w
 });
 
 /*
- * SEALED (BLOCKS.md §2a; Brad, 2026-10-07: "we only need to verify the new stuff").
+ * SEALED (BLOCKS.md; Brad, 2026-10-07: "we only need to verify the new stuff").
  * A seal the caller checked THIS session stands in for every signature at or below
  * it - the per-budget signature checks were what made the full check grow with the
  * chain. The links are still welded to it, so the verdict is the full check's.

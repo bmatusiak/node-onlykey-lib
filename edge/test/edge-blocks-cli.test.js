@@ -1,5 +1,5 @@
 /*
- * `onlykey-js edge blocks` (BLOCKS.md §3, Brad 2026-10-07): this PC's copy cut
+ * `onlykey-js edge blocks` (BLOCKS.md, Brad 2026-10-07): this PC's copy cut
  * at the key's seals into JSON blocks. The seals come from the phone (GIVE's last
  * batch, client.sealsFromPhone) and are kept beside the copy (copy.keepSeals);
  * every block is checked against the key's public key kept at the last sync.
