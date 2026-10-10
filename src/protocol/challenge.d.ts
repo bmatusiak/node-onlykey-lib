@@ -18,6 +18,7 @@ export function challengeDigits(packet: Uint8Array, opts?: {
     duo?: boolean | undefined;
     formula?: string | undefined;
 }): number[];
+export function subjectFingerprint(subjectHex: any): string;
 /** The buttons a standard OnlyKey has. A DUO has three - see below. */
 export const BUTTONS: 6;
 export const DUO_BUTTONS: 3;

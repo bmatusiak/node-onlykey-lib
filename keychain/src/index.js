@@ -13,6 +13,7 @@ module.exports = {
   generate: require('./generate'),
   artifacts: require('./artifacts'),
   derive: require('./derive'),
+  press: require('./press'),
   list: require('./list'),
   cert: require('./cert'),
   pgpImport: require('./pgp-import'),

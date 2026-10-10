@@ -542,6 +542,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
   const wire = require('../../cli/ssh-wire');
   const sshPub = require('../../src/crypto/ssh-pub');
   const pgpCert = require('../../src/crypto/pgp-cert');
+  const { subjectFingerprint } = require('../../src/protocol/challenge');
   const { serveControl } = require('./control');
   const VERSION = 2;
   const ED25519 = 1;
@@ -568,7 +569,11 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
       const cert = await pgpCert.buildCertificate(openpgp, {
         userId: config.gpgUid, curve: 'ed25519', created, signPublic: gpgRaw, ecdhPublic,
         ...(config.expires ? { expires: config.expires } : {}),
-        sign: (digest) => device.sign(gpgIdentity, digest),
+        /* each press said with what is sent (the fingerprint a soft key's sheet shows too) - on a hard key this line is all there is */
+        sign: (digest) => okcrypto.agent.sign(gpgIdentity, digest, {
+          keyType: ED25519, version: VERSION,
+          confirm: confirm || (({ subject }) => log(`press on the OnlyKey: sign the agent's PGP certificate for gpg://${config.gpgUid}${subject ? ` (message ${subjectFingerprint(subject)})` : ''}`)),
+        }),
       });
       config.cert = { armored: cert.armored, fingerprint: cert.fingerprint, created, expires: config.expires || 0, signPublic: Buffer.from(gpgRaw).toString('hex') };
       saveConfig(config);

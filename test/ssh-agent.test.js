@@ -325,7 +325,8 @@ test('-f serves both key types from an identity file; ssh\'s requests get verifi
   assert.equal(r.code, 0, r.err.join('\n'));
   assert.equal(r.out.length, 1);
   assert.ok(r.out[0].includes(sockPath), 'prints what to set');
-  assert.match(r.err.join('\n'), /Confirm on the OnlyKey to sign for <ssh:\/\/okt@example\.com\|ed25519>: enter \d \d \d/);
+  /* the prompt says what is sent - the fingerprint of the request bytes, as a soft key's press sheet shows it (2026-10-10) */
+  assert.match(r.err.join('\n'), /Confirm on the OnlyKey to sign for <ssh:\/\/okt@example\.com\|ed25519> \(message [0-9a-f]{4}( [0-9a-f]{4}){3}\): enter \d \d \d/);
   if (process.platform !== 'win32') assert.ok(!fs.existsSync(sockPath), 'the socket is removed on stop');
 });
 

@@ -96,7 +96,8 @@ const chunk = require('../../src/protocol/chunk');
 const okmsg = require('../../src/protocol/okmsg');
 const agentProto = require('../../src/protocol/agent');
 const { challengeDigits } = require('../../src/protocol/challenge');
-const { toBase64Url, utf8ToBytes, concat } = require('../../src/bytes');
+const { toBase64Url, utf8ToBytes, concat, toHex } = require('../../src/bytes');
+const { sha256: subjectHash } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { MSG } = require('../../src/protocol/msg');
 const { assertPeerNotLowOrder, assertNonZeroSecret } = require('../../src/crypto/x25519guard');
 const { IFACE } = require('../../src/transport/contract');
@@ -377,6 +378,8 @@ function setup(imports, register, config) {
     if (!payload.length) throw new Error('nothing to sign or decrypt');
 
     const digits = challengeDigits(payload, { duo, formula });
+    /* what the press is for, as the key sees it: SHA-256 of exactly these bytes - the same hash a soft key's press sheet shows, so a CLI can print it beside its prompt */
+    const subject = toHex(subjectHash(payload));
 
     /*
      * Whether the device has already answered.
@@ -496,10 +499,10 @@ function setup(imports, register, config) {
       if (off) off();
       throw err;
     }
-    events.emit('challenge', { slot, digits });
+    events.emit('challenge', { slot, digits, subject });
 
     try {
-      if (confirm) await confirm({ digits, slot, isAnswered: () => answered });
+      if (confirm) await confirm({ digits, slot, subject, isAnswered: () => answered });
       const out = await answer;
       /* Only a COMPLETED operation arms the device timers - see settleStaleTimers. */
       lastOperationEndedAt = Date.now();
@@ -1393,6 +1396,8 @@ function setup(imports, register, config) {
     const framed = variable ? null : (v2 ? expectBytes + transit.OVERHEAD : expectBytes);
 
     const digits = challengeDigits(payload, { duo, formula });
+    /* what the press is for, as the key sees it: SHA-256 of exactly these bytes - the same hash a soft key's press sheet shows, so a CLI can print it beside its prompt */
+    const subject = toHex(subjectHash(payload));
 
     await settleStaleTimers();
     await settleStagedReply();
@@ -1412,7 +1417,7 @@ function setup(imports, register, config) {
         if (result) first = result;
       },
     });
-    events.emit('challenge', { slot, digits });
+    events.emit('challenge', { slot, digits, subject });
 
     /*
      * confirm() runs ALONGSIDE the polls, not before them. Over the vendor
@@ -1426,7 +1431,7 @@ function setup(imports, register, config) {
     let confirmError = null;
     const confirming = confirm
       ? Promise.resolve()
-        .then(() => confirm({ digits, slot, isAnswered: () => answered || finished }))
+        .then(() => confirm({ digits, slot, subject, isAnswered: () => answered || finished }))
         .catch((err) => { confirmError = err; })
       : Promise.resolve();
 

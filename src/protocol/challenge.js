@@ -88,4 +88,15 @@ function challengeDigits(packet, opts = {}) {
   return [hash[0] % modulus + 1, hash[15] % modulus + 1, hash[31] % modulus + 1];
 }
 
-module.exports = { challengeDigits, BUTTONS, DUO_BUTTONS };
+/*
+ * A request subject (SHA-256 of exactly the bytes handed to the key) as a person compares it:
+ * the first 16 hex digits in groups of four. One format for every display - a soft key's press
+ * sheet (from what the firmware states) and a CLI's confirm line (from what it sends) - so the
+ * two can be read side by side (Brad, 2026-10-10: "in cli we can show what we are sending, and
+ * in the softkey, we can show it from the firmware in the sheet").
+ */
+function subjectFingerprint(subjectHex) {
+  return (String(subjectHex || '').toLowerCase().slice(0, 16).match(/.{4}/g) || []).join(' ');
+}
+
+module.exports = { challengeDigits, subjectFingerprint, BUTTONS, DUO_BUTTONS };

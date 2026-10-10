@@ -32,3 +32,6 @@ export function derivePublic(okcrypto: any, spec: {
     artifacts: object;
     created: string;
 }>;
+export function labelHashOf(entry: any): any;
+/** An entry's identity as the person knows it: gpg://<uid> or ssh://user@host. */
+export function identityName(entry: any): string | null;

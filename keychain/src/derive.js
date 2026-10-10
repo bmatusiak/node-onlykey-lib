@@ -1,4 +1,6 @@
 'use strict';
+const { identityHash } = require('../../src/protocol/agent');
+const { toHex } = require('../../src/bytes');
 
 /**
  * DERIVE - a public key the OnlyKey makes from a label, kept in Key Chain so it
@@ -77,4 +79,39 @@ async function derivePublic(okcrypto, spec) {
   };
 }
 
-module.exports = { LABEL_TYPES, AGENT_TYPES, derivePublic };
+/*
+ * THE 32-BYTE LABEL A KEY SEES for an entry (Brad, 2026-10-10: the firmware presents what it
+ * signs). A derived sign carries only this hash, never the text; the soft key reports it with
+ * each press (its key_chain plugin), and the phone names the identity by finding the entry whose
+ * label hashes to it - the same shapes as protocol/agent.js identityHash: gpg://<uid>, user@host,
+ * or a host alone. An entry the firmware recorded already carries its hash (labelHash, or a
+ * "hash:" label). -> lowercase hex, or null for an entry no agent sign can name.
+ */
+function labelHashOf(entry) {
+  if (!entry || entry.kind !== 'derived') return null;
+  if (typeof entry.labelHash === 'string' && /^[0-9a-f]{64}$/i.test(entry.labelHash)) return entry.labelHash.toLowerCase();
+  const label = String(entry.label || '');
+  if (label.startsWith('hash:')) return /^[0-9a-f]{64}$/i.test(label.slice(5)) ? label.slice(5).toLowerCase() : null;
+  if (entry.scheme !== 'ssh' && entry.scheme !== 'gpg') return null;
+  const at = label.lastIndexOf('@');
+  const identity = entry.scheme === 'gpg'
+    ? { gpg: label }
+    : { ssh: at > 0 ? { user: label.slice(0, at), host: label.slice(at + 1) } : { host: label } };
+  try {
+    return toHex(identityHash(identity));
+  } catch {
+    return null;
+  }
+}
+
+/** An entry's identity as the person knows it: gpg://<uid> or ssh://user@host. */
+function identityName(entry) {
+  if (!entry || entry.kind !== 'derived') return null;
+  if (entry.scheme === 'gpg') return `gpg://${entry.label}`;
+  if (entry.scheme === 'ssh') return `ssh://${entry.label}`;
+  /* an entry the firmware recorded holds only the hash ("hash:…"): it has no name to give */
+  const label = entry.label ? String(entry.label) : '';
+  return label && !label.startsWith('hash:') ? label : null;
+}
+
+module.exports = { LABEL_TYPES, AGENT_TYPES, derivePublic, labelHashOf, identityName };

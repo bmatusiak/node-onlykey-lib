@@ -550,6 +550,14 @@ const deviceKeys = require('../src/device/keys');
 const slotsLib = require('../src/device/slots');
 const okmsg = require('../src/protocol/okmsg');
 const { fromLatin1, fromHex } = require('../src/bytes');
+const { subjectFingerprint } = require('../src/protocol/challenge');
+/*
+ * WHAT IS SENT, said before the press (Brad, 2026-10-10: "they should know beforehand that the
+ * request is about to happen, and in cli we can show what we are sending"). The fingerprint of
+ * exactly the bytes handed to the key - the same one a soft key's press sheet shows from the
+ * firmware's side; with a hard key on this computer, this line is all the person sees.
+ */
+const sentAs = (subject) => (subject ? ` (message ${subjectFingerprint(subject)})` : '');
 
 const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
@@ -1539,12 +1547,13 @@ COMMANDS.agent = {
         version,
         /* the key is still clearing a request whose press timed out (its 5-second wipe) */
         onBusy: ({ waitMs }) => io.err(`The OnlyKey is still clearing an unanswered request; trying again in ${Math.round(waitMs / 1000)} s`),
-        confirm: ({ digits }) => {
+        confirm: ({ digits, subject }) => {
           if (asks === 'none') return; /* the key signs without asking */
-          if (asks === 'press') io.err(`Confirm on the OnlyKey to sign for ${key.comment}: press any button`);
-          else if (asks === 'code') io.err(`Confirm on the OnlyKey to sign for ${key.comment}: enter ${digits.join(' ')}`);
+          const what = `sign for ${key.comment}${sentAs(subject)}`;
+          if (asks === 'press') io.err(`Confirm on the OnlyKey to ${what}: press any button`);
+          else if (asks === 'code') io.err(`Confirm on the OnlyKey to ${what}: enter ${digits.join(' ')}`);
           else {
-            io.err(`Confirm on the OnlyKey to sign for ${key.comment}: enter ${digits.join(' ')}`
+            io.err(`Confirm on the OnlyKey to ${what}: enter ${digits.join(' ')}`
               + ' (or press any button, if the key asks for a single press)');
           }
         },
@@ -1823,8 +1832,8 @@ COMMANDS.gpg = {
         sign: (digest) => dev.use((okcrypto) => okcrypto.agent.sign(identity, digest, {
           keyType: kinds.sign.keyType,
           version: skey,
-          confirm: ({ digits }) => {
-            io.err(`Confirm on the OnlyKey to sign the new key for <${label}>: enter ${digits.join(' ')}`
+          confirm: ({ digits, subject }) => {
+            io.err(`Confirm on the OnlyKey to sign the new key for <${label}>${sentAs(subject)}: enter ${digits.join(' ')}`
               + ' (or press any button, if the key asks for a single press)');
           },
         })),
@@ -1963,8 +1972,8 @@ COMMANDS['gpg-agent'] = {
       const k = versionFor(key);
       return typeof k === 'object' ? k.slot : null;
     };
-    const confirm = (key, session, what) => ({ digits }) => {
-      const line = `Confirm on the OnlyKey to ${what} for <gpg://${key.userId}|${key.curve}>: enter ${digits.join(' ')}`
+    const confirm = (key, session, what) => ({ digits, subject }) => {
+      const line = `Confirm on the OnlyKey to ${what} for <gpg://${key.userId}|${key.curve}>${sentAs(subject)}: enter ${digits.join(' ')}`
         + ' (or press any button, if the key asks for a single press)';
       log(line);
       const tty = session.options.ttyname;

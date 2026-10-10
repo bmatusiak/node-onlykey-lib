@@ -11,6 +11,14 @@ const assert = require('node:assert');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+/*
+ * A HOME OF ITS OWN, before the CLI loads: the clear test below really removes
+ * <home>/.onlykey-js/edge-test, and with the real home it removed this computer's testnet agent,
+ * copies and Key Chain file on every `npm test` (found 2026-10-10). The homes are read from
+ * os.homedir() at each call, so this one line moves every one of them.
+ */
+const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'oktestnet-home-'));
+os.homedir = () => FAKE_HOME;
 const { main } = require('../../cli/index');
 const control = require('../cli/control');
 const record = require('../../keychain/cli/record');
