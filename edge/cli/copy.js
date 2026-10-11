@@ -138,7 +138,15 @@ async function sync(edge, home, { status = false, history = null } = {}) {
    * against the KEY's head and ring - a link that does not weld onto the key's own chain makes
    * the copy "does not verify", and nothing is kept.
    */
-  if (history && history.length && (!candidate.links.length || seqOf(candidate.links[0]) > 0)) {
+  /*
+   * A GAP IN THE MIDDLE IS FILLED THE SAME WAY (2026-10-11, the two-phone testnet walk): a copy that
+   * began at #0 and then missed links between two syncs (#4-#38 made while this computer was away)
+   * kept the gap for good - the fill ran only for a copy that did not start at #0 - so the log it
+   * offered to the other devices was incomplete and showed there as "not checked yet". The run
+   * from the phone's history replaces the copy's own links up to where it ends; assess() still
+   * judges all of it against the key.
+   */
+  if (history && history.length) {
     const run = [];
     for (const r of [...history].sort((x, y) => seqOf(x) - seqOf(y))) {
       const prev = run[run.length - 1];
@@ -216,7 +224,10 @@ function lines(r, { status = false } = {}) {
   /* your other devices' logs this PC holds, offered to the phone - held there until you approve (2026-10-08) */
   for (const o of r.offered || []) {
     const who = `"${o.nametag}" (${o.deviceId.slice(0, 16)})`;
-    out.push(o.error ? `offered ${who}: ${o.error}` : `offered ${who}: ${o.count} link(s) - held on the phone until you approve the merge (Edge tab banner)`);
+    /* a phone that already has that checkpoint (merged, declined or kept as evidence) holds nothing again (2026-10-11) */
+    out.push(o.error ? `offered ${who}: ${o.error}`
+      : o.held === false ? `offered ${who}: nothing new - the phone already has this log (merged, or answered before)`
+        : `offered ${who}: ${o.count} link(s) - held on the phone until you approve the merge (Edge tab banner)`);
   }
   return out;
 }

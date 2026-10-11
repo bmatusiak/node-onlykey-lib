@@ -185,3 +185,33 @@ test('a log missing a use\'s result or a receipt\'s message is not kept to offer
   copy.keepNotes(h3, noMessage.log.deviceId, { messages: { 0: DONE0 } });
   assert.deepEqual(copy.keepLog(h3, noMessage.log), { kept: true });
 });
+
+test('copy.sync: a gap in the middle of a copy that began at #0 is filled from the phone\'s history', async () => {
+  const t = fakeKey({ secret: p256.utils.randomSecretKey() });
+  const e = edgeOver(t);
+  for (let i = 0; i < 3; i += 1) t.edgeRecord();
+  const home = tmp();
+  const first = await copy.sync(e, home); /* #0..#2, the whole chain so far */
+  assert.equal(first.verdict.kind, 'verified');
+  for (let i = 0; i < 10; i += 1) t.edgeRecord(); /* #3..#12, while this computer was away */
+  const ringed = {
+    publicKey: () => e.publicKey(),
+    publicKeyPq: (which) => e.publicKeyPq(which),
+    head: async () => { const h = await e.head(); return { ...h, oldest: h.seq - 7 }; },
+    pickup: async (from, n) => { const h = await e.head(); const lo = h.seq - 7; return from < lo ? [] : e.pickup(from, n); },
+  };
+  const second = await copy.sync(ringed, home);
+  assert.equal(second.verdict.kind, 'gap', 'the key ring no longer holds #3-#4');
+  const all = [...(await e.pickup(0, 8)), ...(await e.pickup(8, 5))];
+  const filled = await copy.sync(ringed, home, { history: all });
+  assert.equal(filled.verdict.kind, 'verified');
+  assert.equal(copy.load(home, (await e.publicKey()).deviceId).links.length, (await e.head()).seq + 1, 'every link from #0 to the head');
+});
+
+test('copy.lines: an offer the phone did not hold again says so, not "held until you approve"', () => {
+  const base = { deviceId: 'ab'.repeat(16), nametag: 'Pixel 6a', sent: 0, count: 0 };
+  const sync = { deviceId: 'cd'.repeat(16), key: { seq: 3, head: 'ef'.repeat(32), ringFrom: 0 }, copy: { count: 4, added: 0, saved: true }, verdict: { kind: 'verified', through: 3 } };
+  const out = copy.lines({ ...sync, offered: [{ ...base, held: false }, { ...base, held: true, count: 3 }] }).join('\n');
+  assert.match(out, /"Pixel 6a" \(abababababababab\): nothing new - the phone already has this log/);
+  assert.match(out, /3 link\(s\) - held on the phone until you approve the merge/);
+});
