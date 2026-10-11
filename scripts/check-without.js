@@ -21,14 +21,15 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const which = process.argv[2];
-const LEFT_OUT = { edge: ['edge'], keychain: ['keychain', 'edge'] }[which];
+const LEFT_OUT = { edge: ['edge'], keychain: ['keychain', 'edge'], passwords: ['passwords'] }[which];
 if (!LEFT_OUT) {
-  console.error('usage: node scripts/check-without.js edge|keychain');
+  console.error('usage: node scripts/check-without.js edge|keychain|passwords');
   process.exit(2);
 }
-const KEPT_PLUGINS = ['keychain', 'edge'].filter((d) => !LEFT_OUT.includes(d));
-const COMMAND = { keychain: 'keychain', edge: 'edge' };
-const TAG = { keychain: 'Key Chain', edge: 'Edge' };
+const KEPT_PLUGINS = ['keychain', 'edge', 'passwords'].filter((d) => !LEFT_OUT.includes(d));
+/* passwords has no CLI command yet: its name stands in, and --help never lists it */
+const COMMAND = { keychain: 'keychain', edge: 'edge', passwords: 'passwords' };
+const TAG = { keychain: 'Key Chain', edge: 'Edge', passwords: 'Passwords' };
 const SKIP = new Set(['.git', 'node_modules', ...LEFT_OUT]);
 
 const dest = fs.mkdtempSync(path.join(os.tmpdir(), `onlykey-lib-without-${which}-`));
