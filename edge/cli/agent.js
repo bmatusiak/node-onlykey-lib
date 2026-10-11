@@ -404,14 +404,24 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
     },
     receipt: async ({ seq, code, message }) => ({ head: await agent.receipt(seq, { code: code || 'OK', message }) }),
     /* edge sync, phase 1: the PC's own copy - reads only (R8), no press; --status changes nothing */
-    sync: async ({ status, phone = true }) => {
+    /*
+     * only: 'pull' | 'push' | undefined (both) - edge sync --all (Brad, 2026-10-11: "pull from all
+     * devices,, (dont update them) then on the host,, after we have both sync state in the host,
+     * merging them into the host then we push to both devices"). PULL reads this phone into the
+     * PC's copy (its key, a gap filled from its history, its seals, openings, notes and
+     * statement) and writes nothing to the phone. PUSH writes: the phone's own links it lacks,
+     * and every other device's log this PC holds, offered (held there until approved).
+     */
+    sync: async ({ status, phone = true, only }) => {
       if (!edge) throw new Error('this agent service has no Edge key to sync from');
       const where = home || require('./control').edgeHome();
       const copy = require('./copy');
       let r = await copy.sync(edge, where, { status: !!status });
       if (status || !phone) return r;
+      const pull = only !== 'push';
+      const push = only !== 'pull';
       /* a gap only the phone can fill (a late or reset computer): its own copy, checked against the key (copy.sync) */
-      if (r.verdict.kind === 'gap') {
+      if (pull && r.verdict.kind === 'gap') {
         try {
           const history = await client.copyFromPhone(copy.peerSigner(where), { deviceId: Buffer.from(r.deviceId, 'hex') });
           if (history.length) r = await copy.sync(edge, where, { history });
@@ -434,17 +444,19 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
        * Device logs only: the Key Chain list is not Edge's (Brad, 2026-10-08: "Move it out of
        * Edge") - it is the Key Chain plugin's and syncs on its own.
        */
-      try {
-        r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: require('os').hostname() });
-      } catch (e) {
-        r.phone = { refused: e.message };
+      if (push) {
+        try {
+          r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: require('os').hostname() });
+        } catch (e) {
+          r.phone = { refused: e.message };
+        }
       }
       /*
        * The seals that cut this copy into JSON blocks (BLOCKS.md) - asked for on
        * their own: reading them needs no approval, so a merge the person has not
        * approved yet still brings them.
        */
-      try {
+      if (pull) try {
         const given = await client.sealsFromPhone(signer, { deviceId: c.deviceId });
         r.blocks = copy.keepSeals(where, c.deviceId, given);
         if (given.openings && given.openings.length) r.openings = copy.keepOpenings(where, c.deviceId, given.openings);
@@ -467,6 +479,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
        * offered to this phone, which HOLDS each one until you approve the merge from its Edge
        * tab's banner. The phone sorts them (devices.classify).
        */
+      if (!push) return r;
       r.offered = [];
       for (const other of copy.logsToOffer(where, c.deviceId)) {
         try {

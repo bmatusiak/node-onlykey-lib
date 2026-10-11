@@ -152,7 +152,8 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     if (cmd === 'sync') {
       /* APP.md: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone, which holds it until the person approves the merge (2026-10-08) */
       const status = args.includes('--status');
-      const r = await ask('sync', { status }, { timeoutMs: 120000 });
+      const only = args.includes('--pull-only') ? 'pull' : args.includes('--push-only') ? 'push' : undefined;
+      const r = await ask('sync', { status, ...(only ? { only } : {}) }, { timeoutMs: 120000 });
       for (const l of require('./copy').lines(r, { status })) out(l);
       return r.verdict.kind === 'tampered' ? 1 : 0;
     }

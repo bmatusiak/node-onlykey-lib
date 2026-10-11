@@ -32,7 +32,8 @@ const USAGE = [
   'onlykey-js edge continue --ttl MINUTES [--caps n,n] | end | status',
   'onlykey-js edge exec --head H --intent "…" -- <command…>     the only way to spend a budget',
   'onlykey-js edge receipt <seq> [--code OK] --msg "…"',
-  'onlykey-js edge watch [--once] | sync [--status]',
+  'onlykey-js edge watch [--once] | sync [--status | --all]',
+  'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
   'onlykey-js edge agent                                         the optional service',
   'add --test-mode to any of them: the testnet - its own home, its own chain on the phone (Enter testing mode)',
@@ -233,6 +234,35 @@ module.exports = function register(COMMANDS, h) {
       /* an unknown subcommand is refused here, before anything connects to the phone */
       const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - onlykey-js edge help`);
+
+      /*
+       * EDGE SYNC --ALL (Brad, 2026-10-11: "pull from all devices,, (dont update them) then on the
+       * host,, after we have both sync state in the host, merging them into the host then we push
+       * to both devices at same time"). Every phone paired with this computer: first each one is
+       * PULLED into this PC's copies (nothing written to any phone), then each one is PUSHED what
+       * it lacks - so every phone is offered every other device's newest log in one run, not after
+       * a second round. One phone at a time over Bluetooth (one link is the reliable path); a phone
+       * that cannot be reached is reported and the run goes on with the others.
+       */
+      if (sub === 'sync' && rest.includes('--all')) {
+        const phones = require('../../cli/btpair-store').list().map((p) => ({ address: p.address, name: p.name })).filter((p) => p.address);
+        if (!phones.length) throw h.usage('no phone is paired with this computer - onlykey-js --ble pair');
+        const { spawnSync } = require('child_process');
+        const cli = path.join(__dirname, '..', '..', 'cli', 'index.js');
+        const one = (address, mode) => {
+          const r = spawnSync(process.execPath, [cli, '--ble', '--address', address, 'edge', ...(NET === 'test' ? ['--test-mode'] : []), 'sync', mode], { encoding: 'utf8', timeout: 240000 });
+          for (const l of `${r.stdout || ''}${r.stderr || ''}`.split('\n')) if (l.trim() && !/^edge: TESTNET|ble: /.test(l)) io.out(`  ${l}`);
+          return r.status === 0;
+        };
+        let ok = true;
+        for (const [mode, label] of [['--pull-only', 'pull'], ['--push-only', 'push']]) {
+          for (const p of phones) {
+            io.out(`${label} ${p.address}`);
+            if (!one(p.address, mode)) { ok = false; io.out(`  ${label} ${p.address}: did not finish`); }
+          }
+        }
+        return ok ? 0 : 1;
+      }
       const control = require('./control');
       const wait = opt(rest, '--wait');
 
