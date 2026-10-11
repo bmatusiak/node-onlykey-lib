@@ -186,8 +186,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
         if (!same(f.subject, subject)) throw fail('EEDGE_LINK', `edge: the key's newest link (#${f.seq}) is not this use`);
         const paid = f.decision === codes.DECISION.SELF_PRESS && f.grantId === record.grantId;
         if (paid) {
-          const mac = require('./hash').hmacSha256(l.reveal, subject);
-          const r = grants.checkSelfPress({ genesis, uses: record.uses, step: f.grantStep, value: l.reveal, mac, subject });
+          const r = grants.checkSelfPress({ genesis, uses: record.uses, step: f.grantStep, value: l.reveal });
           if (!r.ok) throw fail('EEDGE_LINK', `edge: the self-press's reveal does not belong to this budget (${r.reason})`);
         }
         if (f.flags & codes.FLAG.OWES_RECEIPT) state.owed.push(f.seq);

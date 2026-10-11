@@ -166,13 +166,14 @@ const spend = (i) => {
   return { step: s.step, value: fromHex(s.value), mac: fromHex(s.mac), subject: fromHex(s.subject) };
 };
 
-test('budget: wrong budget, wrong step, wrong subject and past the cap each fail on their own', () => {
+test('budget: wrong budget, wrong step and past the cap each fail on their own', () => {
   const g = { genesis: G(), uses: V.grant.uses };
   assert.equal(grants.checkSelfPress({ ...g, ...spend(0), genesis: new Uint8Array(32).fill(3) }).reason, 'wrong-budget');
   const wrongStep = grants.checkSelfPress({ ...g, ...spend(0), step: 2 });
   assert.equal(wrongStep.reason, 'wrong-step');
   assert.equal(wrongStep.actualStep, 1);
-  assert.equal(grants.checkSelfPress({ ...g, ...spend(0), subject: new Uint8Array(32) }).reason, 'mac-mismatch');
+  /* no MAC check (2026-10-11): it was computed from the same value and subject it was compared with; the link binds the subject */
+  assert.equal(grants.checkSelfPress({ ...g, ...spend(0), subject: new Uint8Array(32) }).ok, true);
   assert.equal(grants.checkSelfPress({ ...g, ...spend(0), step: V.grant.uses + 1 }).reason, 'past-cap');
 });
 
@@ -185,8 +186,8 @@ test('budget: one budget\'s chain is at most 1024 uses - 1024 accepted, 1025 ref
   assert.throws(() => grants.encodeScopes([{ op: 1, slot: 101, cap: 1025 }]), RangeError);
   const g = grants.grantGenesis(seed, 1024);
   /* the first reveal of a 1024-use budget hashes back to G in 1 step; the last in 1024 */
-  assert.equal(grants.checkSelfPress({ genesis: g, uses: 1024, step: 1024, value: grants.reveal(seed, 1024, 1024), mac: grants.reveal(seed, 1024, 1024), subject: seed }).reason, 'mac-mismatch', 'step 1024 is a real step');
-  assert.equal(grants.checkSelfPress({ genesis: g, uses: 1025, step: 1, value: seed, mac: seed, subject: seed }).reason, 'past-cap');
+  assert.equal(grants.checkSelfPress({ genesis: g, uses: 1024, step: 1024, value: grants.reveal(seed, 1024, 1024) }).ok, true, 'step 1024 is a real step');
+  assert.equal(grants.checkSelfPress({ genesis: g, uses: 1025, step: 1, value: seed }).reason, 'past-cap');
 });
 
 test('budget: spends must run 1, 2, 3... - a replayed reveal and a skipped step are caught', () => {

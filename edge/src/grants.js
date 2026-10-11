@@ -14,17 +14,15 @@ const { utf8ToBytes } = require('../../src/bytes');
  * Use i (1..n) reveals v_i = H^(n-i)(seed). Anyone can check H^i(v_i) == G,
  * and nobody without the seed can make a v_{i+1} the key has not revealed (it
  * would be a SHA-256 preimage of v_i). So each self-press proves it was spent
- * from THIS budget at THIS step. The key also returns
- *
- *   mac = HMAC-SHA256(key = v_i, msg = subject)
- *
- * which ties the revealed step to what was approved (the link's subject).
+ * from THIS budget at THIS step. What ties the step to what was approved is its link:
+ * the subject is in the link, and the link is welded into the chain up to a checkpoint the
+ * key signed (checkSelfPress).
  * CHOSEN: i counts from 1, so use 1 reveals H^(n-1)(seed) and use n the seed.
  */
 const crypto = require('../../src/crypto/provider');
 const { TAG, OP } = require('./codes');
 const chain = require('./chain');
-const { H, hmacSha256, bytes32, same, u8 } = require('./hash');
+const { H, bytes32, same, u8 } = require('./hash');
 
 /* R15b: a lifetime of 0 means the key's default, 12 hours (Brad, 2026-10-02) */
 const DEFAULT_LIFETIME_MINUTES = 12 * 60;
@@ -63,14 +61,19 @@ function checkCount(uses) {
 }
 
 /**
- * Check one self-press: {genesis, uses, step, value, mac, subject}.
+ * Check one self-press: {genesis, uses, step, value}.
  * -> {ok: true} or {ok: false, reason}:
  *    past-cap      step beyond the budget's uses (or below 1)
  *    wrong-step    the value is from THIS budget, but at another step
  *    wrong-budget  the value is from no step of this budget
- *    mac-mismatch  the value is right, but the MAC is not over this subject
+ *
+ * WHAT PROTECTS A USE (2026-10-11). The value hashes `step` times to the budget's genesis, and
+ * the genesis is signed by the key at the press (the budget's opening). The use's subject is in
+ * its link, and the link is welded into the chain up to a checkpoint the key signed. A MAC of
+ * the value over the subject used to be compared here too, but every caller computed it from the
+ * same value and subject it then passed in, so it could never fail: it is gone, not replaced.
  */
-function checkSelfPress({ genesis, uses, step, value, mac, subject }) {
+function checkSelfPress({ genesis, uses, step, value }) {
   bytes32(genesis, 'genesis');
   bytes32(value, 'value');
   if (!Number.isInteger(uses) || uses < 1 || uses > MAX_USES || !Number.isInteger(step) || step < 1 || step > uses) {
@@ -85,7 +88,6 @@ function checkSelfPress({ genesis, uses, step, value, mac, subject }) {
     }
     return { ok: false, reason: 'wrong-budget' };
   }
-  if (!same(hmacSha256(value, bytes32(subject, 'subject')), mac)) return { ok: false, reason: 'mac-mismatch' };
   return { ok: true };
 }
 

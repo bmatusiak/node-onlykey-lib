@@ -181,7 +181,23 @@ async function sync(edge, home, { status = false, history = null } = {}) {
   const a = copyLib.assess({ links: candidate.links }, { publicKey, publicKeyPq, head: { seq: keySeq, head: h.head }, held }, {
     ringFrom, ...(candidate.lastSeen ? { lastSeen: candidate.lastSeen } : {}),
   });
-  const verdict = verdictOf(a);
+  let verdict = verdictOf(a);
+  /*
+   * VERIFIED NEEDS THE KEY'S SIGNATURE (Brad, 2026-10-11: "checking every field in a token means
+   * nothing if we never check the signature"). The welds only prove the links lead to the head
+   * the key reported over this link; its checkpoint for that head, verified with both halves
+   * (P-256 + ML-DSA-65), proves the key signed it. No checkpoint, one for another head, or one
+   * that does not verify: "unsigned" - reported, never "verified".
+   */
+  if (verdict.kind === 'verified' && keySeq >= 0) {
+    const cp = await edge.checkpoint().catch(() => null);
+    let signed = false;
+    try {
+      signed = !!cp && cp.seq === keySeq && toHex(cp.head) === toHex(h.head)
+        && chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, publicKey, cp.signaturePq || null, publicKeyPq);
+    } catch { signed = false; }
+    if (!signed) verdict = { kind: 'unsigned', through: verdict.through };
+  }
   const added = candidate.links.length - c.links.length;
   let saved = false;
   /* R27 before storing: a copy that does not verify is reported, not kept */
@@ -207,6 +223,7 @@ function lines(r, { status = false } = {}) {
   out.push(`PC copy: ${r.copy.count - (status ? r.copy.added : 0)} link(s)${status ? (r.copy.added ? `, ${r.copy.added} to read (onlykey-js edge sync)` : ', up to date') : `, ${r.copy.added} new${r.copy.saved ? '' : ' - NOT kept'}`}`);
   const v = r.verdict;
   if (v.kind === 'verified') out.push(`verified through #${v.through}`);
+  else if (v.kind === 'unsigned') out.push(`not checked: the links weld to the key's head, but its signature (checkpoint, both halves) could not be checked - not called verified`);
   else if (v.kind === 'gap') out.push(`gap: ${v.gaps.map((g) => (g.from === g.to ? `#${g.from}` : `#${g.from}-#${g.to}`)).join(', ')} - links no copy here holds (repairs are the phone's)`);
   else out.push(`DOES NOT VERIFY at #${v.seq}: ${v.reason} - reported, nothing kept (repairs are the phone's)`);
   if (r.stoppedAt !== null && r.stoppedAt !== undefined) out.push(`stopped at #${r.stoppedAt}: a reply that does not weld onto the copy`);

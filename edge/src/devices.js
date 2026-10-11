@@ -134,7 +134,12 @@ function checkOpenings({ deviceId, publicKey, records, openings }) {
     try {
       if (!o || !Number.isInteger(o.grantId) || typeof o.reason !== 'string' || o.reason.length > 4096 || !Array.isArray(o.scopes)
         || o.scopes.length < 1 || o.scopes.length > 4 || !Number.isInteger(o.uses)) continue;
-      const scopes = o.scopes.map((s) => ({ op: s.op, slot: s.slot, cap: s.cap, ...(s.identity ? { identity: String(s.identity) } : {}) }));
+      /*
+       * AN IDENTITY NAME ONLY WHERE THE KEY SIGNED IT (2026-10-11): on a derived code the name is
+       * in the signed subject (grants.scopeLabel); on a stored slot the slot is the key and any name
+       * the computer sent is unsigned - dropped, not shown as part of a proven opening.
+       */
+      const scopes = o.scopes.map((s) => ({ op: s.op, slot: s.slot, cap: s.cap, ...(s.identity && grants.isDerivedCode(s.slot) ? { identity: String(s.identity) } : {}) }));
       const open = records.map((r) => chainLib.decodeLink(r.link)).find((f) => f.op === require('./codes').OP.GRANT_CREATE && f.grantId === o.grantId);
       if (!open) continue;
       const link = bySeq.get(open.seq);

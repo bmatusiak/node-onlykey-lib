@@ -25,20 +25,23 @@ export function grantGenesis(seed: any, uses: any): any;
 /** The value use `step` reveals, from the seed (for tests and fakes - a host never has the seed). */
 export function reveal(seed: any, uses: any, step: any): any;
 /**
- * Check one self-press: {genesis, uses, step, value, mac, subject}.
+ * Check one self-press: {genesis, uses, step, value}.
  * -> {ok: true} or {ok: false, reason}:
  *    past-cap      step beyond the budget's uses (or below 1)
  *    wrong-step    the value is from THIS budget, but at another step
  *    wrong-budget  the value is from no step of this budget
- *    mac-mismatch  the value is right, but the MAC is not over this subject
+ *
+ * WHAT PROTECTS A USE (2026-10-11). The value hashes `step` times to the budget's genesis, and
+ * the genesis is signed by the key at the press (the budget's opening). The use's subject is in
+ * its link, and the link is welded into the chain up to a checkpoint the key signed. A MAC of
+ * the value over the subject used to be compared here too, but every caller computed it from the
+ * same value and subject it then passed in, so it could never fail: it is gone, not replaced.
  */
-export function checkSelfPress({ genesis, uses, step, value, mac, subject }: {
+export function checkSelfPress({ genesis, uses, step, value }: {
     genesis: any;
     uses: any;
     step: any;
     value: any;
-    mac: any;
-    subject: any;
 }): {
     ok: boolean;
     reason: string;

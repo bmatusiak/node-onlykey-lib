@@ -150,6 +150,7 @@ test('copy.sync: the phone\'s history fills a gap before the key\'s ring; a forg
   const ringed = {
     publicKey: () => e.publicKey(),
     publicKeyPq: (which) => e.publicKeyPq(which),
+    checkpoint: () => e.checkpoint(),
     head: async () => { const h = await e.head(); return { ...h, oldest: h.seq - 7 }; },
     pickup: async (from, n) => { const h = await e.head(); const lo = h.seq - 7; return from < lo ? [] : e.pickup(from, n); },
   };
@@ -197,6 +198,7 @@ test('copy.sync: a gap in the middle of a copy that began at #0 is filled from t
   const ringed = {
     publicKey: () => e.publicKey(),
     publicKeyPq: (which) => e.publicKeyPq(which),
+    checkpoint: () => e.checkpoint(),
     head: async () => { const h = await e.head(); return { ...h, oldest: h.seq - 7 }; },
     pickup: async (from, n) => { const h = await e.head(); const lo = h.seq - 7; return from < lo ? [] : e.pickup(from, n); },
   };
@@ -214,4 +216,27 @@ test('copy.lines: an offer the phone did not hold again says so, not "held until
   const out = copy.lines({ ...sync, offered: [{ ...base, held: false }, { ...base, held: true, count: 3 }] }).join('\n');
   assert.match(out, /"Pixel 6a" \(abababababababab\): nothing new - the phone already has this log/);
   assert.match(out, /3 link\(s\) - held on the phone until you approve the merge/);
+});
+
+/*
+ * VERIFIED NEEDS THE KEY'S SIGNATURE (Brad, 2026-10-11: "checking every field in a token means
+ * nothing if we never check the signature"): links that weld to the reported head are not
+ * "verified" until the key's checkpoint for that head verifies with both halves.
+ */
+test('copy.sync: no checkpoint from the key -> "unsigned", never "verified"', async () => {
+  const t = fakeKey({ secret: p256.utils.randomSecretKey() });
+  const e = edgeOver(t);
+  for (let i = 0; i < 3; i += 1) t.edgeRecord();
+  const silent = {
+    publicKey: () => e.publicKey(),
+    publicKeyPq: (which) => e.publicKeyPq(which),
+    head: () => e.head(),
+    pickup: (from, n) => e.pickup(from, n),
+    checkpoint: async () => { throw new Error('no answer'); },
+  };
+  const r = await copy.sync(silent, tmp());
+  assert.equal(r.verdict.kind, 'unsigned');
+  assert.match(copy.lines(r).join('\n'), /not checked: the links weld to the key's head/);
+  const signed = await copy.sync(e, tmp());
+  assert.equal(signed.verdict.kind, 'verified');
 });

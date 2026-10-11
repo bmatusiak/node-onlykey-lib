@@ -51,7 +51,7 @@ const { OP, DECISION } = require('./codes');
 const chain = require('./chain');
 const grants = require('./grants');
 const { keyDebts } = require('./receipts');
-const { H, hmacSha256, same } = require('./hash');
+const { H, same } = require('./hash');
 const { toHex, utf8ToBytes } = require('../../src/bytes');
 
 const SEQ_NONE = 0xffffffff;
@@ -481,7 +481,7 @@ function verifyCore(copy, key, prev, out) {
       }
       const value = bySeq.get(f.seq).reveal;
       if (!value || !value.some((x) => x)) return fail('reveal-missing', { seq: f.seq });
-      list.push({ seq: f.seq, step: f.grantStep, scope: f.scope, value, subject: f.subject, mac: hmacSha256(value, f.subject) });
+      list.push({ seq: f.seq, step: f.grantStep, scope: f.scope, value, subject: f.subject });
       touched.add(f.grantId);
     }
   }
