@@ -100,6 +100,7 @@ async function approveRequest(msg, { edge, from = null, seen, ask, verifyCopy, b
       genesis: toHex(g.genesis),
       seq: g.seq,
       lifetime: g.lifetime,
+      /* the opening's checkpoint: its P-256 half only - an older checkpoint once the chain moves on ("B", chain.verifyCheckpointP256) */
       checkpoint: { seq: g.checkpoint.seq, head: toHex(g.checkpoint.head), signature: toHex(g.checkpoint.signature) },
     },
   };

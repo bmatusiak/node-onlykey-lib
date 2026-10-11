@@ -8,7 +8,7 @@
  * computer checks the answer's id is its own hash AND that the returned data
  * hashes to it, so a test says both how fast and that every byte came back.
  *
- * The data rides the Edge wire (wire.js: at most 255 pieces of 55 bytes of
+ * The data rides the Edge wire (wire.js: at most 65,535 pieces of 54 bytes of
  * JSON), so one ping carries at most PING_MAX random bytes (base64 inside).
  * Plain bytes and @noble only: Hermes-clean (the phone answers with it too).
  */

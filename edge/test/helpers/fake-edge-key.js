@@ -4,7 +4,9 @@ const okmsg = require('../../../src/protocol/okmsg');
 /*
  * A fake Edge key: answers OKEDGE sub-ops the way the soft-key firmware plugin
  * does (ok-rn/android/okemu/plugins/edge) - the same report layouts, the same
- * "EDGE:xx" codes, a real P-256 key for the checkpoints. Moved out of
+ * "EDGE:xx" codes, a real P-256 key for the checkpoints and its ML-DSA-65 twin
+ * (the hybrid checkpoint: both signatures on every CHECKPOINT and GRANT_CREATE
+ * reply, the ML-DSA-65 one in 64-byte reports after the P-256 one). Moved out of
  * edge-device.test.js so the L7 tests (edge-l7.test.js) share it.
  *
  * transport.use(bytes) stands in for a sign the KEY decides (L7, 2026-10-03):
@@ -16,6 +18,7 @@ const { chain, codes, grants, receipts } = require('../../src');
 const { H } = require('../../src/hash');
 const { sha256 } = require('../../../src/vendor/exports/@noble/hashes/sha2.js');
 const { p256 } = require('../../../src/vendor/exports/@noble/curves/nist.js');
+const { pqCheckpointKeys, pqOwnerKeys, signPq } = require('./hybrid-key');
 const { IFACE } = require('../../../src/protocol/msg');
 const setup = require('../../plugin');
 
@@ -25,8 +28,19 @@ const DEVICE = chain.deviceIdOf(PUB);
 /* the owner secret: the same on every fake made "from the same backup" (a real key: HKDF(K132) with no salt) */
 const OWNER_SECRET = new Uint8Array(32).fill(6);
 
+/* the ML-DSA-65 twins, from seeds as the firmware derives them (helpers/hybrid-key.js) */
+const PUB_PQ = pqCheckpointKeys(SECRET).publicKey;
+const OWNER_PUB = p256.getPublicKey(OWNER_SECRET, false).slice(1);
+const OWNER_PUB_PQ = pqOwnerKeys(OWNER_SECRET).publicKey;
+
 const u32 = (n) => [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff];
 const report = (bytes) => { const r = new Uint8Array(64); r.set(bytes.slice(0, 64)); return r; };
+/* a long reply (an ML-DSA-65 key or signature) as the firmware sends it: 64-byte reports, the last zero-padded */
+const reports = (bytes) => {
+  const out = [];
+  for (let o = 0; o < bytes.length; o += 64) out.push(report([...bytes.subarray(o, o + 64)]));
+  return out;
+};
 const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUpperCase().padStart(2, '0')}`)]);
 
 /* a fake key: a tiny chain, one held link, answers by sub-op */
@@ -34,6 +48,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
   /* each fake key its own Edge key - SECRET by default */
   const myPub = p256.getPublicKey(secret, false).slice(1);
   const myDevice = chain.deviceIdOf(myPub);
+  const myPq = pqCheckpointKeys(secret);
+  const ownerPq = pqOwnerKeys(ownerSecret);
   const listeners = new Set();
   let head = chain.genesis(myDevice);
   const held = [];
@@ -68,8 +84,10 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
   const checkpoint = () => {
     const seq = held.length - 1;
     const sig = chain.signCheckpoint({ deviceId: myDevice, seq, head }, secret);
+    const sigPq = signPq(chain.checkpointDigest({ deviceId: myDevice, seq, head }), myPq.secretKey);
     emit(report([...u32(seq), ...head]));
     emit(report([...sig]));
+    for (const r of reports(sigPq)) emit(r);
   };
   /* one approved use that owes (R16: the key marked it owes_receipt - a pressed use on a covered slot), so there is something to pick up and receipt */
   append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_RECEIPT, subject: new Uint8Array(32).fill(9) });
@@ -94,14 +112,18 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, 0, refusedTx, 0]));
       } else if (sub === 0x04) {
         emit(report([...myPub]));
+      } else if (sub === 0x05) {
+        /* PUBKEY_PQ: arg 0 = the checkpoint key's ML-DSA-65 twin, 1 = the owner key's - whole, in 64-byte reports */
+        for (const r of reports(arg[0] ? ownerPq.publicKey : myPq.publicKey)) emit(r);
       } else if (sub === 0x06) {
-        /* the owner statement (okplugin_edge statement()): seq . nametag hash, the owner key, the signature - no link */
+        /* the owner statement (okplugin_edge statement()): seq . nametag hash, the owner key, the P-256 signature, the ML-DSA-65 one - no link */
         const seq = held.length ? held.length - 1 : 0xffffffff;
         const nh = arg.slice(0, 32);
-        const digest = grants.statementDigest({ deviceId: myDevice, publicKey: myPub, seq, nametagHash: nh });
+        const digest = grants.statementDigest({ deviceId: myDevice, publicKey: myPub, publicKeyPq: myPq.publicKey, seq, nametagHash: nh });
         emit(report([...u32(seq), ...nh]));
         emit(report([...p256.getPublicKey(ownerSecret, false).slice(1)]));
         emit(report([...p256.sign(digest, ownerSecret, { prehash: false, lowS: false })]));
+        for (const r of reports(signPq(digest, ownerPq.secretKey))) emit(r);
       } else if (sub === 0x03) {
         checkpoint();
       } else if (sub === 0x02) {
@@ -261,4 +283,7 @@ function edgeOver(transport) {
 }
 
 
-module.exports = { fakeKey, edgeOver, SECRET, PUB, DEVICE, OWNER_SECRET, report, status, u32 };
+module.exports = {
+  fakeKey, edgeOver, SECRET, PUB, DEVICE, OWNER_SECRET, report, reports, status, u32,
+  PUB_PQ, OWNER_PUB, OWNER_PUB_PQ, pqCheckpointKeys, pqOwnerKeys,
+};

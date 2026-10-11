@@ -228,7 +228,7 @@ function intentOf(text) {
 /**
  * Check a budget's opening as one standalone proof:
  *   {deviceId, publicKey, link (its grant-create link), prevHead (the head
- *    before it), head + signature (the checkpoint the press answered with),
+ *    before it), head + signature (the checkpoint the press answered with, P-256 half),
  *    scopes, reasonHash, genesis, uses}
  * -> {ok: true, grantId, seq} or {ok: false, reason}:
  *   uses-mismatch      the scopes' caps do not add up to uses
@@ -236,6 +236,9 @@ function intentOf(text) {
  *   subject-mismatch   the link does not commit to these scopes, reason and G
  *   weld-mismatch      the signed head is not this link welded onto prevHead
  *   bad-signature      the checkpoint is not the Edge key's over (seq, head)
+ * An opening is an OLDER checkpoint (chain.verifyCheckpointP256, "B", 2026-10-10): it keeps and
+ * is checked by its P-256 half only; the copy's newest hybrid checkpoint, welded above it, is
+ * what makes it quantum-safe.
  * prevHead is not trusted: a wrong one cannot weld to the signed head.
  */
 function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses, lifetime = 0 }) {
@@ -244,7 +247,7 @@ function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signat
   if (f.op !== OP.GRANT_CREATE) return { ok: false, reason: 'not-a-grant-create' };
   if (!same(f.subject, grantSubject({ scopes, reasonHash, genesis, lifetime }))) return { ok: false, reason: 'subject-mismatch' };
   if (!same(chain.weld(prevHead, link), head)) return { ok: false, reason: 'weld-mismatch' };
-  if (!chain.verifyCheckpoint({ deviceId, seq: f.seq, head }, signature, publicKey)) return { ok: false, reason: 'bad-signature' };
+  if (!chain.verifyCheckpointP256({ deviceId, seq: f.seq, head }, signature, publicKey)) return { ok: false, reason: 'bad-signature' };
   return { ok: true, grantId: f.grantId, seq: f.seq };
 }
 
@@ -261,6 +264,11 @@ function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signat
  * seq and the hash of its nametag (okplugin_edge.cpp statement()). Any device of yours
  * checks another's statement with ITS OWN owner public key: it verifies only if the same
  * OnlyKey secret made it. No press, no link.
+ *
+ * HYBRID (Brad, 2026-10-10): the statement carries both checkpoint keys - the ML-DSA-65 one
+ * as its SHA-256, so the digest stays small - and is signed by the owner P-256 key AND the
+ * owner key's ML-DSA-65 twin (HKDF(K132, "onlykey/edge/owner-mldsa/v1"), no salt). A verifier
+ * needs both owner keys and both signatures; a statement with one half is not "mine".
  */
 const NAMETAG_MAX = 64; /* characters, trimmed */
 
@@ -272,31 +280,38 @@ function nametagHash(nametag) {
   return H('OKEDGE-NAMETAG-v1', utf8ToBytes(t));
 }
 
-/** SHA256("OKEDGE-STATEMENT-v1" || device id 16 || checkpoint pubkey X||Y 64 || seq u32 LE || nametag hash 32) - what the owner key signs. */
-function statementDigest({ deviceId, publicKey, seq, nametagHash: nh }) {
+/**
+ * SHA256("OKEDGE-STATEMENT-v1" || device id 16 || checkpoint pubkey X||Y 64 ||
+ *        SHA256(ML-DSA-65 checkpoint pubkey 1952) 32 || seq u32 LE || nametag hash 32)
+ * - what both owner keys sign (okplugin_edge.cpp statement()).
+ */
+function statementDigest({ deviceId, publicKey, publicKeyPq, seq, nametagHash: nh }) {
   const id = Uint8Array.from(deviceId);
   const pub = Uint8Array.from(publicKey);
+  const pq = Uint8Array.from(publicKeyPq || []);
   const tag = Uint8Array.from(nh);
-  if (id.length !== 16 || pub.length !== 64 || tag.length !== 32 || !Number.isInteger(seq) || seq < 0 || seq > 0xffffffff) {
-    throw new TypeError('edge: a statement is the device id (16), the checkpoint key X||Y (64), a u32 seq and a nametag hash (32)');
+  if (id.length !== 16 || pub.length !== 64 || pq.length !== chain.ML_DSA65.PK || tag.length !== 32 || !Number.isInteger(seq) || seq < 0 || seq > 0xffffffff) {
+    throw new TypeError(`edge: a statement is the device id (16), the checkpoint key X||Y (64), the ML-DSA-65 checkpoint key (${chain.ML_DSA65.PK}), a u32 seq and a nametag hash (32)`);
   }
   const s4 = Uint8Array.of(seq & 0xff, (seq >>> 8) & 0xff, (seq >>> 16) & 0xff, (seq >>> 24) & 0xff);
-  return H('OKEDGE-STATEMENT-v1', id, pub, s4, tag);
+  return H('OKEDGE-STATEMENT-v1', id, pub, crypto.sha256(pq), s4, tag);
 }
 
 /**
- * Is this statement signed by MY owner key, and does it name the key it carries?
- * statement: {deviceId, publicKey, seq, nametag (text), signature}; ownerKey: this device's
- * own owner public key (X||Y). -> boolean (false on anything malformed)
+ * Is this statement signed by MY owner keys, and does it name the key it carries?
+ * statement: {deviceId, publicKey, publicKeyPq, seq, nametag (text), signature, signaturePq};
+ * ownerKey / ownerKeyPq: this device's own owner public keys (P-256 X||Y, ML-DSA-65).
+ * -> boolean: true only when BOTH signatures verify (false on anything malformed or missing)
  */
-function verifyStatement(statement, ownerKey) {
+function verifyStatement(statement, ownerKey, ownerKeyPq) {
   try {
-    const { deviceId, publicKey, seq, nametag, signature } = statement || {};
+    const { deviceId, publicKey, publicKeyPq, seq, nametag, signature, signaturePq } = statement || {};
     if (!same(chain.deviceIdOf(Uint8Array.from(publicKey)), Uint8Array.from(deviceId))) return false; /* the id is the key's */
     /* seq null = the key had no link yet: it signed 0xFFFFFFFF */
-    const digest = statementDigest({ deviceId, publicKey, seq: seq === null ? 0xffffffff : seq, nametagHash: nametagHash(nametag) });
+    const digest = statementDigest({ deviceId, publicKey, publicKeyPq, seq: seq === null ? 0xffffffff : seq, nametagHash: nametagHash(nametag) });
     const owner = Uint8Array.from(ownerKey);
-    return crypto.p256VerifyDigest(Uint8Array.from(signature), digest, owner.length === 64 ? Uint8Array.from([4, ...owner]) : owner, { lowS: false });
+    return crypto.p256VerifyDigest(Uint8Array.from(signature), digest, owner.length === 64 ? Uint8Array.from([4, ...owner]) : owner, { lowS: false })
+      && chain.mlDsaVerify(signaturePq, digest, ownerKeyPq);
   } catch {
     return false;
   }

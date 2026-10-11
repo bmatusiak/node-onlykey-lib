@@ -15,11 +15,14 @@
  *
  * The copy: <edge home>/copy-<device id, 16 hex>.json
  *   {deviceId, links: [{link, head, reveal?}] (hex), lastSeen: {seq, head} | null,
- *    publicKey, seals: [{seq, head, signature}], checkpoint?, statement?}
+ *    publicKey, publicKeyPq, seals: [{seq, head, signature, signaturePq?}], checkpoint?, statement?}
  * One file per device: this phone's key, and since 2026-10-08 your OTHER devices' logs too
  * (each phone synced in turn, a hard key's later), each with that device's signed checkpoint and its
  * owner statement (nametag) - what this computer offers your phones to merge.
- * publicKey is the key's Edge key as the key gave it at the last sync; seals
+ * publicKey is the key's Edge key as the key gave it at the last sync, publicKeyPq its
+ * ML-DSA-65 twin. One hybrid anchor per copy ("B", 2026-10-10): the newest checkpoint and
+ * the newest seal keep their ML-DSA-65 half and are checked with both; older seals keep
+ * their P-256 half only (chain.verifyCheckpointP256); seals
  * come from the phone (it takes a seal when a budget ends) and cut the copy into
  * JSON blocks (BLOCKS.md) - each checked against that key, nothing trusted.
  */
@@ -38,20 +41,27 @@ function copyFile(home, deviceId) {
 
 function load(home, deviceId) {
   const f = copyFile(home, deviceId);
-  if (!fs.existsSync(f)) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], checkpoint: null, statement: null, openings: [] };
+  if (!fs.existsSync(f)) return { deviceId, links: [], lastSeen: null, publicKey: null, publicKeyPq: null, seals: [], checkpoint: null, statement: null, openings: [] };
   const s = JSON.parse(fs.readFileSync(f, 'utf8'));
   /* version 1 since the clean start: an older copy is the old chain's - read as no copy */
-  if (s.v !== 1) return { deviceId, links: [], lastSeen: null, publicKey: null, seals: [], checkpoint: null, statement: null, openings: [] };
+  if (s.v !== 1) return { deviceId, links: [], lastSeen: null, publicKey: null, publicKeyPq: null, seals: [], checkpoint: null, statement: null, openings: [] };
   return {
     deviceId,
     links: s.links.map((l) => ({ link: fromHex(l.link), head: fromHex(l.head), ...(l.reveal ? { reveal: fromHex(l.reveal) } : {}) })),
     lastSeen: s.lastSeen ? { seq: s.lastSeen.seq, head: fromHex(s.lastSeen.head) } : null,
     publicKey: s.publicKey ? fromHex(s.publicKey) : null,
-    seals: (s.seals || []).map((x) => ({ seq: x.seq, head: fromHex(x.head), signature: fromHex(x.signature) })),
+    publicKeyPq: s.publicKeyPq ? fromHex(s.publicKeyPq) : null,
+    /* only the newest seal keeps signaturePq ("B"); the checkpoint without one loads as empty bytes and fails its check */
+    seals: (s.seals || []).map((x) => ({ seq: x.seq, head: fromHex(x.head), signature: fromHex(x.signature), ...(x.signaturePq ? { signaturePq: fromHex(x.signaturePq) } : {}) })),
     openings: Array.isArray(s.openings) ? s.openings : [],
     notes: s.notes && typeof s.notes === 'object' ? s.notes : { reasons: {}, messages: {} },
-    checkpoint: s.checkpoint ? { seq: s.checkpoint.seq, head: fromHex(s.checkpoint.head), signature: fromHex(s.checkpoint.signature) } : null,
-    statement: s.statement ? { deviceId: fromHex(s.statement.deviceId), publicKey: fromHex(s.statement.publicKey), seq: s.statement.seq ?? null, nametag: s.statement.nametag, signature: fromHex(s.statement.signature) } : null,
+    checkpoint: s.checkpoint ? {
+      seq: s.checkpoint.seq, head: fromHex(s.checkpoint.head), signature: fromHex(s.checkpoint.signature), signaturePq: fromHex(s.checkpoint.signaturePq || ''),
+    } : null,
+    statement: s.statement ? {
+      deviceId: fromHex(s.statement.deviceId), publicKey: fromHex(s.statement.publicKey), publicKeyPq: fromHex(s.statement.publicKeyPq || ''),
+      seq: s.statement.seq ?? null, nametag: s.statement.nametag, signature: fromHex(s.statement.signature), signaturePq: fromHex(s.statement.signaturePq || ''),
+    } : null,
   };
 }
 
@@ -63,11 +73,17 @@ function save(home, c) {
     links: c.links.map((l) => ({ link: toHex(l.link), head: toHex(l.head), ...(l.reveal ? { reveal: toHex(l.reveal) } : {}) })),
     lastSeen: c.lastSeen ? { seq: c.lastSeen.seq, head: toHex(c.lastSeen.head) } : null,
     ...(c.publicKey ? { publicKey: toHex(c.publicKey) } : {}),
-    seals: (c.seals || []).map((x) => ({ seq: x.seq, head: toHex(x.head), signature: toHex(x.signature) })),
+    ...(c.publicKeyPq ? { publicKeyPq: toHex(c.publicKeyPq) } : {}),
+    seals: (c.seals || []).map((x) => ({ seq: x.seq, head: toHex(x.head), signature: toHex(x.signature), ...(x.signaturePq && x.signaturePq.length ? { signaturePq: toHex(x.signaturePq) } : {}) })),
     ...(c.openings && c.openings.length ? { openings: c.openings } : {}),
     ...(c.notes ? { notes: c.notes } : {}),
-    ...(c.checkpoint ? { checkpoint: { seq: c.checkpoint.seq, head: toHex(c.checkpoint.head), signature: toHex(c.checkpoint.signature) } } : {}),
-    ...(c.statement ? { statement: { deviceId: toHex(c.statement.deviceId), publicKey: toHex(c.statement.publicKey), seq: c.statement.seq ?? null, nametag: c.statement.nametag, signature: toHex(c.statement.signature) } } : {}),
+    ...(c.checkpoint ? { checkpoint: {
+      seq: c.checkpoint.seq, head: toHex(c.checkpoint.head), signature: toHex(c.checkpoint.signature), signaturePq: toHex(c.checkpoint.signaturePq || new Uint8Array(0)),
+    } } : {}),
+    ...(c.statement ? { statement: {
+      deviceId: toHex(c.statement.deviceId), publicKey: toHex(c.statement.publicKey), publicKeyPq: toHex(c.statement.publicKeyPq || new Uint8Array(0)),
+      seq: c.statement.seq ?? null, nametag: c.statement.nametag, signature: toHex(c.statement.signature), signaturePq: toHex(c.statement.signaturePq || new Uint8Array(0)),
+    } } : {}),
   };
   fs.writeFileSync(copyFile(home, c.deviceId), JSON.stringify(s, null, 1) + '\n', { mode: 0o600 });
 }
@@ -100,16 +116,18 @@ function verdictOf(a) {
 
 /**
  * Bring the PC's copy up to the key's head (status: read and report only).
- * edge: the Edge plugin (head, pickup, publicKey). -> a report; changes only the
+ * edge: the Edge plugin (head, pickup, publicKey, publicKeyPq). -> a report; changes only the
  * PC's copy file, and only when what it would store verifies (no tampering).
  */
 async function sync(edge, home, { status = false, history = null } = {}) {
   const { publicKey, deviceId } = await edge.publicKey();
+  /* the ML-DSA-65 twin of the checkpoint key: every checkpoint and seal of this chain is checked under both */
+  const publicKeyPq = await edge.publicKeyPq('checkpoint');
   const c = load(home, deviceId);
   const h = await edge.head();
   const keySeq = h.seq === null ? -1 : h.seq;
   const ringFrom = h.oldest === null ? keySeq + 1 : h.oldest;
-  const candidate = { ...c, links: [...c.links], publicKey };
+  const candidate = { ...c, links: [...c.links], publicKey, publicKeyPq };
   let stopped = null;
   /*
    * THE PHONE'S HISTORY FILLS A GAP (2026-10-08, walking the setup flow): the key's ring holds
@@ -152,7 +170,7 @@ async function sync(edge, home, { status = false, history = null } = {}) {
     }
   }
   const held = keySeq < 0 || h.oldest === null ? [] : await edge.pickup(h.oldest, Math.min(PICKUP_MAX, keySeq - h.oldest + 1));
-  const a = copyLib.assess({ links: candidate.links }, { publicKey, head: { seq: keySeq, head: h.head }, held }, {
+  const a = copyLib.assess({ links: candidate.links }, { publicKey, publicKeyPq, head: { seq: keySeq, head: h.head }, held }, {
     ringFrom, ...(candidate.lastSeen ? { lastSeen: candidate.lastSeen } : {}),
   });
   const verdict = verdictOf(a);
@@ -232,13 +250,20 @@ function keepSeals(home, deviceId, { seals = [] }) {
   const bySeq = new Map(c.seals.map((x) => [x.seq, x]));
   for (const x of seals) bySeq.set(x.seq, x);
   c.seals = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  /* one hybrid anchor ("B"): the newest seal keeps its ML-DSA-65 half, older ones drop it */
+  c.seals = c.seals.map((x, i) => {
+    if (i === c.seals.length - 1) return x;
+    const { signaturePq: _older, ...p256 } = x;
+    return p256;
+  });
   save(home, c);
   return { seals: c.seals.length };
 }
 
 /*
  * Every copy in this home as JSON blocks (edge/src/block.js), each block checked
- * against the key's public key kept at the last sync and against the block before
+ * against the key's public keys kept at the last sync - the newest block with both halves (the
+ * copy's one hybrid anchor), older ones by P-256 - and against the block before
  * it. -> [{deviceId, blocks: [{block, id, ok, reason?}], open, reason?}]
  */
 function blocks(home, { net }) {
@@ -249,8 +274,9 @@ function blocks(home, { net }) {
     const c = load(home, fromHex(s.deviceId));
     const r = block.blocksFrom({ net, deviceId: c.deviceId, records: c.links, seals: c.seals });
     const out = [];
-    for (const b of r.blocks) {
-      const v = c.publicKey ? block.verifyBlock(b, c.publicKey, out.length ? out[out.length - 1].block : null) : { ok: false, reason: 'no public key kept - run onlykey-js edge sync' };
+    for (const [i, b] of r.blocks.entries()) {
+      const anchor = i === r.blocks.length - 1;
+      const v = c.publicKey ? block.verifyBlock(b, c.publicKey, c.publicKeyPq, out.length ? out[out.length - 1].block : null, { anchor }) : { ok: false, reason: 'no public key kept - run onlykey-js edge sync' };
       out.push({ block: b, id: block.blockId(b), ok: v.ok, ...(v.ok ? {} : { reason: v.reason }) });
     }
     return { deviceId: toHex(c.deviceId), blocks: out, open: r.open, ...(r.reason ? { reason: r.reason } : {}) };
@@ -265,13 +291,15 @@ function blocks(home, { net }) {
  * YOURS is each phone's call (devices.classify, with its owner key) - this file only keeps it.
  * -> {kept: true} | {kept: false, why}
  */
-function keepLog(home, { deviceId, publicKey, records, checkpoint, statement }) {
+function keepLog(home, { deviceId, publicKey, publicKeyPq, records, checkpoint, statement }) {
   const { sync: syncLib } = require('../src');
   const id = Uint8Array.from(deviceId);
-  if (!statement || toHex(statement.deviceId) !== toHex(id) || toHex(statement.publicKey) !== toHex(publicKey)) return { kept: false, why: 'the statement does not name this device' };
+  /* the statement names both checkpoint keys (the hybrid): one that lacks or differs in the ML-DSA-65 key names another device */
+  if (!statement || toHex(statement.deviceId) !== toHex(id) || toHex(statement.publicKey) !== toHex(publicKey)
+    || !publicKeyPq || !statement.publicKeyPq || toHex(statement.publicKeyPq) !== toHex(publicKeyPq)) return { kept: false, why: 'the statement does not name this device' };
   /* nothing to merge yet: a device whose key has no link is not kept or offered (an older app's check would read NO_SEQ as a seq) */
   if (checkpoint.seq === syncLib.NO_SEQ || !records.length) return { kept: false, why: 'its key has no link yet' };
-  const check = syncLib.anchorCheck({ records, publicKey: Uint8Array.from(publicKey), checkpoint, anchors: [] });
+  const check = syncLib.anchorCheck({ records, publicKey: Uint8Array.from(publicKey), publicKeyPq: Uint8Array.from(publicKeyPq), checkpoint, anchors: [] });
   if (!check.ok) return { kept: false, why: `its chain does not check (${check.alarm}${check.detail ? `: ${check.detail}` : ''})` };
   const c = load(home, id);
   if (c.checkpoint && c.checkpoint.seq > checkpoint.seq) return { kept: false, why: `this computer already holds it up to #${c.checkpoint.seq}` };
@@ -279,6 +307,7 @@ function keepLog(home, { deviceId, publicKey, records, checkpoint, statement }) 
   const full = require('../src').devices.completeness({ deviceId: id, publicKey, records: records.filter((r) => seqOf(r) <= checkpoint.seq), openings: c.openings || [], notes: c.notes || null });
   if (!full.ok) return { kept: false, why: `not complete - ${full.missing.slice(0, 3).join('; ')}${full.missing.length > 3 ? ` (+${full.missing.length - 3} more)` : ''}` };
   c.publicKey = Uint8Array.from(publicKey);
+  c.publicKeyPq = Uint8Array.from(publicKeyPq);
   c.links = records.filter((r) => seqOf(r) <= checkpoint.seq).map((r) => ({ link: Uint8Array.from(r.link), head: Uint8Array.from(r.head), ...(r.reveal ? { reveal: Uint8Array.from(r.reveal) } : {}) }));
   c.checkpoint = checkpoint;
   if (!c.statement || (statement.seq ?? -1) >= (c.statement.seq ?? -1)) c.statement = statement;

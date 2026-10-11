@@ -23,18 +23,21 @@ const { main } = require('../../cli/index');
 const sk = new Uint8Array(32).fill(5);
 const pub = p256.getPublicKey(sk, false).subarray(1);
 const id = chain.deviceIdOf(pub);
+/* the hybrid checkpoint (2026-10-10): every seal carries the P-256 and the ML-DSA-65 signature */
+const K = require('./helpers/hybrid-key').edgeKey(sk);
+const pubPq = K.publicKeyPq;
 const b32 = (n) => new Uint8Array(32).fill(n);
 
 /* two budgets' worth of links, the second still open after its last link */
 const links = [OP.GRANT_CREATE, OP.SIGN, OP.RECEIPT, OP.GRANT_END, OP.GRANT_CREATE, OP.SIGN].map((op, seq) =>
   chain.encodeLink({ seq, op, decision: op === OP.SIGN ? DECISION.SELF_PRESS : DECISION.APPROVE, subject: b32(seq + 1), grantId: 3, version: 1 }));
 const heads = chain.heads(links, chain.genesis(id));
-const sealAt = (seq) => ({ seq, head: heads[seq], signature: chain.signCheckpoint({ deviceId: id, seq, head: heads[seq] }, sk) });
+const sealAt = (seq) => ({ seq, head: heads[seq], ...K.sign({ deviceId: id, seq, head: heads[seq] }) });
 
 function homeWithCopy() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'okblocks-'));
   fs.writeFileSync(copy.copyFile(home, id), JSON.stringify({ v: 1,
-    deviceId: toHex(id), publicKey: toHex(pub), lastSeen: null,
+    deviceId: toHex(id), publicKey: toHex(pub), publicKeyPq: toHex(pubPq), lastSeen: null,
     links: links.map((l, i) => ({ link: toHex(l), head: toHex(heads[i]) })),
   }));
   return home;
@@ -56,7 +59,7 @@ test('sealsFromPhone reads the phone\'s last-batch fields: the seals, and the st
   const s = sealAt(3);
   const peer = require('../src/request').peerSignerFromSecret(new Uint8Array(32).fill(2));
   const sent = [];
-  const phone = { send: async (msg) => { sent.push(msg); return { ok: true, links: [], next: null, seals: [[s.seq, toHex(s.head), toHex(s.signature)]], seen: [] }; } };
+  const phone = { send: async (msg) => { sent.push(msg); return { ok: true, links: [], next: null, seals: [[s.seq, toHex(s.head), toHex(s.signature), toHex(s.signaturePq)]], seen: [] }; } };
   const c = client.createEdgeClient({ edge: {}, channel: phone });
   const got = await c.sealsFromPhone(peer, { deviceId: id });
   assert.deepEqual(Object.keys(got).sort(), ['notes', 'openings', 'seals', 'statement']);
@@ -64,6 +67,7 @@ test('sealsFromPhone reads the phone\'s last-batch fields: the seals, and the st
   assert.equal(got.seals[0].seq, 3);
   assert.equal(toHex(got.seals[0].head), toHex(s.head));
   assert.equal(toHex(got.seals[0].signature), toHex(s.signature));
+  assert.equal(toHex(got.seals[0].signaturePq), toHex(s.signaturePq), "the seal's ML-DSA-65 half comes with it");
   assert.equal(got.statement, null, 'no statement from the phone');
   assert.equal(sent[0].peer, toHex(peer.publicKey), 'the GIVE names this computer\'s sync key');
   /* a phone that refuses, or answers nothing */
@@ -97,8 +101,13 @@ test('edge blocks --json prints blocks that verify on their own, against the key
     assert.equal(r.code, 0, r.err.join('\n'));
     const blocks = JSON.parse(r.out.join('\n'));
     assert.equal(blocks.length, 2);
-    assert.equal(block.verifyBlock(blocks[0], pub).ok, true);
-    assert.equal(block.verifyBlock(blocks[1], pub, blocks[0]).ok, true);
+    /* one hybrid anchor ("B"): the newest block carries sigPq; the older seal dropped it when the newer came */
+    assert.equal('sigPq' in blocks[0].checkpoint, false);
+    assert.equal(typeof blocks[1].checkpoint.sigPq, 'string');
+    assert.equal(copy.load(home, id).seals[0].signaturePq, undefined, 'the older seal is kept with its P-256 half only');
+    assert.equal(block.verifyBlock(blocks[0], pub, pubPq, null, { anchor: false }).ok, true);
+    assert.equal(block.verifyBlock(blocks[0], pub, pubPq).ok, false, 'an older block is no anchor');
+    assert.equal(block.verifyBlock(blocks[1], pub, pubPq, blocks[0]).ok, true);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -113,6 +122,19 @@ test('a seal that is not the key\'s: edge blocks says the block does not verify,
     const r = await run(['edge', '--edge-home', home, 'blocks']);
     assert.equal(r.code, 1);
     assert.match(r.out.join('\n'), /does not verify: signature/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a seal with only its P-256 half (no sigPq): kept, but its block does not verify', async () => {
+  const home = homeWithCopy();
+  try {
+    const { signaturePq: _none, ...p256Only } = sealAt(3);
+    copy.keepSeals(home, id, { seals: [p256Only] });
+    const r = await run(['edge', '--edge-home', home, 'blocks']);
+    assert.equal(r.code, 1);
+    assert.match(r.out.join(' '), /does not verify: signature/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

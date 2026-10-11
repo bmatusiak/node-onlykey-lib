@@ -3,6 +3,8 @@
  * hash of a json"). A block is the links between two seals plus the key's
  * signed checkpoint, written as JSON whose SHA-256 is its id. Only the key's
  * signature is trusted: change any field and the block fails, and its id moves.
+ * The seal is the hybrid checkpoint (2026-10-10): "sig" (P-256) and "sigPq"
+ * (ML-DSA-65), both required.
  */
 'use strict';
 
@@ -12,12 +14,14 @@ const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 const chain = require('../src/chain');
 const { OP, DECISION } = require('../src/codes');
 const block = require('../src/block');
+const { edgeKey } = require('./helpers/hybrid-key');
 
 /* a key: its Edge key pair and device id */
 function key(fill) {
   const sk = new Uint8Array(32).fill(fill);
   const pub = p256.getPublicKey(sk, false).subarray(1);
-  return { sk, pub, id: chain.deviceIdOf(pub) };
+  const k = edgeKey(sk);
+  return { sk, pub, pubPq: k.publicKeyPq, sign: k.sign, id: chain.deviceIdOf(pub) };
 }
 
 const K = key(7);
@@ -41,7 +45,7 @@ function seal(k, startHead, ls) {
   const heads = chain.heads(ls, startHead);
   const head = heads[heads.length - 1];
   const seq = chain.decodeLink(ls[ls.length - 1]).seq;
-  return { seq, head, signature: chain.signCheckpoint({ deviceId: k.id, seq, head }, k.sk) };
+  return { seq, head, ...k.sign({ deviceId: k.id, seq, head }) };
 }
 
 function first() {
@@ -73,7 +77,7 @@ test('a block reads plainly: op names, numbers, hex, and its seal', () => {
 
 test('a block verifies with the key\'s public key only, and its id is the SHA-256 of its canonical JSON', () => {
   const b = first();
-  const r = block.verifyBlock(b, K.pub);
+  const r = block.verifyBlock(b, K.pub, K.pubPq);
   assert.deepEqual(r, { ok: true, id: block.blockId(b) });
   assert.match(r.id, /^[0-9a-f]{64}$/);
   /* the same block built again has the same id */
@@ -90,6 +94,8 @@ test('change any field and the block fails - and its id moves', () => {
     ['a link removed', (x) => { x.links.splice(2, 1); }],
     ['the seal\'s head', (x) => { x.checkpoint.head = '00'.repeat(32); }],
     ['the signature', (x) => { x.checkpoint.sig = `${x.checkpoint.sig.slice(0, -2)}00`; }],
+    ['the pq signature', (x) => { x.checkpoint.sigPq = `${x.checkpoint.sigPq.slice(0, 200)}${x.checkpoint.sigPq[200] === '0' ? '1' : '0'}${x.checkpoint.sigPq.slice(201)}`; }],
+    ['the pq signature removed', (x) => { delete x.checkpoint.sigPq; }],
     ['the device', (x) => { x.device = '11'.repeat(16); }],
     ['the start', (x) => { x.start.head = '22'.repeat(32); }],
     ['the net', (x) => { x.net = 'test'; }],
@@ -99,12 +105,24 @@ test('change any field and the block fails - and its id moves', () => {
     edit(x);
     assert.notEqual(block.blockId(x), id, `${what}: id`);
     /* the net is not signed by the key - a test block claiming live still has its own id */
-    if (what !== 'the net') assert.equal(block.verifyBlock(x, K.pub).ok, false, `${what}: verify`);
+    if (what !== 'the net') assert.equal(block.verifyBlock(x, K.pub, K.pubPq).ok, false, `${what}: verify`);
   }
 });
 
 test('another key\'s public key does not verify the block', () => {
-  assert.deepEqual(block.verifyBlock(first(), SIB.pub), { ok: false, reason: 'device' });
+  assert.deepEqual(block.verifyBlock(first(), SIB.pub, SIB.pubPq), { ok: false, reason: 'device' });
+});
+
+test('block verify requires sigPq: the P-256 half alone, or another ML-DSA-65 key, is not a signed block', () => {
+  const b = first();
+  assert.equal(b.checkpoint.sigPq.length, chain.ML_DSA65.SIG * 2, 'the seal carries the ML-DSA-65 signature as hex');
+  const p256Only = JSON.parse(JSON.stringify(b));
+  delete p256Only.checkpoint.sigPq;
+  assert.deepEqual(block.verifyBlock(p256Only, K.pub, K.pubPq), { ok: false, reason: 'signature' });
+  /* the right P-256 key, the wrong (or no) ML-DSA-65 key */
+  assert.deepEqual(block.verifyBlock(b, K.pub, SIB.pubPq), { ok: false, reason: 'signature' });
+  assert.deepEqual(block.verifyBlock(b, K.pub, null), { ok: false, reason: 'signature' });
+  assert.deepEqual(block.verifyBlock(b, K.pub), { ok: false, reason: 'signature' });
 });
 
 test('blocks chain: the second starts on the first\'s seal and names its id; a wrong prev fails', () => {
@@ -112,10 +130,10 @@ test('blocks chain: the second starts on the first\'s seal and names its id; a w
   const ls = links(5);
   const start = { seq: 5, head: Uint8Array.from(Buffer.from(b1.checkpoint.head, 'hex')) };
   const b2 = block.buildBlock({ net: 'live', deviceId: K.id, start, prev: block.blockId(b1), links: ls, checkpoint: seal(K, start.head, ls) });
-  assert.equal(block.verifyBlock(b2, K.pub, b1).ok, true);
+  assert.equal(block.verifyBlock(b2, K.pub, K.pubPq, b1).ok, true);
   const wrong = JSON.parse(JSON.stringify(b2));
   wrong.prev = '33'.repeat(32);
-  assert.deepEqual(block.verifyBlock(wrong, K.pub, b1), { ok: false, reason: 'prev' });
+  assert.deepEqual(block.verifyBlock(wrong, K.pub, K.pubPq, b1), { ok: false, reason: 'prev' });
 });
 
 test('a link whose reserved bytes are not zero cannot be written as fields: refused at build', () => {
@@ -129,26 +147,38 @@ test('the same bytes and id as an independent writer (onlykey-edge make_block_ve
   const V = require('./vectors/block-v1.json');
   assert.equal(block.canonical(V.block), V.canonical);
   assert.equal(block.blockId(V.block), V.id);
-  const r = block.verifyBlock(V.block, Uint8Array.from(Buffer.from(V.publicKey, 'hex')));
-  assert.deepEqual(r, { ok: true, id: V.id });
+  /*
+   * The Python writer is stdlib only and has no ML-DSA-65, so its block carries the P-256
+   * half alone - not a signed block under the hybrid. Its canonical bytes and id still match;
+   * the ML-DSA-65 half is added here in JS (any ML-DSA-65 key: only the checker's pinned key
+   * matters) and the block then verifies against the vector's P-256 key.
+   */
+  const pub = Uint8Array.from(Buffer.from(V.publicKey, 'hex'));
+  assert.deepEqual(block.verifyBlock(V.block, pub, K.pubPq), { ok: false, reason: 'signature' });
+  const pq = chain.mlDsaKeys(new Uint8Array(32).fill(0x33));
+  const fields = { deviceId: chain.deviceIdOf(pub), seq: V.block.checkpoint.seq, head: Uint8Array.from(Buffer.from(V.block.checkpoint.head, 'hex')) };
+  const hybrid = JSON.parse(JSON.stringify(V.block));
+  hybrid.checkpoint.sigPq = Buffer.from(chain.signCheckpointPq(fields, pq.secretKey)).toString('hex');
+  assert.deepEqual(block.verifyBlock(hybrid, pub, pq.publicKey), { ok: true, id: block.blockId(hybrid) });
+  assert.notEqual(block.blockId(hybrid), V.id, 'sigPq is part of the block, so of its id');
 });
 
 test('blocksFrom: a copy and its seals give its blocks, each continuing the last; links after the last seal stay open', () => {
   const ls = [...links(0), ...links(5), ...links(10).slice(0, 2)];
   const heads = chain.heads(ls, chain.genesis(K.id));
-  const sealAt = (seq) => ({ seq, head: heads[seq], signature: chain.signCheckpoint({ deviceId: K.id, seq, head: heads[seq] }, K.sk) });
+  const sealAt = (seq) => ({ seq, head: heads[seq], ...K.sign({ deviceId: K.id, seq, head: heads[seq] }) });
   const r = block.blocksFrom({ net: 'live', deviceId: K.id, records: ls.map((link) => ({ link })), seals: [sealAt(9), sealAt(4)] });
   assert.equal(r.blocks.length, 2);
   assert.equal(r.open, 2);
-  assert.equal(block.verifyBlock(r.blocks[0], K.pub).ok, true);
-  assert.equal(block.verifyBlock(r.blocks[1], K.pub, r.blocks[0]).ok, true);
+  assert.equal(block.verifyBlock(r.blocks[0], K.pub, K.pubPq).ok, true);
+  assert.equal(block.verifyBlock(r.blocks[1], K.pub, K.pubPq, r.blocks[0]).ok, true);
   assert.equal(r.blocks[1].prev, block.blockId(r.blocks[0]));
 });
 
 test('blocksFrom: a copy that starts late, or has a hole, gives no wrong block - it says why', () => {
   const ls = links(0);
   const heads = chain.heads(ls, chain.genesis(K.id));
-  const seal4 = { seq: 4, head: heads[4], signature: chain.signCheckpoint({ deviceId: K.id, seq: 4, head: heads[4] }, K.sk) };
+  const seal4 = { seq: 4, head: heads[4], ...K.sign({ deviceId: K.id, seq: 4, head: heads[4] }) };
   const late = block.blocksFrom({ net: 'live', deviceId: K.id, records: ls.slice(2).map((link) => ({ link })), seals: [seal4] });
   assert.equal(late.blocks.length, 0);
   assert.match(late.reason, /starts at #2/);

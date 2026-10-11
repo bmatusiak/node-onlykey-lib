@@ -15,7 +15,7 @@ const { H } = require('../src/hash');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 const { IFACE } = require('../../src/protocol/msg');
 
-const { fakeKey, edgeOver, PUB, DEVICE, SECRET, report, status, u32 } = require('./helpers/fake-edge-key');
+const { fakeKey, edgeOver, PUB, PUB_PQ, OWNER_PUB_PQ, DEVICE, SECRET, report, status, u32 } = require('./helpers/fake-edge-key');
 
 test('edge: HEAD, the public key and device id, PICKUP of a held link', async () => {
   const edge = edgeOver(fakeKey());
@@ -35,7 +35,24 @@ test('edge: HEAD, the public key and device id, PICKUP of a held link', async ()
 test('edge: the checkpoint is read and verifies with the Edge key', async () => {
   const edge = edgeOver(fakeKey());
   const c = await edge.checkpoint();
-  assert.ok(chain.verifyCheckpoint({ deviceId: DEVICE, seq: c.seq, head: c.head }, c.signature, PUB));
+  /* the hybrid: the ML-DSA-65 half follows the P-256 one in 64-byte reports, and both verify */
+  assert.equal(c.signaturePq.length, chain.ML_DSA65.SIG);
+  assert.ok(chain.verifyCheckpoint({ deviceId: DEVICE, seq: c.seq, head: c.head }, c.signature, PUB, c.signaturePq, PUB_PQ));
+  assert.equal(chain.verifyCheckpoint({ deviceId: DEVICE, seq: c.seq, head: c.head }, c.signature, PUB), false, 'the P-256 half alone');
+});
+
+test('edge: PUBKEY_PQ reads the ML-DSA-65 checkpoint key and the owner key, whole (1952 bytes in 64-byte reports)', async () => {
+  const edge = edgeOver(fakeKey());
+  const cp = await edge.publicKeyPq('checkpoint');
+  const owner = await edge.publicKeyPq('owner');
+  assert.equal(cp.length, chain.ML_DSA65.PK);
+  assert.deepEqual(Array.from(cp), Array.from(PUB_PQ));
+  assert.deepEqual(Array.from(owner), Array.from(OWNER_PUB_PQ));
+  assert.notDeepEqual(Array.from(cp), Array.from(owner), 'two keys');
+  /* the owner key is the same on every device of the same backup; the checkpoint key is the device's own */
+  const sibling = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey() }));
+  assert.deepEqual(Array.from(await sibling.publicKeyPq('owner')), Array.from(owner));
+  assert.notDeepEqual(Array.from(await sibling.publicKeyPq('checkpoint')), Array.from(cp));
 });
 
 test('edge: a budget\'s opening comes back as a proof verifyBudgetOpening accepts', async () => {
@@ -57,6 +74,7 @@ test('edge: a budget\'s opening comes back as a proof verifyBudgetOpening accept
     head: g.checkpoint.head, signature: g.checkpoint.signature, scopes, reasonHash, genesis: g.genesis, uses: g.uses,
   });
   assert.deepEqual(r, { ok: true, grantId: g.grantId, seq: 2 });
+  assert.equal(g.checkpoint.signaturePq.length, chain.ML_DSA65.SIG, 'the key still sends the ML-DSA-65 half (the host keeps it only while newest)');
   assert.deepEqual((await edge.head()).live, [g.grantId]);
   assert.equal(await edge.revoke(g.grantId), true);
 });

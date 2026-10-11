@@ -23,8 +23,9 @@ async function deviceLog(links = 3, { result = true } = {}) {
   if (result) await e.receipt(0, 0, require('../src').receipts.messageHash(DONE0));
   for (let i = 0; i < links; i += 1) t.edgeRecord();
   const { publicKey, deviceId } = await e.publicKey();
+  const publicKeyPq = await e.publicKeyPq('checkpoint');
   const h = await e.head();
-  return { t, e, log: { deviceId, publicKey, records: await e.pickup(0, h.seq + 1), checkpoint: await e.checkpoint(), statement: await e.statement('hard key') } };
+  return { t, e, log: { deviceId, publicKey, publicKeyPq, records: await e.pickup(0, h.seq + 1), checkpoint: await e.checkpoint(), statement: await e.statement('hard key') } };
 }
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-offer-'));
 
@@ -37,6 +38,13 @@ test('the computer keeps another device\'s log only when its chain checks and th
   const swapped = copy.keepLog(home, { ...a.log, statement: b.log.statement });
   assert.equal(swapped.kept, false);
   assert.match(swapped.why, /does not name this device/);
+  /* the hybrid: a statement that names another (or no) ML-DSA-65 checkpoint key does not name this device */
+  assert.match(copy.keepLog(home, { ...a.log, publicKeyPq: b.log.publicKeyPq }).why, /does not name this device/);
+  const { publicKeyPq: _k, ...noKeyPq } = a.log.statement;
+  assert.match(copy.keepLog(home, { ...a.log, statement: noKeyPq }).why, /does not name this device/);
+  /* a checkpoint with only its P-256 half does not check */
+  const { signaturePq: _s, ...p256Only } = a.log.checkpoint;
+  assert.match(copy.keepLog(home, { ...a.log, checkpoint: p256Only }).why, /does not check \(bad-checkpoint\)/);
   const tampered = a.log.records.map((r, i) => (i === 1 ? { ...r, link: Uint8Array.from(r.link, (x, j) => (j === 50 ? x ^ 1 : x)) } : r));
   assert.match(copy.keepLog(home, { ...a.log, records: tampered }).why, /does not check/);
   a.t.edgeRecord();
@@ -46,6 +54,12 @@ test('the computer keeps another device\'s log only when its chain checks and th
   assert.match(copy.keepLog(home, a.log).why, /already holds it up to/);
   assert.equal(copy.load(home, a.log.deviceId).checkpoint.seq, h.seq);
   assert.equal(copy.load(home, a.log.deviceId).statement.nametag, 'hard key');
+  /* saved and loaded with both halves: the kept log checks again from the file alone */
+  const kept = copy.load(home, a.log.deviceId);
+  assert.equal(Buffer.from(kept.publicKeyPq).toString('hex'), Buffer.from(a.log.publicKeyPq).toString('hex'));
+  assert.equal(Buffer.from(kept.checkpoint.signaturePq).toString('hex'), Buffer.from(newer.checkpoint.signaturePq).toString('hex'));
+  assert.equal(Buffer.from(kept.statement.signaturePq).toString('hex'), Buffer.from(a.log.statement.signaturePq).toString('hex'));
+  assert.equal(sync.anchorCheck({ records: kept.links, publicKey: kept.publicKey, publicKeyPq: kept.publicKeyPq, checkpoint: kept.checkpoint }).ok, true);
   copy.keepLog(home, b.log);
   const offers = copy.logsToOffer(home, a.log.deviceId).map((c) => Buffer.from(c.deviceId).toString('hex'));
   assert.deepEqual(offers, [Buffer.from(b.log.deviceId).toString('hex')], 'every log but the phone being synced');
@@ -76,6 +90,11 @@ test('offerToPhone: HAVE, only the links the phone lacks, then a signed OFFER ca
   assert.equal(offer.checkpoint.seq, log.checkpoint.seq);
   assert.equal(offer.statement.nametag, 'hard key');
   assert.equal(offer.statement.publicKey, Buffer.from(log.publicKey).toString('hex'));
+  /* both halves of the hybrid travel, at their exact lengths */
+  assert.equal(offer.checkpoint.signaturePq, Buffer.from(log.checkpoint.signaturePq).toString('hex'));
+  assert.equal(offer.checkpoint.signaturePq.length, chain.ML_DSA65.SIG * 2);
+  assert.equal(offer.statement.publicKeyPq, Buffer.from(log.publicKeyPq).toString('hex'));
+  assert.equal(offer.statement.signaturePq.length, chain.ML_DSA65.SIG * 2);
 });
 
 test('an OFFER without a statement, or with a malformed checkpoint, is dropped by the phone unread', async () => {
@@ -87,6 +106,11 @@ test('an OFFER without a statement, or with a malformed checkpoint, is dropped b
     { ...good, payload: { ...good.payload, statement: null } },
     { ...good, payload: { ...good.payload, checkpoint: { ...good.payload.checkpoint, head: 'zz' } } },
     { ...good, payload: { ...good.payload, statement: { ...good.payload.statement, nametag: '  ' } } },
+    /* the hybrid: a pq half missing or of the wrong length is malformed */
+    { ...good, payload: { ...good.payload, checkpoint: { ...good.payload.checkpoint, signaturePq: undefined } } },
+    { ...good, payload: { ...good.payload, checkpoint: { ...good.payload.checkpoint, signaturePq: good.payload.checkpoint.signaturePq.slice(2) } } },
+    { ...good, payload: { ...good.payload, statement: { ...good.payload.statement, signaturePq: undefined } } },
+    { ...good, payload: { ...good.payload, statement: { ...good.payload.statement, publicKeyPq: good.payload.statement.publicKeyPq.slice(2) } } },
   ]) assert.equal(sync.verify(bad).ok, false);
 });
 
@@ -100,16 +124,16 @@ test('an empty chain (checkpoint NO_SEQ) checks at once and is not kept to offer
   const secret = p256.utils.randomSecretKey();
   const e = edgeOver(fakeKey({ secret }));
   const { publicKey, deviceId } = await e.publicKey();
+  const publicKeyPq = await e.publicKeyPq('checkpoint');
   const head = chain.genesis(deviceId);
-  const signature = chain.signCheckpoint({ deviceId, seq: sync.NO_SEQ, head }, secret);
-  const checkpoint = { seq: sync.NO_SEQ, head, signature };
+  const checkpoint = require('./helpers/hybrid-key').edgeKey(secret).checkpoint({ seq: sync.NO_SEQ, head });
   const t0 = Date.now();
-  assert.deepEqual(sync.anchorCheck({ records: [], publicKey, checkpoint, anchors: [] }), { ok: true, verifiedThrough: -1, open: false });
+  assert.deepEqual(sync.anchorCheck({ records: [], publicKey, publicKeyPq, checkpoint, anchors: [] }), { ok: true, verifiedThrough: -1, open: false });
   assert.ok(Date.now() - t0 < 1000, 'checked at once');
   const other = await deviceLog(1);
-  assert.equal(sync.anchorCheck({ records: other.log.records, publicKey, checkpoint, anchors: [] }).ok, false, 'links past an empty checkpoint');
+  assert.equal(sync.anchorCheck({ records: other.log.records, publicKey, publicKeyPq, checkpoint, anchors: [] }).ok, false, 'links past an empty checkpoint');
   const statement = await e.statement('Pixel');
-  assert.deepEqual(copy.keepLog(tmp(), { deviceId, publicKey, records: [], checkpoint, statement }), { kept: false, why: 'its key has no link yet' });
+  assert.deepEqual(copy.keepLog(tmp(), { deviceId, publicKey, publicKeyPq, records: [], checkpoint, statement }), { kept: false, why: 'its key has no link yet' });
 });
 
 /*
@@ -125,6 +149,7 @@ test('copy.sync: the phone\'s history fills a gap before the key\'s ring; a forg
   const all = [...(await e.pickup(0, 8)), ...(await e.pickup(8, 5))];
   const ringed = {
     publicKey: () => e.publicKey(),
+    publicKeyPq: (which) => e.publicKeyPq(which),
     head: async () => { const h = await e.head(); return { ...h, oldest: h.seq - 7 }; },
     pickup: async (from, n) => { const h = await e.head(); const lo = h.seq - 7; return from < lo ? [] : e.pickup(from, n); },
   };

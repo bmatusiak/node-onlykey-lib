@@ -14,6 +14,9 @@ const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 const SECRET = new Uint8Array(32).fill(5);
 const PUB = p256.getPublicKey(SECRET, false).slice(1);
 const DEVICE = chain.deviceIdOf(PUB);
+/* the hybrid checkpoint (2026-10-10): every signature here is P-256 + ML-DSA-65, both checked */
+const { edgeKey } = require('./helpers/hybrid-key');
+const PUB_PQ = edgeKey(SECRET).publicKeyPq;
 const { OP, DECISION, FLAG } = codes;
 
 /*
@@ -46,7 +49,8 @@ function story({ scopes: given = null, spendScopes = [], openingScope = null } =
   /* R3: the opening's byte 46 = its scope count when its spends are scoped (a new budget), else 0 */
   const opening = openingScope !== null ? openingScope : spendScopes.some((x) => x) ? scopes.length : 0;
   const at = add({ op: OP.GRANT_CREATE, decision: DECISION.APPROVE, flags: FLAG.PRESS_OBSERVED, grantId, scope: opening, subject: grants.grantSubject({ scopes, reasonHash, genesis }) });
-  const signature = chain.signCheckpoint({ deviceId: DEVICE, seq: at, head }, SECRET);
+  /* the opening: an older checkpoint, its P-256 half only ("B"); key.checkpoint below is the hybrid anchor */
+  const { signature } = edgeKey(SECRET).sign({ deviceId: DEVICE, seq: at, head });
   const openings = { [grantId]: { scopes, reasonHash, genesis, uses, signature } };
 
   for (let step = 1; step <= uses; step++) {
@@ -56,9 +60,9 @@ function story({ scopes: given = null, spendScopes = [], openingScope = null } =
   }
   const seq = links.length - 1;
   const key = {
-    publicKey: PUB,
+    publicKey: PUB, publicKeyPq: PUB_PQ,
     head: { seq, head, owed: 0 },
-    checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) },
+    checkpoint: { seq, head, ...edgeKey(SECRET).sign({ deviceId: DEVICE, seq, head }) },
   };
   return { links, openings, key, grantId };
 }
@@ -67,6 +71,33 @@ test('copy: a copy of the whole story verifies, through the live head', () => {
   const s = story();
   const v = copy.verifyCopy({ links: s.links, openings: s.openings }, s.key);
   assert.deepEqual(v, { ok: true, verifiedThrough: s.key.head.seq, head: s.key.head.head });
+});
+
+/* ONE HYBRID ANCHOR PER COPY (Brad, 2026-10-10: "yes do B") */
+test('copy, "B": an older opening with only P-256 verifies inside a copy whose NEWEST checkpoint is hybrid; a broken or missing newest pq half fails', () => {
+  const s = story();
+  assert.equal('signaturePq' in s.openings[s.grantId], false, 'the opening keeps its P-256 half only');
+  assert.equal(copy.verifyCopy({ links: s.links, openings: s.openings }, s.key).ok, true);
+  /* the newest checkpoint: no pq half, a flipped one, or no pq key -> the copy is not verified */
+  const { signaturePq: _none, ...p256Only } = s.key.checkpoint;
+  assert.equal(copy.verifyCopy({ links: s.links, openings: s.openings }, { ...s.key, checkpoint: p256Only }).reason, 'checkpoint');
+  const bad = Uint8Array.from(s.key.checkpoint.signaturePq); bad[9] ^= 4;
+  assert.equal(copy.verifyCopy({ links: s.links, openings: s.openings }, { ...s.key, checkpoint: { ...s.key.checkpoint, signaturePq: bad } }).reason, 'checkpoint');
+  assert.equal(copy.verifyCopy({ links: s.links, openings: s.openings }, { ...s.key, publicKeyPq: null }).reason, 'checkpoint');
+});
+
+test('copy, "B": a copy that welds only to a P-256-only checkpoint is not verified, and that checkpoint is no hybrid anchor', () => {
+  const s = story();
+  /* the newest checkpoint as an older one would be kept: P-256 only */
+  const { signaturePq: _none, ...p256Only } = s.key.checkpoint;
+  const key = { ...s.key, checkpoint: p256Only };
+  assert.equal(copy.verifyCopy({ links: s.links, openings: s.openings }, key).ok, false);
+  /* as the key's latest, a P-256-only checkpoint anchors nothing (the opening at #2 still does, by P-256) */
+  const links = [s.links[1], s.links[2], s.links[6]];
+  const a = copy.assess({ links, openings: s.openings }, { ...key, held: [] });
+  assert.deepEqual(a.anchors.map((x) => x.seq), [2], 'not #' + s.key.checkpoint.seq);
+  const hybrid = copy.assess({ links, openings: s.openings }, { ...s.key, held: [] });
+  assert.ok(hybrid.anchors.some((x) => x.seq === s.key.checkpoint.seq), 'the same checkpoint with both halves anchors');
 });
 
 test('copy: every way a copy can fail is named, and the first one is the answer', () => {
@@ -81,10 +112,21 @@ test('copy: every way a copy can fail is named, and the first one is the answer'
 
   const badCp = { ...s.key, checkpoint: { ...s.key.checkpoint, signature: new Uint8Array(64).fill(1) } };
   assert.equal(check({}, badCp).reason, 'checkpoint');
+  /* the hybrid: a checkpoint with only its P-256 half, or a flipped ML-DSA-65 half, or a key read without its twin */
+  const { signaturePq: _dropped, ...p256Only } = s.key.checkpoint;
+  assert.equal(check({}, { ...s.key, checkpoint: p256Only }).reason, 'checkpoint');
+  const flippedPq = Uint8Array.from(s.key.checkpoint.signaturePq);
+  flippedPq[7] ^= 0x80;
+  assert.equal(check({}, { ...s.key, checkpoint: { ...s.key.checkpoint, signaturePq: flippedPq } }).reason, 'checkpoint');
+  assert.equal(check({}, { ...s.key, publicKeyPq: undefined }).reason, 'checkpoint');
 
   assert.equal(check({ openings: {} }).reason, 'budget-opening-missing');
   const wrongReason = { [s.grantId]: { ...s.openings[s.grantId], reasonHash: new Uint8Array(32).fill(8) } };
   assert.equal(check({ openings: wrongReason }).reason, 'budget-opening');
+  /* the opening is checked by P-256: another key's P-256 signature is not it */
+  const foreign = { [s.grantId]: { ...s.openings[s.grantId], signature: edgeKey(OTHER_SECRET).sign({ deviceId: DEVICE, seq: 2, head: s.links[2].head }).signature } };
+  const r0 = check({ openings: foreign });
+  assert.equal(JSON.stringify([r0.reason, r0.detail.reason]), JSON.stringify(['budget-opening', 'bad-signature']));
 
   const noReveal = s.links.map((e) => (e.reveal ? { ...e, reveal: null } : e));
   assert.equal(check({ links: noReveal }).reason, 'reveal-missing');
@@ -99,7 +141,7 @@ test('copy: every way a copy can fail is named, and the first one is the answer'
 
 test('copy: an empty key verifies only an empty copy', () => {
   const genesis = chain.genesis(DEVICE);
-  const key = { publicKey: PUB, head: { seq: null, head: genesis, owed: 0 }, checkpoint: null };
+  const key = { publicKey: PUB, publicKeyPq: PUB_PQ, head: { seq: null, head: genesis, owed: 0 }, checkpoint: null };
   assert.equal(copy.verifyCopy({ links: [] }, key).ok, true);
   assert.equal(copy.verifyCopy({ links: story().links.slice(0, 1) }, key).reason, 'chain');
 });
@@ -116,7 +158,7 @@ function withLoss(from, to, opts = {}) {
   s.key = {
     ...s.key,
     head: { ...s.key.head, seq, head },
-    checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) },
+    checkpoint: { seq, head, ...edgeKey(SECRET).sign({ deviceId: DEVICE, seq, head }) },
   };
   return s;
 }
@@ -179,8 +221,8 @@ test('copy: a checkpoint signed by any key but this one anchors nothing - the pu
   const s = story();
   const links = [s.links[1], s.links[2], s.links[6]];
   const head2 = s.links[2].head;
-  const selfSigned = { [s.grantId]: { ...s.openings[s.grantId], signature: chain.signCheckpoint({ deviceId: DEVICE, seq: 2, head: head2 }, OTHER_SECRET) } };
-  const a = copy.assess({ links, openings: selfSigned, publicKey: OTHER_PUB, checkpoints: [{ seq: 2, head: head2, signature: selfSigned[s.grantId].signature }] }, { ...s.key, held: [s.links[6]] });
+  const selfSigned = { [s.grantId]: { ...s.openings[s.grantId], ...edgeKey(OTHER_SECRET).sign({ deviceId: DEVICE, seq: 2, head: head2 }) } };
+  const a = copy.assess({ links, openings: selfSigned, publicKey: OTHER_PUB, checkpoints: [{ seq: 2, head: head2, signature: selfSigned[s.grantId].signature, signaturePq: selfSigned[s.grantId].signaturePq }] }, { ...s.key, held: [s.links[6]] });
   assert.deepEqual(a.missing, [{ from: 0, to: 5 }], 'nothing the copy signed for itself narrows the gap');
   assert.deepEqual(a.anchors.map((x) => x.seq), [6]);
 });
@@ -231,7 +273,7 @@ function withLosses(list) {
     const link = chain.encodeLink({ seq, op: OP.LOSS, decision: DECISION.APPROVE, flags: FLAG.PRESS_OBSERVED, subject, grantId: from });
     const head = chain.weld(s.key.head.head, link);
     s.links.push({ link, head, reveal: null });
-    s.key = { ...s.key, head: { ...s.key.head, seq, head }, checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) } };
+    s.key = { ...s.key, head: { ...s.key.head, seq, head }, checkpoint: { seq, head, ...edgeKey(SECRET).sign({ deviceId: DEVICE, seq, head }) } };
   }
   return s;
 }
@@ -360,7 +402,7 @@ test('copy: an edited new link fails the from-check', () => {
 
 test('copy: a checkpoint past the verified head that does not verify is a failure, not one anchor fewer', () => {
   const s = story();
-  const key = { ...s.key, checkpoint: { ...s.key.checkpoint, signature: chain.signCheckpoint({ deviceId: DEVICE, seq: s.key.checkpoint.seq, head: s.key.checkpoint.head }, OTHER_SECRET) } };
+  const key = { ...s.key, checkpoint: { ...s.key.checkpoint, ...edgeKey(OTHER_SECRET).sign({ deviceId: DEVICE, seq: s.key.checkpoint.seq, head: s.key.checkpoint.head }) } };
   const a = copy.assess({ links: s.links, openings: s.openings }, key, { from: { seq: 3, head: s.links[3].head } });
   assert.equal(a.chain.ok, false);
   assert.equal(a.chain.failure.reason, 'bad-checkpoint');
@@ -373,7 +415,7 @@ test('copy: a checkpoint past the verified head that does not verify is a failur
  */
 function keyAt(s, seq) {
   const head = s.links[seq].head;
-  return { ...s.key, head: { seq, head, owed: 0 }, checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) }, held: [] };
+  return { ...s.key, head: { seq, head, owed: 0 }, checkpoint: { seq, head, ...edgeKey(SECRET).sign({ deviceId: DEVICE, seq, head }) }, held: [] };
 }
 
 test('kept: full first, then skipped, then only the new links - and the same answer as the full check', () => {
@@ -430,10 +472,10 @@ function relinked(s, edit) {
     head = chain.weld(head, link);
     out.push({ link, head, reveal: e.reveal });
     /* an opening's signature is a checkpoint over its grant-create link's head: signed again */
-    if (f.op === codes.OP.GRANT_CREATE && openings[f.grantId]) openings[f.grantId] = { ...openings[f.grantId], signature: chain.signCheckpoint({ deviceId: DEVICE, seq: f.seq, head }, SECRET) };
+    if (f.op === codes.OP.GRANT_CREATE && openings[f.grantId]) openings[f.grantId] = { ...openings[f.grantId], ...edgeKey(SECRET).sign({ deviceId: DEVICE, seq: f.seq, head }) };
   }
   const seq = out.length - 1;
-  const key = { ...s.key, head: { ...s.key.head, seq, head }, checkpoint: { seq, head, signature: chain.signCheckpoint({ deviceId: DEVICE, seq, head }, SECRET) } };
+  const key = { ...s.key, head: { ...s.key.head, seq, head }, checkpoint: { seq, head, ...edgeKey(SECRET).sign({ deviceId: DEVICE, seq, head }) } };
   return { links: out, key, openings };
 }
 
@@ -469,10 +511,13 @@ test('version: the byte is inside the welded 64 bytes - changing it breaks the w
  * chain. The links are still welded to it, so the verdict is the full check's.
  */
 const countVerifies = (fn) => {
+  /* both checks: the newest checkpoint's (hybrid) and the older ones' (P-256, "B") */
   const real = chain.verifyCheckpoint;
+  const realP256 = chain.verifyCheckpointP256;
   let n = 0;
   chain.verifyCheckpoint = (...a) => { n += 1; return real(...a); };
-  try { return { result: fn(), checks: n }; } finally { chain.verifyCheckpoint = real; }
+  chain.verifyCheckpointP256 = (...a) => { n += 1; return realP256(...a); };
+  try { return { result: fn(), checks: n }; } finally { chain.verifyCheckpoint = real; chain.verifyCheckpointP256 = realP256; }
 };
 
 test('copy: assess with a seal gives the full check\'s verdict without the signatures below it', () => {

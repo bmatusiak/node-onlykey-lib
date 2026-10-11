@@ -20,8 +20,9 @@ export function buildGive({ signer, deviceId, from }: {
 /**
  * The computer's side: "that is device `chain`'s log up to its signed checkpoint, with its
  * statement" - for the phone whose key is `deviceId` to HOLD until the person approves.
- * checkpoint: {seq, head, signature}; statement: {publicKey, seq, nametag, signature} (as
- * plugin.statement gives it, or as that device's phone kept it).
+ * checkpoint: {seq, head, signature, signaturePq}; statement: {publicKey, publicKeyPq, seq, nametag,
+ * signature, signaturePq} (as plugin.statement gives it, or as that device's phone kept it) - the
+ * hybrid halves both travel: the phone checks both (chain.verifyCheckpoint, grants.verifyStatement).
  */
 export function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement, openings, notes }: {
     signer: any;
@@ -46,32 +47,35 @@ export function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, c
  * 2026-10-08; the check itself is unchanged.)
  *   records:    the phone's copy of that chain merged with what came
  *   publicKey:  that device's checkpoint key (X || Y), as its statement names it
- *   checkpoint: {seq, head, signature} read from that device's key
+ *   publicKeyPq: its ML-DSA-65 twin (1952 bytes), as its statement names it
+ *   checkpoint: {seq, head, signature, signaturePq} read from that device's key
  *   anchors:    [{seq, head}] the points of that chain this phone merged before
  * ALARMS (spec R30, written when the key kept siblings: "a sibling anchors a head its
  * own chain doesn't contain: one device's rollback or tampering is proven by the other";
  * the check now runs on the phone, against heads it merged before):
- *   bad-checkpoint - not signed by that device's key;
+ *   bad-checkpoint - not signed by that device's keys (both halves of the hybrid);
  *   rollback       - that device's head is now older than one this phone merged before;
  *   changed        - at a seq merged before, that device's chain now holds another head;
  *   tampered       - the links do not verify up to the signed checkpoint.
  * -> {ok: true, verifiedThrough, open} | {ok: false, alarm, seq?, detail?}
  *
- * @param {{records: Array<{link: Uint8Array, head: Uint8Array, reveal?: Uint8Array|null}>, publicKey: Uint8Array,
- *   checkpoint: {seq: number, head: Uint8Array, signature: Uint8Array}, anchors?: Array<{seq: number, head: Uint8Array}>}} o
+ * @param {{records: Array<{link: Uint8Array, head: Uint8Array, reveal?: Uint8Array|null}>, publicKey: Uint8Array, publicKeyPq: Uint8Array,
+ *   checkpoint: {seq: number, head: Uint8Array, signature: Uint8Array, signaturePq: Uint8Array}, anchors?: Array<{seq: number, head: Uint8Array}>}} o
  * @returns {{ok: boolean, alarm?: string, seq?: number, detail?: string, verifiedThrough?: number, open?: any[]}}
  */
-export function anchorCheck({ records, publicKey, checkpoint, anchors }: {
+export function anchorCheck({ records, publicKey, publicKeyPq, checkpoint, anchors }: {
     records: Array<{
         link: Uint8Array;
         head: Uint8Array;
         reveal?: Uint8Array | null;
     }>;
     publicKey: Uint8Array;
+    publicKeyPq: Uint8Array;
     checkpoint: {
         seq: number;
         head: Uint8Array;
         signature: Uint8Array;
+        signaturePq: Uint8Array;
     };
     anchors?: Array<{
         seq: number;

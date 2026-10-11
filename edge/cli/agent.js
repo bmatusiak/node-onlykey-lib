@@ -454,7 +454,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
           const mine = copy.load(where, c.deviceId);
           mine.statement = given.statement;
           mine.checkpoint = await edge.checkpoint();
-          r.log = copy.keepLog(where, { deviceId: c.deviceId, publicKey: mine.publicKey, records: mine.links, checkpoint: mine.checkpoint, statement: mine.statement });
+          r.log = copy.keepLog(where, { deviceId: c.deviceId, publicKey: mine.publicKey, publicKeyPq: mine.publicKeyPq, records: mine.links, checkpoint: mine.checkpoint, statement: mine.statement });
         } else {
           r.log = { kept: false, why: 'the phone gave no nametag statement' };
         }

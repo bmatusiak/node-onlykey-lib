@@ -3,7 +3,8 @@ export const KIND: Readonly<{
     REQUEST: 1;
     ANSWER: 2;
 }>;
-export const PIECE: 55;
+export const PIECE: 54;
+export const MAX_PIECES: 65535;
 /** a whole message -> its 64-byte reports */
 export function encode(kind: any, obj: any): Uint8Array<ArrayBuffer>[];
 /** is this report an OKEDGE_REQUEST piece (either direction)? */

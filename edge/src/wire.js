@@ -13,10 +13,14 @@
  *   [0..3] FF FF FF FF   the vendor header every OnlyKey message has
  *   [4]    0xF7          OKEDGE_REQUEST
  *   [5]    kind          1 = request, 2 = answer
- *   [6]    index         0.. (a new index 0 starts a new message)
- *   [7]    last          1 on the final piece
- *   [8]    length        bytes of payload in this piece (<= 55)
- *   [9..]  payload       UTF-8 JSON of the whole message, cut in pieces
+ *   [6..7] index         u16 LE, 0.. (a new index 0 starts a new message)
+ *   [8]    last          1 on the final piece
+ *   [9]    length        bytes of payload in this piece (<= 54)
+ *   [10..] payload       UTF-8 JSON of the whole message, cut in pieces
+ * WHY A u16 INDEX (Brad, 2026-10-10: the hybrid checkpoint, "B + a wider wire"): a one-byte
+ * index capped a message at 255 x 55 = 14,025 bytes, and one ML-DSA-65 signature is 6,618
+ * hex characters - an OFFER with its hybrid checkpoint and statement no longer fit. Two
+ * bytes allow 65,535 pieces of 54 (about 3.5 MB). No compatibility mode: Edge is unreleased.
  * Pure: no device, no Node built-ins.
  */
 
@@ -50,8 +54,9 @@ const { inLane } = require('../../src/transport/lane');
 
 const OKEDGE_REQUEST = 0xf7;
 const KIND = Object.freeze({ REQUEST: 1, ANSWER: 2 });
-const PIECE = 55;
-const MAX_PIECES = 255;
+const PIECE = 54;
+const MAX_PIECES = 0xffff;
+const HEADER = 10; /* FF FF FF FF, 0xF7, kind, index u16 LE, last, length */
 
 /** a whole message -> its 64-byte reports */
 function encode(kind, obj) {
@@ -62,8 +67,8 @@ function encode(kind, obj) {
   for (let i = 0; i < n; i++) {
     const part = data.subarray(i * PIECE, (i + 1) * PIECE);
     const r = new Uint8Array(64);
-    r.set([0xff, 0xff, 0xff, 0xff, OKEDGE_REQUEST, kind, i, i === n - 1 ? 1 : 0, part.length]);
-    r.set(part, 9);
+    r.set([0xff, 0xff, 0xff, 0xff, OKEDGE_REQUEST, kind, i & 0xff, i >>> 8, i === n - 1 ? 1 : 0, part.length]);
+    r.set(part, HEADER);
     out.push(r);
   }
   return out;
@@ -71,7 +76,7 @@ function encode(kind, obj) {
 
 /** is this report an OKEDGE_REQUEST piece (either direction)? */
 function isEdgeRequestFrame(frame) {
-  return frame && frame.length >= 9 && frame[0] === 0xff && frame[1] === 0xff && frame[2] === 0xff && frame[3] === 0xff
+  return frame && frame.length >= HEADER && frame[0] === 0xff && frame[1] === 0xff && frame[2] === 0xff && frame[3] === 0xff
     && frame[4] === OKEDGE_REQUEST;
 }
 
@@ -86,10 +91,11 @@ function createAssembler() {
   return {
     push(frame) {
       if (!isEdgeRequestFrame(frame)) return null;
-      const [k, index, last, len] = [frame[5], frame[6], frame[7], frame[8]];
+      const [k, index, last, len] = [frame[5], frame[6] | (frame[7] << 8), frame[8], frame[9]];
       if (index === 0) { parts = []; kind = k; }
+      /* the u16 index must be the next one: a lost, repeated or reordered piece drops the message */
       if (index !== parts.length || k !== kind || len > PIECE) { parts = []; return { error: 'out-of-order' }; }
-      parts.push(frame.slice(9, 9 + len));
+      parts.push(frame.slice(HEADER, HEADER + len));
       if (!last) return null;
       const all = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
       let at = 0;
@@ -191,4 +197,4 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
   };
 }
 
-module.exports = { OKEDGE_REQUEST, KIND, PIECE, encode, isEdgeRequestFrame, createAssembler, createWireChannel, answerEnvelope };
+module.exports = { OKEDGE_REQUEST, KIND, PIECE, MAX_PIECES, encode, isEdgeRequestFrame, createAssembler, createWireChannel, answerEnvelope };

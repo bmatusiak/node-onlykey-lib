@@ -433,7 +433,8 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
      * your other devices. A phone that has no nametag yet gives none. A GIVE asked past the end: no links, just its last-batch fields.
      * Nothing is trusted here - each seal is checked against the key's own public
      * key when the blocks are built (block.verifyBlock).
-     * -> {seals: [{seq, head, signature}], statement: {deviceId, publicKey, seq, nametag, signature} | null}
+     * -> {seals: [{seq, head, signature, signaturePq?}],
+     *     statement: {deviceId, publicKey, publicKeyPq, seq, nametag, signature, signaturePq} | null}
      */
     async sealsFromPhone(peerSigner, { deviceId }) {
       const syncLib = require('./sync');
@@ -442,10 +443,13 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?');
       if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone gave no seals - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
       return {
-        seals: (a.seals || []).map(([seq, head, sig]) => ({ seq, head: fromHex(head), signature: fromHex(sig) })),
+        /* a seal is [seq, head, sig] - and [seq, head, sig, sigPq] for the NEWEST only: one hybrid anchor per copy ("B", chain.verifyCheckpointP256) */
+        seals: (a.seals || []).map(([seq, head, sig, sigPq]) => ({ seq, head: fromHex(head), signature: fromHex(sig), ...(sigPq ? { signaturePq: fromHex(sigPq) } : {}) })),
         statement: a.statement && typeof a.statement === 'object' ? {
           deviceId: fromHex(a.statement.deviceId), publicKey: fromHex(a.statement.publicKey),
+          publicKeyPq: a.statement.publicKeyPq ? fromHex(a.statement.publicKeyPq) : null,
           seq: a.statement.seq ?? null, nametag: String(a.statement.nametag), signature: fromHex(a.statement.signature),
+          signaturePq: a.statement.signaturePq ? fromHex(a.statement.signaturePq) : null,
         } : null,
         /* the budgets' opening words (full cards on your other devices) - checked against the log before kept */
         openings: Array.isArray(a.openings) ? a.openings : [],

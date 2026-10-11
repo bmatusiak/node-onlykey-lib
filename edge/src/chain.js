@@ -40,6 +40,7 @@ const { OP, TAG, DECISION } = require('./codes');
 /* R3: the newest link format this library reads (byte 63) */
 const LINK_VERSION = 1;
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
+const { ml_dsa65 } = require('../../src/vendor/exports/@noble/post-quantum/ml-dsa.js');
 const crypto = require('../../src/crypto/provider');
 const { concat } = require('../../src/bytes');
 const { H, ascii, u32le, bytes32, same } = require('./hash');
@@ -304,8 +305,55 @@ function checkpointDigest(fields) {
   return crypto.sha256(checkpointMessage(fields));
 }
 
-/** {deviceId, seq, head}, the key's 64-byte signature, the Edge public key -> boolean */
-function verifyCheckpoint(fields, signature, publicKey) {
+/*
+ * A CHECKPOINT IS TWO SIGNATURES over the same digest (Brad, 2026-10-10: "quantum-safe hybrid
+ * signatures"; the design: "yes, match firmware for recommended, and yes i like the calls"): the
+ * P-256 checkpoint key's and its ML-DSA-65 twin's (FIPS 204, pure, empty context - the firmware's
+ * mldsa-native build). Both are required: the pair holds while either algorithm does, so a
+ * quantum computer that forges P-256 still cannot forge a checkpoint. There is no P-256-only
+ * checkpoint in v1 - a missing half is a failed check.
+ */
+const ML_DSA65 = { PK: 1952, SIG: 3309 };
+
+/** an ML-DSA-65 signature over the message under the public key -> boolean (never throws) */
+function mlDsaVerify(signature, message, publicKey) {
+  try {
+    if (!signature || !publicKey || signature.length !== ML_DSA65.SIG || publicKey.length !== ML_DSA65.PK) return false;
+    return ml_dsa65.verify(Uint8Array.from(signature), message, Uint8Array.from(publicKey));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * {deviceId, seq, head}, the key's two signatures and its two public keys -> boolean: true only
+ * when the 64-byte P-256 signature verifies under the P-256 key AND the ML-DSA-65 signature
+ * under the ML-DSA-65 key, over the same digest.
+ */
+function verifyCheckpoint(fields, signature, publicKey, signaturePq, publicKeyPq) {
+  try {
+    const digest = checkpointDigest(fields);
+    return crypto.p256VerifyDigest(Uint8Array.from(signature), digest, sec1(publicKey), { lowS: false })
+      && mlDsaVerify(signaturePq, digest, publicKeyPq);
+  } catch {
+    return false;
+  }
+}
+
+/*
+ * ONE HYBRID ANCHOR PER COPY (Brad, 2026-10-10: "yes do B"). The key signs every checkpoint
+ * with both algorithms, but a host keeps and sends the ML-DSA-65 half only for the NEWEST
+ * checkpoint of a copy - key.checkpoint, the anchor a sync or a check verifies against - and
+ * checks that one with verifyCheckpoint (both halves). Older checkpoints (budget openings,
+ * copy.checkpoints, seals of blocks before the newest) keep only the P-256 signature and are
+ * checked here, P-256 alone. They are not quantum-safe anchors on their own: what makes them
+ * so is the hash chain - every one of them is welded below the newest head, and one hybrid
+ * anchor there authenticates everything welded beneath it (forging an older link would need a
+ * SHA-256 preimage). So a copy counts as verified only when it welds up to a head whose
+ * checkpoint verifies with both halves; a P-256-only checkpoint never ends that chain.
+ */
+/** {deviceId, seq, head}, the 64-byte P-256 signature and the P-256 key -> boolean: the older-checkpoint check (never the newest). */
+function verifyCheckpointP256(fields, signature, publicKey) {
   try {
     return crypto.p256VerifyDigest(Uint8Array.from(signature), checkpointDigest(fields), sec1(publicKey), { lowS: false });
   } catch {
@@ -318,8 +366,17 @@ function signCheckpoint(fields, secretKey) {
   return p256.sign(checkpointDigest(fields), secretKey, { prehash: false, lowS: false });
 }
 
+/** The ML-DSA-65 half, for the fake key and tests: keys from a 32-byte seed, as the firmware derives them. */
+function mlDsaKeys(seed32) {
+  return ml_dsa65.keygen(Uint8Array.from(seed32));
+}
+function signCheckpointPq(fields, secretKeyPq) {
+  return ml_dsa65.sign(checkpointDigest(fields), secretKeyPq);
+}
+
 module.exports = {
   LINK_VERSION,
   LINK_BYTES, REASONS, encodeLink, decodeLink, genesis, continueSubject, chainStart, weld, heads, verify,
-  deviceIdOf, checkpointMessage, checkpointDigest, verifyCheckpoint, signCheckpoint,
+  deviceIdOf, checkpointMessage, checkpointDigest, verifyCheckpoint, verifyCheckpointP256, signCheckpoint,
+  ML_DSA65, mlDsaVerify, mlDsaKeys, signCheckpointPq,
 };

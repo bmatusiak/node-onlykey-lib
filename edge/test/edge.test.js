@@ -204,6 +204,7 @@ test('budget: a value past the last step cannot be made from a revealed one', ()
 /* ---- the key's one signature: checkpoints, and a budget's opening through one ---- */
 
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
+const { edgeKey } = require('./helpers/hybrid-key');
 
 test('device id and checkpoint digest match the Python reading', () => {
   assert.equal(toHex(chain.deviceIdOf(fromHex(V.deviceFromPub.pub))), V.deviceFromPub.deviceId);
@@ -235,11 +236,51 @@ test('checkpoint: Node\'s own ECDSA and the lib agree in both directions', () =>
   const fields = { deviceId, seq: V.checkpoint.seq, head: fromHex(V.checkpoint.head) };
   /* Node signs the message (ECDSA-SHA256 hashes it itself): a signature over our digest */
   const nodeSig = nodeCrypto.sign('sha256', chain.checkpointMessage(fields), { key: privateKey, dsaEncoding: 'ieee-p1363' });
-  assert.ok(chain.verifyCheckpoint(fields, new Uint8Array(nodeSig), raw));
+  /* the ML-DSA-65 half of the hybrid, over the same digest */
+  const pq = chain.mlDsaKeys(new Uint8Array(32).fill(0x2a));
+  const sigPq = chain.signCheckpointPq(fields, pq.secretKey);
+  assert.ok(chain.verifyCheckpoint(fields, new Uint8Array(nodeSig), raw, sigPq, pq.publicKey));
   const libSig = chain.signCheckpoint(fields, new Uint8Array(Buffer.from(privateKey.export({ format: 'jwk' }).d, 'base64url')));
   assert.ok(nodeCrypto.verify('sha256', chain.checkpointMessage(fields), { key: publicKey, dsaEncoding: 'ieee-p1363' }, libSig));
   /* over THIS head only */
-  assert.equal(chain.verifyCheckpoint({ ...fields, head: new Uint8Array(32).fill(1) }, new Uint8Array(nodeSig), raw), false);
+  assert.equal(chain.verifyCheckpoint({ ...fields, head: new Uint8Array(32).fill(1) }, new Uint8Array(nodeSig), raw, sigPq, pq.publicKey), false);
+});
+
+/* THE HYBRID (Brad, 2026-10-10): a checkpoint is a P-256 AND an ML-DSA-65 signature over one digest - both required, no P-256-only mode */
+test('verifyCheckpointP256 (an older checkpoint, "B"): the P-256 half alone, over this digest and key only', () => {
+  const k = edgeKey(new Uint8Array(32).fill(7));
+  const fields = { deviceId: k.deviceId, seq: V.checkpoint.seq, head: fromHex(V.checkpoint.head) };
+  const { signature } = k.sign(fields);
+  assert.equal(chain.verifyCheckpointP256(fields, signature, k.publicKey), true);
+  assert.equal(chain.verifyCheckpointP256({ ...fields, head: new Uint8Array(32).fill(1) }, signature, k.publicKey), false);
+  assert.equal(chain.verifyCheckpointP256(fields, signature, edgeKey(new Uint8Array(32).fill(8)).publicKey), false);
+  assert.equal(chain.verifyCheckpointP256(fields, undefined, k.publicKey), false);
+});
+
+test('checkpoint: only both halves verify - a P-256 half alone, a tampered or foreign ML-DSA-65 half, or a swapped key all fail', () => {
+  const k = edgeKey(new Uint8Array(32).fill(7));
+  const fields = { deviceId: k.deviceId, seq: V.checkpoint.seq, head: fromHex(V.checkpoint.head) };
+  const { signature, signaturePq } = k.sign(fields);
+  assert.equal(signaturePq.length, chain.ML_DSA65.SIG);
+  assert.equal(k.publicKeyPq.length, chain.ML_DSA65.PK);
+  assert.ok(chain.verifyCheckpoint(fields, signature, k.publicKey, signaturePq, k.publicKeyPq));
+  /* the P-256 half alone (the shape before the hybrid): no fallback */
+  assert.equal(chain.verifyCheckpoint(fields, signature, k.publicKey), false);
+  assert.equal(chain.verifyCheckpoint(fields, signature, k.publicKey, null, k.publicKeyPq), false);
+  assert.equal(chain.verifyCheckpoint(fields, signature, k.publicKey, signaturePq, null), false);
+  /* one flipped bit in the ML-DSA-65 signature */
+  const bad = Uint8Array.from(signaturePq);
+  bad[100] ^= 1;
+  assert.equal(chain.verifyCheckpoint(fields, signature, k.publicKey, bad, k.publicKeyPq), false);
+  /* truncated, or under another key's ML-DSA-65 twin */
+  assert.equal(chain.verifyCheckpoint(fields, signature, k.publicKey, signaturePq.slice(0, -1), k.publicKeyPq), false);
+  const other = edgeKey(new Uint8Array(32).fill(8));
+  assert.equal(chain.verifyCheckpoint(fields, signature, k.publicKey, signaturePq, other.publicKeyPq), false);
+  /* the ML-DSA-65 half is over THIS digest: another head's pq signature does not stand in */
+  const elsewhere = k.sign({ ...fields, head: new Uint8Array(32).fill(1) });
+  assert.equal(chain.verifyCheckpoint(fields, signature, k.publicKey, elsewhere.signaturePq, k.publicKeyPq), false);
+  /* a good pq half does not rescue a bad P-256 half */
+  assert.equal(chain.verifyCheckpoint(fields, elsewhere.signature, k.publicKey, signaturePq, k.publicKeyPq), false);
 });
 
 /* what the key does at a press: link grant-create (subject commits to G), checkpoint over it */
@@ -254,8 +295,10 @@ function openBudget(secret, { prevSeq = 4, prevHead = fromHex(V.chain[4].head) }
     subject: grants.grantSubject({ scopes, reasonHash, genesis }), grantId: seq + 1,
   });
   const head = chain.weld(prevHead, link);
-  const signature = chain.signCheckpoint({ deviceId, seq, head }, secret);
-  return { deviceId, publicKey: p256.getPublicKey(secret, false).slice(1), link, prevHead, head, signature, scopes, reasonHash, genesis, uses: g.uses };
+  const k = edgeKey(secret);
+  /* an opening is an older checkpoint ("B"): it keeps and is checked by its P-256 half */
+  const { signature } = k.sign({ deviceId, seq, head });
+  return { deviceId, publicKey: k.publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses: g.uses };
 }
 
 test('budget opening: a press-answered checkpoint over the grant-create link proves G on its own', () => {

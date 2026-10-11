@@ -1,19 +1,25 @@
 export const NAMETAG_MAX: 64;
 /** A nametag as the person typed it -> its hash, the 32 bytes the key signs. Throws on an empty or too long one. */
 export function nametagHash(nametag: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-/** SHA256("OKEDGE-STATEMENT-v1" || device id 16 || checkpoint pubkey X||Y 64 || seq u32 LE || nametag hash 32) - what the owner key signs. */
-export function statementDigest({ deviceId, publicKey, seq, nametagHash: nh }: {
+/**
+ * SHA256("OKEDGE-STATEMENT-v1" || device id 16 || checkpoint pubkey X||Y 64 ||
+ *        SHA256(ML-DSA-65 checkpoint pubkey 1952) 32 || seq u32 LE || nametag hash 32)
+ * - what both owner keys sign (okplugin_edge.cpp statement()).
+ */
+export function statementDigest({ deviceId, publicKey, publicKeyPq, seq, nametagHash: nh }: {
     deviceId: any;
     publicKey: any;
+    publicKeyPq: any;
     seq: any;
     nametagHash: any;
 }): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /**
- * Is this statement signed by MY owner key, and does it name the key it carries?
- * statement: {deviceId, publicKey, seq, nametag (text), signature}; ownerKey: this device's
- * own owner public key (X||Y). -> boolean (false on anything malformed)
+ * Is this statement signed by MY owner keys, and does it name the key it carries?
+ * statement: {deviceId, publicKey, publicKeyPq, seq, nametag (text), signature, signaturePq};
+ * ownerKey / ownerKeyPq: this device's own owner public keys (P-256 X||Y, ML-DSA-65).
+ * -> boolean: true only when BOTH signatures verify (false on anything malformed or missing)
  */
-export function verifyStatement(statement: any, ownerKey: any): boolean;
+export function verifyStatement(statement: any, ownerKey: any, ownerKeyPq: any): boolean;
 export const MAX_USES: 1024;
 export function grantGenesis(seed: any, uses: any): any;
 /** The value use `step` reveals, from the seed (for tests and fakes - a host never has the seed). */
@@ -84,7 +90,7 @@ export function intentOf(text: any): Uint8Array<ArrayBuffer>;
 /**
  * Check a budget's opening as one standalone proof:
  *   {deviceId, publicKey, link (its grant-create link), prevHead (the head
- *    before it), head + signature (the checkpoint the press answered with),
+ *    before it), head + signature (the checkpoint the press answered with, P-256 half),
  *    scopes, reasonHash, genesis, uses}
  * -> {ok: true, grantId, seq} or {ok: false, reason}:
  *   uses-mismatch      the scopes' caps do not add up to uses
@@ -92,6 +98,9 @@ export function intentOf(text: any): Uint8Array<ArrayBuffer>;
  *   subject-mismatch   the link does not commit to these scopes, reason and G
  *   weld-mismatch      the signed head is not this link welded onto prevHead
  *   bad-signature      the checkpoint is not the Edge key's over (seq, head)
+ * An opening is an OLDER checkpoint (chain.verifyCheckpointP256, "B", 2026-10-10): it keeps and
+ * is checked by its P-256 half only; the copy's newest hybrid checkpoint, welded above it, is
+ * what makes it quantum-safe.
  * prevHead is not trusted: a wrong one cannot weld to the signed head.
  */
 export function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signature, scopes, reasonHash, genesis, uses, lifetime }: {

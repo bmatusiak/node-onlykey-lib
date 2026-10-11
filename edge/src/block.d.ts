@@ -12,7 +12,8 @@ export function blockId(block: any): string;
  *   previous block's checkpoint, or genesis (seq = the first link's seq)
  * @param {string|null} o.prev               the previous block's id (hex), null for the first
  * @param {Uint8Array[]} o.links             64-byte links, in seq order, ending at the checkpoint
- * @param {{seq: number, head: Uint8Array, signature: Uint8Array}} o.checkpoint  the key's seal
+ * @param {{seq: number, head: Uint8Array, signature: Uint8Array, signaturePq?: Uint8Array}} o.checkpoint  the key's seal
+ *   (signaturePq only on the newest: written as "sigPq", absent otherwise)
  */
 export function buildBlock({ net, deviceId, start, prev, links, checkpoint }: {
     net: "live" | "test";
@@ -27,6 +28,7 @@ export function buildBlock({ net, deviceId, start, prev, links, checkpoint }: {
         seq: number;
         head: Uint8Array;
         signature: Uint8Array;
+        signaturePq?: Uint8Array;
     };
 }): {
     v: number;
@@ -51,6 +53,7 @@ export function buildBlock({ net, deviceId, start, prev, links, checkpoint }: {
         v: number;
     }[];
     checkpoint: {
+        sigPq?: string | undefined;
         seq: number;
         head: string;
         sig: string;
@@ -66,7 +69,7 @@ export function buildBlock({ net, deviceId, start, prev, links, checkpoint }: {
  * @param {'live'|'test'} o.net
  * @param {Uint8Array} o.deviceId
  * @param {{link: Uint8Array}[]} o.records  the copy, in seq order
- * @param {{seq, head, signature}[]} o.seals  the key's checkpoints taken when a block closed
+ * @param {{seq, head, signature, signaturePq?}[]} o.seals  the key's checkpoints taken when a block closed (the newest with its ML-DSA-65 half)
  * -> {blocks, open (links after the last seal), reason?}
  */
 export function blocksFrom({ net, deviceId, records, seals }: {
@@ -79,6 +82,7 @@ export function blocksFrom({ net, deviceId, records, seals }: {
         seq: any;
         head: any;
         signature: any;
+        signaturePq?: any;
     }[];
 }): {
     blocks: {
@@ -104,6 +108,7 @@ export function blocksFrom({ net, deviceId, records, seals }: {
             v: number;
         }[];
         checkpoint: {
+            sigPq?: string | undefined;
             seq: number;
             head: string;
             sig: string;
@@ -135,6 +140,7 @@ export function blocksFrom({ net, deviceId, records, seals }: {
             v: number;
         }[];
         checkpoint: {
+            sigPq?: string | undefined;
             seq: number;
             head: string;
             sig: string;
@@ -144,16 +150,24 @@ export function blocksFrom({ net, deviceId, records, seals }: {
     reason?: undefined;
 };
 /**
- * Check a block on its own terms, trusting only `publicKey` (the device's Edge
- * key, read from the key). With `prevBlock`, also check it continues that block.
+ * Check a block on its own terms, trusting only `publicKey` and `publicKeyPq` (the
+ * device's Edge keys, read from the key). With `prevBlock`, also check it continues
+ * that block. opts.anchor (default true): this is the newest block, the copy's one
+ * hybrid anchor - "sigPq" is required and both halves must verify. anchor: false, an
+ * older block: P-256 only (chain.verifyCheckpointP256); it is quantum-safe only through
+ * the prev links up to the anchor block.
  * -> {ok: true, id} or {ok: false, reason}
  *
  * @param {object} block
  * @param {Uint8Array} publicKey  the device's Edge public key (X||Y), from the key
+ * @param {Uint8Array|null} publicKeyPq  its ML-DSA-65 twin (1952 bytes), from the key
  * @param {object|null} [prevBlock]
+ * @param {{anchor?: boolean}} [opts]
  * @returns {{ok: boolean, id?: string, reason?: string}}
  */
-export function verifyBlock(block: object, publicKey: Uint8Array, prevBlock?: object | null): {
+export function verifyBlock(block: object, publicKey: Uint8Array, publicKeyPq: Uint8Array | null, prevBlock?: object | null, { anchor }?: {
+    anchor?: boolean;
+}): {
     ok: boolean;
     id?: string;
     reason?: string;

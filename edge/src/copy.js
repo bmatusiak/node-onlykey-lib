@@ -158,6 +158,11 @@ function uncoveredGaps(entries, gaps, held) {
  * key's latest (key.checkpoint), each budget opening's (the press's answer,
  * over its grant-create link's stored head) and any the copy kept
  * (copy.checkpoints). Only signatures that verify under key.publicKey count.
+ * ONE HYBRID ANCHOR ("B", 2026-10-10; chain.verifyCheckpointP256): the key's
+ * latest is the newest and must verify with both halves (key.publicKeyPq too);
+ * the openings and kept checkpoints are older and carry their P-256 half only.
+ * The verdict still needs the copy to weld up to the key's live head and, in
+ * verifyCopy, to the hybrid checkpoint - an older anchor never ends the chain.
  */
 /*
  * SEALED (BLOCKS.md; Brad, 2026-10-07: "we only need to verify the new stuff").
@@ -174,23 +179,28 @@ function checkpointAnchors(entries, copy, key, sealed = null) {
   const out = new Map();
   if (sealed) out.set(sealed.seq, { seq: sealed.seq, head: sealed.head });
   const below = (seq) => sealed && seq <= sealed.seq;
-  const take = (seq, head, signature) => {
+  /* signature: the P-256 bytes of an older checkpoint, or - newest - the checkpoint {signature, signaturePq} */
+  const take = (seq, head, signature, newest = false) => {
     if (out.has(seq) || below(seq) || !head || !signature) return;
-    if (chain.verifyCheckpoint({ deviceId, seq, head }, signature, key.publicKey)) out.set(seq, { seq, head });
+    const ok = newest
+      ? chain.verifyCheckpoint({ deviceId, seq, head }, signature.signature, key.publicKey, signature.signaturePq, key.publicKeyPq)
+      : chain.verifyCheckpointP256({ deviceId, seq, head }, signature, key.publicKey);
+    if (ok) out.set(seq, { seq, head });
   };
+  /* the newest first, with both halves; then the older ones, P-256 */
+  if (key.checkpoint) take(key.checkpoint.seq, key.checkpoint.head, key.checkpoint, true);
   const openings = copy.openings || {};
   for (const e of entries) {
     const f = chain.decodeLink(e.link);
     if (f.op === OP.GRANT_CREATE && openings[f.grantId]) take(f.seq, e.head, openings[f.grantId].signature);
   }
   for (const c of copy.checkpoints || []) take(c.seq, c.head, c.signature);
-  if (key.checkpoint) take(key.checkpoint.seq, key.checkpoint.head, key.checkpoint.signature);
   return [...out.values()].sort((a, b) => a.seq - b.seq);
 }
 
 /**
  * The one answer to "what does this copy prove" (R27), for the banner and
- * Approve alike. key: {publicKey, head {seq, head}, held?, checkpoint?} -
+ * Approve alike. key: {publicKey, publicKeyPq, head {seq, head}, held?, checkpoint?} -
  * or {deviceId, ...} with no public key (a test key that signs nothing): then
  * the anchors are the genesis and HEAD only;
  * opts.ringFrom: the oldest seq the key still holds (missing links at or
@@ -235,7 +245,7 @@ function assessFrom(copy, key, opts) {
     .filter((e) => chain.decodeLink(e.link).seq > from.seq);
   const deviceId = key.publicKey ? chain.deviceIdOf(key.publicKey) : key.deviceId;
   const cp = key.checkpoint;
-  if (cp && cp.seq > from.seq && key.publicKey && !chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, key.publicKey)) {
+  if (cp && cp.seq > from.seq && key.publicKey && !chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, key.publicKey, cp.signaturePq, key.publicKeyPq)) {
     return {
       chain: { ok: false, verifiedThrough: from.seq, gaps: [], failure: { seq: cp.seq, reason: 'bad-checkpoint' } },
       anchors: [], missing: [], losses: [], open: [],
@@ -256,10 +266,10 @@ function assessFrom(copy, key, opts) {
  *   links:    [{link, head?, reveal?}] from seq 0, oldest first (reveal = the
  *             self-press's v_i, as PICKUP gave it),
  *   openings: {[grantId]: {scopes, reasonHash, genesis, uses, lifetime, signature}} -
- *             what the host asked for and the checkpoint signature its press
- *             answered with (edge.grant's reply),
+ *             what the host asked for and the checkpoint signature (P-256: an
+ *             older checkpoint, "B") its press answered with (edge.grant's reply),
  * }
- * key: what the host read from the key THIS session: {publicKey, head (edge.head()),
+ * key: what the host read from the key THIS session: {publicKey, publicKeyPq (edge.publicKeyPq()), head (edge.head()),
  *      held (optional: the links PICKUP gave from the key's ring - trusted as they are),
  *      checkpoint (edge.checkpoint())}
  *
@@ -396,7 +406,7 @@ function verifyCore(copy, key, prev, out) {
 
   const cp = key.checkpoint;
   if (!cp || !same(headAt(cp.seq) || new Uint8Array(0), cp.head) ||
-      !chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, key.publicKey)) {
+      !chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, key.publicKey, cp.signaturePq, key.publicKeyPq)) {
     return fail('checkpoint', { seq: cp ? cp.seq : null });
   }
 
@@ -438,11 +448,11 @@ function verifyCore(copy, key, prev, out) {
          * The key handed this grant-create over itself, but the head before it
          * is gone (a covered gap): its own head stands in for the weld. Still
          * checked: the caps add up, the subject commits to these scopes, reason,
-         * G and lifetime, and the press's checkpoint signs this head.
+         * G and lifetime, and the press's checkpoint signs this head (P-256: an older checkpoint).
          */
         const sum = o.scopes.reduce((n, sc) => n + sc.cap, 0) === o.uses;
         const subj = same(f.subject, grants.grantSubject({ scopes: o.scopes, reasonHash: o.reasonHash, genesis: o.genesis, lifetime: o.lifetime || 0 }));
-        const sig = chain.verifyCheckpoint({ deviceId, seq: f.seq, head: headAt(f.seq) }, o.signature, key.publicKey);
+        const sig = chain.verifyCheckpointP256({ deviceId, seq: f.seq, head: headAt(f.seq) }, o.signature, key.publicKey);
         r = sum && subj && sig ? { ok: true, grantId: f.grantId } : { ok: false, reason: !sum ? 'uses-mismatch' : !subj ? 'subject-mismatch' : 'bad-signature' };
       } else {
         r = { ok: false, reason: 'prev-head-unknown' };

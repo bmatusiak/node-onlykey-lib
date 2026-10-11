@@ -16,23 +16,28 @@ async function device({ nametag = 'hard key', ownerSecret, links = 3 } = {}) {
   const e = edgeOver(t);
   for (let i = 0; i < links; i += 1) t.edgeRecord();
   const { publicKey, deviceId } = await e.publicKey();
+  const publicKeyPq = await e.publicKeyPq('checkpoint');
   const h = await e.head();
-  return { t, e, log: { deviceId, publicKey, records: await e.pickup(0, h.seq + 1), checkpoint: await e.checkpoint(), statement: await e.statement(nametag) } };
+  return { t, e, log: { deviceId, publicKey, publicKeyPq, records: await e.pickup(0, h.seq + 1), checkpoint: await e.checkpoint(), statement: await e.statement(nametag) } };
 }
-const myOwner = async () => (await (await device()).e.statement('A13')).ownerKey;
+/* this device's own owner keys - both halves of the hybrid: {ownerKey, ownerKeyPq} */
+const myOwner = async () => {
+  const st = await (await device()).e.statement('A13');
+  return { ownerKey: st.ownerKey, ownerKeyPq: st.ownerKeyPq };
+};
 
 test('a log made with your OnlyKey from a device you know: mine-known, its chain checks, its nametag', async () => {
   const owner = await myOwner();
   const { log } = await device({ nametag: 'Pixel' });
   const known = [{ deviceId: Buffer.from(log.deviceId).toString('hex') }];
-  const r = devices.classify({ log, ownerKey: owner, known });
+  const r = devices.classify({ log, ...owner, known });
   assert.equal(r.class, 'mine-known');
   assert.equal(r.nametag, 'Pixel');
   assert.equal(r.check.ok, true, JSON.stringify(r.check));
 });
 
 test('a log made with your OnlyKey from a device you do NOT know: mine-new (a hard key restored from the backup, or a leak)', async () => {
-  const r = devices.classify({ log: (await device()).log, ownerKey: await myOwner(), known: [] });
+  const r = devices.classify({ log: (await device()).log, ...(await myOwner()), known: [] });
   assert.equal(r.class, 'mine-new');
   assert.equal(r.nametag, 'hard key');
 });
@@ -40,17 +45,31 @@ test('a log made with your OnlyKey from a device you do NOT know: mine-new (a ha
 test('a log NOT made with your OnlyKey, or a statement naming another key: forged - never merged, kept as evidence', async () => {
   const owner = await myOwner();
   const stranger = await device({ ownerSecret: p256.utils.randomSecretKey() });
-  assert.equal(devices.classify({ log: stranger.log, ownerKey: owner }).class, 'forged', 'another owner key');
+  assert.equal(devices.classify({ log: stranger.log, ...owner }).class, 'forged', 'another owner key');
   const a = await device();
   const b = await device();
   const swapped = { ...a.log, statement: b.log.statement };
-  assert.equal(devices.classify({ log: swapped, ownerKey: owner }).class, 'forged', 'a real statement of ANOTHER device of yours, put on this chain');
+  assert.equal(devices.classify({ log: swapped, ...owner }).class, 'forged', 'a real statement of ANOTHER device of yours, put on this chain');
+});
+
+test('the hybrid: a statement without its ML-DSA-65 half, or naming another ML-DSA-65 checkpoint key, is not "mine"', async () => {
+  const owner = await myOwner();
+  const { log } = await device();
+  assert.equal(devices.classify({ log, ...owner }).class, 'mine-new');
+  const { signaturePq: _s, ...noSigPq } = log.statement;
+  assert.equal(devices.classify({ log: { ...log, statement: noSigPq }, ...owner }).class, 'forged', 'no ML-DSA-65 signature');
+  const { publicKeyPq: _k, ...noKeyPq } = log.statement;
+  assert.equal(devices.classify({ log: { ...log, statement: noKeyPq }, ...owner }).class, 'forged', 'no ML-DSA-65 checkpoint key named');
+  const other = await device();
+  assert.equal(devices.classify({ log: { ...log, publicKeyPq: other.log.publicKeyPq }, ...owner }).class, 'forged', 'the log is checked under another ML-DSA-65 key than the statement names');
+  /* checked without this device's owner ML-DSA-65 key: nothing is mine */
+  assert.equal(devices.classify({ log, ownerKey: owner.ownerKey }).class, 'forged', 'no owner ML-DSA-65 key');
 });
 
 test('the chain is checked under that device\'s own key: a tampered link is an alarm even on a device of yours', async () => {
   const { log } = await device();
   const records = log.records.map((r, i) => (i === 1 ? { ...r, link: Uint8Array.from(r.link, (x, j) => (j === 50 ? x ^ 1 : x)) } : r));
-  const r = devices.classify({ log: { ...log, records }, ownerKey: await myOwner() });
+  const r = devices.classify({ log: { ...log, records }, ...(await myOwner()) });
   assert.equal(r.class, 'mine-new', 'the owner signature still says who it is');
   assert.equal(r.check.ok, false);
   assert.equal(r.check.alarm, 'tampered');
@@ -69,7 +88,11 @@ test('nametags: one fingerprint, many statements - the highest seq names it, the
   list = devices.remember(list, later, { at: 3 });
   assert.equal(list.length, 1, 'one entry per fingerprint');
   assert.equal(list[0].statements.length, 2, 'the same statement twice is kept once');
-  assert.deepEqual(devices.nametagOf([...devices.statementsOf(list[0]), fake], owner), { nametag: 'A13', seq: later.seq, previously: ['phone'] });
+  assert.equal(list[0].publicKeyPq, Buffer.from(first.publicKeyPq).toString('hex'), 'the ML-DSA-65 checkpoint key is kept with the device');
+  assert.equal(list[0].statements[0].signaturePq, Buffer.from(first.signaturePq).toString('hex'), 'and each statement\'s ML-DSA-65 signature');
+  assert.deepEqual(devices.nametagOf([...devices.statementsOf(list[0]), fake], owner.ownerKey, owner.ownerKeyPq), { nametag: 'A13', seq: later.seq, previously: ['phone'] });
+  /* without the owner ML-DSA-65 key no statement counts */
+  assert.equal(devices.nametagOf(devices.statementsOf(list[0]), owner.ownerKey), null);
 });
 
 test('log recovery: a device\'s log with a stretch it accepted as lost (LOSS) still checks and can merge', async () => {
@@ -78,8 +101,8 @@ test('log recovery: a device\'s log with a stretch it accepted as lost (LOSS) st
   const h = await d.e.head();
   const all = await d.e.pickup(0, h.seq + 1);
   const records = all.filter((r, i) => i !== 1 && i !== 2); /* the lost stretch is not in this copy */
-  const r = devices.classify({ log: { ...d.log, records, checkpoint: await d.e.checkpoint() }, ownerKey: await myOwner() });
+  const r = devices.classify({ log: { ...d.log, records, checkpoint: await d.e.checkpoint() }, ...(await myOwner()) });
   assert.equal(r.check.ok, true, JSON.stringify(r.check));
-  const found = devices.classify({ log: { ...d.log, records: all, checkpoint: await d.e.checkpoint() }, ownerKey: await myOwner() });
+  const found = devices.classify({ log: { ...d.log, records: all, checkpoint: await d.e.checkpoint() }, ...(await myOwner()) });
   assert.equal(found.check.ok, true, 'the lost stretch, found again, welds back in');
 });

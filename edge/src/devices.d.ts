@@ -1,23 +1,27 @@
 /**
  * Sort one offered log.
  * @param {object} o
- * @param {{deviceId, publicKey, records, checkpoint, statement}} o.log
- *   records: [{link, head, reveal?}] of that device's chain; checkpoint: {seq, head, signature}
- *   from its key; statement: {deviceId, publicKey, seq, nametag, signature}
+ * @param {{deviceId, publicKey, publicKeyPq, records, checkpoint, statement}} o.log
+ *   records: [{link, head, reveal?}] of that device's chain; checkpoint: {seq, head, signature,
+ *   signaturePq} from its key; statement: {deviceId, publicKey, publicKeyPq, seq, nametag,
+ *   signature, signaturePq}
  * @param {Uint8Array} o.ownerKey   THIS device's own owner public key (X||Y)
+ * @param {Uint8Array} o.ownerKeyPq THIS device's own owner ML-DSA-65 public key (1952 bytes)
  * @param {Array<{deviceId: string}>} [o.known]  your devices (deviceId hex)
  * @param {Array<{seq, head}>} [o.merged]  the points of that chain this device merged before
  * -> {class, deviceId (hex), nametag, check}
  */
-export function classify({ log, ownerKey, known, merged }: {
+export function classify({ log, ownerKey, ownerKeyPq, known, merged }: {
     log: {
         deviceId: any;
         publicKey: any;
+        publicKeyPq: any;
         records: any;
         checkpoint: any;
         statement: any;
     };
     ownerKey: Uint8Array;
+    ownerKeyPq: Uint8Array;
     known?: {
         deviceId: string;
     }[] | undefined;
@@ -41,9 +45,10 @@ export function classify({ log, ownerKey, known, merged }: {
 /**
  * The nametag a device goes by, from every statement of its own seen so far: the one with
  * the highest seq names it; the others are its history ("previously"). A statement that
- * does not verify under `ownerKey` is not counted. -> {nametag, seq, previously: [nametag]} | null
+ * does not verify under `ownerKey` and `ownerKeyPq` (both halves) is not counted.
+ * -> {nametag, seq, previously: [nametag]} | null
  */
-export function nametagOf(statements: any, ownerKey: any): {
+export function nametagOf(statements: any, ownerKey: any, ownerKeyPq: any): {
     nametag: any;
     seq: any;
     previously: any[];

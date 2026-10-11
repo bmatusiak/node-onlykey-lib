@@ -29,7 +29,7 @@ const { codes, chain, receipts, copy: copyCheck } = require('../src');
 
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
-  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, STATEMENT: 0x06,
+  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, PUBKEY_PQ: 0x05, STATEMENT: 0x06,
   /* R31: DEBUG firmware only - a production key answers it as unknown (EDGE:0A) */
   WIPE_DEBUG: 0x7e,
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
@@ -64,6 +64,12 @@ class EdgeError extends Error {
 
 const u32 = (n) => Uint8Array.of(n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff);
 const get32 = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+/* a reply of n bytes, in 64-byte reports */
+const reportsFor = (n) => Math.ceil(n / 64);
+/* a checkpoint reply: seq . head, then the P-256 signature, then the ML-DSA-65 signature in its reports */
+const checkpointOf = (c, rest) => ({
+  seq: get32(c, 0), head: c.slice(4, 36), signature: rest[0].slice(0, 64), signaturePq: concat(rest.slice(1)).slice(0, chain.ML_DSA65.SIG),
+});
 const get16 = (b, o) => b[o] | (b[o + 1] << 8);
 const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -362,11 +368,15 @@ function setup(imports, register) {
     },
 
     /**
-     * The owner statement (Brad, 2026-10-08): the key signs its own fingerprint (device id,
-     * checkpoint key, current seq) and this NAMETAG with its owner key - no press, no link.
-     * Another device of yours checks it with grants.verifyStatement against ITS owner key.
-     * -> {deviceId, publicKey, seq (null = no link yet), nametag, ownerKey, signature}
+     * An ML-DSA-65 public key of the key's (chain.ML_DSA65.PK bytes, in 64-byte reports): which
+     * 'checkpoint' (the twin of the P-256 checkpoint key; a restore makes a new one) or 'owner'
+     * (the owner key's twin: the same on every device made from the same OnlyKey secret).
      */
+    async publicKeyPq(which = 'checkpoint', opts) {
+      const rs = await call(SUB.PUBKEY_PQ, Uint8Array.of(which === 'owner' ? 1 : 0), { ...opts, reports: reportsFor(chain.ML_DSA65.PK) });
+      return concat(rs).slice(0, chain.ML_DSA65.PK);
+    },
+
     /**
      * R31, DEBUG FIRMWARE ONLY: the key erases its Edge region (state, salt) and starts a fresh
      * chain - a new device id; no key outside the Edge region is touched. A production key
@@ -378,14 +388,28 @@ function setup(imports, register) {
       return { wiped: true };
     },
 
+    /**
+     * The owner statement (Brad, 2026-10-08): the key signs its own fingerprint (device id,
+     * both checkpoint keys, current seq) and this NAMETAG with its owner key and the owner key's
+     * ML-DSA-65 twin - no press, no link. Another device of yours checks it with
+     * grants.verifyStatement against ITS owner keys; both signatures are required.
+     * -> {deviceId, publicKey, publicKeyPq, seq (null = no link yet), nametag, ownerKey, ownerKeyPq,
+     *     signature, signaturePq}
+     */
     async statement(nametag, opts) {
       const { grants } = require('../src');
       const tag = String(nametag ?? '').trim();
       const nh = grants.nametagHash(tag);
       const { publicKey, deviceId } = await edge.publicKey(opts);
-      const [a, k, sg] = await call(SUB.STATEMENT, nh, { ...opts, reports: 3 });
+      const publicKeyPq = await edge.publicKeyPq('checkpoint', opts);
+      const ownerKeyPq = await edge.publicKeyPq('owner', opts);
+      const rs = await call(SUB.STATEMENT, nh, { ...opts, reports: 3 + reportsFor(chain.ML_DSA65.SIG) });
+      const [a, k, sg] = rs;
       const seq = get32(a, 0);
-      return { deviceId, publicKey, seq: seq === SEQ_NONE ? null : seq, nametag: tag, ownerKey: k.slice(0, 64), signature: sg.slice(0, 64) };
+      return {
+        deviceId, publicKey, publicKeyPq, seq: seq === SEQ_NONE ? null : seq, nametag: tag,
+        ownerKey: k.slice(0, 64), ownerKeyPq, signature: sg.slice(0, 64), signaturePq: concat(rs.slice(3)).slice(0, chain.ML_DSA65.SIG),
+      };
     },
 
     /** Links the key still holds: [{link, head, reveal|null}] (reveal = a self-press's v_i). */
@@ -400,10 +424,13 @@ function setup(imports, register) {
       return out;
     },
 
-    /** The key's one signature: {seq, head, signature} over (device_id, seq, head) - chain.verifyCheckpoint. */
+    /**
+     * The key's checkpoint: {seq, head, signature, signaturePq} - the P-256 and the ML-DSA-65
+     * signature over (device_id, seq, head), both required by chain.verifyCheckpoint.
+     */
     async checkpoint(opts) {
-      const [c, s] = await call(SUB.CHECKPOINT, null, { ...opts, reports: 2 });
-      return { seq: get32(c, 0), head: c.slice(4, 36), signature: s.slice(0, 64) };
+      const rs = await call(SUB.CHECKPOINT, null, { ...opts, reports: 2 + reportsFor(chain.ML_DSA65.SIG) });
+      return checkpointOf(rs[0], rs.slice(1));
     },
 
     /**
@@ -441,15 +468,16 @@ function setup(imports, register) {
       args[50] = ttlMinutes & 0xff;
       args[51] = ttlMinutes >>> 8;
       args.set(verifiedHead.subarray(0, GRANT_HEAD_BYTES), 52);
-      const pending = pressed(SUB.GRANT_CREATE, args, { reports: 3, timeoutMs }, onPress);
-      const [g, c, s] = await pending;
+      const pending = pressed(SUB.GRANT_CREATE, args, { reports: 3 + reportsFor(chain.ML_DSA65.SIG), timeoutMs }, onPress);
+      const rs = await pending;
+      const g = rs[0];
       return {
         grantId: get32(g, 0),
         uses: get16(g, 4),
         genesis: g.slice(6, 38),
         lifetime: ttlMinutes,
         seq: get32(g, 38),
-        checkpoint: { seq: get32(c, 0), head: c.slice(4, 36), signature: s.slice(0, 64) },
+        checkpoint: checkpointOf(rs[1], rs.slice(2)),
       };
     },
 
@@ -549,11 +577,13 @@ function setup(imports, register) {
        * in this session's memory only (copy.verifyCopyKept) - never stored, so a
        * restart checks in full. The same head and copy reuse it; a copy that grew
        * is checked from its last verified link. The key is read for what that
-       * needs: its head always, its public key once a session, its checkpoint when
+       * needs: its head always, its public keys once a session, its checkpoint when
        * the head moved, its ring only before a full check.
        */
       async check(copy, opts = {}) {
         if (!publicKeyNow) publicKeyNow = (await edge.publicKey()).publicKey;
+        /* the hybrid checkpoint: its ML-DSA-65 half is checked under the twin key, also read once a session */
+        if (!publicKeyPqNow) publicKeyPqNow = await edge.publicKeyPq('checkpoint');
         /*
          * ONE MOMENT OF THE KEY (Pixel, 2026-10-06): the head, its newest links,
          * the checkpoint and the ring are separate reads; an agent's link (its
@@ -656,19 +686,20 @@ function setup(imports, register) {
     if (!same && head.seq !== null) readMore = true;
     /* the key's own ring, this session: its links are trusted as they are (copy.missingGaps) - needed by the full check */
     const held = same || grew || head.seq === null || head.oldest === null ? [] : await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
-    let r = copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held }, st);
+    let r = copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, publicKeyPq: publicKeyPqNow, head, checkpoint, held }, st);
     /* a full check after all (the copy changed under the same head): with the ring and a fresh checkpoint, as before */
     if (r.path === 'full' && head.seq !== null && head.oldest !== null && (same || grew)) {
       const ring = await edge.pickup(head.oldest, Math.min(HELD, head.seq - head.oldest + 1));
       checkpoint = await edge.checkpoint();
       readMore = true;
       const why = r.why;
-      r = { ...copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, head, checkpoint, held: ring }, null), why };
+      r = { ...copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, publicKeyPq: publicKeyPqNow, head, checkpoint, held: ring }, null), why };
     }
     return { r, st, head, checkpoint, readMore };
   }
 
   let publicKeyNow = null;
+  let publicKeyPqNow = null;
 
   async function verifiedHeadOf(copy) {
     const verdict = await edge.grants.check(copy || {});

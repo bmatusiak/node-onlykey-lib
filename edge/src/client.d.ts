@@ -170,7 +170,8 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
      * your other devices. A phone that has no nametag yet gives none. A GIVE asked past the end: no links, just its last-batch fields.
      * Nothing is trusted here - each seal is checked against the key's own public
      * key when the blocks are built (block.verifyBlock).
-     * -> {seals: [{seq, head, signature}], statement: {deviceId, publicKey, seq, nametag, signature} | null}
+     * -> {seals: [{seq, head, signature, signaturePq?}],
+     *     statement: {deviceId, publicKey, publicKeyPq, seq, nametag, signature, signaturePq} | null}
      */
     sealsFromPhone(peerSigner: any, { deviceId }: {
         deviceId: any;
@@ -179,9 +180,11 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
         statement: {
             deviceId: Uint8Array<ArrayBuffer>;
             publicKey: Uint8Array<ArrayBuffer>;
+            publicKeyPq: Uint8Array<ArrayBuffer> | null;
             seq: any;
             nametag: string;
             signature: Uint8Array<ArrayBuffer>;
+            signaturePq: Uint8Array<ArrayBuffer> | null;
         } | null;
         openings: any;
         notes: {

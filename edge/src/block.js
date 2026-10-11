@@ -30,8 +30,12 @@
  * implementation's float or Unicode rules. Within the subset the output equals
  * RFC 8785, and equals Python's json.dumps(sort_keys=True, separators=(",", ":")).
  *
- * WHAT IS TRUSTED. Only the key's signature: verifyBlock() needs the device's
- * Edge public key from the key (this session), never one carried in the block.
+ * WHAT IS TRUSTED. Only the key's signatures: verifyBlock() needs the device's
+ * Edge public keys from the key (this session), never ones carried in the block.
+ * The seal is the key's checkpoint: "sig" its P-256 half; the NEWEST block of a
+ * set - the copy's one hybrid anchor ("B", 2026-10-10) - also carries "sigPq",
+ * the ML-DSA-65 half, and is verified with both (opts.anchor). Older blocks are
+ * checked by P-256 and are trusted through the prev links up to that anchor.
  */
 const { OP } = require('./codes');
 const chain = require('./chain');
@@ -149,7 +153,8 @@ function linkBytes(f) {
  *   previous block's checkpoint, or genesis (seq = the first link's seq)
  * @param {string|null} o.prev               the previous block's id (hex), null for the first
  * @param {Uint8Array[]} o.links             64-byte links, in seq order, ending at the checkpoint
- * @param {{seq: number, head: Uint8Array, signature: Uint8Array}} o.checkpoint  the key's seal
+ * @param {{seq: number, head: Uint8Array, signature: Uint8Array, signaturePq?: Uint8Array}} o.checkpoint  the key's seal
+ *   (signaturePq only on the newest: written as "sigPq", absent otherwise)
  */
 function buildBlock({ net, deviceId, start, prev = null, links, checkpoint }) {
   if (!NETS.includes(net)) throw new TypeError(`edge block: net must be ${NETS.join(' or ')}`);
@@ -160,7 +165,10 @@ function buildBlock({ net, deviceId, start, prev = null, links, checkpoint }) {
     prev,
     start: { seq: start.seq, head: hex(start.head) },
     links: links.map((l) => linkFields(Uint8Array.from(l))),
-    checkpoint: { seq: checkpoint.seq, head: hex(checkpoint.head), sig: hex(checkpoint.signature) },
+    checkpoint: {
+      seq: checkpoint.seq, head: hex(checkpoint.head), sig: hex(checkpoint.signature),
+      ...(checkpoint.signaturePq && checkpoint.signaturePq.length ? { sigPq: hex(checkpoint.signaturePq) } : {}),
+    },
   };
   canonical(block); /* throws now, not when someone first hashes it */
   return block;
@@ -178,7 +186,7 @@ function buildBlock({ net, deviceId, start, prev = null, links, checkpoint }) {
  * @param {'live'|'test'} o.net
  * @param {Uint8Array} o.deviceId
  * @param {{link: Uint8Array}[]} o.records  the copy, in seq order
- * @param {{seq, head, signature}[]} o.seals  the key's checkpoints taken when a block closed
+ * @param {{seq, head, signature, signaturePq?}[]} o.seals  the key's checkpoints taken when a block closed (the newest with its ML-DSA-65 half)
  * -> {blocks, open (links after the last seal), reason?}
  */
 function blocksFrom({ net, deviceId, records, seals }) {
@@ -199,7 +207,9 @@ function blocksFrom({ net, deviceId, records, seals }) {
       if (!bySeq.has(q)) return { blocks, open: recs.length - countUpTo(blocks), reason: `the copy has no link #${q}` };
       links.push(bySeq.get(q));
     }
-    const b = buildBlock({ net, deviceId, start, prev, links, checkpoint: { seq: s.seq, head: Uint8Array.from(s.head), signature: Uint8Array.from(s.signature) } });
+    const b = buildBlock({ net, deviceId, start, prev, links, checkpoint: {
+      seq: s.seq, head: Uint8Array.from(s.head), signature: Uint8Array.from(s.signature), ...(s.signaturePq ? { signaturePq: Uint8Array.from(s.signaturePq) } : {}),
+    } });
     blocks.push(b);
     prev = blockId(b);
     start = { seq: s.seq + 1, head: Uint8Array.from(s.head) };
@@ -212,16 +222,22 @@ const countUpTo = (blocks) => blocks.reduce((n, b) => n + b.links.length, 0);
 /* ---- verify ---- */
 
 /**
- * Check a block on its own terms, trusting only `publicKey` (the device's Edge
- * key, read from the key). With `prevBlock`, also check it continues that block.
+ * Check a block on its own terms, trusting only `publicKey` and `publicKeyPq` (the
+ * device's Edge keys, read from the key). With `prevBlock`, also check it continues
+ * that block. opts.anchor (default true): this is the newest block, the copy's one
+ * hybrid anchor - "sigPq" is required and both halves must verify. anchor: false, an
+ * older block: P-256 only (chain.verifyCheckpointP256); it is quantum-safe only through
+ * the prev links up to the anchor block.
  * -> {ok: true, id} or {ok: false, reason}
  *
  * @param {object} block
  * @param {Uint8Array} publicKey  the device's Edge public key (X||Y), from the key
+ * @param {Uint8Array|null} publicKeyPq  its ML-DSA-65 twin (1952 bytes), from the key
  * @param {object|null} [prevBlock]
+ * @param {{anchor?: boolean}} [opts]
  * @returns {{ok: boolean, id?: string, reason?: string}}
  */
-function verifyBlock(block, publicKey, prevBlock = null) {
+function verifyBlock(block, publicKey, publicKeyPq, prevBlock = null, { anchor = true } = {}) {
   const fail = (reason) => ({ ok: false, reason });
   try {
     if (!block || block.v !== BLOCK_VERSION) return fail('version');
@@ -253,7 +269,13 @@ function verifyBlock(block, publicKey, prevBlock = null) {
     if (seq - 1 !== block.checkpoint.seq) return fail('checkpoint');
     if (toHex(head) !== block.checkpoint.head) return fail('checkpoint');
     const fields = { deviceId, seq: block.checkpoint.seq, head: fromHex(block.checkpoint.head) };
-    if (!chain.verifyCheckpoint(fields, fromHex(block.checkpoint.sig), publicKey)) return fail('signature');
+    if (anchor) {
+      /* the anchor: both halves - an anchor block without "sigPq" is not signed */
+      if (typeof block.checkpoint.sigPq !== 'string') return fail('signature');
+      if (!chain.verifyCheckpoint(fields, fromHex(block.checkpoint.sig), publicKey, fromHex(block.checkpoint.sigPq), publicKeyPq)) return fail('signature');
+    } else if (!chain.verifyCheckpointP256(fields, fromHex(block.checkpoint.sig), publicKey)) {
+      return fail('signature');
+    }
     return { ok: true, id };
   } catch (e) {
     return fail(`malformed: ${e.message}`);

@@ -27,8 +27,9 @@
  *                                           -> {ok, staged} for a part before the last;
  *                                              the last one is answered after the sheet
  *
- * A batch is at most BATCH links: the vendor wire carries about 14 KB per
- * message (255 pieces), and a link record is 128 bytes, 256 as hex.
+ * A batch is at most BATCH links: a link record is 128 bytes, 256 as hex. The vendor
+ * wire carries up to 65,535 pieces of 54 bytes a message since 2026-10-10 (wire.js);
+ * BATCH was sized for the old 255-piece cap and is kept as it was.
  */
 
 const crypto = require('../../src/crypto/provider');
@@ -55,12 +56,15 @@ const GIVE_TYPE = 'EDGE_SYNC_GIVE';
  */
 const OFFER_TYPE = 'EDGE_SYNC_OFFER';
 const TYPES = [HAVE_TYPE, LINKS_TYPE, COMMIT_TYPE, GIVE_TYPE, OFFER_TYPE];
-/* a Key Chain part: JSON text up to this many characters (the wire carries ~14 KB a message) */
+/* a Key Chain part: JSON text up to this many characters (the wire carries up to 65,535 x 54 bytes a message since 2026-10-10) */
 /* "no seq": a checkpoint of a key with no link yet (anchorCheck); it once filled the retired sync link's seq fields when only the Key Chain list moved */
 const NO_SEQ = 0xffffffff;
 const TAG = 'OKEDGE-SYNC-MSG-v1';
 const BATCH = 40;
 
+/* the ML-DSA-65 halves of the hybrid checkpoint and statement (chain.ML_DSA65), exact lengths */
+const PQ_SIG = chain.ML_DSA65.SIG;
+const PQ_PK = chain.ML_DSA65.PK;
 const isHex = (s, n) => typeof s === 'string' && (n === undefined ? s.length % 2 === 0 : s.length === n * 2) && /^[0-9a-f]*$/i.test(s);
 
 /*
@@ -130,9 +134,9 @@ function verify(msg, { seen } = {}) {
     const st = p.statement;
     const u32ok = (n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
     if (!isHex(p.sid, 8) || !isHex(p.chain, 16) || !Number.isInteger(p.linkParts) || p.linkParts < 0 || p.linkParts > 255
-      || !c || !u32ok(c.seq) || !isHex(c.head, 32) || !isHex(c.signature, 64)
-      || !st || !isHex(st.publicKey, 64) || !(st.seq === null || u32ok(st.seq)) || typeof st.nametag !== 'string' || !st.nametag.trim()
-      || utf8ToBytes(st.nametag).length > 0xff || !isHex(st.signature, 64)
+      || !c || !u32ok(c.seq) || !isHex(c.head, 32) || !isHex(c.signature, 64) || !isHex(c.signaturePq, PQ_SIG)
+      || !st || !isHex(st.publicKey, 64) || !isHex(st.publicKeyPq, PQ_PK) || !(st.seq === null || u32ok(st.seq)) || typeof st.nametag !== 'string' || !st.nametag.trim()
+      || utf8ToBytes(st.nametag).length > 0xff || !isHex(st.signature, 64) || !isHex(st.signaturePq, PQ_SIG)
       || (p.openings !== undefined && (!Array.isArray(p.openings) || p.openings.length > 500 || p.openings.some((o) => !o || typeof o !== 'object')))
       || (p.notes !== undefined && (!p.notes || typeof p.notes !== 'object'))) {
       return { ok: false, reason: 'malformed' };
@@ -209,14 +213,18 @@ function canon(v) {
 /**
  * The computer's side: "that is device `chain`'s log up to its signed checkpoint, with its
  * statement" - for the phone whose key is `deviceId` to HOLD until the person approves.
- * checkpoint: {seq, head, signature}; statement: {publicKey, seq, nametag, signature} (as
- * plugin.statement gives it, or as that device's phone kept it).
+ * checkpoint: {seq, head, signature, signaturePq}; statement: {publicKey, publicKeyPq, seq, nametag,
+ * signature, signaturePq} (as plugin.statement gives it, or as that device's phone kept it) - the
+ * hybrid halves both travel: the phone checks both (chain.verifyCheckpoint, grants.verifyStatement).
  */
 function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement, openings = [], notes = null }) {
   return sign(OFFER_TYPE, signer, {
     sid, deviceId: toHex(deviceId), chain: toHex(chainId), linkParts,
-    checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature) },
-    statement: { publicKey: toHex(statement.publicKey), seq: statement.seq ?? null, nametag: String(statement.nametag), signature: toHex(statement.signature) },
+    checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature), signaturePq: toHex(checkpoint.signaturePq) },
+    statement: {
+      publicKey: toHex(statement.publicKey), publicKeyPq: toHex(statement.publicKeyPq), seq: statement.seq ?? null,
+      nametag: String(statement.nametag), signature: toHex(statement.signature), signaturePq: toHex(statement.signaturePq),
+    },
     /* the budgets' opening words (devices.checkOpenings) - the receiving phone checks each against the log */
     openings: (openings || []).slice(0, 500),
     /* its notes, intents and receipt messages by seq - each screen checks them against the chain's hashes */
@@ -240,27 +248,28 @@ function buildGive({ signer, deviceId, from = 0 }) {
  * 2026-10-08; the check itself is unchanged.)
  *   records:    the phone's copy of that chain merged with what came
  *   publicKey:  that device's checkpoint key (X || Y), as its statement names it
- *   checkpoint: {seq, head, signature} read from that device's key
+ *   publicKeyPq: its ML-DSA-65 twin (1952 bytes), as its statement names it
+ *   checkpoint: {seq, head, signature, signaturePq} read from that device's key
  *   anchors:    [{seq, head}] the points of that chain this phone merged before
  * ALARMS (spec R30, written when the key kept siblings: "a sibling anchors a head its
  * own chain doesn't contain: one device's rollback or tampering is proven by the other";
  * the check now runs on the phone, against heads it merged before):
- *   bad-checkpoint - not signed by that device's key;
+ *   bad-checkpoint - not signed by that device's keys (both halves of the hybrid);
  *   rollback       - that device's head is now older than one this phone merged before;
  *   changed        - at a seq merged before, that device's chain now holds another head;
  *   tampered       - the links do not verify up to the signed checkpoint.
  * -> {ok: true, verifiedThrough, open} | {ok: false, alarm, seq?, detail?}
  *
- * @param {{records: Array<{link: Uint8Array, head: Uint8Array, reveal?: Uint8Array|null}>, publicKey: Uint8Array,
- *   checkpoint: {seq: number, head: Uint8Array, signature: Uint8Array}, anchors?: Array<{seq: number, head: Uint8Array}>}} o
+ * @param {{records: Array<{link: Uint8Array, head: Uint8Array, reveal?: Uint8Array|null}>, publicKey: Uint8Array, publicKeyPq: Uint8Array,
+ *   checkpoint: {seq: number, head: Uint8Array, signature: Uint8Array, signaturePq: Uint8Array}, anchors?: Array<{seq: number, head: Uint8Array}>}} o
  * @returns {{ok: boolean, alarm?: string, seq?: number, detail?: string, verifiedThrough?: number, open?: any[]}}
  */
-function anchorCheck({ records, publicKey, checkpoint, anchors = [] }) {
+function anchorCheck({ records, publicKey, publicKeyPq, checkpoint, anchors = [] }) {
   const chainLib = require('./chain');
   const copyLib = require('./copy');
   const deviceId = chainLib.deviceIdOf(publicKey);
   const cp = { seq: checkpoint.seq, head: Uint8Array.from(checkpoint.head) };
-  if (!chainLib.verifyCheckpoint({ deviceId, ...cp }, checkpoint.signature, publicKey)) return { ok: false, alarm: 'bad-checkpoint', seq: cp.seq };
+  if (!chainLib.verifyCheckpoint({ deviceId, ...cp }, checkpoint.signature, publicKey, checkpoint.signaturePq, publicKeyPq)) return { ok: false, alarm: 'bad-checkpoint', seq: cp.seq };
   /*
    * A key with no link yet signs NO_SEQ (0xffffffff): an empty chain, checked at once. Read as a
    * seq, the check counted toward four billion and the computer's sync hung (a new Pixel's first
@@ -275,7 +284,7 @@ function anchorCheck({ records, publicKey, checkpoint, anchors = [] }) {
     const at = a.seq === cp.seq ? cp.head : bySeq.get(a.seq) ? bySeq.get(a.seq).head : null;
     if (at && toHex(at) !== toHex(a.head)) return { ok: false, alarm: 'changed', seq: a.seq, detail: `#${a.seq} holds another head than the one anchored` };
   }
-  const v = copyLib.assess({ links: upTo }, { publicKey, head: cp, held: [], checkpoint: { ...cp, signature: checkpoint.signature } });
+  const v = copyLib.assess({ links: upTo }, { publicKey, publicKeyPq, head: cp, held: [], checkpoint: { ...cp, signature: checkpoint.signature, signaturePq: checkpoint.signaturePq } });
   if (v.chain.failure) return { ok: false, alarm: 'tampered', seq: v.chain.failure.seq, detail: v.chain.failure.reason };
   return { ok: true, verifiedThrough: v.chain.verifiedThrough, open: v.open };
 }

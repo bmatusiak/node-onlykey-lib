@@ -78,6 +78,42 @@ test('wire: a message cut into 64-byte OKEDGE_REQUEST reports and put back toget
   assert.equal(wire.createAssembler().push(okedge), null);
 });
 
+/* the wider wire (Brad, 2026-10-10: "B + a wider wire"): a u16 LE piece index, 54 payload bytes a piece */
+test('wire: a u16 piece index - a message past the old 14,025-byte cap round-trips; one over 65,535 pieces is refused', () => {
+  assert.equal(wire.PIECE, 54);
+  assert.equal(wire.MAX_PIECES, 65535);
+  /* 60,000 characters: past the old 255 x 55 cap, and past index 255 (the high byte in use) */
+  const msg = { type: 'EDGE_SYNC_OFFER', blob: 'ab'.repeat(30000) };
+  const frames = wire.encode(wire.KIND.REQUEST, msg);
+  const bytes = JSON.stringify(msg).length;
+  assert.ok(bytes > 14025, 'larger than the old cap');
+  assert.equal(frames.length, Math.ceil(bytes / 54));
+  assert.ok(frames.length > 256);
+  /* the layout: FF FF FF FF F7, kind, index u16 LE, last, length, payload from byte 10 */
+  const f300 = frames[300];
+  assert.deepEqual([...f300.slice(0, 10)], [0xff, 0xff, 0xff, 0xff, 0xf7, wire.KIND.REQUEST, 300 & 0xff, 300 >> 8, 0, 54]);
+  const tail = frames[frames.length - 1];
+  assert.equal(tail[6] | (tail[7] << 8), frames.length - 1);
+  assert.equal(tail[8], 1, 'the last piece says so');
+  assert.equal(tail[9], bytes - (frames.length - 1) * 54);
+  const asm = wire.createAssembler();
+  let got = null;
+  for (const f of frames) got = asm.push(f) || got;
+  assert.deepEqual(got, { kind: wire.KIND.REQUEST, message: msg });
+  /* out of order across the one-byte boundary: 255 then 257 */
+  const asm2 = wire.createAssembler();
+  for (let i = 0; i < 256; i += 1) assert.equal(asm2.push(frames[i]), null);
+  assert.deepEqual(asm2.push(frames[257]), { error: 'out-of-order' });
+  /* a piece whose index wraps as one byte (256 read as 0) is not taken as the next */
+  const asm3 = wire.createAssembler();
+  for (let i = 0; i < 256; i += 1) asm3.push(frames[i]);
+  const wrapped = Uint8Array.from(frames[256]); wrapped[7] = 0; /* index 256 -> 0: restarts, never appends */
+  assert.equal(asm3.push(wrapped), null);
+  assert.deepEqual(asm3.push(frames[257]), { error: 'out-of-order' });
+  /* over 65,535 pieces of 54: refused before anything is written */
+  assert.throws(() => wire.encode(wire.KIND.REQUEST, { blob: 'x'.repeat(65535 * 54) }), /too long/);
+});
+
 test('wire: the channel sends the request and waits for the app\'s answer; no answer = null', async () => {
   const listeners = new Set();
   const written = [];
@@ -176,6 +212,8 @@ test('the app makes the labels and the reason hash itself - hashes carried by th
   const [opened] = await edge.pickup(r.budget.seq, 1);
   const [prev] = await edge.pickup(r.budget.seq - 1, 1);
   const { publicKey, deviceId } = await edge.publicKey();
+  /* the opening's checkpoint travels with its P-256 half only ("B") */
+  assert.equal(r.budget.checkpoint.signaturePq, undefined);
   const check = (scopesForCheck, reasonHash) => grants.verifyBudgetOpening({
     deviceId, publicKey, link: opened.link, prevHead: prev.head,
     head: Buffer.from(r.budget.checkpoint.head, 'hex'), signature: Buffer.from(r.budget.checkpoint.signature, 'hex'),

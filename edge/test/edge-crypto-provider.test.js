@@ -33,7 +33,9 @@ test('a plugged-in provider is the one Edge uses: hash chains, HMAC, checkpoints
   const sk = p256.utils.randomSecretKey();
   const pub = p256.getPublicKey(sk, false).subarray(1);
   const fields = { deviceId: chain.deviceIdOf(pub), seq: 5, head: genesis };
-  assert.equal(chain.verifyCheckpoint(fields, chain.signCheckpoint(fields, sk), pub), true);
+  /* the hybrid checkpoint: the ML-DSA-65 half is noble's own (not the provider's) - both must verify */
+  const pq = chain.mlDsaKeys(new Uint8Array(32).fill(9));
+  assert.equal(chain.verifyCheckpoint(fields, chain.signCheckpoint(fields, sk), pub, chain.signCheckpointPq(fields, pq.secretKey), pq.publicKey), true);
   assert.ok(calls.p256VerifyDigest >= 1 && calls.sha256 >= 1);
   crypto.setCryptoProvider(null);
   assert.equal(crypto.cryptoProviderName(), 'js');
@@ -45,6 +47,9 @@ test('a provider that lies changes the verdict - so the checks really go through
   const pub = p256.getPublicKey(sk, false).subarray(1);
   const fields = { deviceId: chain.deviceIdOf(pub), seq: 1, head: new Uint8Array(32).fill(1) };
   const sig = chain.signCheckpoint(fields, sk);
+  const pq = chain.mlDsaKeys(new Uint8Array(32).fill(9));
+  const sigPq = chain.signCheckpointPq(fields, pq.secretKey);
+  assert.equal(chain.verifyCheckpoint(fields, sig, pub, sigPq, pq.publicKey), true);
   crypto.setCryptoProvider({ p256VerifyDigest: () => false }, 'liar');
-  assert.equal(chain.verifyCheckpoint(fields, sig, pub), false);
+  assert.equal(chain.verifyCheckpoint(fields, sig, pub, sigPq, pq.publicKey), false);
 });

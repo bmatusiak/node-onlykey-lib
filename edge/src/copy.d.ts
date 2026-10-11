@@ -3,10 +3,10 @@
  *   links:    [{link, head?, reveal?}] from seq 0, oldest first (reveal = the
  *             self-press's v_i, as PICKUP gave it),
  *   openings: {[grantId]: {scopes, reasonHash, genesis, uses, lifetime, signature}} -
- *             what the host asked for and the checkpoint signature its press
- *             answered with (edge.grant's reply),
+ *             what the host asked for and the checkpoint signature (P-256: an
+ *             older checkpoint, "B") its press answered with (edge.grant's reply),
  * }
- * key: what the host read from the key THIS session: {publicKey, head (edge.head()),
+ * key: what the host read from the key THIS session: {publicKey, publicKeyPq (edge.publicKeyPq()), head (edge.head()),
  *      held (optional: the links PICKUP gave from the key's ring - trusted as they are),
  *      checkpoint (edge.checkpoint())}
  *
@@ -52,7 +52,7 @@ export function verifyCopyKept(copy: any, key: any, prev?: null): {
 };
 /**
  * The one answer to "what does this copy prove" (R27), for the banner and
- * Approve alike. key: {publicKey, head {seq, head}, held?, checkpoint?} -
+ * Approve alike. key: {publicKey, publicKeyPq, head {seq, head}, held?, checkpoint?} -
  * or {deviceId, ...} with no public key (a test key that signs nothing): then
  * the anchors are the genesis and HEAD only;
  * opts.ringFrom: the oldest seq the key still holds (missing links at or

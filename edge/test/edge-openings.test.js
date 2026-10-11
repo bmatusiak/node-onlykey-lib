@@ -3,7 +3,8 @@
  * FULL CARDS FOR YOUR OTHER DEVICES (Brad, 2026-10-09: "full cards, i want to see them in the
  * budget history list"): a budget's opening words travel with its device's log and are kept
  * only when they check against that log (devices.checkOpenings -> grants.verifyBudgetOpening):
- * the grant-create link, the head before it, the key's checkpoint signature from the press.
+ * the grant-create link, the head before it, the key's checkpoint signature from the press
+ * (its P-256 half: an opening is an older checkpoint, "B", 2026-10-10).
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -36,6 +37,7 @@ test('an opening whose words match the log is kept; changed words, a wrong budge
   const { deviceId, publicKey, records, opening } = await openedBudget();
   const kept = devices.checkOpenings({ deviceId, publicKey, records, openings: [opening] });
   assert.equal(kept.length, 1);
+  assert.equal('signaturePq' in kept[0], false, 'kept with its P-256 half only');
   assert.equal(kept[0].reason, 'TEST: push the work');
   assert.equal(kept[0].from, 'nitro16');
   for (const bad of [
@@ -44,6 +46,7 @@ test('an opening whose words match the log is kept; changed words, a wrong budge
     { ...opening, uses: opening.uses + 1 },
     { ...opening, grantId: opening.grantId + 7 },
     { ...opening, signature: '00'.repeat(64) },
+    { ...opening, signature: (opening.signature[0] === '0' ? '1' : '0') + opening.signature.slice(1) },
     null, 'nonsense',
   ]) assert.deepEqual(devices.checkOpenings({ deviceId, publicKey, records, openings: [bad] }), [], JSON.stringify(bad));
   const other = await openedBudget(p256.utils.randomSecretKey());

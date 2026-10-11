@@ -87,7 +87,25 @@ export function checkpointMessage({ deviceId, seq, head }: {
     head: any;
 }): Uint8Array<ArrayBuffer>;
 export function checkpointDigest(fields: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
-/** {deviceId, seq, head}, the key's 64-byte signature, the Edge public key -> boolean */
-export function verifyCheckpoint(fields: any, signature: any, publicKey: any): boolean;
+/**
+ * {deviceId, seq, head}, the key's two signatures and its two public keys -> boolean: true only
+ * when the 64-byte P-256 signature verifies under the P-256 key AND the ML-DSA-65 signature
+ * under the ML-DSA-65 key, over the same digest.
+ */
+export function verifyCheckpoint(fields: any, signature: any, publicKey: any, signaturePq: any, publicKeyPq: any): boolean;
+/** {deviceId, seq, head}, the 64-byte P-256 signature and the P-256 key -> boolean: the older-checkpoint check (never the newest). */
+export function verifyCheckpointP256(fields: any, signature: any, publicKey: any): boolean;
 /** What the key does - for the fake key and tests; a host never holds the Edge key. */
 export function signCheckpoint(fields: any, secretKey: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export namespace ML_DSA65 {
+    let PK: number;
+    let SIG: number;
+}
+/** an ML-DSA-65 signature over the message under the public key -> boolean (never throws) */
+export function mlDsaVerify(signature: any, message: any, publicKey: any): boolean;
+/** The ML-DSA-65 half, for the fake key and tests: keys from a 32-byte seed, as the firmware derives them. */
+export function mlDsaKeys(seed32: any): {
+    secretKey: import("@noble/post-quantum/utils.js", { with: { "resolution-mode": "import" } }).TRet<Uint8Array>;
+    publicKey: import("@noble/post-quantum/utils.js", { with: { "resolution-mode": "import" } }).TRet<Uint8Array>;
+};
+export function signCheckpointPq(fields: any, secretKeyPq: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
