@@ -86,7 +86,6 @@ function shapeEntry(e) {
     const x = strings(e[f], f);
     if (x !== undefined) out[f] = x;
   }
-  if (e.reconfirm === true) out.reconfirm = true;
   /*
    * The apps a login fills, each by its package AND its signing certificate's SHA-256 (spec
    * "Matching, the anti-phishing part"): an app that only took the package name gets nothing.

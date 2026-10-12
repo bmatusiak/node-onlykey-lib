@@ -40,6 +40,14 @@ export function parseOtpauth(uri: any): {
     account: string;
     issuer: any;
 };
+/**
+ * Steam's secret as people have it: the `shared_secret` of a Steam Desktop Authenticator .maFile
+ * (or an Aegis/andOTP export) is BASE64 of 20 bytes - 28 characters ending in one '='. Steam never
+ * shows a setup QR, so this is how a Steam account gets in (spec "Steam Guard"). That form becomes
+ * the base32 every entry keeps; anything else is read as base32, as the other codes are. Checked
+ * before shapeTotp upper-cases the text, which would garble base64.
+ */
+export function steamSecret(text: any): string;
 import { sha1 } from "@noble/hashes/legacy.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { sha512 } from "@noble/hashes/sha2.js";

@@ -15,6 +15,7 @@ const { hmac } = require('../../src/vendor/exports/@noble/hashes/hmac.js');
 const { sha1 } = require('../../src/vendor/exports/@noble/hashes/legacy.js');
 const { sha256, sha512 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { base32ToBytes } = require('../../src/device/encoders');
+const { fromBase64 } = require('../../src/bytes');
 
 const ALGOS = { SHA1: sha1, SHA256: sha256, SHA512: sha512 };
 /* Steam Guard's alphabet: 26 characters, no look-alikes */
@@ -63,11 +64,42 @@ function codeOf(t, nowMs = Date.now()) {
 
 const num = (v, d) => (v === undefined || v === null || v === '' ? d : Number(v));
 
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function bytesToBase32(bytes) {
+  let bits = 0;
+  let value = 0;
+  let out = '';
+  for (const b of bytes) {
+    value = (value << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += B32[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += B32[(value << (5 - bits)) & 31];
+  return out;
+}
+
+/**
+ * Steam's secret as people have it: the `shared_secret` of a Steam Desktop Authenticator .maFile
+ * (or an Aegis/andOTP export) is BASE64 of 20 bytes - 28 characters ending in one '='. Steam never
+ * shows a setup QR, so this is how a Steam account gets in (spec "Steam Guard"). That form becomes
+ * the base32 every entry keeps; anything else is read as base32, as the other codes are. Checked
+ * before shapeTotp upper-cases the text, which would garble base64.
+ */
+function steamSecret(text) {
+  const s = String(text || '').trim();
+  if (/^[A-Za-z0-9+/]{27}=$/.test(s)) return bytesToBase32(fromBase64(s));
+  return s;
+}
+
 /** A totp field as stored, checked. Unknown fields are dropped. */
 function shapeTotp(t) {
   if (!t || typeof t !== 'object') throw new TypeError('passwords: an authenticator is an object');
   const type = t.type === 'hotp' ? 'hotp' : 'totp';
-  const secret = String(t.secret || '').toUpperCase().replace(/[\s-]/g, '').replace(/=+$/, '');
+  const given = t.encoder === 'steam' ? steamSecret(t.secret) : t.secret;
+  const secret = String(given || '').toUpperCase().replace(/[\s-]/g, '').replace(/=+$/, '');
   if (!secret) throw new TypeError('passwords: an authenticator needs its setup key');
   let key;
   try {
@@ -126,4 +158,4 @@ function parseOtpauth(uri) {
   return { totp, account, issuer };
 }
 
-module.exports = { ALGOS, hotp, codeOf, shapeTotp, parseOtpauth };
+module.exports = { ALGOS, hotp, codeOf, shapeTotp, parseOtpauth, steamSecret };

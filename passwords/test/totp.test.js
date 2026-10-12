@@ -110,4 +110,14 @@ test('Steam: the same codes as steam-totp computes them (its algorithm, done her
   for (const t of [0, 59, 1_000_000_007, 1_700_000_000, 2_000_000_000]) {
     assert.equal(require('../src').totp.codeOf({ secret: b32, encoder: 'steam' }, t * 1000).code, reference(t), `at ${t}`);
   }
+  /* the same secret as a .maFile holds it: shared_secret = base64 of the 20 bytes */
+  const shared = raw.toString('base64');
+  assert.match(shared, /^[A-Za-z0-9+/]{27}=$/);
+  const { totp } = require('../src');
+  assert.equal(totp.shapeTotp({ secret: shared, encoder: 'steam' }).secret, b32, 'base64 shared_secret -> the base32 kept');
+  for (const t of [0, 1_700_000_000]) {
+    assert.equal(totp.codeOf(totp.shapeTotp({ secret: shared, encoder: 'steam' }), t * 1000).code, reference(t), `base64 at ${t}`);
+  }
+  /* only Steam reads base64: the same text for an ordinary code is refused, not guessed */
+  assert.throws(() => totp.shapeTotp({ secret: shared }), /not base32/);
 });
