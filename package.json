@@ -18,6 +18,7 @@
     "./keychain": "./keychain/src/index.js",
     "./edge": "./edge/src/index.js",
     "./passwords": "./passwords/src/index.js",
+    "./guestbook": "./guestbook/src/index.js",
     "./btpair": "./src/btpair/index.js",
     "./config": "./src/config/ini.js",
     "./device/press": "./src/device/press.js",
@@ -65,6 +66,7 @@
     "cli",
     "edge",
     "passwords",
+    "guestbook",
     "!cli/dev",
     "!edge/cli/dev",
     "scripts",
@@ -73,7 +75,7 @@
     "FINDING-*.md"
   ],
   "scripts": {
-    "test": "npm run types && node --test test/*.test.js keychain/test/*.test.js edge/test/*.test.js passwords/test/*.test.js",
+    "test": "npm run types && node --test test/*.test.js keychain/test/*.test.js edge/test/*.test.js passwords/test/*.test.js guestbook/test/*.test.js",
     "types": "node scripts/gen-types.js",
     "release-check": "node scripts/release-check.js"
   },

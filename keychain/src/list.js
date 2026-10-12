@@ -27,24 +27,10 @@ const VERSION = 1;
 const KINDS = ['slot', 'derived', 'external'];
 const TYPES = ['ed25519', 'x25519', 'p256', 'secp256k1', 'rsa', 'mlkem768', 'xwing', 'composite'];
 
-/* Field names a private key travels under, and text that only a private key carries. */
-const PRIVATE_FIELDS = ['secret', 'privateKey', 'private', 'scalar', 'seed', 'd', 'p', 'q', 'dp', 'dq', 'qi', 'blob'];
 /* the own-identities mark, under any spelling an entry might bring it */
 const OWN_FIELDS = ['yours', 'own', 'mine', 'ownIdentity'];
-const PRIVATE_TEXT = /PRIVATE KEY|AGE-SECRET-KEY-|-----BEGIN PGP PRIVATE/i;
-
-function refusePrivate(value, where) {
-  if (value && typeof value === 'object' && !(value instanceof Uint8Array)) {
-    for (const [k, v] of Object.entries(value)) {
-      if (PRIVATE_FIELDS.includes(k)) {
-        throw new Error(`the Key Chain list holds public data only - "${where}.${k}" looks like a private key`);
-      }
-      refusePrivate(v, `${where}.${k}`);
-    }
-  } else if (typeof value === 'string' && PRIVATE_TEXT.test(value)) {
-    throw new Error(`the Key Chain list holds public data only - "${where}" contains private key text`);
-  }
-}
+/* public only: the guard Guest Book shares (src/crypto/public-only.js), named "the Key Chain list" here */
+const { refusePrivate } = require('../../src/crypto/public-only');
 
 /** A stable id: the same key from the same place is the same entry. */
 function entryId(e) {
