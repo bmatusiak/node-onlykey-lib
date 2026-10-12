@@ -45,6 +45,15 @@
       "tree": "ef88a6f77244b09d62375b8942cb816e1749297620015a36c6f40009dba6101d",
       "files": 11,
       "why": "nacl.box - the OKCONNECT/legacy transit key agreement"
+    },
+    {
+      "name": "@scure/bip39",
+      "version": "2.4.0",
+      "integrity": "sha512-82dxFbZUYboyOf0AXiydsQrFQ5Q4h9mX+O2UkE91ROYmsc0BKMGZLwDmy96Jpa2+vrtoxomjUhy1RPIgH/r2nA==",
+      "tarball": "https://registry.npmjs.org/@scure/bip39/-/bip39-2.4.0.tgz",
+      "tree": "f1f1dd3f7dbed979db51e120547b7aefc6c3bbf5e4b5cd8c1aba2945d2902809",
+      "files": 26,
+      "why": "BIP39 English words + checksum - the Password Manager derived wallet phrases (needs @noble/hashes 2.4.0, vendored above)"
     }
   ]
 }

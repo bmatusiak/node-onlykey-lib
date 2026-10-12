@@ -14,11 +14,20 @@
  * Record layout (okplugin_key_chain.cpp okplugin_key_chain_primed), 69 bytes:
  *   [0] 1 version . [1] transport (0 vendor, 1 WebAuthn) . [2] opcode . [3] slot .
  *   [4] has_label . [5..36] subject = SHA-256 of the bytes to sign . [37..68] label or zeros
+ *
+ * A DERIVE'S PRESS (okplugin_key_chain_derive_wait): the same layout, opcode 0xE4 (OKCONNECT),
+ * slot 128, the label set, and a 70th byte - the confirmation the derive gate asks (field 30):
+ * 1 a button press, 0 the 3-digit code. The code is not in the record: it is computed from the
+ * subject exactly as the gate computes it (codeOf). Its end, event "press_end": [0] 1, [1] the
+ * test's result as a signed byte (1 entered, 0 timed out, -2 wrong button, -1 cancelled).
  */
 const { toHex } = require('../../src/bytes');
 const { labelHashOf, identityName } = require('./derive');
 
 const PRESS_BYTES = 69;
+/** the press record of a slot-128 derive: OKCONNECT */
+const DERIVE_OPCODE = 0xe4;
+const DERIVE_SLOT = 128;
 
 /** bytes (Uint8Array) or hex -> {transport, opcode, slot, subject, label} or null (not a v1 record) */
 function decodePress(rec) {
@@ -30,6 +39,8 @@ function decodePress(rec) {
     slot: b[3],
     subject: toHex(b.subarray(5, 37)),
     label: b[4] === 1 ? toHex(b.subarray(37, 69)) : null,
+    /* a derive's record says which confirmation it waits for; others do not */
+    mode: b.length > PRESS_BYTES ? (b[PRESS_BYTES] === 1 ? 'press' : 'code') : null,
   };
 }
 
@@ -44,4 +55,21 @@ function nameOfLabel(list, label) {
   return { listed: hits.length > 0, name: hits.map(identityName).find(Boolean) || null };
 }
 
-module.exports = { PRESS_BYTES, decodePress, nameOfLabel };
+/**
+ * The 3-digit code a derive's gate waits for, from its record's subject (hex): bytes 0, 15 and
+ * 31 of the hash, mod 6, plus one (a soft key is not a DUO, whose buttons are 3).
+ */
+function codeOf(subject, buttons = 6) {
+  const h = Uint8Array.from((String(subject).match(/../g) || []).map((x) => parseInt(x, 16)));
+  if (h.length !== 32) throw new TypeError('keychain: the subject is a 32-byte hash');
+  return [h[0] % buttons + 1, h[15] % buttons + 1, h[31] % buttons + 1];
+}
+
+/** "press_end": bytes or hex -> {result} (1 entered, 0 timed out, -2 wrong button, -1 cancelled) */
+function decodePressEnd(rec) {
+  const b = typeof rec === 'string' ? Uint8Array.from((rec.match(/../g) || []).map((x) => parseInt(x, 16))) : rec;
+  if (!b || b.length < 2 || b[0] !== 1) return null;
+  return { result: b[1] > 127 ? b[1] - 256 : b[1] };
+}
+
+module.exports = { PRESS_BYTES, DERIVE_OPCODE, DERIVE_SLOT, decodePress, decodePressEnd, codeOf, nameOfLabel };

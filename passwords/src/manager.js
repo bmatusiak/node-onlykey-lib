@@ -26,11 +26,16 @@ const vault = require('../../src/crypto/vault');
 const { createVaultStore } = require('../../src/crypto/vault_store');
 const { sha256 } = require('../../src/crypto/provider');
 const { toHex } = require('../../src/bytes');
+const { shapeRecipe } = require('./mnemonic');
+const { shapeTotp } = require('./totp');
 
 /** the derive label the manager key comes from (deviceVault adds `vault:`) */
 const LABEL = 'ok-rn-manager';
-/** the entry kinds this release writes; later ones (totp, mnemonic, derived) are refused until built */
-const KINDS = ['login', 'note', 'card'];
+/**
+ * the entry kinds this release writes; a later one (derived passwords) is refused until built.
+ * A mnemonic entry is a RECIPE (mnemonic.js): the phrase itself is never stored.
+ */
+const KINDS = ['login', 'note', 'card', 'mnemonic', 'totp'];
 const HISTORY = 5;
 const TEXT_MAX = 4096;
 
@@ -81,6 +86,17 @@ function shapeEntry(e) {
     if (x !== undefined) out[f] = x;
   }
   if (e.reconfirm === true) out.reconfirm = true;
+  if (out.kind === 'mnemonic') {
+    if (out.password !== undefined) throw new TypeError('passwords: a phrase entry stores no secret, only its recipe');
+    out.recipe = shapeRecipe(e.recipe);
+  } else if (e.recipe !== undefined) {
+    throw new TypeError('passwords: only a phrase entry has a recipe');
+  }
+  /* an authenticator: its own entry, or the code a login needs beside its password (GitHub) */
+  if (out.kind === 'totp' || e.totp !== undefined) {
+    if (out.kind !== 'totp' && out.kind !== 'login') throw new TypeError('passwords: a code belongs to a login or an authenticator entry');
+    out.totp = shapeTotp(e.totp ?? {});
+  }
   if (e.inner !== undefined) {
     const i = e.inner;
     if (!i || typeof i !== 'object' || !['entry-derive', 'entry-passphrase'].includes(i.seal) || typeof i.blob !== 'string') throw new TypeError('passwords: inner is {seal, blob, salt?}');

@@ -8,6 +8,7 @@ Every third-party library this project runs lives here, once:
 | `@noble/curves` | 2.4.0 | X25519/Ed25519, P-256; `abstract/fft` for ML-KEM |
 | `@noble/ciphers` | 2.4.0 | AES-GCM/CBC, ChaCha20-Poly1305, XSalsa20 |
 | `@noble/post-quantum` | 0.7.1 | ML-KEM-768 (the post-quantum half of X-Wing) |
+| `@scure/bip39` | 2.4.0 | BIP39 English words + checksum (the Password Manager's wallet phrases) |
 | `tweetnacl` | 1.0.3 | `nacl.box` - the OKCONNECT / legacy transit key agreement |
 | `openpgp` (PQC fork) | 6.0.0 fork | see `openpgp/VENDORED.md` - its own record |
 

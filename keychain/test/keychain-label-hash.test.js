@@ -41,7 +41,7 @@ test('decodePress: version, transport, opcode, slot, subject, label - from bytes
   const label = Array.from({ length: 32 }, (_, i) => 0xa0 + (i % 16));
   const rec = Uint8Array.from([1, 0, 0xed, 221, 1, ...subject, ...label]);
   const hexOf = (a) => Buffer.from(a).toString('hex');
-  const want = { transport: 'vendor', opcode: 0xed, slot: 221, subject: hexOf(subject), label: hexOf(label) };
+  const want = { transport: 'vendor', opcode: 0xed, slot: 221, subject: hexOf(subject), label: hexOf(label), mode: null };
   assert.deepEqual(decodePress(rec), want);
   assert.deepEqual(decodePress(hexOf(rec)), want);
   assert.equal(decodePress(Uint8Array.from([1, 1, 0xf0, 2, 0, ...subject, ...new Array(32).fill(0)])).label, null);

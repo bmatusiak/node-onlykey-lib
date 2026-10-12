@@ -12,4 +12,6 @@ module.exports = {
   manager: require('./manager'),
   inner: require('./inner'),
   legacy: require('./legacy'),
+  mnemonic: require('./mnemonic'),
+  totp: require('./totp'),
 };

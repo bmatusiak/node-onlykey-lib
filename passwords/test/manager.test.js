@@ -101,7 +101,7 @@ test('export / import: the envelope stays sealed; another key imports nothing fr
 test('only this release\'s kinds are written; a locked manager does nothing', async () => {
   const p = phone();
   const a = await m.openManager({ store: p.storeFor(PUB_A), key: KEY_A, randomBytes });
-  await assert.rejects(a.put({ kind: 'totp', title: 'Later' }), /kind must be one of login, note, card/);
+  await assert.rejects(a.put({ kind: 'derived', title: 'Later' }), /kind must be one of login, note, card/);
   a.lock();
   assert.throws(() => a.list(), /locked/);
 });

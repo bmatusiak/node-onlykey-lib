@@ -819,7 +819,16 @@ function setup(imports, register, config) {
         attempts: DERIVE_ATTEMPTS,
       });
       try {
-        return await deriveOnce(opts);
+        /*
+         * IN THE LANE, as a sign or a decrypt is (deviceOperation): one attempt is one
+         * conversation - the CTAPHID INIT, the request's packets, the press, the answer. Outside
+         * it, another plugin's frames (Edge's OKEDGE reads, on the vendor interface) landed
+         * between a derive's first packet and its continuations; the firmware parses both
+         * interfaces through one CTAPHID buffer, dropped the continuations as "random cont
+         * packet", and the derive was never answered (the Pixel soft key, 2026-10-11).
+         * Per attempt, not around the loop: a retry lets whatever waited go first.
+         */
+        return await inLane(transport, () => deriveOnce(opts));
       } catch (err) {
         last = err;
         if (!/did not answer this derive/.test(String(err && err.message))) throw err;

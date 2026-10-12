@@ -895,6 +895,36 @@ test('with no ctap supplied, a derive still builds and inits its own CtapHid', a
   await app.destroy();
 });
 
+test('a derive waits for the lane: nothing of it is written while another conversation holds the key', async () => {
+  /*
+   * MEASURED on the Pixel soft key, 2026-10-11: the Password Manager's derive went out while the
+   * Edge background sync was writing its OKEDGE frames, the firmware's one CTAPHID buffer was
+   * reset between the derive's first packet and its continuations ("ignoring random cont
+   * packet"), and the derive was never answered (60 s). A derive is one conversation with the key,
+   * as a sign is, so it runs in the lane (src/transport/lane.js).
+   */
+  const { inLane } = require('../src/transport/lane');
+  const transport = fakeCtapHid({
+    onCbor: (cmd, params) => (cmd === CTAP2_CMD.GET_ASSERTION
+      ? deriveAnswer(requestIn(params)) : undefined),
+  });
+  const app = await startWith(
+    [hostPlugin, transportPlugin(transport), sessionPlugin, devicePlugin, okcryptoPlugin],
+    {},
+  );
+  let release;
+  const held = inLane(transport, () => new Promise((r) => { release = r; }));
+  const before = transport.writes.length;
+  const derived = app.services.okcrypto.derivePublicKey('example.com', { timeoutMs: 2000 });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(transport.writes.length, before, 'the derive wrote while the lane was held');
+  release();
+  await held;
+  assert.deepEqual(Uint8Array.from((await derived).publicKey), DERIVED);
+  assert.ok(transport.writes.length > before);
+  await app.destroy();
+});
+
 test('a supplied ctap carries the derive, and CTAPHID is never touched', async () => {
   const pipe = fakeFirmware();
   const ctap = fakeCtap();
