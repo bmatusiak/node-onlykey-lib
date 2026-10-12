@@ -488,6 +488,20 @@ test('the key is derived once and reused, because deriving costs a touch', async
   await app.destroy();
 });
 
+test('status() names the cached key and its time left, without counting as a use', async () => {
+  const app = await start(FULL());
+  const okcrypto = app.services.okcrypto;
+  stubDerives(okcrypto);
+  assert.deepEqual(okcrypto.deviceVault.status(), []);
+  await okcrypto.deviceVault.seal('github.com', 'hunter2');
+  const [s] = okcrypto.deviceVault.status();
+  assert.equal(s.serviceId, 'github.com');
+  assert.equal(s.policy, 'session:30m');
+  assert.equal(s.sliding, true);
+  assert.ok(s.remainingMs > 29 * 60000 && s.remainingMs <= 30 * 60000);
+  await app.destroy();
+});
+
 test("a policy of 'always' caches nothing", async () => {
   /*
    * The whole point of that policy: every use touches the device. A cache that

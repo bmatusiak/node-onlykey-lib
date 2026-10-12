@@ -62,6 +62,10 @@ const PACKAGES = [
     why: 'nacl.box - the OKCONNECT/legacy transit key agreement'},
   {name: '@scure/bip39', version: '2.4.0',
     why: 'BIP39 English words + checksum - the Password Manager derived wallet phrases (needs @noble/hashes 2.4.0, vendored above)'},
+  {name: 'tldts-core', version: '7.4.15',
+    why: 'the public suffix list engine tldts runs on'},
+  {name: 'tldts', version: '7.4.15',
+    why: 'registrable domain (eTLD+1) - the Password Manager Autofill matches a site by it'},
 ];
 
 /** Every file under dir, as sorted POSIX paths relative to it. */

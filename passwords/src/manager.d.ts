@@ -1,8 +1,8 @@
 /** the derive label the manager key comes from (deviceVault adds `vault:`) */
 export const LABEL: "ok-rn-manager";
 /**
- * the entry kinds this release writes; a later one (derived passwords) is refused until built.
- * A mnemonic entry is a RECIPE (mnemonic.js): the phrase itself is never stored.
+ * the entry kinds this release writes. A mnemonic or a derived entry is a RECIPE (mnemonic.js,
+ * derived.js): the phrase or the password itself is never stored.
  */
 export const KINDS: string[];
 /** The store id: SHA-256 of the manager label's derive public key, hex. Public by design. */

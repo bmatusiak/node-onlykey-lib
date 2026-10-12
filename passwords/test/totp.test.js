@@ -82,3 +82,32 @@ test('in the store: an authenticator entry, or a code attached to a login - seal
   await assert.rejects(a.put({ kind: 'totp', title: 'no key' }), /needs its setup key/);
   await assert.rejects(a.put({ kind: 'note', title: 'n', totp: { secret: SEED_B32 } }), /login or an authenticator/);
 });
+
+test('Steam: the same codes as steam-totp computes them (its algorithm, done here with node:crypto)', () => {
+  /* steam-totp 2.1.2 generateAuthCode: HMAC-SHA1(secret, floor(t/30) as 8 bytes), dynamic
+     truncation, then 5 characters of 23456789BCDFGHJKMNPQRTVWXY, dividing by 26 as a float */
+  const raw = nodeCrypto.createHash('sha1').update('steam-test-secret').digest();
+  const reference = (t) => {
+    const buf = Buffer.alloc(8);
+    buf.writeUInt32BE(0, 0);
+    buf.writeUInt32BE(Math.floor(t / 30), 4);
+    const h = nodeCrypto.createHmac('sha1', raw).update(buf).digest();
+    const s = h[19] & 0x0f;
+    let full = h.readUInt32BE(s) & 0x7fffffff;
+    let code = '';
+    for (let i = 0; i < 5; i += 1) {
+      code += '23456789BCDFGHJKMNPQRTVWXY'.charAt(full % 26);
+      full /= 26;
+    }
+    return code;
+  };
+  const b32 = (() => {
+    const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let bits = '';
+    for (const byte of raw) bits += byte.toString(2).padStart(8, '0');
+    return bits.match(/.{1,5}/g).map((g) => A[parseInt(g.padEnd(5, '0'), 2)]).join('');
+  })();
+  for (const t of [0, 59, 1_000_000_007, 1_700_000_000, 2_000_000_000]) {
+    assert.equal(require('../src').totp.codeOf({ secret: b32, encoder: 'steam' }, t * 1000).code, reference(t), `at ${t}`);
+  }
+});

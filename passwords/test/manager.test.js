@@ -101,7 +101,7 @@ test('export / import: the envelope stays sealed; another key imports nothing fr
 test('only this release\'s kinds are written; a locked manager does nothing', async () => {
   const p = phone();
   const a = await m.openManager({ store: p.storeFor(PUB_A), key: KEY_A, randomBytes });
-  await assert.rejects(a.put({ kind: 'derived', title: 'Later' }), /kind must be one of login, note, card/);
+  await assert.rejects(a.put({ kind: 'wifi', title: 'Later' }), /kind must be one of login, note, card/);
   a.lock();
   assert.throws(() => a.list(), /locked/);
 });
@@ -110,7 +110,11 @@ test('a per-entry key: derived, or a passphrase with the manager key - neither a
   const p = phone();
   const a = await m.openManager({ store: p.storeFor(PUB_A), key: KEY_A, randomBytes });
   const entryKey = bytes(32, 9);
-  const sealed = inner.sealInner({ kind: 'login', title: 'Bank', username: 'u', password: 'secret' }, entryKey, randomBytes, { seal: 'entry-derive' });
+  const ref = inner.newRef(randomBytes);
+  assert.equal(inner.entryLabel(ref), `entry:${ref}`);
+  assert.throws(() => inner.sealInner({ kind: 'login', title: 'B', password: 'x' }, entryKey, randomBytes, { seal: 'entry-derive' }), /ref/);
+  const sealed = inner.sealInner({ kind: 'login', title: 'Bank', username: 'u', password: 'secret' }, entryKey, randomBytes, { seal: 'entry-derive', ref });
+  assert.equal(sealed.inner.ref, ref);
   assert.equal(sealed.password, undefined);
   const saved = await a.put(sealed);
   const again = (await m.openManager({ store: p.storeFor(PUB_A), key: KEY_A, randomBytes })).get(saved.id);
@@ -137,4 +141,45 @@ test('the old vault comes in as login entries; one that does not open is counted
   assert.equal(r.imported, 1);
   assert.deepEqual(r.failed, [{ serviceId: 'old-firmware.org', reason: 'tag mismatch' }]);
   assert.deepEqual(a.list().map((x) => [x.kind, x.title, x.password]), [['login', 'example.com', 'pw-example.com']]);
+});
+
+test('sealed again, an authenticator setup key goes inside too; the entry still saves', async () => {
+  const p = phone();
+  const a = await m.openManager({ store: p.storeFor(PUB_A), key: KEY_A, randomBytes });
+  const k = bytes(32, 5);
+  const sealed = inner.sealInner({ kind: 'totp', title: 'GitHub 2FA', totp: { secret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ' } }, k, randomBytes, { seal: 'entry-derive', ref: inner.newRef(randomBytes) });
+  assert.equal(sealed.totp, undefined);
+  const saved = await a.put(sealed);
+  assert.equal(saved.totp, undefined);
+  assert.equal(inner.openInner(saved, k).totp.secret, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+});
+
+test('a passphrase key from the host PBKDF2 (OkSSL in ok-rn) equals the lib one', async () => {
+  const salt = bytes(16, 3);
+  const host = async (pw, sl, rounds, len) => new Uint8Array(nodeCrypto.pbkdf2Sync(Buffer.from(pw), Buffer.from(sl), rounds, len, 'sha256'));
+  const viaHost = await inner.passphraseKey({ passphrase: 'horse battery', salt, managerKey: KEY_A, pbkdf2: host });
+  const viaLib = await inner.passphraseKey({ passphrase: 'horse battery', salt, managerKey: KEY_A });
+  assert.deepEqual(viaHost, viaLib);
+});
+
+test('sealing a plain entry again leaves no old password outside the seal', async () => {
+  const p = phone();
+  const a = await m.openManager({ store: p.storeFor(PUB_A), key: KEY_A, randomBytes });
+  const e = await a.put({ kind: 'login', title: 'Bank', password: 'old-secret' });
+  const k = bytes(32, 7);
+  const sealed = inner.sealInner({ ...e, password: 'new-secret' }, k, randomBytes, { seal: 'entry-derive', ref: inner.newRef(randomBytes) });
+  const saved = await a.put(sealed);
+  assert.equal(saved.history, undefined);
+  assert.equal(JSON.stringify(saved).includes('old-secret'), false);
+  assert.equal(inner.openInner(saved, k).password, 'new-secret');
+});
+
+test('an app a login fills: its package and its signing certificate, both checked', async () => {
+  const p = phone();
+  const a = await m.openManager({ store: p.storeFor(PUB_A), key: KEY_A, randomBytes });
+  const cert = 'ab'.repeat(32);
+  const e = await a.put({ kind: 'login', title: 'Bank app', password: 'p', androidApps: [{ package: 'com.example.bank', cert: cert.toUpperCase() }] });
+  assert.deepEqual(e.androidApps, [{ package: 'com.example.bank', cert }]);
+  await assert.rejects(a.put({ kind: 'login', title: 'x', androidApps: [{ package: 'not a package', cert }] }), /package name/);
+  await assert.rejects(a.put({ kind: 'login', title: 'x', androidApps: [{ package: 'com.example.bank', cert: 'abc' }] }), /SHA-256/);
 });

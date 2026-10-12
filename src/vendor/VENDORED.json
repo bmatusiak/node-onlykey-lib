@@ -54,6 +54,24 @@
       "tree": "f1f1dd3f7dbed979db51e120547b7aefc6c3bbf5e4b5cd8c1aba2945d2902809",
       "files": 26,
       "why": "BIP39 English words + checksum - the Password Manager derived wallet phrases (needs @noble/hashes 2.4.0, vendored above)"
+    },
+    {
+      "name": "tldts-core",
+      "version": "7.4.15",
+      "integrity": "sha512-ERuv0p98XgSzmlSLJr8vDNxX+uATGInlN97V3R+JpYWaSqn5IG3ewWgCwczk4bkOpgth/o8Nt5FOi4B4w0n/1A==",
+      "tarball": "https://registry.npmjs.org/tldts-core/-/tldts-core-7.4.15.tgz",
+      "tree": "504968fa57e9084dd27ea08d0891dfca6b906e62715f91b67dc9bdca876b6a7e",
+      "files": 77,
+      "why": "the public suffix list engine tldts runs on"
+    },
+    {
+      "name": "tldts",
+      "version": "7.4.15",
+      "integrity": "sha512-SJVBeHOxDbNoq14CvpAoA2mLEWdbldGK8nR+yumpjY5nrlZxOflcA7p1Qj1gbTGmbu9DY9qLj/bENSWhBzjxRQ==",
+      "tarball": "https://registry.npmjs.org/tldts/-/tldts-7.4.15.tgz",
+      "tree": "2af7b3719c671ff4fb1802d585c5d16d94af823cb03963223b53b421fa4b258b",
+      "files": 30,
+      "why": "registrable domain (eTLD+1) - the Password Manager Autofill matches a site by it"
     }
   ]
 }

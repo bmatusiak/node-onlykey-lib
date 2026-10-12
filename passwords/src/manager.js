@@ -27,15 +27,16 @@ const { createVaultStore } = require('../../src/crypto/vault_store');
 const { sha256 } = require('../../src/crypto/provider');
 const { toHex } = require('../../src/bytes');
 const { shapeRecipe } = require('./mnemonic');
+const { shapeRecipe: shapePasswordRecipe } = require('./derived');
 const { shapeTotp } = require('./totp');
 
 /** the derive label the manager key comes from (deviceVault adds `vault:`) */
 const LABEL = 'ok-rn-manager';
 /**
- * the entry kinds this release writes; a later one (derived passwords) is refused until built.
- * A mnemonic entry is a RECIPE (mnemonic.js): the phrase itself is never stored.
+ * the entry kinds this release writes. A mnemonic or a derived entry is a RECIPE (mnemonic.js,
+ * derived.js): the phrase or the password itself is never stored.
  */
-const KINDS = ['login', 'note', 'card', 'mnemonic', 'totp'];
+const KINDS = ['login', 'note', 'card', 'mnemonic', 'totp', 'derived'];
 const HISTORY = 5;
 const TEXT_MAX = 4096;
 
@@ -86,21 +87,42 @@ function shapeEntry(e) {
     if (x !== undefined) out[f] = x;
   }
   if (e.reconfirm === true) out.reconfirm = true;
-  if (out.kind === 'mnemonic') {
-    if (out.password !== undefined) throw new TypeError('passwords: a phrase entry stores no secret, only its recipe');
-    out.recipe = shapeRecipe(e.recipe);
+  /*
+   * The apps a login fills, each by its package AND its signing certificate's SHA-256 (spec
+   * "Matching, the anti-phishing part"): an app that only took the package name gets nothing.
+   */
+  if (e.androidApps !== undefined) {
+    if (!Array.isArray(e.androidApps) || e.androidApps.length > 16) throw new TypeError('passwords: androidApps is a list of at most 16');
+    out.androidApps = e.androidApps.map((a, i) => {
+      const pkg = str(a && a.package, `androidApps[${i}].package`, { required: true });
+      const cert = String(a && a.cert).toLowerCase();
+      if (!/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/i.test(pkg)) throw new TypeError(`passwords: androidApps[${i}].package is not a package name`);
+      if (!/^[0-9a-f]{64}$/.test(cert)) throw new TypeError(`passwords: androidApps[${i}].cert is a SHA-256, 64 hex`);
+      return { package: pkg, cert };
+    });
+  }
+  if (out.kind === 'mnemonic' || out.kind === 'derived') {
+    if (out.password !== undefined) throw new TypeError('passwords: a phrase or derived entry stores no secret, only its recipe');
+    out.recipe = out.kind === 'mnemonic' ? shapeRecipe(e.recipe) : shapePasswordRecipe(e.recipe);
   } else if (e.recipe !== undefined) {
-    throw new TypeError('passwords: only a phrase entry has a recipe');
+    throw new TypeError('passwords: only a phrase or a derived entry has a recipe');
   }
   /* an authenticator: its own entry, or the code a login needs beside its password (GitHub) */
-  if (out.kind === 'totp' || e.totp !== undefined) {
+  /* (sealed again with its own key, its setup key is inside `inner`, checked when opened) */
+  const codeSealed = e.inner !== undefined && e.totp === undefined;
+  if ((out.kind === 'totp' && !codeSealed) || e.totp !== undefined) {
     if (out.kind !== 'totp' && out.kind !== 'login') throw new TypeError('passwords: a code belongs to a login or an authenticator entry');
     out.totp = shapeTotp(e.totp ?? {});
   }
   if (e.inner !== undefined) {
     const i = e.inner;
     if (!i || typeof i !== 'object' || !['entry-derive', 'entry-passphrase'].includes(i.seal) || typeof i.blob !== 'string') throw new TypeError('passwords: inner is {seal, blob, salt?}');
-    out.inner = { seal: i.seal, blob: i.blob, ...(typeof i.salt === 'string' ? { salt: i.salt } : {}) };
+    out.inner = {
+      seal: i.seal,
+      blob: i.blob,
+      ...(typeof i.salt === 'string' ? { salt: i.salt } : {}),
+      ...(typeof i.ref === 'string' ? { ref: i.ref } : {}),
+    };
   }
   return out;
 }
@@ -156,8 +178,14 @@ async function openManager({ store, key, randomBytes, now = () => new Date() }) 
       const was = input.id ? entries.get(input.id) : null;
       if (input.id && !was) throw new Error('passwords: no entry with that id');
       const id = was ? was.id : toHex(randomBytes(16));
-      const history = was ? [...(was.history || [])] : [];
-      if (was && was.password && shaped.password !== was.password) history.unshift({ password: was.password, changedAt: at });
+      /*
+       * A changed password goes to the history - unless the entry is sealed again (inner): then its
+       * history lives inside that seal (the caller keeps it there), and the plain one is dropped.
+       * Otherwise sealing a plain entry would leave its old password outside, in the clear.
+       */
+      const sealedNow = !!shaped.inner;
+      const history = was && !sealedNow ? [...(was.history || [])] : [];
+      if (!sealedNow && was && was.password && shaped.password !== was.password) history.unshift({ password: was.password, changedAt: at });
       const e = { ...shaped, id, createdAt: was ? was.createdAt : at, updatedAt: at, ...(history.length ? { history: history.slice(0, HISTORY) } : {}) };
       return sealAndKeep(e);
     },

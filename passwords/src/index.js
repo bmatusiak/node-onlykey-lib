@@ -14,4 +14,5 @@ module.exports = {
   legacy: require('./legacy'),
   mnemonic: require('./mnemonic'),
   totp: require('./totp'),
+  derived: require('./derived'),
 };

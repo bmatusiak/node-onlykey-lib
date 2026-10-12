@@ -30,6 +30,7 @@
     "./vendor/openpgp": "./src/vendor/openpgp/openpgp.js",
     "./vendor/@noble/*": "./src/vendor/exports/@noble/*",
     "./vendor/@scure/*": "./src/vendor/exports/@scure/*",
+    "./vendor/tldts": "./src/vendor/exports/tldts.js",
     "./vendor/tweetnacl": "./src/vendor/exports/tweetnacl.js",
     "./plugins/host": "./plugins/host/index.js",
     "./plugins/session": "./plugins/session/index.js",

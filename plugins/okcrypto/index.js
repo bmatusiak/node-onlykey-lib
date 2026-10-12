@@ -2159,6 +2159,13 @@ function setup(imports, register, config) {
       isUnlocked: (label) => vaultKeys.get(label) !== null,
 
       /**
+       * What is cached and for how much longer - [{serviceId, policy, sliding, remainingMs,
+       * remaining}] (src/crypto/vault.js status). READ-ONLY: unlike isUnlocked, it does not count
+       * as a use, so a screen can show the time left without keeping a sliding session open.
+       */
+      status: () => vaultKeys.status(),
+
+      /**
        * The vault key for a label, from the cache or from the device.
        *
        * Touching the device is the expensive part - it needs a button - so a

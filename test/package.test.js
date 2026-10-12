@@ -264,9 +264,12 @@ test('nothing under src/ requires a Node built-in, so it bundles for a browser',
    * instead: tweetnacl reaches for Node's `crypto` only when there is no global
    * crypto.getRandomValues - the same file this library used from npm before it
    * was vendored. A version bump that adds a built-in fails here, where it can
-   * be looked at, rather than in a consumer's bundler.
+   * be looked at, rather than in a consumer's bundler. tldts ships its command
+   * line tool (bin/cli.js, `readline`) in the tarball; nothing requires it -
+   * src/vendor/exports/tldts.js loads dist/cjs/index.js - so a bundler never reaches it.
    */
   assert.deepEqual(vendorHits.sort(), [
+    'src/vendor/node_modules/tldts/bin/cli.js: readline',
     'src/vendor/node_modules/tweetnacl/nacl-fast.js: crypto',
     'src/vendor/node_modules/tweetnacl/nacl-fast.min.js: crypto',
     'src/vendor/node_modules/tweetnacl/nacl.js: crypto',

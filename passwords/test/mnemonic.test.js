@@ -89,6 +89,6 @@ test('a phrase entry stores only its recipe: no words, no secret', async () => {
   assert.equal(e.password, undefined);
   const plain = JSON.stringify(e);
   for (const w of new Set(words)) assert.equal(plain.includes(` ${w} `), false);
-  await assert.rejects(a.put({ kind: 'mnemonic', title: 'x', recipe, password: words.join(' ') }), /stores no secret/);
-  await assert.rejects(a.put({ kind: 'login', title: 'x', recipe }), /only a phrase entry/);
+  await assert.rejects(a.put({ kind: 'mnemonic', title: 'x', recipe, password: words.join(' ') }), /stores no secret, only its recipe/);
+  await assert.rejects(a.put({ kind: 'login', title: 'x', recipe }), /only a phrase or a derived entry/);
 });

@@ -9,6 +9,7 @@ Every third-party library this project runs lives here, once:
 | `@noble/ciphers` | 2.4.0 | AES-GCM/CBC, ChaCha20-Poly1305, XSalsa20 |
 | `@noble/post-quantum` | 0.7.1 | ML-KEM-768 (the post-quantum half of X-Wing) |
 | `@scure/bip39` | 2.4.0 | BIP39 English words + checksum (the Password Manager's wallet phrases) |
+| `tldts` + `tldts-core` | 7.4.15 | registrable domain (eTLD+1), the public suffix list - Autofill site matching |
 | `tweetnacl` | 1.0.3 | `nacl.box` - the OKCONNECT / legacy transit key agreement |
 | `openpgp` (PQC fork) | 6.0.0 fork | see `openpgp/VENDORED.md` - its own record |
 
