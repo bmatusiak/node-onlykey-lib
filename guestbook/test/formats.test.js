@@ -41,6 +41,20 @@ test('OpenPGP: a public block is found, with its primary fingerprint and user id
   assert.match(k.text, /BEGIN PGP PUBLIC KEY BLOCK/);
 });
 
+test('OpenPGP: a composite post-quantum certificate (Key Chain\'s quantum-safe identity) is found like any other', async () => {
+  /* the lib's core maker, not keychain/composite: Guest Book must pass with Key Chain left out */
+  const { generateCompositeKey } = require('../../src/crypto/composite_pgp');
+  const made = await generateCompositeKey(openpgp, { userId: { name: 'Bob', email: 'bob@example.com' } });
+  made.blob.fill(0);
+  const { found, errors } = await formats.detectAll(made.armoredPublicKey, { openpgp });
+  assert.deepEqual(errors, []);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].format, 'openpgp');
+  const key = await openpgp.readKey({ armoredKey: made.armoredPublicKey });
+  assert.equal(found[0].fingerprint, key.getFingerprint().toUpperCase());
+  assert.equal(found[0].label, 'Bob <bob@example.com>');
+});
+
 test('OpenSSH: ed25519 and nistp256 lines, fingerprinted as ssh-keygen -l does (SHA256 of the blob)', async () => {
   const edPub = ed25519.getPublicKey(seed(32, 1));
   const edLine = sshPub.publicKeyLine('ed25519', edPub, 'alice@laptop');

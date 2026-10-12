@@ -10,9 +10,12 @@
  *   age           X25519 (classic "age1..."), X-Wing ("age1onlykey..." - the
  *                 post-quantum recipient the OnlyKey apps use)
  *
- * A PGP certificate is not here: it needs self-signatures, which only the key
- * holder can make (the device, through crypto.pgpCert), so it is built by the
- * caller that can ask for them and kept in the Key Chain list.
+ * A PGP certificate is not BUILT here: it needs self-signatures, which only the
+ * key holder can make (the device, through crypto.pgpCert), so it is built by
+ * the caller that can ask for them and kept in the Key Chain list. A composite
+ * key is the exception that comes back here: its kept certificate (`pgp`) is
+ * its ONLY form - there are no raw public key bytes, so no hex, base64, ssh
+ * or age.
  */
 
 const { toHex, toBase64 } = require('../../src/bytes');
@@ -20,11 +23,12 @@ const ssh = require('../../src/crypto/ssh-pub');
 const pqc = require('../../src/crypto/age_pqc');
 
 /**
- * @param {{type: string, publicKey: Uint8Array, comment?: string}} key
- *   type: ed25519 | x25519 | p256 | secp256k1 | rsa | mlkem768 | xwing
- * @returns {{hex: string, base64: string, ssh?: string, age?: string}}
+ * @param {{type: string, publicKey?: Uint8Array, comment?: string, pgp?: string}} key
+ *   type: ed25519 | x25519 | p256 | secp256k1 | rsa | mlkem768 | xwing | composite
+ * @returns {{hex?: string, base64?: string, ssh?: string, age?: string, pgp?: string}}
  */
-function forKey({ type, publicKey, comment }) {
+function forKey({ type, publicKey, comment, pgp }) {
+  if (type === 'composite') return pgp ? { pgp } : {};
   const out = { hex: toHex(publicKey), base64: toBase64(publicKey) };
   if (type === 'ed25519') out.ssh = ssh.publicKeyLine('ed25519', publicKey, comment);
   else if (type === 'p256') out.ssh = ssh.publicKeyLine('nist256p1', publicKey, comment);

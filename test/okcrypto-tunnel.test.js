@@ -433,3 +433,34 @@ test('an all-zero shared secret from the device is refused, not returned as a ke
   );
   await app.destroy();
 });
+
+test('deviceAge.decapsulate: [label hash | ct] goes to the derivation slot, the 32-byte secret comes back', async () => {
+  /*
+   * The step inside every age decrypt, exposed for handshakes: an OnlyKey
+   * proves it holds a label's X-Wing key by opening what was sealed to it.
+   */
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
+  const app = await start(device);
+  const label = 'okrn-contact:v1';
+  const ct = Uint8Array.from({ length: 1120 }, (_, i) => (i * 13 + 1) & 0xff);
+
+  const ss = await app.services.okcrypto.deviceAge.decapsulate(label, ct, { ...FAST, confirm: pressing(device) });
+  const sent = new Uint8Array(32 + 1120);
+  sent.set(okconnect.derivationHash(label), 0);
+  sent.set(ct, 32);
+  assert.deepEqual(Uint8Array.from(ss), resultFor(MSG.OKDECRYPT, sent));
+  assert.ok(device.requests.some((r) => r.cmd === MSG.OKDECRYPT && r.opt1 === 128),
+    'the derivation slot was not asked');
+  await app.destroy();
+});
+
+test('deviceAge.decapsulate refuses a ciphertext that is not 1120 bytes, before the device is asked', async () => {
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
+  const app = await start(device);
+  await assert.rejects(
+    app.services.okcrypto.deviceAge.decapsulate('okrn-contact:v1', new Uint8Array(32), FAST),
+    /X-Wing ciphertext is 1120 bytes; got 32/,
+  );
+  assert.equal(device.requests.length, 0);
+  await app.destroy();
+});

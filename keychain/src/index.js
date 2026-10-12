@@ -17,4 +17,5 @@ module.exports = {
   list: require('./list'),
   cert: require('./cert'),
   pgpImport: require('./pgp-import'),
+  composite: require('./composite'),
 };

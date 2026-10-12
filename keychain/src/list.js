@@ -32,10 +32,18 @@ const OWN_FIELDS = ['yours', 'own', 'mine', 'ownIdentity'];
 /* public only: the guard Guest Book shares (src/crypto/public-only.js), named "the Key Chain list" here */
 const { refusePrivate } = require('../../src/crypto/public-only');
 
-/** A stable id: the same key from the same place is the same entry. */
+/**
+ * A stable id: the same key from the same place is the same entry.
+ *
+ * A composite key has no raw public key to hash, so its PGP fingerprint
+ * stands in: otherwise a new composite key made in the same slot would carry
+ * the old one's id, and merge would keep the OLD certificate - the one
+ * nobody can decrypt to any more.
+ */
 function entryId(e) {
   const where = e.kind === 'slot' ? `slot${e.slot}` : e.kind === 'derived' ? `${e.scheme}:${e.label}` : (e.name || '');
-  return `${e.kind}:${where}:${e.type}:${toHex(sha256(e.publicKey)).slice(0, 16)}`;
+  const material = e.publicKey.length || !e.pgpFingerprint ? e.publicKey : new TextEncoder().encode(e.pgpFingerprint);
+  return `${e.kind}:${where}:${e.type}:${toHex(sha256(material)).slice(0, 16)}`;
 }
 
 /**
@@ -65,8 +73,8 @@ function createEntry(fields) {
   if (e.revocation !== undefined && (typeof e.revocation !== 'string' || !/BEGIN PGP PUBLIC KEY BLOCK/.test(e.revocation))) {
     throw new Error('an entry revocation is an armored PUBLIC key block');
   }
-  if (!e.artifacts && e.publicKey.length) {
-    try { e.artifacts = artifacts.forKey({ type: e.type, publicKey: e.publicKey }); } catch (_) { e.artifacts = {}; }
+  if (!e.artifacts && (e.publicKey.length || e.pgp)) {
+    try { e.artifacts = artifacts.forKey({ type: e.type, publicKey: e.publicKey, pgp: e.pgp }); } catch (_) { e.artifacts = {}; }
   }
   e.created = e.created || new Date().toISOString();
   e.id = entryId(e);

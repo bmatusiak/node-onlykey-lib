@@ -14,3 +14,4 @@ export declare let press: typeof import("./press");
 export declare let list: typeof import("./list");
 export declare let cert: typeof import("./cert");
 export declare let pgpImport: typeof import("./pgp-import");
+export declare let composite: typeof import("./composite");

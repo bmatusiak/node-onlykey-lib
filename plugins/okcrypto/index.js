@@ -1904,76 +1904,105 @@ function setup(imports, register, config) {
       /**
        * Decrypt with the device.
        *
-       * The stanza carries the whole 1120-byte X-Wing ciphertext, but only
-       * ct_X - its last 32 bytes - goes to the device. ct_M never leaves the
-       * host: the ML-KEM half is decapsulated here from the seed, which is
-       * what makes this one round trip rather than a 1120-byte upload.
+       * Each stanza carries a 1120-byte X-Wing ciphertext, and decapsulate()
+       * below opens it: from 3.0.5 the whole ciphertext goes to the device,
+       * before that only ct_X did and the ML-KEM half was opened here.
        */
       async decrypt(fileBytes, label, opts = {}) {
         /* Asked, not read: unknown would have meant the split path (G-6). */
         const custody = await xwingCustody(opts);
         const id = await okcrypto.deviceAge.identity(label, opts);
 
-        return age.decryptAgeFile(fileBytes, async (ciphertext) => {
-          /*
-           * FROM 3.0.5 THIS IS NOT A DERIVE AT ALL. The firmware says so at the
-           * branch that used to serve it (fido2/ok_extension.cpp):
-           *
-           *   "DERIVE_SHAREDSEC is NO LONGER served here. Decapsulation now
-           *    needs the whole 1120-byte X-Wing ciphertext on the device (ct_M
-           *    included), which does not fit this single-shot client_handle
-           *    path. The browser sends it as a chunked OKDECRYPT to slot
-           *    RESERVED_KEY_WEB_AGENT_DERIVATION carrying [ label32 | ct(1120) ]"
-           *
-           * and answers a derive that asks anyway with "Error use OKDECRYPT for
-           * derived X-Wing decapsulation" - over the VENDOR interface, while the
-           * FIDO answer stays empty. So a client that keeps deriving sees only a
-           * reply it cannot open, never the sentence explaining why.
-           *
-           * The device does the whole decapsulation now, both halves, and
-           * returns the finished 32-byte X-Wing secret. ct_M no longer stays on
-           * the host, which is what makes this a 1152-byte upload rather than
-           * one round trip - the cost of the device holding sk_M rather than
-           * handing out a seed that yields it.
-           */
-          if (custody) {
-            /*
-             * CONFIRMATION HERE IS opts.confirm, NOT onKeepAlive. On the
-             * vendor interface (ok-rn, the CLI) this chunked OKDECRYPT is
-             * confirmed by okcore_prime_user_confirmation with field 30:
-             * press mode waits SILENTLY for any button (CRYPTO_AUTH=3) - no
-             * keepalive exists on this path, so an onKeepAlive presser never
-             * fires, and after 20 s the firmware answers "Timeout occured
-             * while waiting for confirmation" (a refusal - deviceOperation).
-             * A caller that presses must pass `confirm`; it runs once the
-             * upload is written and gets the digits (used only in challenge
-             * mode) and isAnswered() to stop early. Over a FIDO2 tunnel the
-             * derive paths do raise keepalives. Measured 2026-09-30.
-             */
-            const payload = new Uint8Array(32 + ciphertext.length);
-            payload.set(okconnect.derivationHash(label), 0);
-            payload.set(ciphertext, 32);
-            const answer = await storedOperation(
-              MSG.OKDECRYPT, slots.WEB_AGENT_DERIVATION_SLOT, payload,
-              { expectBytes: 32, ...opts },
-            );
-            const secret = answer && (answer.data || answer.bytes || answer);
-            const bytes = Uint8Array.from(secret);
-            if (bytes.length !== 32) {
-              throw new Error(
-                `a derived X-Wing decapsulation is 32 bytes; got ${bytes.length}`,
-              );
-            }
-            return bytes;
-          }
+        return age.decryptAgeFile(fileBytes, (ciphertext) =>
+          okcrypto.deviceAge.decapsulate(label, ciphertext, opts, { custody, id }),
+        );
+      },
 
-          const ctX = pqc.ctXOf(ciphertext);
-          const answer = await okcrypto.deriveSharedSecret(label, ctX, {
-            ...opts,
-            keytype: okconnect.KEYTYPE.XWING,
-          });
-          return pqc.splitDecapsulate(answer.secret, ciphertext, id.pkX, id.mlkemSeed);
+      /**
+       * Open one X-Wing ciphertext with the label's derived key.
+       *
+       * The step inside every age decrypt, on its own: the 1120-byte
+       * ciphertext a host made with xwingEncapsHost(identity(label)) goes in,
+       * the 32-byte shared secret comes out - the same one the host holds.
+       * A handshake needs exactly this and no file around it: an OnlyKey
+       * proves it holds the key for a label by opening what was sealed to
+       * it, while the key itself never leaves the device.
+       *
+       * `known` is decrypt's: the custody answer and the identity it already
+       * has, so a file with several stanzas asks the device once, not per
+       * stanza.
+       */
+      async decapsulate(label, ciphertext, opts = {}, known = {}) {
+        if (!ciphertext || ciphertext.length !== pqc.XWING_CT) {
+          throw new Error(
+            `an X-Wing ciphertext is ${pqc.XWING_CT} bytes; got ${ciphertext ? ciphertext.length : 0}`,
+          );
+        }
+        const custody = known.custody !== undefined
+          ? known.custody
+          : await xwingCustody(opts);
+        const id = custody
+          ? null
+          : known.id || await okcrypto.deviceAge.identity(label, opts);
+
+        /*
+         * FROM 3.0.5 THIS IS NOT A DERIVE AT ALL. The firmware says so at the
+         * branch that used to serve it (fido2/ok_extension.cpp):
+         *
+         *   "DERIVE_SHAREDSEC is NO LONGER served here. Decapsulation now
+         *    needs the whole 1120-byte X-Wing ciphertext on the device (ct_M
+         *    included), which does not fit this single-shot client_handle
+         *    path. The browser sends it as a chunked OKDECRYPT to slot
+         *    RESERVED_KEY_WEB_AGENT_DERIVATION carrying [ label32 | ct(1120) ]"
+         *
+         * and answers a derive that asks anyway with "Error use OKDECRYPT for
+         * derived X-Wing decapsulation" - over the VENDOR interface, while the
+         * FIDO answer stays empty. So a client that keeps deriving sees only a
+         * reply it cannot open, never the sentence explaining why.
+         *
+         * The device does the whole decapsulation now, both halves, and
+         * returns the finished 32-byte X-Wing secret. ct_M no longer stays on
+         * the host, which is what makes this a 1152-byte upload rather than
+         * one round trip - the cost of the device holding sk_M rather than
+         * handing out a seed that yields it.
+         */
+        if (custody) {
+          /*
+           * CONFIRMATION HERE IS opts.confirm, NOT onKeepAlive. On the
+           * vendor interface (ok-rn, the CLI) this chunked OKDECRYPT is
+           * confirmed by okcore_prime_user_confirmation with field 30:
+           * press mode waits SILENTLY for any button (CRYPTO_AUTH=3) - no
+           * keepalive exists on this path, so an onKeepAlive presser never
+           * fires, and after 20 s the firmware answers "Timeout occured
+           * while waiting for confirmation" (a refusal - deviceOperation).
+           * A caller that presses must pass `confirm`; it runs once the
+           * upload is written and gets the digits (used only in challenge
+           * mode) and isAnswered() to stop early. Over a FIDO2 tunnel the
+           * derive paths do raise keepalives. Measured 2026-09-30.
+           */
+          const payload = new Uint8Array(32 + ciphertext.length);
+          payload.set(okconnect.derivationHash(label), 0);
+          payload.set(ciphertext, 32);
+          const answer = await storedOperation(
+            MSG.OKDECRYPT, slots.WEB_AGENT_DERIVATION_SLOT, payload,
+            { expectBytes: 32, ...opts },
+          );
+          const secret = answer && (answer.data || answer.bytes || answer);
+          const bytes = Uint8Array.from(secret);
+          if (bytes.length !== 32) {
+            throw new Error(
+              `a derived X-Wing decapsulation is 32 bytes; got ${bytes.length}`,
+            );
+          }
+          return bytes;
+        }
+
+        const ctX = pqc.ctXOf(ciphertext);
+        const answer = await okcrypto.deriveSharedSecret(label, ctX, {
+          ...opts,
+          keytype: okconnect.KEYTYPE.XWING,
         });
+        return pqc.splitDecapsulate(answer.secret, ciphertext, id.pkX, id.mlkemSeed);
       },
 
       /**
