@@ -8,6 +8,7 @@ export const KEY: "guestbook:v1";
 export const VERSION: 1;
 export const SOURCE_KINDS: string[];
 export const HISTORY_MAX: 20;
+export const DETAIL_LABELS: string[];
 /**
  * The Guest Book over a key-value storage.
  * @param {{storage: {getItem(k: string): Promise<string|null>, setItem(k: string, v: string): Promise<void>}, randomBytes: (n: number) => Uint8Array, now?: () => Date, key?: string}} deps - key: the storage key (a host keeps a test list apart under another)
@@ -55,6 +56,18 @@ export function createGuestBook({ storage, randomBytes, now, key }: {
         history: any;
     };
     rename: (contact: any, name: any, note: any) => {
+        id: string;
+        name: string;
+        keys: any;
+        history: any;
+    };
+    setDetails: (contact: any, { name, nicknames, phones, emails, note }: {
+        name: any;
+        nicknames: any;
+        phones: any;
+        emails: any;
+        note: any;
+    }) => {
         id: string;
         name: string;
         keys: any;

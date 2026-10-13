@@ -37,7 +37,9 @@ function fragment(msg, size) {
 
 /**
  * Feed fragments as they arrive; `push` returns the whole message when its last fragment
- * lands, otherwise null. Throws on a fragment out of place.
+ * lands, otherwise null. Throws on a fragment out of place. `progress` says how far the message
+ * now arriving has come - {have, want} in bytes, or null between messages - so a screen can show
+ * a large one coming in (a +PQC certificate is ~15 KB, seconds over Bluetooth).
  */
 function createAssembler() {
   let want = -1;
@@ -45,6 +47,9 @@ function createAssembler() {
   let have = 0;
   let seq = 0;
   return {
+    progress() {
+      return want < 0 ? null : { have, want };
+    },
     push(frag) {
       if (!(frag instanceof Uint8Array) || frag.length < 1) throw new Error('an empty fragment');
       if (want < 0) {

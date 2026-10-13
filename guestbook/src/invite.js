@@ -22,6 +22,7 @@
  */
 
 const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
+const { hmac } = require('../../src/vendor/exports/@noble/hashes/hmac.js');
 /* Uint8Array helpers, never Buffer: Hermes has none, and the phone reads these invites */
 const { toBase64Url: b64url, fromBase64Url, toHex, fromHex } = require('../../src/bytes');
 
@@ -80,4 +81,51 @@ function readInvite(text) {
   return { id, token, link };
 }
 
-module.exports = { VERSION, LABEL, ID_LEN, TOKEN_LEN, LINK_LEN, idOf, makeInvite, readInvite, toHex };
+/*
+ * A TOKEN THAT TURNS OVER LIKE A TOTP CODE (Brad, 2026-10-12: "can we also use totp" - a rotating
+ * QR token). The showing phone keeps a random seed for as long as its sheet is open; the token for
+ * each 30-second window is HMAC-SHA256(seed, "okrn-invite/v2" || window)[0..16], and the QR is
+ * redrawn with it. The phone accepts the token of this window and the one before, so a photo of
+ * the screen stops working within 30-60 seconds even while the sheet stays open - and the first
+ * phone to link ends the advertising, so after that nobody can find it at all. 30 s (Brad,
+ * 2026-10-12: "make it 30seconds"); the window before stays accepted because a scanner needs a
+ * few seconds to connect over Bluetooth before it proves the token. Nothing is shared ahead of
+ * time: the scanner just reads whichever token the QR showed. The id and the link id stay the
+ * same for the sheet, so the scanner still finds the same phone.
+ */
+const PERIOD_MS = 30 * 1000;
+const windowOf = (now) => Math.floor(now / PERIOD_MS);
+function tokenFor(seed, window) {
+  const msg = new Uint8Array(te.encode('okrn-invite/v2').length + 8);
+  msg.set(te.encode('okrn-invite/v2'), 0);
+  new DataView(msg.buffer).setBigUint64(msg.length - 8, BigInt(window));
+  return hmac(sha256, seed, msg).slice(0, TOKEN_LEN);
+}
+
+/**
+ * A rotating invite for this phone's contact identity: a seed instead of a fixed token.
+ * @returns {{id: Uint8Array, link: Uint8Array, seed: Uint8Array}}
+ */
+function makeRotatingInvite({ publicKey, randomBytes }) {
+  if (!publicKey || publicKey.length !== 1216) throw new Error('an invite names a 1216-byte X-Wing contact key');
+  return { id: idOf(publicKey), link: randomBytes(LINK_LEN), seed: randomBytes(32) };
+}
+
+/** The QR's text right now, and when it next changes. */
+function inviteUrlAt(invite, now) {
+  const w = windowOf(now);
+  const token = invite.seed ? tokenFor(invite.seed, w) : invite.token;
+  return {
+    url: `okrn://connect?v=${VERSION}&id=${b64url(invite.id)}&t=${b64url(token)}&b=${toHex(invite.link)}`,
+    nextAt: (w + 1) * PERIOD_MS,
+  };
+}
+
+/** The tokens the showing phone accepts now: this window's and the previous one's (or a fixed one). */
+function tokensAt(invite, now) {
+  if (!invite.seed) return [invite.token];
+  const w = windowOf(now);
+  return [tokenFor(invite.seed, w), tokenFor(invite.seed, w - 1)];
+}
+
+module.exports = { VERSION, LABEL, ID_LEN, TOKEN_LEN, LINK_LEN, PERIOD_MS, idOf, makeInvite, makeRotatingInvite, inviteUrlAt, tokensAt, readInvite, toHex };

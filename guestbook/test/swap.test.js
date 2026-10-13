@@ -137,3 +137,68 @@ test('frames: a 60 KB card crosses a 20-byte link and a 244-byte link intact; a 
   assert.throws(() => asm.push(parts[2]), /link broke/);
   assert.throws(() => fragment(randomBytes(70000), 244), /at most/);
 });
+
+test('goodbye: sealed on the cards\' counter - a card then a goodbye in order; a forged, replayed or unknown one is refused', async () => {
+  const { a, b } = await handshake();
+  const card = swap.sealCard(a.session, ALICE_CARD);
+  const bye = swap.sealBye(a.session, 'done');
+  assert.deepEqual(swap.openMessage(b.session, card), { kind: 'card', card: ALICE_CARD });
+  assert.deepEqual(swap.openMessage(b.session, bye), { kind: 'bye', reason: 'done' });
+  assert.throws(() => swap.openMessage(b.session, bye), (e) => e.code === 'EBTPAIR_REPLAY');
+  /* one sealed under another swap's keys */
+  const other = await handshake();
+  other.a.session.sendCtr = 9; /* ahead of ours, so only its key can refuse it */
+  assert.throws(() => swap.openMessage(b.session, swap.sealBye(other.a.session, 'leaving')), (e) => e.code === 'EBTPAIR_TAG');
+  assert.throws(() => swap.sealBye(a.session, 'whenever'), /one of done, leaving/);
+  assert.deepEqual(swap.openMessage(a.session, swap.sealBye(b.session, 'leaving')), { kind: 'bye', reason: 'leaving' });
+});
+
+test('ROTATING QR: the token turns over every 15 s; this window\'s and the last one\'s work, an older photo does not', async () => {
+  const alice = onlyKey();
+  const t0 = 1_800_000_000_000;
+  const made = inv.makeRotatingInvite({ publicKey: alice.publicKey, randomBytes });
+  const a = inv.inviteUrlAt(made, t0);
+  const b = inv.inviteUrlAt(made, t0 + inv.PERIOD_MS);
+  assert.notEqual(a.url, b.url, 'the QR did not change');
+  assert.equal(inv.readInvite(a.url).id.join(), inv.readInvite(b.url).id.join(), 'the id changed with the token');
+  assert.equal(inv.readInvite(a.url).link.join(), inv.readInvite(b.url).link.join(), 'the link id changed with the token');
+
+  const tryAt = async (url, now) => {
+    const sh = swap.showerStart({ identity: alice, invite: made, randomBytes });
+    const sc = swap.scannerStart({ identity: onlyKey(), invite: inv.readInvite(url), randomBytes });
+    const a1 = swap.showerOnOpen(sh, sc.msg);
+    const b1 = swap.scannerOnKeys(sc.state, a1.msg);
+    const a2 = await swap.showerOnReveal(a1.state, b1.msg, now);
+    const b2 = await swap.scannerOnDone(b1.state, a2.msg);
+    return swap.showerOnConfirm(a2.state, b2.msg);
+  };
+  assert.ok(await tryAt(a.url, t0), 'the code on screen now');
+  assert.ok(await tryAt(a.url, t0 + inv.PERIOD_MS), 'the code from the window before (scanned just as it changed)');
+  const before = alice.presses;
+  await assert.rejects(tryAt(a.url, t0 + 2 * inv.PERIOD_MS), (e) => e.code === 'ESWAP_TOKEN');
+  assert.equal(alice.presses, before, 'an old photo cost a press');
+});
+
+test('a swap is a trade: an empty card is refused when sealed and when opened', async () => {
+  const { a, b } = await handshake();
+  assert.throws(() => swap.sealCard(a.session, { name: 'x', keys: [] }), /at least one key/);
+  const raw = btpair.seal(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [] })));
+  const frame = new Uint8Array(2 + raw.length);
+  frame.set([swap.T.CARD, swap.VERSION], 0);
+  frame.set(raw, 2);
+  assert.throws(() => swap.openCard(b.session, frame), /at least one key/);
+});
+
+test('frames: progress says how much of the arriving message is in, then null once it is whole', () => {
+  const { fragment, createAssembler } = require('../src/frames');
+  const msg = randomBytes(1000);
+  const parts = fragment(msg, 244);
+  const asm = createAssembler();
+  assert.equal(asm.progress(), null);
+  asm.push(parts[0]);
+  assert.deepEqual(asm.progress(), { have: 241, want: 1000 });
+  for (const p of parts.slice(1, -1)) asm.push(p);
+  assert.ok(asm.progress().have < 1000);
+  assert.deepEqual(asm.push(parts[parts.length - 1]), msg);
+  assert.equal(asm.progress(), null);
+});

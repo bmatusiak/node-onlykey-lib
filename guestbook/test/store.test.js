@@ -97,3 +97,33 @@ test('IN PERSON IS VERIFIED: keys from the Bluetooth swap are kept verified; eve
   e = gb.addKeys(e, pasted, { kind: 'connect', handle: 'peer-id' });
   assert.equal(e.keys[0].verified, true);
 });
+
+test('CONTACT DETAILS: nicknames, labelled phones and emails are kept, trimmed and bounded; a private one is refused', async () => {
+  const storage = memoryStorage();
+  const gb = book(storage);
+  const { found } = await formats.detectAll(recipient(7));
+  let c = gb.newContact({ name: 'Faye', found, source: { kind: 'paste', handle: '' } });
+  c = gb.setDetails(c, {
+    name: ' Faye Q ',
+    nicknames: [' Fay ', '', 'F'],
+    phones: [{ label: 'Mobile', value: ' 555-0100 ' }, { label: 'Pager', value: '555-0199' }, { label: 'Home', value: '' }],
+    emails: [{ label: 'Work', value: 'faye@example.com' }],
+    note: 'met at the meetup',
+  });
+  assert.equal(c.name, 'Faye Q');
+  assert.deepEqual(c.nicknames, ['Fay', 'F']);
+  assert.deepEqual(c.phones, [{ label: 'Mobile', value: '555-0100' }, { label: 'Other', value: '555-0199' }]);
+  assert.deepEqual(c.emails, [{ label: 'Work', value: 'faye@example.com' }]);
+  await gb.save([c]);
+  const back = (await book(storage).load()).contacts[0];
+  assert.deepEqual([back.nicknames, back.phones, back.emails, back.note], [c.nicknames, c.phones, c.emails, c.note]);
+  /* an export file goes through shapeContact on import: the details come back */
+  const again = store.shapeContact(JSON.parse(JSON.stringify(back)));
+  assert.deepEqual(again.phones, c.phones);
+  /* removing them all leaves no empty arrays behind */
+  const cleared = gb.setDetails(c, { name: 'Faye', nicknames: [], phones: [], emails: [], note: '' });
+  assert.equal(cleared.nicknames, undefined);
+  assert.equal(cleared.phones, undefined);
+  /* public only, here too */
+  assert.throws(() => gb.setDetails(c, { name: 'x', emails: [{ label: 'Work', value: '-----BEGIN OPENSSH PRIVATE KEY-----' }] }));
+});

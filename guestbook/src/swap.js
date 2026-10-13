@@ -44,14 +44,16 @@ const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { hmac } = require('../../src/vendor/exports/@noble/hashes/hmac.js');
 const { hkdf } = require('../../src/vendor/exports/@noble/hashes/hkdf.js');
 const btpair = require('../../src/btpair');
-const { idOf } = require('./invite');
+const { idOf, tokensAt } = require('./invite');
 const { FORMATS, MAX_TEXT, refusePublicOnly } = require('./formats');
 
 const VERSION = 1;
 const PUB = 1216;
 const CT = 1120;
 const N = 32;
-const T = Object.freeze({ OPEN: 0x31, KEYS: 0x32, REVEAL: 0x33, DONE: 0x34, CONFIRM: 0x35, CARD: 0x36 });
+const T = Object.freeze({ OPEN: 0x31, KEYS: 0x32, REVEAL: 0x33, DONE: 0x34, CONFIRM: 0x35, CARD: 0x36, BYE: 0x37 });
+/* why a phone ends the link: it has sent and received ("done"), or it closed without giving keys ("leaving") */
+const BYE_REASONS = ['done', 'leaving'];
 const MAX_KEYS = 16;
 const NAME_MAX = 64;
 const MAX_CARD = 60000;
@@ -130,18 +132,20 @@ function showerOnOpen(state, msg) {
  * REVEAL -> DONE. The token is checked first; only then is the OnlyKey asked to open the
  * scanner's seal (the press). Async: that is the device.
  */
-async function showerOnReveal(state, msg) {
+async function showerOnReveal(state, msg, now = Date.now()) {
   if (state.step !== 'reveal') throw fail('ESWAP_STEP', 'not waiting for the scanner\'s keys');
   const b = body(msg, T.REVEAL, PUB + CT + N, 'scanner\'s keys');
   const pubB = b.slice(0, PUB);
   const ctA = b.slice(PUB, PUB + CT);
   const proof = b.slice(PUB + CT);
-  if (!same(proof, mac(state.invite.token, 'okrn-contact/v1/reveal', state.nA, state.nB, pubB, ctA))) {
-    throw fail('ESWAP_TOKEN', 'the other phone does not hold this QR\'s token - it did not scan it');
+  /* the token the scanner proves: this window's or the previous one's on a rotating QR (invite.js) */
+  const token = tokensAt(state.invite, now).find((t) => same(proof, mac(t, 'okrn-contact/v1/reveal', state.nA, state.nB, pubB, ctA)));
+  if (!token) {
+    throw fail('ESWAP_TOKEN', 'the other phone does not hold this QR\'s current token - it did not scan it, or scanned it more than a minute ago');
   }
   const ssA = await opened(state.identity, ctA);
   const { cipherText: ctB, sharedSecret: ssB } = xwing.encapsulate(pubB);
-  const s = { ...state, pubB, ctA, ctB };
+  const s = { ...state, invite: { ...state.invite, token }, pubB, ctA, ctB };
   const transcript = transcriptOf(s);
   const K = keyOf(ssA, ssB, transcript);
   return { state: { ...s, K, transcript, step: 'confirm' }, msg: concat(header(T.DONE), ctB, mac(K, 'okrn-contact/v1/a-confirm')) };
@@ -205,6 +209,8 @@ async function scannerOnDone(state, msg) {
 function checkCard(card) {
   if (!card || typeof card !== 'object' || !Array.isArray(card.keys)) throw fail('ESWAP_CARD', 'a card is {name, keys: [...]}');
   if (card.keys.length > MAX_KEYS) throw fail('ESWAP_CARD', `a card carries at most ${MAX_KEYS} keys`);
+  /* a swap is a trade (Brad, 2026-10-13: "i dont want to trade without a key"): one key at least, both ways */
+  if (!card.keys.length) throw fail('ESWAP_CARD', 'a swap card carries at least one key');
   const name = String(card.name || '').slice(0, NAME_MAX);
   const keys = card.keys.map((k) => {
     if (!k || !FORMATS.includes(k.format)) throw fail('ESWAP_CARD', `a key of an unknown format: ${k && k.format}`);
@@ -235,9 +241,34 @@ function openCard(session, msg) {
   return checkCard(card);
 }
 
+/*
+ * GOODBYE (Brad, 2026-10-12: "there is no reason to keep a link open if nothing will be send, it
+ * should send a goodbye so the other phone knows"). Sealed like a card and on the same counter, so
+ * a stranger cannot end someone else's swap and an old goodbye cannot be replayed. "done": this
+ * phone has sent its card and received theirs - on an ordered link the other phone has both too.
+ * "leaving": this phone closed the sheet without giving keys - nothing more will come.
+ */
+function sealBye(session, reason) {
+  if (!BYE_REASONS.includes(reason)) throw new Error(`a goodbye is one of ${BYE_REASONS.join(', ')}`);
+  return concat(header(T.BYE), btpair.seal(session, te.encode(JSON.stringify({ bye: reason }))));
+}
+
+/** The other phone's next sealed message: {kind: 'card', card} or {kind: 'bye', reason}. */
+function openMessage(session, msg) {
+  if (msg instanceof Uint8Array && msg[0] === T.CARD) return { kind: 'card', card: openCard(session, msg) };
+  const frame = body(msg, T.BYE, undefined, 'goodbye');
+  let m;
+  try { m = JSON.parse(td.decode(btpair.open(session, frame))); } catch (e) {
+    if (e && e.code) throw e;
+    throw fail('ESWAP_MSG', 'the goodbye is not readable');
+  }
+  if (!m || !BYE_REASONS.includes(m.bye)) throw fail('ESWAP_MSG', 'a goodbye with no reason');
+  return { kind: 'bye', reason: m.bye };
+}
+
 module.exports = {
-  VERSION, T,
+  VERSION, T, BYE_REASONS,
   showerStart, showerOnOpen, showerOnReveal, showerOnConfirm,
   scannerStart, scannerOnKeys, scannerOnDone,
-  sealCard, openCard, checkCard,
+  sealCard, openCard, checkCard, sealBye, openMessage,
 };

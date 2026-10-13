@@ -25,6 +25,20 @@ const VERSION = 1;
 const SOURCE_KINDS = ['keybase', 'protonmail', 'github', 'url', 'paste', 'qr', 'connect'];
 const HISTORY_MAX = 20;
 const HOLDER = 'Guest Book';
+/*
+ * A CONTACT'S OWN DETAILS, like a phone's contacts app (Brad, 2026-10-13: "i can add remove phone
+ * numbers, emails, nicknames"): labelled phones and emails, nicknames. Plain public text, bounded,
+ * through the same private-key guard as everything else in a contact.
+ */
+const DETAIL_LABELS = ['Mobile', 'Home', 'Work', 'Other'];
+const DETAILS_MAX = 20;
+const DETAIL_TEXT_MAX = 200;
+const text = (v) => String(v == null ? '' : v).trim().slice(0, DETAIL_TEXT_MAX);
+const shapeNicknames = (list) => (Array.isArray(list) ? list : []).map(text).filter(Boolean).slice(0, DETAILS_MAX);
+const shapeLabelled = (list) => (Array.isArray(list) ? list : [])
+  .map((e) => ({ label: DETAIL_LABELS.includes(e && e.label) ? e.label : 'Other', value: text(e && e.value) }))
+  .filter((e) => e.value)
+  .slice(0, DETAILS_MAX);
 
 /** @typedef {{kind: string, handle: string, lastChecked?: string, lastResult?: string}} SourceLink */
 
@@ -66,6 +80,12 @@ function shapeContact(c) {
     history: (c.history || []).slice(0, HISTORY_MAX),
   };
   if (c.note) out.note = String(c.note);
+  const nicknames = shapeNicknames(c.nicknames);
+  const phones = shapeLabelled(c.phones);
+  const emails = shapeLabelled(c.emails);
+  if (nicknames.length) out.nicknames = nicknames;
+  if (phones.length) out.phones = phones;
+  if (emails.length) out.emails = emails;
   refusePrivate(out, 'contact', HOLDER);
   return out;
 }
@@ -158,10 +178,14 @@ function createGuestBook({ storage, randomBytes, now = () => new Date(), key = K
   const rename = (contact, name, note) =>
     shapeContact({ ...contact, name, note: note === undefined ? contact.note : note, history: historyOf(contact, 'renamed') });
 
+  /** The person's own details, as the edit page saves them: name, nicknames, phones, emails, note. */
+  const setDetails = (contact, { name, nicknames, phones, emails, note }) =>
+    shapeContact({ ...contact, name, nicknames, phones, emails, note, history: historyOf(contact, 'details edited') });
+
   const removeKey = (contact, keyId) =>
     shapeContact({ ...contact, keys: contact.keys.filter((k) => k.id !== keyId), history: historyOf(contact, 'key removed') });
 
-  return { KEY: key, load, save, newContact, addKeys, setVerified, rename, removeKey };
+  return { KEY: key, load, save, newContact, addKeys, setVerified, rename, setDetails, removeKey };
 }
 
-module.exports = { KEY, VERSION, SOURCE_KINDS, HISTORY_MAX, createGuestBook, shapeContact };
+module.exports = { KEY, VERSION, SOURCE_KINDS, HISTORY_MAX, DETAIL_LABELS, createGuestBook, shapeContact };

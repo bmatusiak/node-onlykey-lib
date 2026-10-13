@@ -6,7 +6,9 @@ export const T: Readonly<{
     DONE: 52;
     CONFIRM: 53;
     CARD: 54;
+    BYE: 55;
 }>;
+export const BYE_REASONS: string[];
 /** @param {{identity: {publicKey, decapsulate}, invite: {id, token}, randomBytes}} p */
 export function showerStart({ identity, invite, randomBytes }: {
     identity: {
@@ -40,7 +42,7 @@ export function showerOnOpen(state: any, msg: any): {
  * REVEAL -> DONE. The token is checked first; only then is the OnlyKey asked to open the
  * scanner's seal (the press). Async: that is the device.
  */
-export function showerOnReveal(state: any, msg: any): Promise<{
+export function showerOnReveal(state: any, msg: any, now?: number): Promise<{
     state: any;
     msg: Uint8Array<any>;
 }>;
@@ -119,4 +121,18 @@ export function openCard(session: any, msg: any): {
 export function checkCard(card: any): {
     name: string;
     keys: any;
+};
+export function sealBye(session: any, reason: any): Uint8Array<any>;
+/** The other phone's next sealed message: {kind: 'card', card} or {kind: 'bye', reason}. */
+export function openMessage(session: any, msg: any): {
+    kind: string;
+    card: {
+        name: string;
+        keys: any;
+    };
+    reason?: undefined;
+} | {
+    kind: string;
+    reason: any;
+    card?: undefined;
 };
