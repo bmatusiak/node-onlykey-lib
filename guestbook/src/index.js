@@ -11,4 +11,7 @@ module.exports = {
   merge: require('./merge'),
   sources: require('./sources'),
   refresh: require('./refresh'),
+  invite: require('./invite'),
+  swap: require('./swap'),
+  frames: require('./frames'),
 };

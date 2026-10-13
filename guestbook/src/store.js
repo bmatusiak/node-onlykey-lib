@@ -101,10 +101,19 @@ function createGuestBook({ storage, randomBytes, now = () => new Date(), key = K
 
   const historyOf = (c, what) => [{ at: stamp(), what }, ...(c.history || [])].slice(0, HISTORY_MAX);
 
+  /*
+   * IN PERSON IS VERIFIED (GUEST-BOOK-SPEC: "in person means verified; a screenshot or link
+   * means not"). A key that came through the Bluetooth swap (source kind "connect") was handed
+   * over by the other person's OnlyKey, in front of you, after the QR you scanned pinned it -
+   * that IS the fingerprint check, so it is kept verified. Every other way in starts unverified
+   * and only the person's own "Mark verified" changes that. Only swap.js's caller uses "connect".
+   */
+  const inPerson = (source) => !!source && source.kind === 'connect';
+
   /** A key as Guest Book keeps it, from a detector's find and where it came from. */
   function keyFrom(found, source) {
     const at = stamp();
-    return shapeKey({ ...found, id: newId(), verified: false, sources: source ? [source] : [], addedAt: at, updatedAt: at });
+    return shapeKey({ ...found, id: newId(), verified: inPerson(source), sources: source ? [source] : [], addedAt: at, updatedAt: at });
   }
 
   /** A new contact holding the keys found (a person's Add). */
@@ -128,6 +137,8 @@ function createGuestBook({ storage, randomBytes, now = () => new Date(), key = K
       const same = keys.find((k) => k.format === f.format && k.fingerprint === f.fingerprint);
       if (same) {
         if (source && !same.sources.some((s) => s.kind === source.kind && s.handle === source.handle)) same.sources.push(shapeSource(source));
+        /* the same fingerprint, now handed over in person */
+        if (inPerson(source)) same.verified = true;
       } else {
         keys.push(keyFrom(f, source));
       }

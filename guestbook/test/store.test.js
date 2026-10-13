@@ -82,3 +82,18 @@ test('PUBLIC ONLY: a contact carrying a private field or private text is never s
   await assert.rejects(gb.save([{ ...c, keys: [{ ...c.keys[0], text: 'AGE-SECRET-KEY-1ABC' }] }]), /Guest Book holds public data only/);
   assert.equal(storage.map.get(store.KEY), undefined, 'something was written');
 });
+
+test('IN PERSON IS VERIFIED: keys from the Bluetooth swap are kept verified; every other way in is not', async () => {
+  const gb = book(memoryStorage());
+  const swapped = (await formats.detectAll(recipient(4))).found;
+  const c = gb.newContact({ name: 'Dan', found: swapped, source: { kind: 'connect', handle: 'peer-id' } });
+  assert.equal(c.keys[0].verified, true);
+  /* a key pasted first, then handed over in person: the same fingerprint becomes verified */
+  const pasted = (await formats.detectAll(recipient(5))).found;
+  let e = gb.newContact({ name: 'Eve', found: pasted, source: { kind: 'paste', handle: '' } });
+  assert.equal(e.keys[0].verified, false);
+  e = gb.addKeys(e, (await formats.detectAll(recipient(6))).found, { kind: 'qr', handle: '' });
+  assert.equal(e.keys[1].verified, false, 'a scanned QR of a key is a link, not in person');
+  e = gb.addKeys(e, pasted, { kind: 'connect', handle: 'peer-id' });
+  assert.equal(e.keys[0].verified, true);
+});
