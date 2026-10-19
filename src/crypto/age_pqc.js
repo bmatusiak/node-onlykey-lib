@@ -8,7 +8,7 @@
 // old scheme here was stale/superseded and `age` rejects it outright.
 //
 // THE DEVICE HOLDS BOTH HALVES NOW. What the firmware does with a derived
-// X-Wing key from 3.0.5 on - release 3.1.0, libraries onlykey/okcrypto.cpp -
+// X-Wing key from 3.1.0 on - libraries onlykey/okcrypto.cpp -
 // and what plugins/okcrypto's deviceAge drives when the session reports
 // capability `xwingDeviceCustody` (src/device/version.js):
 //   OKGETPUBKEY  slot RESERVED_KEY_WEB_AGENT_DERIVATION, type XWING, label32
@@ -26,7 +26,7 @@
 // for was SPLIT CUSTODY - the device answered [ pk_X(32) | mlkem_seed(32) ]
 // and [ ss_X(32) | mlkem_seed(32) ] and the host expanded the ML-KEM half from
 // the seed, so a PUBLIC-key request carried private material. That shape only
-// ever existed on pre-3.0.5 development builds (xwingDeviceCustody's note in
+// ever existed on pre-3.1.0 development builds (xwingDeviceCustody's note in
 // version.js); v3.0.4, the last signed release, has no X-Wing at all.
 // mlkemKeypairFromSeed, buildRecipient, splitDecapsulate and ctXOf serve only
 // it, and are DEPRECATED: kept and exported because consumers pin this

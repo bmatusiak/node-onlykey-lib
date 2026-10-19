@@ -221,7 +221,7 @@ export namespace USER_INPUT_ENUM_ROWS {
     export { storedChallengeMode_1 as storedChallengeMode };
 }
 /**
- * What fields 21, 22 and 30 become at firmware 3.0.5 - applied over the rows
+ * What fields 21, 22 and 30 become at firmware 3.1.0 - applied over the rows
  * above by preferences(), never instead of them.
  *
  * An OVERLAY rather than a second table, because only the SHAPE changes:
@@ -250,7 +250,7 @@ export namespace USER_INPUT_ENUM_ROWS {
  * say it for every line.
  */
 /**
- * Fields that DO NOT EXIST before 3.0.5, as against 21 and 22, which exist
+ * Fields that DO NOT EXIST before 3.1.0, as against 21 and 22, which exist
  * everywhere and only change shape.
  *
  * v3.0.4's set_slot() has no `case 30` or `case 31` (libraries@c8804e3); both
@@ -261,7 +261,7 @@ export namespace USER_INPUT_ENUM_ROWS {
  * "Webcrypt Access") and a derive
  * mode, set them, and nothing happened.
  *
- * Gated on userInputModeEnum because that capability IS the 3.0.5 line - both
+ * Gated on userInputModeEnum because that capability IS the 3.1.0 line - both
  * fields arrived with the enum (97c8353, 720abfe) - and a second capability
  * with the same bound would be two names for one fact. An unknown version
  * (locked) hides them, the same safe direction as the reshaping: a row that
@@ -278,7 +278,7 @@ export const USER_INPUT_MODES: "User Input Modes";
 /**
  * One row, in the shape THIS firmware reads it.
  *
- * The static row with the 3.0.5 enum overlay applied when the capabilities say
+ * The static row with the 3.1.0 enum overlay applied when the capabilities say
  * the fields are enums (see USER_INPUT_ENUM_ROWS for why an overlay). Unknown
  * capabilities - null, or a locked device's `version: null` - give the legacy
  * shape, the same safe direction preferences() has always taken.
@@ -294,7 +294,7 @@ export const USER_INPUT_MODES: "User Input Modes";
 export function preferenceRow(name: string, capabilities?: object | null): object | null;
 /**
  * Every row this firmware has, each in its shape - what a settings screen
- * draws. The rows that do not exist before 3.0.5 are left out unless the
+ * draws. The rows that do not exist before 3.1.0 are left out unless the
  * capabilities say the enum line (ENUM_ONLY_PREFERENCES says why).
  *
  * @param {object|null} [capabilities]

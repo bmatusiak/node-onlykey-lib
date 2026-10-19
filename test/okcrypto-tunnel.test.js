@@ -10,7 +10,7 @@
  * wrongly, chunked wrongly or numbered wrongly produces the wrong answer or no
  * answer here, the way it would on a key.
  *
- * Both framings are covered: v3.0.5 (transit v2, the version that decides it
+ * Both framings are covered: v3.1.0 (transit v2, the version that decides it
  * read from the tunnel connect) and v3.0.4, the compatibility target (the v1
  * box, no tag).
  */
@@ -94,14 +94,14 @@ test('connectTunnel refuses when no ctap was supplied - the vendor session reads
 
 /* ---------------------------------------------------- 3a: the tunnel connect */
 
-test('connectTunnel reads the version from the PLAIN connect reply: v3.0.5 is transit v2', async () => {
-  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
+test('connectTunnel reads the version from the PLAIN connect reply: v3.1.0 is transit v2', async () => {
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
   const app = await start(device);
 
   const connected = await app.services.okcrypto.connectTunnel();
-  assert.equal(connected.status, 'UNLOCKEDv3.0.5-prodc');
+  assert.equal(connected.status, 'UNLOCKEDv3.1.0-prodc');
   assert.equal(connected.capabilities.transitV2, true);
-  assert.equal(connected.identity.version, 'v3.0.5-prodc');
+  assert.equal(connected.identity.version, 'v3.1.0-prodc');
 
   assert.equal(device.requests.length, 1, 'one ceremony, so one browser prompt');
   const [req] = device.requests;
@@ -124,10 +124,10 @@ test('a locked device or an untrusted origin is named, not timed out', async () 
   await app.destroy();
 });
 
-/* ------------------------------------------- 3b/3c: v3.0.5, transit v2 seal */
+/* ------------------------------------------- 3b/3c: v3.1.0, transit v2 seal */
 
-test('v3.0.5: composite_sign (Ed25519) - sealed request, three-button challenge, v2-framed result opened', async () => {
-  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
+test('v3.1.0: composite_sign (Ed25519) - sealed request, three-button challenge, v2-framed result opened', async () => {
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
   const app = await start(device);
   const seen = [];
 
@@ -153,8 +153,8 @@ test('v3.0.5: composite_sign (Ed25519) - sealed request, three-button challenge,
   await app.destroy();
 });
 
-test('v3.0.5: composite_sign (ML-DSA-65) collects 3329 framed bytes across 512-byte polls', async () => {
-  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
+test('v3.1.0: composite_sign (ML-DSA-65) collects 3329 framed bytes across 512-byte polls', async () => {
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
   const app = await start(device);
 
   const sig = await app.services.okcrypto.composite_sign(
@@ -167,8 +167,8 @@ test('v3.0.5: composite_sign (ML-DSA-65) collects 3329 framed bytes across 512-b
   await app.destroy();
 });
 
-test('v3.0.5: an ML-KEM ciphertext goes as 171-byte sealed chunks, numbered upward, one counter per key', async () => {
-  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
+test('v3.1.0: an ML-KEM ciphertext goes as 171-byte sealed chunks, numbered upward, one counter per key', async () => {
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
   const app = await start(device);
   const ct = Uint8Array.from({ length: 1088 }, (_, i) => (i * 7) & 0xff);
 
@@ -198,7 +198,7 @@ test('v3.0.5: an ML-KEM ciphertext goes as 171-byte sealed chunks, numbered upwa
   await app.destroy();
 });
 
-test('v3.0.5: a derived X-Wing decapsulation (slot 128) - accepted chunks are answered "no data ready", and that is not a refusal', async () => {
+test('v3.1.0: a derived X-Wing decapsulation (slot 128) - accepted chunks are answered "no data ready", and that is not a refusal', async () => {
   /*
    * The web-and-agent derivation slot gathers its [label32 | ct(1120)] outside
    * packet_buffer, so the firmware answers each ACCEPTED non-final chunk with
@@ -207,7 +207,7 @@ test('v3.0.5: a derived X-Wing decapsulation (slot 128) - accepted chunks are an
    * console showed the first chunk opened and dispatched, and this plugin
    * aborted on it as REQUEST_NOT_ACCEPTED - the decap never ran (audit #8).
    */
-  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
   const app = await start(device);
   const payload = Uint8Array.from({ length: 32 + 1120 }, (_, i) => (i * 11) & 0xff);
 
@@ -219,8 +219,8 @@ test('v3.0.5: a derived X-Wing decapsulation (slot 128) - accepted chunks are an
   await app.destroy();
 });
 
-test('v3.0.5: a derive re-keys the device, and the next stored-key operation seals under the derive key', async () => {
-  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
+test('v3.1.0: a derive re-keys the device, and the next stored-key operation seals under the derive key', async () => {
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
   const app = await start(device);
   await app.services.okcrypto.connectTunnel();
   const derived = await app.services.okcrypto.derivePublicKey('example.com');
@@ -274,7 +274,7 @@ test('v3.0.4: two operations back to back - the RNG2 byte in the duplicate guard
 /* ------------------------------------------- the reply to the request itself */
 
 test('a request that fails transit authentication is named at once, not polled for', async () => {
-  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc' });
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
   const app = await start(device);
   await app.services.okcrypto.connectTunnel();
   await new Promise((r) => setTimeout(r, 50)); /* let the connect reply expire */
@@ -301,7 +301,7 @@ test('a request that fails transit authentication is named at once, not polled f
 
 test('a stale staged reply in answer to a request chunk fails by name', async () => {
   /* The plugin is told not to wait, and the device keeps its connect reply. */
-  const device = fakeTunnelDevice({ firmware: 'v3.0.5-prodc', wipeMs: 60000 });
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc', wipeMs: 60000 });
   const app = await start(device, { stagedWipeMs: 0 });
   await app.services.okcrypto.connectTunnel();
 
@@ -382,11 +382,11 @@ test('classic RSA-4096 sign over the tunnel: 512 bytes arrive as 512 + 20 across
 
 /* ------------------------------------ X-Wing: the version first (G-6, G-9) */
 
-test('X-Wing with the version unknown: the tunnel connects FIRST, then reads the 3.0.5+ recipient', async () => {
+test('X-Wing with the version unknown: the tunnel connects FIRST, then reads the 3.1.0+ recipient', async () => {
   /*
    * No connectTunnel() by the caller - the order a GUI that skips it, or a
    * session that connected while locked, produces. Before this, deviceCan()
-   * read "unknown" as the pre-3.0.5 world: transit v1 against a v2 device,
+   * read "unknown" as the pre-3.1.0 world: transit v1 against a v2 device,
    * and a 64-byte "pair" sliced from a 1216-byte recipient. Now the plain
    * OKCONNECT goes out first and the derive is read in the shape the
    * version says.

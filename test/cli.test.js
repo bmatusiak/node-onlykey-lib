@@ -114,15 +114,15 @@ test('fwversion on a locked key says why there is no version, instead of python\
 });
 
 test('status: status line, firmware, model, build and the capability flags', async () => {
-  const r = await run(['status'], { version: 'v3.0.5-prodc' });
+  const r = await run(['status'], { version: 'v3.1.0-prodc' });
   assert.equal(r.code, 0, r.err.join('\n'));
-  assert.equal(r.out[0], 'status         UNLOCKEDv3.0.5-prodc');
+  assert.equal(r.out[0], 'status         UNLOCKEDv3.1.0-prodc');
   assert.equal(r.out[1], 'state          unlocked');
-  assert.equal(r.out[2], 'firmware       v3.0.5-prodc');
+  assert.equal(r.out[2], 'firmware       v3.1.0-prodc');
   assert.equal(r.out[3], 'model          classic');
   assert.equal(r.out[4], 'build          production');
   const caps = r.out.find((l) => l.startsWith('capabilities'));
-  assert.match(caps, /\bagentDerivationV2\b/, '3.0.5 has agent v2');
+  assert.match(caps, /\bagentDerivationV2\b/, '3.1.0 has agent v2');
 });
 
 test('status on a locked DUO reports what it can and claims no capabilities', async () => {

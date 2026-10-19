@@ -2,7 +2,7 @@
  * A fake OnlyKey behind the WebAuthn tunnel - the ctap a browser would hand
  * okcrypto, with bridge_to_onlykey() behind it.
  *
- * Modelled on libraries/fido2/ok_extension.cpp (master, 3.0.5) and the v3.0.4
+ * Modelled on libraries/fido2/ok_extension.cpp (master, 3.1.0) and the v3.0.4
  * staged tree, for the parts a stored-key operation touches. Each behaviour
  * below is one the plugin has to get right, and each is written the way the
  * firmware does it rather than the way a host would like it:
@@ -15,11 +15,11 @@
  *   plaintext is split into 57-byte packets, only the final keyhandle's last
  *     packet carries a length;
  *   the duplicate guard drops opt3 <= last with a ret-0 answer (71 bytes of
- *     "stack"); 3.0.5 clears the mark on the final chunk, 3.0.4 leaves the
+ *     "stack"); 3.1.0 clears the mark on the final chunk, 3.0.4 leaves the
  *     RNG2 byte process_packets writes there until wipetasks();
  *   a served reply stays staged, re-served from 0, until `wipeMs` of quiet -
  *     the 5-second Wipedata timer, shortened;
- *   from 3.0.5 a composite result is sealed as a v2 frame (libraries a29b063),
+ *   from 3.1.0 a composite result is sealed as a v2 frame (libraries a29b063),
  *     before it in the clear.
  *
  * The result bytes are a function of the reassembled payload, so a payload
@@ -58,7 +58,7 @@ function resultFor(cmd, payload) {
 const DERIVED_SLOT = 128;
 
 function fakeTunnelDevice({
-  firmware = 'v3.0.5-prodc',
+  firmware = 'v3.1.0-prodc',
   webcryptLevel = 2,
   wipeMs = 30,
   derived = Uint8Array.from({ length: 65 }, (_, i) => (i === 0 ? 0x04 : i)),
@@ -242,7 +242,7 @@ function fakeTunnelDevice({
           left -= 57;
         }
         if (opt2) {
-          /* 3.0.5 clears the mark; 3.0.4's RNG2 leaves a byte of noise in it. */
+          /* 3.1.0 clears the mark; 3.0.4's RNG2 leaves a byte of noise in it. */
           lastOpt3 = v2 ? 0 : 200;
           cryptoAuth = true;
           pending = { cmd, payload: concat(packets) };

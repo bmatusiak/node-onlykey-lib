@@ -902,7 +902,7 @@ const BACKUP_REFUSALS = [
    * arrives in config mode or on first use (okcore.cpp dispatches it on
    * `configmode == true || !initcheck`), both already presence proofs, and ECC
    * keygen never asked for more. Every tree with PQC keygen worth supporting
-   * has 97f0149 - the bench key (b412e78), 3.0.5 (57340df) and release 3.1.0
+   * has 97f0149 - the bench key (b412e78), the pre-release master (57340df) and release 3.1.0
    * (eb25290, read at ecc_priv_flash: "No confirmation, as for ECC keygen") -
    * and no signed release has PQC keygen at all.
    *
@@ -1397,8 +1397,8 @@ const BACKUP_REFUSALS = [
        *
        * A locked device answers `INITIALIZED` - no version - and connect()
        * parsed its capabilities from that, i.e. from `version: null`, which
-       * every version gate reads as pre-3.0.5. Unlocking is what produces
-       * `UNLOCKEDv3.0.5-testc`, and since a device has to be connected before
+       * every version gate reads as pre-3.1.0. Unlocking is what produces
+       * `UNLOCKEDv3.1.0-testc`, and since a device has to be connected before
        * it can be unlocked, this is the ordinary order rather than an unusual
        * one. Handing the status back to the session here is what stops the
        * rest of the session being spoken in an older protocol than the device
@@ -1943,9 +1943,9 @@ const BACKUP_REFUSALS = [
       /*
        * THE SAME BYTE MEANS TWO DIFFERENT THINGS, and the version decides
        * which. This used to hand back the static table, so every GUI drew
-       * pre-3.0.5 semantics at a 3.0.5 key.
+       * pre-3.1.0 semantics at a 3.1.0 key.
        *
-       * Fields 21, 22 and 30 are a BITFIELD before 3.0.5 and a 0/1/2 ENUM at
+       * Fields 21, 22 and 30 are a BITFIELD before 3.1.0 and a 0/1/2 ENUM at
        * and after it. A screen rendering the old shape offers a toggle that
        * writes 8 - which `set_slot()` refuses outright with "Error invalid
        * user input mode". That is not a hypothetical: writing 8 is what made
@@ -1953,12 +1953,12 @@ const BACKUP_REFUSALS = [
        * e2e was fixed for it while this table, which the UI reads, was not.
        *
        * Gated rather than replaced, because this app has to keep working
-       * against older firmware: below 3.0.5 the bits are still correct and
+       * against older firmware: below 3.1.0 the bits are still correct and
        * still the only way to reach "derive without a touch".
        *
        * Version UNKNOWN (a locked device reports no version) falls to the
        * legacy shape. That is the safe direction: the bits are refused by
-       * 3.0.5 with a message that names the problem, whereas offering the
+       * 3.1.0 with a message that names the problem, whereas offering the
        * enum to an older key would write bit 0 while the user believed they
        * had chosen "challenge", and nothing would say so.
        */
@@ -1979,8 +1979,8 @@ const BACKUP_REFUSALS = [
       /*
        * VALIDATED AGAINST THE ROW THIS FIRMWARE HAS, not the static table.
        *
-       * It used to read PREFERENCES[name].max - the pre-3.0.5 limit - while
-       * preferences() handed the screen the version-shaped row. So a 3.0.5+
+       * It used to read PREFERENCES[name].max - the pre-3.1.0 limit - while
+       * preferences() handed the screen the version-shaped row. So a 3.1.0+
        * key drew field 21 as Challenge/Press and still let 2..255 through
        * here, bitmask 8 included, for the firmware to refuse ("Error invalid
        * user input mode"). The same function now shapes both (G-4). Unknown
@@ -1995,7 +1995,7 @@ const BACKUP_REFUSALS = [
         );
       }
       /*
-       * Refused HERE on a key known to predate 3.0.5, because the firmware
+       * Refused HERE on a key known to predate 3.1.0, because the firmware
        * would not refuse it at all - it would say nothing, and the retries
        * below would spend their whole budget on that silence. An unknown
        * version is let through: hiding the row is a display choice, but a
@@ -2513,9 +2513,9 @@ const BACKUP_REFUSALS = [
      * a second key over the first. So `ackRetries: 0` - a lost acknowledgement
      * is reported as unknown rather than papered over by generating again.
      *
-     * ## Curve25519 needs 3.0.5, and the version must be KNOWN
+     * ## Curve25519 needs 3.1.0, and the version must be KNOWN
      *
-     * Before 3.0.5 set_private has no type-4 branch: the trigger ITSELF is
+     * Before 3.1.0 set_private has no type-4 branch: the trigger ITSELF is
      * encrypted and flashed, and the device says "Successfully set ECC Key" -
      * every such OnlyKey then holds the same constant key (capability
      * curve25519Keygen). v3.0.4, the last signed release, is one of them. So a
@@ -2560,14 +2560,14 @@ const BACKUP_REFUSALS = [
         if (!known()) await session.connect(timeoutMs ? { timeoutMs } : {});
         if (!known()) {
           throw new Error(
-            'a Curve25519 key can only be generated on firmware 3.0.5 or later, and this device has '
+            'a Curve25519 key can only be generated on firmware 3.1.0 or later, and this device has '
             + 'not said its version (is it locked?). Nothing was written.',
           );
         }
         if (!(session.capabilities && session.capabilities.curve25519Keygen)) {
           throw new Error(
             `firmware ${session.identity.version} cannot generate a Curve25519 key: it would store the `
-            + 'same fixed key every such OnlyKey gets, and report success. Nothing was written. Use 3.0.5 '
+            + 'same fixed key every such OnlyKey gets, and report success. Nothing was written. Use 3.1.0 '
             + 'or later, or load a key made elsewhere.',
           );
         }

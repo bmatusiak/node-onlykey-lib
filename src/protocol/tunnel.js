@@ -69,7 +69,7 @@ async function send(ctap, req, opts = {}) {
    * THE KEY - okcrypto_hkdf() v1 hashes it into the derivation - so asking with
    * a different one derives DIFFERENT KEYS with no error at any layer; it
    * surfaces much later as "no identity matched any of the recipients" against
-   * a file that is perfectly intact. From 3.0.5 it is ADMISSION: the origin is
+   * a file that is perfectly intact. From 3.1.0 it is ADMISSION: the origin is
    * out of the derivation, and webcryptcheck() refuses any rpId but the two
    * trusted names.
    */

@@ -88,12 +88,12 @@
       "name": "release-libraries",
       "repo": "trustcrypto/libraries",
       "branch": "release-3.1.0",
-      "head": "8d28305",
+      "head": "37aa531",
       "paths": [
         "fido2",
         "onlykey"
       ],
-      "since": "2026-09-30",
+      "since": "2026-10-19",
       "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #33."
     },
     {

@@ -205,7 +205,7 @@ function decryptBody(key, body) {
 }
 
 /**
- * TRANSIT V2 - the framing firmware 3.0.5 and later speaks.
+ * TRANSIT V2 - the framing firmware 3.1.0 and later speaks.
  *
  * v1 used AES-GCM as a stream cipher: a fixed all-zero IV, a counter that was
  * never incremented, and the tag thrown away. That is decryptBody() above, and
@@ -222,7 +222,7 @@ function decryptBody(key, body) {
  * WHICH ONE TO SPEAK IS NOT NEGOTIATED. onlykey.h states the contract: the
  * host reads the firmware version out of the PLAIN OKCONNECT response - that
  * one is unencrypted, so it is readable before any of this applies - and picks
- * its framing from it. Below 3.0.5 is v1, 3.0.5 and above is v2. There is no
+ * its framing from it. Below 3.1.0 is v1, 3.1.0 and above is v2. There is no
  * flag in the frame saying which it is, and no way to tell them apart by
  * looking: a v1 body and a v2 frame are both just bytes. Guessing wrong yields
  * plausible noise rather than an error, which is what the tag now prevents in
@@ -237,7 +237,7 @@ function decryptBody(key, body) {
  *
  * The device -> host half was first ported from onlykey.extra.js
  * (0c-coder/onlykey.github.io), which carries the matching TRANSIT_V2_MIN and
- * was measured on hardware against v3.0.5-test.
+ * was measured on hardware against v3.1.0-test.
  */
 
 const transit = require('../session/transit');
@@ -316,7 +316,7 @@ function xwingShape(opts) {
   const custody = opts && opts.xwingCustody;
   if (typeof custody !== 'boolean') {
     const err = new Error(
-      'an X-Wing key has two shapes (3.0.5+: 1216 bytes, before: 64) that '
+      'an X-Wing key has two shapes (3.1.0+: 1216 bytes, before: 64) that '
       + 'cannot be told apart by length - pass xwingCustody from the firmware '
       + 'version (capabilities().xwingDeviceCustody); there is no default',
     );
@@ -333,7 +333,7 @@ function xwingShape(opts) {
  * changed what it hands back.
  *
  *   before      [ pk_X(32) | mlkem_seed(32) ]                 64 bytes
- *   3.0.5+      [ pk_M(1184) | pk_X(32) ]                   1216 bytes
+ *   3.1.0+      [ pk_M(1184) | pk_X(32) ]                   1216 bytes
  *
  * The old one returned PRIVATE MATERIAL from a PUBLIC KEY request: the host
  * was expected to expand the ML-KEM half from that seed itself. The device
@@ -353,7 +353,7 @@ function xwingShape(opts) {
  *
  * @param {number} keytype
  * @param {object} [opts]
- * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.0.5+);
+ * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.1.0+);
  *   REQUIRED for X-Wing, ignored for every other key type
  */
 function publicKeyWidth(keytype, opts = {}) {
@@ -500,7 +500,7 @@ function sharedSecretFrom(payload, keytype, opts = {}) {
   if (keytype === KEYTYPE.XWING) {
     const custody = xwingShape(opts);
     /*
-     * FROM 3.0.5 THERE IS NO SEED AND NO PAIR. The device holds both halves
+     * FROM 3.1.0 THERE IS NO SEED AND NO PAIR. The device holds both halves
      * and answers a decapsulation with the finished X-Wing secret, 32 bytes and
      * nothing else - so there is nothing to split and nothing for the host to
      * expand. `mlkemSeed` is absent rather than zero-filled: a caller still

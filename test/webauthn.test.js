@@ -168,7 +168,7 @@ test('an AbortSignal is handed to the browser', async () => {
 /* ----------------------------------------------------------- the response */
 
 test('the answer comes back as the Map decodeAssertion reads', async () => {
-  const payload = fromLatin1('UNLOCKEDv3.0.5');
+  const payload = fromLatin1('UNLOCKEDv3.1.0');
   const credentials = fakeCredentials(() => ({
     signature: [0x00, ...payload],
     authenticatorData: authData(42),
@@ -182,7 +182,7 @@ test('the answer comes back as the Map decodeAssertion reads', async () => {
 
   const decoded = ctap.decodeAssertion(assertion);
   assert.equal(decoded.status, 'CTAP1_SUCCESS');
-  assert.equal(toLatin1(decoded.data), 'UNLOCKEDv3.0.5');
+  assert.equal(toLatin1(decoded.data), 'UNLOCKEDv3.1.0');
   assert.equal(decoded.count, 42);
 });
 

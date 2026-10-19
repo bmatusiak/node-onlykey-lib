@@ -6,7 +6,7 @@
  * One OpenPGP v6 key whose signatures are ML-DSA-65 + Ed25519 and whose
  * encryption is ML-KEM-768 + X25519: safe while either half holds, so a
  * future quantum computer breaking X25519/Ed25519 does not open it. The
- * firmware (3.0.5+) holds the four private seeds in an RSA slot (key type
+ * firmware (3.1.0+) holds the four private seeds in an RSA slot (key type
  * 0x67) and answers decrypt and sign there; nothing else of it is on the key.
  *
  * WHY KEY CHAIN KEEPS THE CERTIFICATE. The device cannot give the public

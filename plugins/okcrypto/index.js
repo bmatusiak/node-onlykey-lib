@@ -58,7 +58,7 @@
  * the derived X-Wing decapsulation go through the tunnel instead - see
  * tunnelOperation. There the framing and the response are the other way
  * round from the vendor path: every request keyhandle is SEALED under the
- * transit key (the firmware opens it before dispatch), and from 3.0.5 the
+ * transit key (the firmware opens it before dispatch), and from 3.1.0 the
  * response IS sealed too (libraries a29b063). Nothing about the vendor path
  * changes; ok-rn and the kit never supply a ctap.
  *
@@ -124,13 +124,13 @@ function setup(imports, register, config) {
    * X-Wing has two wire shapes and nothing on the wire tells them apart
    * (see version.js, xwingDeviceCustody):
    *
-   *   3.0.5+        derive -> [pk_M | pk_X] 1216 bytes; decap is a chunked
+   *   3.1.0+        derive -> [pk_M | pk_X] 1216 bytes; decap is a chunked
    *                 OKDECRYPT to slot 128 that returns the finished secret
    *   before        derive -> [pk_X | mlkem_seed] 64 bytes; the host expands
    *                 the seed and runs the split decapsulation itself
    *
    * Every other gate in this plugin lets "unknown" through, because for them
-   * the pre-3.0.5 default is harmless. Here it is not: `deviceCan(...) === true`
+   * the pre-3.1.0 default is harmless. Here it is not: `deviceCan(...) === true`
    * read "unknown" as "the old shape", so a session that was connected while
    * LOCKED (status INITIALIZED, no version) or never connected at all took the
    * split path against a 3.1.0 key - sliced the last 64 bytes of a 1216-byte
@@ -145,8 +145,8 @@ function setup(imports, register, config) {
    * which the lib never saw - an OKCONNECT there is set_time(), a status reply
    * and no prompt). If the device still does not say - it is locked - this
    * REFUSES by name rather than guess. The split shape is kept only for a
-   * version KNOWN to be below 3.0.5 (a 3.0.4 development build; no release
-   * has X-Wing before 3.0.5).
+   * version KNOWN to be below 3.1.0 (a 3.0.4 development build; no release
+   * has X-Wing before 3.1.0).
    *
    * Asked per operation, not cached here: session.identity is the one record,
    * and a later connect() may replace it.
@@ -162,7 +162,7 @@ function setup(imports, register, config) {
       const err = new Error(
         'X-Wing needs the firmware version, and this device has not said it - '
         + 'it is most likely LOCKED (a locked device answers INITIALIZED with no '
-        + 'version). The two X-Wing shapes (3.0.5+ and before) cannot be told '
+        + 'version). The two X-Wing shapes (3.1.0+ and before) cannot be told '
         + 'apart on the wire, so this refuses rather than guess. Unlock the '
         + 'device and try again.',
       );
@@ -277,7 +277,7 @@ function setup(imports, register, config) {
    */
   /*
    * Refuse an agent derivation the firmware is KNOWN not to have: v2's codes
-   * have no branch before 3.0.5 and would simply go unanswered, and a 132
+   * have no branch before 3.1.0 and would simply go unanswered, and a 132
    * public-key request has none before 2.1.0. Unknown (not yet connected) is
    * let through, as deviceCan() does everywhere.
    */
@@ -295,7 +295,7 @@ function setup(imports, register, config) {
       }
       throw new Error(
         version === 2
-          ? 'this firmware has no agent derivation v2 (it arrived in 3.0.5); use version 1'
+          ? 'this firmware has no agent derivation v2 (it arrived in 3.1.0); use version 1'
           : 'this firmware has no agent derivation public key (it arrived in 2.1.0)',
       );
     }
@@ -626,7 +626,7 @@ function setup(imports, register, config) {
    *
    * WHICH KEY THE DEVICE HOLDS is "the last OKCONNECT it answered", whoever sent
    * it - every OKCONNECT regenerates the device's keypair and rederives
-   * transit_key, and from 3.0.5 resets its counter with it
+   * transit_key, and from 3.1.0 resets its counter with it
    * (okcrypto_transit_reset(), ok_extension.cpp:325). That includes every
    * DERIVE, which is an OKCONNECT too. So this is dropped the moment a derive is
    * sent and replaced from the derive's own reply, and a connectTunnel() sets it
@@ -762,7 +762,7 @@ function setup(imports, register, config) {
    * this was added to settle.
    */
   /*
-   * The REQ_PRESS opcodes do not exist on v3.0.5 and later, so they are
+   * The REQ_PRESS opcodes do not exist on v3.1.0 and later, so they are
    * translated here rather than at every caller.
    *
    * ONE PLACE, because there are four ways in - derivePublicKey,
@@ -772,7 +772,7 @@ function setup(imports, register, config) {
    * caller that passes requirePress still gets the presence behaviour it
    * asked for on the firmware that has it.
    *
-   * WHAT THE CALLER LOSES, stated plainly: on v3.0.5 presence is decided by
+   * WHAT THE CALLER LOSES, stated plainly: on v3.1.0 presence is decided by
    * the request, not by the opcode - a public-key derivation never asks for a
    * touch and a shared secret always does. So `requirePress: true` against a
    * public-key derivation is silently not honoured there. It cannot be: the
@@ -797,7 +797,7 @@ function setup(imports, register, config) {
     /*
      * null means connect() has not run, so nothing is known about the
      * firmware. Sending what the caller asked for is the honest default: it is
-     * what every firmware before v3.0.5 wants, and on v3.0.5 the device
+     * what every firmware before v3.1.0 wants, and on v3.1.0 the device
      * refuses it by name rather than doing something unintended.
      */
     if (deviceCan('deriveReqPress') !== false) return action;
@@ -1007,7 +1007,7 @@ function setup(imports, register, config) {
           );
         },
         untilShortChunk: true,
-        /* The first chunk is already here, so the challenge is over; on 3.0.5
+        /* The first chunk is already here, so the challenge is over; on 3.1.0
          * "incorrect challenge" now can only mean the staged answer was
          * wiped. See capabilities().challengeErrorIsFinal. */
         challengeErrorIsFinal: Boolean(session && session.capabilities
@@ -1126,13 +1126,13 @@ function setup(imports, register, config) {
    *
    * WHY THIS EXISTS. A browser has no vendor interface, so session.connect() -
    * the only place capabilities() has ever been fed - cannot run there. Without
-   * a version, every gate reads its pre-3.0.5 default (see session.observeStatus
+   * a version, every gate reads its pre-3.1.0 default (see session.observeStatus
    * for that account): transit v1 against a v2 device, whose every sealed
    * request then fails authentication and is silently discarded.
    *
    * The PLAIN reply carries the version, and that is the firmware's own
    * contract (onlykey.h; okcrypto.cpp at okcrypto_transit_seal): with opt1 = 0
-   * bridge_to_onlykey() stages [device transit pubkey(32) | "UNLOCKEDv3.0.5..."
+   * bridge_to_onlykey() stages [device transit pubkey(32) | "UNLOCKEDv3.1.0..."
    * NUL] (ok_extension.cpp:564) and, with opt3 = 0, does NOT seal it - so the
    * version is readable before the framing it decides has been chosen. opt3
    * must be 0 here: this branch never rewrites a truthy opt3 to 2 the way the
@@ -1258,7 +1258,7 @@ function setup(imports, register, config) {
      *
      * A stored slot gathers its chunks in packet_buffer, so send_stored_response()
      * answers each accepted one with USER_ACTION_PENDING (ok_extension.cpp:787).
-     * The web-and-agent derivation slot - the 3.0.5 derived X-Wing
+     * The web-and-agent derivation slot - the 3.1.0 derived X-Wing
      * decapsulation, [label32 | ct(1120)] - gathers elsewhere and leaves
      * packet_buffer_offset at 0, so an accepted NON-FINAL chunk falls through to
      * CTAP2_ERR_NO_OPERATION_PENDING (:793-798). Read as a refusal, every
@@ -1321,7 +1321,7 @@ function setup(imports, register, config) {
     const hint = reply.status === 'CTAP2_ERR_EXTENSION_NOT_SUPPORTED'
       ? ' The device refuses the extension while locked, and to untrusted origins.'
       : reply.status === 'CTAP2_ERR_NO_OPERATION_PENDING'
-        ? ' The device did not take the chunk: on firmware before 3.0.5 stored-key '
+        ? ' The device did not take the chunk: on firmware before 3.1.0 stored-key '
           + 'operations over FIDO2 need webcryptcheck() level 2, and a lower level '
           + 'is answered like this rather than refused by name.'
         : '';
@@ -1334,15 +1334,15 @@ function setup(imports, register, config) {
    * interface.
    *
    *   1. the payload goes out as OKSIGN/OKDECRYPT keyhandles, each SEALED under
-   *      the tunnel's transit session - v2 frames from 3.0.5, the v1 box
+   *      the tunnel's transit session - v2 frames from 3.1.0, the v1 box
    *      before it (capabilities().transitV2) - and each reply is checked;
    *   2. the device raises the same three-button challenge, over the same
    *      reassembled payload, so confirm() gets the same digits;
-   *   3. the result is collected with OKPING polls and, from 3.0.5, OPENED:
+   *   3. the result is collected with OKPING polls and, from 3.1.0, OPENED:
    *      libraries a29b063 seals every composite response in transit
    *      (okpqc.cpp: send_transport_response(..., true, true)), so a 64-byte
    *      Ed25519 signature arrives as an 84-byte v2 frame and ML-DSA-65's 3309
-   *      bytes as 3329, across seven 512-byte polls. Before 3.0.5 the composite
+   *      bytes as 3329, across seven 512-byte polls. Before 3.1.0 the composite
    *      responses were not encrypted, and the v1 path reads them as they are.
    *
    * WHAT IT COSTS IN A BROWSER: every keyhandle and every poll is one
@@ -1598,7 +1598,7 @@ function setup(imports, register, config) {
      *
      * `identity` is a 32-byte hash, `{ ssh: { user, host } }` or
      * `{ gpg: userId }`, hashed exactly as lib-agent hashes it. `version` 1
-     * (the default, every release from 2.1.0) or 2 (3.0.5 on): DIFFERENT keys
+     * (the default, every release from 2.1.0) or 2 (3.1.0 on): DIFFERENT keys
      * for the same identity - use the one a server already trusts.
      *
      * publicKey needs no press. sign and ecdh raise the derived-key
@@ -1853,7 +1853,7 @@ function setup(imports, register, config) {
           keytype: okconnect.KEYTYPE.XWING,
         });
         /*
-         * FROM 3.0.5 THE DERIVED KEY IS ALREADY THE RECIPIENT.
+         * FROM 3.1.0 THE DERIVED KEY IS ALREADY THE RECIPIENT.
          *
          * The device answers [pk_M(1184) | pk_X(32)] - the whole X-Wing
          * recipient, 1216 bytes - so there is nothing to build and no seed to
@@ -1905,7 +1905,7 @@ function setup(imports, register, config) {
        * Decrypt with the device.
        *
        * Each stanza carries a 1120-byte X-Wing ciphertext, and decapsulate()
-       * below opens it: from 3.0.5 the whole ciphertext goes to the device,
+       * below opens it: from 3.1.0 the whole ciphertext goes to the device,
        * before that only ct_X did and the ML-KEM half was opened here.
        */
       async decrypt(fileBytes, label, opts = {}) {
@@ -1946,7 +1946,7 @@ function setup(imports, register, config) {
           : known.id || await okcrypto.deviceAge.identity(label, opts);
 
         /*
-         * FROM 3.0.5 THIS IS NOT A DERIVE AT ALL. The firmware says so at the
+         * FROM 3.1.0 THIS IS NOT A DERIVE AT ALL. The firmware says so at the
          * branch that used to serve it (fido2/ok_extension.cpp):
          *
          *   "DERIVE_SHAREDSEC is NO LONGER served here. Decapsulation now

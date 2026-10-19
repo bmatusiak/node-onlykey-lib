@@ -159,14 +159,14 @@ function setup(imports, register) {
      * is `INITIALIZED` - no version, no build, no model. capabilities() then
      * answers from `version: null`, which means every version gate reads
      * FALSE: transitV2 false, deriveReqPress TRUE, xwingDeviceCustody false.
-     * That is the pre-3.0.5 device, described exactly.
+     * That is the pre-3.1.0 device, described exactly.
      *
      * And that is the ORDINARY path, not an edge case: a device must be
      * connected before it can be unlocked, so the first connect() of every
      * session sees the locked status. Without this, the library spends the
      * rest of that session speaking transit v1 to a v2 device (whose
      * responses then decrypt to noise, or fail their tag and vanish
-     * entirely), asking for derive opcodes 3 and 4 that 3.0.5 removed, and
+     * entirely), asking for derive opcodes 3 and 4 that 3.1.0 removed, and
      * reading a 64-byte X-Wing pair from a 1216-byte answer.
      *
      * It was invisible for as long as it was because a full e2e run hides it:

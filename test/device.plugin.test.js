@@ -627,7 +627,7 @@ test('the derived-key challenge mode accepts the bit that matters', async () => 
 
 test('setPreference validates against the row THIS firmware has, not the static table (G-4)', async () => {
   /*
-   * preferences() drew field 21 as Challenge/Press on a 3.0.5+ key while
+   * preferences() drew field 21 as Challenge/Press on a 3.1.0+ key while
    * setPreference still checked the static max of 255 - so 8, the old
    * "no touch" bit, went out for the enum firmware to refuse. Both now read
    * preferenceRow(name, capabilities).
@@ -642,7 +642,7 @@ test('setPreference validates against the row THIS firmware has, not the static 
   await assert.rejects(() => device.setPreference('storedChallengeMode', 2), /0\.\.1/);
   assert.equal(sent(), 0, 'a value the enum firmware refuses reached the wire');
   await assert.doesNotReject(() => device.setPreference('derivedChallengeMode', 1));
-  /* Field 30 takes "none" (2) on every 3.0.5+ build. */
+  /* Field 30 takes "none" (2) on every 3.1.0+ build. */
   await assert.doesNotReject(() => device.setPreference('webAgentDeriveMode', 2));
   assert.equal(sent(), 2);
   await app.destroy();
@@ -1090,13 +1090,13 @@ test('unlocking teaches the session what firmware it is talking to', async () =>
    * to be connected before it can be unlocked. Without the refresh, the whole
    * session afterwards speaks transit v1 to a v2 device - whose answers then
    * decrypt to noise, or fail their tag and vanish entirely - and asks for
-   * derive opcodes 3.0.5 removed.
+   * derive opcodes 3.1.0 removed.
    *
    * Found on 2026-09-23 by running two e2e suites in isolation: a full run
    * hides it, because each suite connects afresh and by the time the derive
    * suites run the device is already unlocked, so connect() sees a version.
    */
-  const app = await start(fakeFirmware({ pin: '1234561', version: 'v3.0.5-testc' }));
+  const app = await start(fakeFirmware({ pin: '1234561', version: 'v3.1.0-testc' }));
   const device = app.services.device;
 
   const before = await device.connect();
@@ -1108,7 +1108,7 @@ test('unlocking teaches the session what firmware it is talking to', async () =>
   await device.unlock('1234561');
 
   assert.equal(device.capabilities.transitV2, true,
-    'the session still thinks this is pre-3.0.5 firmware after unlocking');
+    'the session still thinks this is pre-3.1.0 firmware after unlocking');
   assert.equal(device.capabilities.deriveReqPress, false);
   assert.equal(device.capabilities.xwingDeviceCustody, true);
 
@@ -1394,7 +1394,7 @@ test('generateEccKey never resends: a resent trigger would generate a second key
   await app.destroy();
 });
 
-test('generateEccKey Curve25519: refused on v3.0.4 (connected or not), generated on 3.0.5', async () => {
+test('generateEccKey Curve25519: refused on v3.0.4 (connected or not), generated on 3.1.0', async () => {
   /*
    * v3.0.4 has no type-4 branch: it would flash the trigger itself and say
    * "Successfully set ECC Key" - the same key on every such device. An
@@ -1417,7 +1417,7 @@ test('generateEccKey Curve25519: refused on v3.0.4 (connected or not), generated
   assert.equal(setPrivFrames(locked).length, 0);
   await app0.destroy();
 
-  const pipe = fakeFirmware({ version: 'v3.0.5-prodc' });
+  const pipe = fakeFirmware({ version: 'v3.1.0-prodc' });
   const app = await start(pipe);
   const out = await app.services.device.generateEccKey(102, 4, { backup: true, decryption: true });
   assert.equal(out.type, 0x04 | 0x80 | 0x20);

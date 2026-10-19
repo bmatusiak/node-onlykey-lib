@@ -18,7 +18,7 @@
  * K132 is a random per-device secret that cannot be written (okcore.cpp
  * 3052-3058, 423-426), so there are no cross-device vectors: the same identity
  * gives a different key on every OnlyKey, by design. v1 is every release from
- * 2.1.0 and lib-agent's default; v2 is 3.0.5 on, opt-in in lib-agent
+ * 2.1.0 and lib-agent's default; v2 is 3.1.0 on, opt-in in lib-agent
  * (`--skey derived-v2`) - they are DIFFERENT KEYS for the same identity, so a
  * host must keep using whichever one a server already trusts.
  *

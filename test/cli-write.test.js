@@ -266,7 +266,7 @@ test('wipeslot sends a whole-slot wipe (no field byte) and prints EVERY answer',
 /* ------------------------------------------------------------ settings */
 
 test('every python settings command names a preference the library has', async () => {
-  const firmware = fakeFirmware({ version: 'v3.0.5-prodc' });
+  const firmware = fakeFirmware({ version: 'v3.1.0-prodc' });
   const app = await startDesktop({ pipe: firmware });
   try {
     await app.services.device.connect();
@@ -313,14 +313,14 @@ test('a one-way setting needs --yes; with it, it is written', async () => {
   assert.deepEqual([...w.payload], [2]);
 });
 
-test('webagentderivemode and webcryptpolicy are refused by version below 3.0.5, nothing written', async () => {
+test('webagentderivemode and webcryptpolicy are refused by version below 3.1.0, nothing written', async () => {
   for (const argv of [['webagentderivemode', '1'], ['webcryptpolicy', '1', '--yes']]) {
     const r = await run(argv, { version: 'v3.0.4-prodc' });
     assert.equal(r.code, 1, argv.join(' '));
     assert.match(r.err[0], /needs firmware 3\.1\.0 or later/);
     assert.equal(sent(r.firmware, MSG.OKSETSLOT).length, 0);
   }
-  const r = await run(['webderivemode', '2'], { version: 'v3.0.5-prodc' });
+  const r = await run(['webderivemode', '2'], { version: 'v3.1.0-prodc' });
   assert.equal(r.code, 0, r.err.join('\n'));
   assert.equal(slotWrite(sent(r.firmware, MSG.OKSETSLOT)[0]).field, 30);
 });
@@ -345,22 +345,22 @@ test('genkey x/n/s: the all-FF trigger with the type and use bits, python\'s 32 
   assert.equal(r.firmware.generations, 1);
 });
 
-test('genkey c is refused below 3.0.5, where the key would be the constant trigger', async () => {
+test('genkey c is refused below 3.1.0, where the key would be the constant trigger', async () => {
   let r = await run(['genkey', 'ECC2', 'c', 'd'], { version: 'v3.0.4-prodc' });
   assert.equal(r.code, 1);
   assert.match(r.err[0], /cannot generate a Curve25519 key.*Nothing was written/);
   assert.equal(sent(r.firmware, MSG.OKSETPRIV).length, 0);
 
-  r = await run(['genkey', 'ECC2', 'c', 'b'], { version: 'v3.0.5-prodc' });
+  r = await run(['genkey', 'ECC2', 'c', 'b'], { version: 'v3.1.0-prodc' });
   assert.equal(r.code, 0, r.err.join('\n'));
   const [frame] = sent(r.firmware, MSG.OKSETPRIV);
   assert.equal(frame[5], 102);
   assert.equal(frame[6], 0x04 | 0x80 | 0x20, 'Curve25519 | backup | decryption');
 });
 
-test('genkey m generates a post-quantum key on 3.0.5 and says what came back; refused on 3.0.4', async () => {
+test('genkey m generates a post-quantum key on 3.1.0 and says what came back; refused on 3.0.4', async () => {
   const pub = new Uint8Array(1184).map((_, i) => (i * 7 + 3) & 0xff);
-  let r = await run(['genkey', 'ECC3', 'm'], { version: 'v3.0.5-prodc', generates: { 103: pub } });
+  let r = await run(['genkey', 'ECC3', 'm'], { version: 'v3.1.0-prodc', generates: { 103: pub } });
   assert.equal(r.code, 0, r.err.join('\n'));
   assert.deepEqual(r.out, ['Successfully generated ML-KEM-768 key in ECC3 (public key 1184 bytes)']);
 

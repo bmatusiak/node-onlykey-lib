@@ -129,7 +129,7 @@ export function openResponse(response: any, appSecretKey: any, { encrypted, tran
  * changed what it hands back.
  *
  *   before      [ pk_X(32) | mlkem_seed(32) ]                 64 bytes
- *   3.0.5+      [ pk_M(1184) | pk_X(32) ]                   1216 bytes
+ *   3.1.0+      [ pk_M(1184) | pk_X(32) ]                   1216 bytes
  *
  * The old one returned PRIVATE MATERIAL from a PUBLIC KEY request: the host
  * was expected to expand the ML-KEM half from that seed itself. The device
@@ -149,7 +149,7 @@ export function openResponse(response: any, appSecretKey: any, { encrypted, tran
  *
  * @param {number} keytype
  * @param {object} [opts]
- * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.0.5+);
+ * @param {boolean} [opts.xwingCustody]  the device holds both halves (3.1.0+);
  *   REQUIRED for X-Wing, ignored for every other key type
  */
 export function publicKeyWidth(keytype: number, opts?: {

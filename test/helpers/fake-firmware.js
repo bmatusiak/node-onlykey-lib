@@ -191,7 +191,7 @@ function fakeFirmware(opts = {}) {
      * has the spec): a per-device secret K132, the v1 or v2 derivation chosen
      * by the code, real Ed25519 / ECDSA / ECDH, one 64-byte report back.
      * `agent: { k132, v2 = true }`; with v2 false the v2 codes go unanswered,
-     * as they do on firmware before 3.0.5.
+     * as they do on firmware before 3.1.0.
      */
     if (busyLeft > 0 && (msg === MSG.OKSIGN || msg === MSG.OKDECRYPT)) {
       if (frame[6] !== 0xff) busyLeft--; /* the message's last packet */
@@ -337,8 +337,8 @@ function fakeFirmware(opts = {}) {
        * Modelled faithfully in the two ways that matter to a client:
        *
        *   it answers the ONE request, with no button challenge - libraries
-       *   97f0149 removed the PQC keygen gate, and 3.0.5 and release 3.1.0
-       *   generate straight away (ecc_priv_flash: "No confirmation, as for ECC
+       *   97f0149 removed the PQC keygen gate, and 3.1.0
+       *   generates straight away (ecc_priv_flash: "No confirmation, as for ECC
        *   keygen"). It answers from INSIDE the write here, the fastest a device
        *   can, so a client that only starts listening after its write returns
        *   loses the key's first reports and fails these tests; and

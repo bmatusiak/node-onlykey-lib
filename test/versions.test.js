@@ -14,8 +14,6 @@ test('the table is reachable through the public subpath and lists the releases',
   const all = versions.list();
   assert.ok(all.length >= 10, `only ${all.length} releases`);
   for (const v of ['v3.1.0', 'v3.0.4', 'v2.1.0', 'v0.2-beta.8']) assert.ok(all.includes(v), v);
-  /* Dropped 2026-09-29: never released, superseded by the 3.1.0 proposed release. */
-  assert.ok(!all.includes('v3.0.5'), 'v3.0.5 is no longer a row');
 });
 
 test('every row is all pinned or all blank - never half a release', () => {
@@ -25,8 +23,7 @@ test('every row is all pinned or all blank - never half a release', () => {
   /* Pinned 2026-09-28 to commits that are not release tags yet: the 3.1.0
    * proposed release at its PR heads, treated like the signed release (see
    * src/versions/index.js). */
-  assert.deepEqual(versions.pinsFor('v3.1.0'), { libraries: '8d28305', 'OnlyKey-Firmware': '9fceea1' });
-  assert.throws(() => versions.pinsFor('v3.0.5'), /v3.0.5/, 'the dropped v3.0.5 is refused by name');
+  assert.deepEqual(versions.pinsFor('v3.1.0'), { libraries: '37aa531', 'OnlyKey-Firmware': '9fceea1' });
   assert.equal(versions.list()[0], 'v3.1.0', 'the newest release is listed first');
   assert.deepEqual(versions.pinsFor('v3.0.4'),
     { libraries: 'c8804e3', 'OnlyKey-Firmware': '9600daa', file: 'Signed_OnlyKey_3_0_4_STD' });

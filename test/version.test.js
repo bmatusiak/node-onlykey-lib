@@ -222,7 +222,7 @@ test('the challenge formula follows the model, then the version', () => {
    *
    *   v2.1.0 .. v3.0.1   if (onlykeyhw==OK_HW_DUO) { % 3 } else { % 6 }
    *   v3.0.2 .. v3.0.4   the branch is absent; % 6 unconditionally
-   *   master  (3.0.5)    restored, okcore.cpp:7913-7920
+   *   master  (3.1.0)    restored, okcore.cpp:7913-7920
    *
    * So on those three the DEVICE asks for digits it has no buttons for, and a
    * host predicting mod 3 would be wrong on top of it. Predict what will
@@ -231,7 +231,7 @@ test('the challenge formula follows the model, then the version', () => {
   assert.equal(capabilities('UNLOCKEDv3.0.1-prodp').challengeFormula, 'duo');
   assert.equal(capabilities('UNLOCKEDv3.0.2-prodp').challengeFormula, 'modern');
   assert.equal(capabilities('UNLOCKEDv3.0.4-prodp').challengeFormula, 'modern');
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodp').challengeFormula, 'duo');
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodp').challengeFormula, 'duo');
 });
 
 test('a locked DUO already picks the three-button formula', () => {
@@ -343,28 +343,28 @@ test('nothing is assumed about a release that does not exist yet', () => {
    * unmeasured release now reads like the newest one that WAS measured, and
    * stays there until somebody measures it.
    *
-   * 3.0.5 USED TO BE THE EXAMPLE HERE, and is no longer hypothetical: it is
+   * 3.1.0 USED TO BE THE EXAMPLE HERE, and is no longer hypothetical: it is
    * measured, and the answer is 'always'. The gate it used to fail is gone from
    * the source - ok_extension.cpp has no derived_key_challenge_mode bit-3 test
-   * left, and a 3.0.5 tree answers every REQ_PRESS opcode with
+   * left, and a 3.1.0 tree answers every REQ_PRESS opcode with
    * CTAP2_ERR_EXTENSION_NOT_SUPPORTED while the plain opcodes work. Because
    * that is a source-level removal rather than a build difference, it holds for
    * -prod as well as -test.
    *
    * The property this test exists for is unchanged, and 4.0.0 still carries it:
    * an unmeasured release reads like the newest MEASURED one, which is now
-   * 3.0.5 rather than 3.0.4.
+   * 3.1.0 rather than 3.0.4.
    */
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').touchFreeDerive, 'preference');
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').touchFreeDerive, 'preference');
   assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').touchFreeDerive, 'preference');
   /*
-   * postQuantum used to be asserted FALSE here for 3.0.5-prod and 4.0.0-prod.
+   * postQuantum used to be asserted FALSE here for 3.1.0-prod and 4.0.0-prod.
    * That was the build keyword standing in for a measurement, while the
-   * working tree still declared 3.0.4. It declares 3.0.5 now and was
+   * working tree still declared 3.0.4. It declares 3.1.0 now and was
    * measured - a production build of it carries the post-quantum line - so
-   * by this test's own rule a later release reads like 3.0.5: true.
+   * by this test's own rule a later release reads like 3.1.0: true.
    */
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').postQuantum, true);
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').postQuantum, true);
   assert.equal(capabilities('UNLOCKEDv4.0.0-prodc').postQuantum, true);
 });
 
@@ -384,7 +384,7 @@ test('the vendor ORIGIN gates the whole FIDO2 path, and now we speak it', () => 
   assert.equal(capabilities('UNLOCKEDv0.2-beta.8-prodc').vendorOrigin, true);
   assert.equal(capabilities('UNLOCKEDv3.0.4-testc').vendorOrigin, true);
   /* Unmeasured releases inherit the origin too - it has never once moved. */
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').vendorOrigin, true);
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').vendorOrigin, true);
 });
 
 test('the capability follows RP_ID, so a change there cannot pass unnoticed', () => {
@@ -394,7 +394,7 @@ test('the capability follows RP_ID, so a change there cannot pass unnoticed', ()
    * is a comparison, so it answers for whatever RP_ID currently is.
    *
    * The second origin was `onlyagent.app`, known only by the development line
-   * (libraries@a5b731f, never released). Firmware 3.0.5 admits exactly
+   * (libraries@a5b731f, never released). Firmware 3.1.0 admits exactly
    * `apps.crp.to` and `apps.onlykey.io` and drops onlyagent.app entirely
    * (libraries@e44ff6c), so the list now names the two the device will accept.
    */
@@ -439,10 +439,10 @@ test('X-Wing is the development line, and absence is the default', () => {
   /* The pre-bump development line, which declared 3.0.4 and carried okpqc. */
   assert.equal(capabilities('UNLOCKEDv3.0.4-testc').xwingDerive, true);
   /*
-   * 3.0.5 is measured - production build included - and a later release
+   * 3.1.0 is measured - production build included - and a later release
    * reads like the newest measured one, as for the capabilities beside it.
    */
-  assert.equal(capabilities('UNLOCKEDv3.0.5-prodc').xwingDerive, true);
+  assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').xwingDerive, true);
   assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').xwingDerive, true);
   // Unknown defaults to absent - the opposite of touchFreeDerive, because this
   // is a feature old firmware does NOT have rather than one it does.
@@ -747,8 +747,8 @@ test('a status string with no version yields no version, and that is load-bearin
     assert.equal(caps.deriveReqPress, true);
   }
 
-  /* The contrast: unlocking a 3.0.5 key says so, and everything flips. */
-  const known = capabilities(parseStatus('UNLOCKEDv3.0.5-testc'));
+  /* The contrast: unlocking a 3.1.0 key says so, and everything flips. */
+  const known = capabilities(parseStatus('UNLOCKEDv3.1.0-testc'));
   assert.equal(known.transitV2, true);
   assert.equal(known.deriveReqPress, false);
   assert.equal(known.xwingDeviceCustody, true);
@@ -770,7 +770,7 @@ test('a status string with no version yields no version, and that is load-bearin
  * capture test on every one of their runs before this existed.
  */
 test('the backup digest chain is a v2.1.2 feature, and older releases have none', () => {
-  for (const v of ['v2.1.2', 'v3.0.0', 'v3.0.2', 'v3.0.4', 'v3.0.5']) {
+  for (const v of ['v2.1.2', 'v3.0.0', 'v3.0.2', 'v3.0.4', 'v3.1.0']) {
     assert.equal(capabilities(`UNLOCKED${v}-prodc`).backupDigest, true,
       `${v} should carry a backup digest`);
   }
@@ -797,7 +797,7 @@ test('the backup digest chain is a v2.1.2 feature, and older releases have none'
  */
 test('an unrecognised pubkey slot is silent only from v2.1.0', () => {
   assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').unknownSlotIsSilent, false);
-  for (const v of ['v2.1.0', 'v2.1.2', 'v3.0.4', 'v3.0.5']) {
+  for (const v of ['v2.1.0', 'v2.1.2', 'v3.0.4', 'v3.1.0']) {
     assert.equal(capabilities(`UNLOCKED${v}-prodc`).unknownSlotIsSilent, true,
       `${v} should drop an unrecognised slot`);
   }
@@ -821,7 +821,7 @@ test('a press-mode default is only written from v3.0.2', () => {
     assert.equal(capabilities(`UNLOCKED${v}-prodc`).pressModeDefaulted, false,
       `${v} leaves the mode unwritten, so the challenge is the only path`);
   }
-  for (const v of ['v3.0.2', 'v3.0.4', 'v3.0.5']) {
+  for (const v of ['v3.0.2', 'v3.0.4', 'v3.1.0']) {
     assert.equal(capabilities(`UNLOCKED${v}-prodc`).pressModeDefaulted, true,
       `${v} writes the default at first boot`);
   }
@@ -868,14 +868,14 @@ test('the stale-fade guard arrives in v2.1.0, not later', () => {
 test('derive over CTAPHID is a v2.1.0 feature', () => {
   assert.equal(capabilities('UNLOCKEDv0.2-beta.8c').webDerive, false,
     'the 2019 beta has no derive opcodes in its FIDO2 extension');
-  for (const v of ['v2.1.0', 'v2.1.2', 'v3.0.4', 'v3.0.5']) {
+  for (const v of ['v2.1.0', 'v2.1.2', 'v3.0.4', 'v3.1.0']) {
     assert.equal(capabilities(`UNLOCKED${v}-prodc`).webDerive, true,
       `${v} answers the derive opcodes`);
   }
 });
 
 /*
- * THREE GATES AT THE v3.0.4 -> v3.0.5 LINE, each read at the pins
+ * THREE GATES AT THE v3.0.4 -> v3.1.0 LINE, each read at the pins
  * (libraries c8804e3 for v3.0.4, b412e78 for the working tree) and pinned on
  * both sides here because until now none of them was.
  *
@@ -884,42 +884,42 @@ test('derive over CTAPHID is a v2.1.0 feature', () => {
  * fields 21, 22 and 30 refuse anything above USER_INPUT_NONE.
  *
  * xwingDeviceCustody: no file in libraries@c8804e3 mentions X-Wing, so no
- * release has either reply shape and the bound can only be 3.0.5.
+ * release has either reply shape and the bound can only be 3.1.0.
  *
  * deviceVault: a product decision rather than a firmware limit (see its
  * comment in version.js). Its premise is checkable, though: 40464ca, which
  * moved the rpId out of the HKDF, is not an ancestor of c8804e3 - so v3.0.4
  * really does derive the old way and a vault sealed there would strand.
  */
-test('the enum, X-Wing custody and the vault all begin at v3.0.5', () => {
+test('the enum, X-Wing custody and the vault all begin at v3.1.0', () => {
   for (const v of ['v3.0.2', 'v3.0.4']) {
     const caps = capabilities(`UNLOCKED${v}-prodc`);
     assert.equal(caps.userInputModeEnum, false, `${v} stores field 21 as a raw byte`);
     assert.equal(caps.xwingDeviceCustody, false, `${v} has no X-Wing to hold`);
     assert.equal(caps.deviceVault, false, `${v} derives with the rpId in the salt`);
   }
-  const caps = capabilities('UNLOCKEDv3.0.5-testc');
-  assert.equal(caps.userInputModeEnum, true, 'v3.0.5 refuses a field-21 value above 2');
-  assert.equal(caps.xwingDeviceCustody, true, 'v3.0.5 returns the 1216-byte recipient');
-  assert.equal(caps.deviceVault, true, 'v3.0.5 derives without the rpId');
+  const caps = capabilities('UNLOCKEDv3.1.0-testc');
+  assert.equal(caps.userInputModeEnum, true, 'v3.1.0 refuses a field-21 value above 2');
+  assert.equal(caps.xwingDeviceCustody, true, 'v3.1.0 returns the 1216-byte recipient');
+  assert.equal(caps.deviceVault, true, 'v3.1.0 derives without the rpId');
 });
 
 /*
  * curve25519Keygen: okcrypto_generate_random_key at libraries c8804e3 (v3.0.4)
  * branches on types 1, 2 and 3 only, so a type-4 generation flashes the all-FF
- * trigger as the key; the KEYTYPE_CURVE25519 branch is at 57340df (v3.0.5)
+ * trigger as the key; the KEYTYPE_CURVE25519 branch is at 57340df (v3.1.0)
  * and eb25290 (v3.1.0). Types 1-3 have no flag because every release has them.
  */
-test('on-device Curve25519 generation makes a random key only from v3.0.5', () => {
+test('on-device Curve25519 generation makes a random key only from v3.1.0', () => {
   for (const v of ['v2.1.0', 'v3.0.2', 'v3.0.4']) {
     assert.equal(capabilities(`UNLOCKED${v}-prodc`).curve25519Keygen, false,
       `${v} stores the generate trigger itself as the key`);
   }
-  assert.equal(capabilities('UNLOCKEDv3.0.5-testc').curve25519Keygen, true);
+  assert.equal(capabilities('UNLOCKEDv3.1.0-testc').curve25519Keygen, true);
   assert.equal(capabilities('UNLOCKEDv3.1.0-prodc').curve25519Keygen, true);
 });
 
-test('"incorrect challenge" at OKPING is final only from v3.0.5', () => {
+test('"incorrect challenge" at OKPING is final only from v3.1.0', () => {
   // Read at the pins: the response-too-large and ML-DSA readback fixes, and
   // 8b3d5c0's split messages, exist only after libraries c8804e3 /
   // OnlyKey-Firmware 9600daa.
@@ -927,24 +927,24 @@ test('"incorrect challenge" at OKPING is final only from v3.0.5', () => {
     assert.equal(capabilities(`UNLOCKED${v}-prodc`).challengeErrorIsFinal, false,
       `${v} can say it about a challenge that was entered correctly`);
   }
-  assert.equal(capabilities('UNLOCKEDv3.0.5-testc').challengeErrorIsFinal, true,
-    'v3.0.5 says it only with nothing staged');
+  assert.equal(capabilities('UNLOCKEDv3.1.0-testc').challengeErrorIsFinal, true,
+    'v3.1.0 says it only with nothing staged');
 });
 
 /*
- * 3.0.5 HAS A NUMBER OF ITS OWN, so the development line's features follow
+ * 3.1.0 HAS A NUMBER OF ITS OWN, so the development line's features follow
  * the version there - not the build keyword.
  *
  * Before the bump the working tree declared 3.0.4 like the release, and only
- * -test vs -prod told them apart. It declares 3.0.5 now, and a PRODUCTION
+ * -test vs -prod told them apart. It declares 3.1.0 now, and a PRODUCTION
  * build of it has post-quantum and X-Wing like a -test one: the soft key's
- * v3.0.5 column, built production, skipped the X-Wing and age tests only
- * because xwingDerive read the keyword. Below 3.0.5 the keyword still
+ * v3.1.0 column, built production, skipped the X-Wing and age tests only
+ * because xwingDerive read the keyword. Below 3.1.0 the keyword still
  * separates the pre-bump development tree from the release.
  */
-test('post-quantum and X-Wing follow the version from 3.0.5, the keyword below it', () => {
+test('post-quantum and X-Wing follow the version from 3.1.0, the keyword below it', () => {
   const at = (v) => capabilities(`UNLOCKED${v}`);
-  for (const v of ['v3.0.5-prodc', 'v3.0.5-testc']) {
+  for (const v of ['v3.1.0-prodc', 'v3.1.0-testc']) {
     assert.equal(at(v).postQuantum, true, `${v} carries the post-quantum line`);
     assert.equal(at(v).xwingDerive, true, `${v} carries X-Wing`);
     assert.equal(at(v).touchFreeDerive, 'preference', `${v} gates touch-free on field 30`);

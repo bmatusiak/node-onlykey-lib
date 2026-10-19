@@ -246,8 +246,8 @@ test('a confirmation timeout IS terminal', async () => {
   );
 });
 
-test('from 3.0.5 an incorrect challenge ends the poll instead of spending the budget', async () => {
-  // Same reply as the transient test above; only the flag differs. On 3.0.5
+test('from 3.1.0 an incorrect challenge ends the poll instead of spending the budget', async () => {
+  // Same reply as the transient test above; only the flag differs. On 3.1.0
   // the string means nothing is staged and nothing will be.
   let polls = 0;
   await assert.rejects(

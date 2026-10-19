@@ -865,9 +865,9 @@ const SETTINGS = [
   ['hmackeymode', 'hmacChallengeMode', 'HMAC challenge: button press or none'],
   ['storedkeymode', 'storedChallengeMode', 'how use of a stored key is approved'],
   ['derivedkeymode', 'derivedChallengeMode', 'how use of an SSH/GPG derived key is approved'],
-  ['webagentderivemode', 'webAgentDeriveMode', 'how web and agent derived keys are approved (3.0.5+)'],
+  ['webagentderivemode', 'webAgentDeriveMode', 'how web and agent derived keys are approved (3.1.0+)'],
   ['webderivemode', 'webAgentDeriveMode', 'python\'s older name for webagentderivemode'],
-  ['webcryptpolicy', 'webcryptPolicy', 'what the browser may do over FIDO2 (3.0.5+, cannot be undone)'],
+  ['webcryptpolicy', 'webcryptPolicy', 'what the browser may do over FIDO2 (3.1.0+, cannot be undone)'],
 ];
 
 for (const [name, preference, summary] of SETTINGS) {
@@ -887,7 +887,7 @@ for (const [name, preference, summary] of SETTINGS) {
          * and webcryptpolicy as readily as the LED brightness; the library
          * marks them `oneWay` because the firmware gives no way back, so
          * this will not write one without --yes. The row can be absent -
-         * webcryptpolicy on a key older than 3.0.5 - and then setPreference
+         * webcryptpolicy on a key older than 3.1.0 - and then setPreference
          * refuses it by version without writing anything.
          */
         const row = device.preferences().find((p) => p.name === preference);
@@ -974,7 +974,7 @@ COMMANDS.genkey = {
       /*
        * The library's generateEccKey: python's all-FF trigger, sent ONCE (a
        * resend generates again), and the Curve25519 gate python does not have
-       * - before 3.0.5 the firmware stores the trigger itself as the key and
+       * - before 3.1.0 the firmware stores the trigger itself as the key and
        * says "Successfully set ECC Key" (capability curve25519Keygen). The
        * gate's refusal is a plain Error and reaches the user as its message.
        */
@@ -1371,7 +1371,7 @@ function sharedDevice(io, opts, { idleMs = 10000 } = {}) {
 /*
  * lib-agent's --skey values that name the DERIVED key (libagent/device/
  * onlykey.py convert_keyslot, _parse_slot_value): ECC32 / 132 is v1, the
- * default; derived-v2 / ECC32v2 / 232 is v2 (3.0.5 on).
+ * default; derived-v2 / ECC32v2 / 232 is v2 (3.1.0 on).
  *
  * ECC1-16 - a key STORED in a slot - for gpg only (allowSlot; owner,
  * 2026-10-03: a PGP pair made in Key Chain, ECC2 signing and ECC1 decrypt,

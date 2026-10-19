@@ -1002,7 +1002,7 @@ test('a supplied ctap without getAssertion fails the composition, not the first 
 test('X-Wing on a LOCKED vendor device is refused by name - the old shape is never guessed', async () => {
   /*
    * ok-rn's hard key: connected while locked, so the status said INITIALIZED
-   * and no version. The derive used to go ahead in the pre-3.0.5 shape. Now
+   * and no version. The derive used to go ahead in the pre-3.1.0 shape. Now
    * the vendor OKCONNECT is asked again (set_time - a status and no prompt),
    * and with still no version the operation refuses before a derive is sent.
    */

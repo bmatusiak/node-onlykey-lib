@@ -325,12 +325,12 @@ test('preferences() describes the whole settings surface', async () => {
   await app.destroy();
 });
 
-test('the user-input fields change SHAPE at 3.0.5, and the table follows', async () => {
+test('the user-input fields change SHAPE at 3.1.0, and the table follows', async () => {
   /*
    * THE SAME BYTE, READ TWO WAYS, and nothing on the wire says which.
    *
-   * Before 3.0.5 field 21 is a bitmask whose BIT 3 (value 8) is the only way
-   * to get a derive without a touch. From 3.0.5 it is a 0/1/2 enum and
+   * Before 3.1.0 field 21 is a bitmask whose BIT 3 (value 8) is the only way
+   * to get a derive without a touch. From 3.1.0 it is a 0/1/2 enum and
    * set_slot() refuses anything above USER_INPUT_NONE with "Error invalid
    * user input mode" - so a screen still drawing the old shape offers a
    * toggle that writes 8 and is refused.
@@ -339,7 +339,7 @@ test('the user-input fields change SHAPE at 3.0.5, and the table follows', async
    * OPERATION_DENIED for a whole session; the e2e was fixed for it and this
    * table, which the UI renders from, was not.
    */
-  const app = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  const app = await start(fakeFirmware({ version: 'v3.1.0-testc' }));
   const device = app.services.device;
   await device.connect();
 
@@ -377,7 +377,7 @@ test('the user input modes read as the desktop App reads them', async () => {
    * 3.1.0; that rule is 21 and 22's), and field 26 had no choices at all, so
    * nothing said that its 0 is the PRESS - the reverse of its neighbours.
    */
-  const app = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  const app = await start(fakeFirmware({ version: 'v3.1.0-testc' }));
   const device = app.services.device;
   await device.connect();
   const rows = device.preferences();
@@ -447,7 +447,7 @@ test('an older key keeps the bitmask, because there the bits are correct', async
     + 'user believed they had chosen "challenge"');
 
   /*
-   * BIT 0 IS THE PRESS, not the challenge: set, pre-3.0.5 firmware takes
+   * BIT 0 IS THE PRESS, not the challenge: set, pre-3.1.0 firmware takes
    * CRYPTO_AUTH = 3, the press path; clear, it hashes a challenge code
    * (libraries 20e1623 okcore.cpp:7128). It was labelled the other way round.
    */
@@ -466,11 +466,11 @@ test('an unknown version falls to the legacy shape, which fails loudly', async (
    * A LOCKED DEVICE REPORTS NO VERSION (see session.observeStatus), so this
    * case is reachable on the ordinary path rather than being a curiosity.
    *
-   * Legacy is the safe default: 3.0.5 REFUSES the bits with a message that
+   * Legacy is the safe default: 3.1.0 REFUSES the bits with a message that
    * names the problem, whereas handing the enum to an older key writes bit 0
    * silently while the user believes they chose "challenge".
    */
-  const app = await start(fakeFirmware({ pin: '1234561', version: 'v3.0.5-testc' }));
+  const app = await start(fakeFirmware({ pin: '1234561', version: 'v3.1.0-testc' }));
   const device = app.services.device;
 
   const before = await device.connect();
@@ -507,10 +507,10 @@ test('fields 30 and 31 are offered only where they exist', async () => {
   );
   await old.destroy();
 
-  const cur = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  const cur = await start(fakeFirmware({ version: 'v3.1.0-testc' }));
   await cur.services.device.connect();
   const curNames = cur.services.device.preferences().map((p) => p.name);
-  for (const n of NEW) assert.ok(curNames.includes(n), `${n} missing on v3.0.5`);
+  for (const n of NEW) assert.ok(curNames.includes(n), `${n} missing on v3.1.0`);
   await cur.destroy();
 });
 
@@ -526,7 +526,7 @@ test('the table says which writes cannot be taken back', async () => {
    * is the point: the next irreversible setting should not be able to arrive
    * quietly and be adopted by every screen that renders from this table.
    */
-  const app = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  const app = await start(fakeFirmware({ version: 'v3.1.0-testc' }));
   const device = app.services.device;
   await device.connect();
 
@@ -564,8 +564,8 @@ test('the webcrypt policy is a validated bitmask, not a free byte', async () => 
    * latch is invisible from the host - but the note has to SAY so, because it
    * is the only warning a GUI author will ever get.
    */
-  /* A 3.0.5 key, connected: field 31 does not exist on anything older. */
-  const app = await start(fakeFirmware({ version: 'v3.0.5-testc' }));
+  /* A 3.1.0 key, connected: field 31 does not exist on anything older. */
+  const app = await start(fakeFirmware({ version: 'v3.1.0-testc' }));
   await app.services.device.connect();
   const byName = Object.fromEntries(
     app.services.device.preferences().map((p) => [p.name, p]),
@@ -1394,7 +1394,7 @@ function fakePublicKey(bytes) {
 test('generating an X-Wing key sends the trigger ONCE and presses nothing', async () => {
   /*
    * The firmware generates on the one request - no button challenge since
-   * libraries 97f0149, which 3.0.5 and release 3.1.0 carry (see generateKey).
+   * libraries 97f0149, which 3.1.0 carries (see generateKey).
    * The things a client can still get wrong, each with real damage on a key:
    *
    *   PRESSING. A caller told there was a challenge pressed on the user's

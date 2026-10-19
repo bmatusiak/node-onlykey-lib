@@ -344,7 +344,7 @@ function supportsFwUpdate(version) {
  * full extension with no device setting required.
  *
  * The development line is the only build that knows `onlyagent.app`, and
- * nothing is assumed forward - a released 3.0.5 reads like a release until
+ * nothing is assumed forward - a released 3.1.0 reads like a release until
  * somebody measures its sources.
  */
 function vendorOrigins(info, unreleased) {
@@ -355,13 +355,13 @@ function vendorOrigins(info, unreleased) {
    * until a working tree could be built as production.
    */
   /*
-   * 3.0.5 HAS A NUMBER OF ITS OWN, and its origin table is not the old
+   * 3.1.0 HAS A NUMBER OF ITS OWN, and its origin table is not the old
    * development line's. libraries@e44ff6c ("Production origins: apps.crp.to
    * and apps.onlykey.io; drop onlyagent.app") - device.cpp@b412e78:118-128
-   * trusts exactly those two. So from 3.0.5 the answer is the version's,
+   * trusts exactly those two. So from 3.1.0 the answer is the version's,
    * whatever the build keyword says.
    */
-  if (atLeast(info.release, [3, 0, 5])) {
+  if (atLeast(info.release, [3, 1, 0])) {
     origins.push('apps.onlykey.io');
     return origins;
   }
@@ -527,7 +527,7 @@ const gestures = (() => {
      *   v3.0.2 (5d7ce7a)   the `if` is GONE; `% 6` unconditionally
      *   v3.0.3 (a133bea)   same
      *   v3.0.4 (c8804e3)   same - the NEWEST SIGNED RELEASE
-     *   master  (3.0.5)    restored, okcore.cpp:7913-7920
+     *   master  (3.1.0)    restored, okcore.cpp:7913-7920
      *
      * Not an artefact of reading the wrong function: v3.0.1's okcore.cpp has
      * 27 `OK_HW_DUO` references and v3.0.2's has 26, and the missing one is
@@ -541,14 +541,14 @@ const gestures = (() => {
      * well, and two wrongs would show as "Error incorrect challenge was
      * entered" with nothing to say which side produced it.
      *
-     * Kept as a window rather than `below 3.0.5`, because the branch existed
+     * Kept as a window rather than `below 3.1.0`, because the branch existed
      * before it and exists after it; what is unusual is the gap.
      */
     challengeFormula:
       info.versionField === BREAKING_BETA_8C
         ? 'legacy'
         : (info.model === MODEL.DUO
-          && !(atLeast(info.release, [3, 0, 2]) && !atLeast(info.release, [3, 0, 5])))
+          && !(atLeast(info.release, [3, 0, 2]) && !atLeast(info.release, [3, 1, 0])))
             ? 'duo'
             : 'modern',
 
@@ -621,11 +621,11 @@ const gestures = (() => {
      * development tree declared 3.0.4 - the macro went unbumped from 2022 -
      * so released v3.0.4 and the bench key shared a number.
      *
-     * IT HAS A NUMBER NOW. The working tree declares 3.0.5 (onlykey.h), and
+     * IT HAS A NUMBER NOW. The working tree declares 3.1.0 (onlykey.h), and
      * the question this used to guess at has been measured: libraries@b412e78
-     * carries the whole post-quantum line, and the soft key's v3.0.5 column -
-     * built PRODUCTION - passes the post-quantum suites. So from 3.0.5 the
-     * version answers, and a production build of it (3.0.5-prodc) has the
+     * carries the whole post-quantum line, and the soft key's v3.1.0 column -
+     * built PRODUCTION - passes the post-quantum suites. So from 3.1.0 the
+     * version answers, and a production build of it (3.1.0-prodc) has the
      * feature just as a -testc one does. The keyword clause below stays for
      * keys still on a pre-bump development build (v3.0.4-testc).
      *
@@ -636,13 +636,13 @@ const gestures = (() => {
      *
      * `atLeast(3.0.4)` as well as the keyword, so that a developer building
      * v3.0.2 with DEBUG on is not told it has post-quantum support. Nothing
-     * is assumed forward past what was measured: 3.0.5 is in because it was
+     * is assumed forward past what was measured: 3.1.0 is in because it was
      * measured, not because it is next.
      *
      * ok-rn/FINDING-capability-guesses-about-the-next-release-were-wrong.md
      */
     postQuantum:
-      atLeast(info.release, [3, 0, 5]) ||
+      atLeast(info.release, [3, 1, 0]) ||
       unreleased === true ||
       (unreleased === undefined &&
         info.build === BUILD.DEBUG &&
@@ -786,13 +786,13 @@ const gestures = (() => {
       }
 
       /*
-       * v3.0.5 MOVED THE GATE, it did not remove it - and this value answers
+       * v3.1.0 MOVED THE GATE, it did not remove it - and this value answers
        * for the SHARED SECRET, which is the operation that is gated.
        *
        * This first read 'always', on the reasoning that
        * `derived_key_challenge_mode` bit 3 is gone from ok_extension.cpp and
        * presence is decided by what is asked for. Half right, and the wrong
-       * half to build on. Measured against a 3.0.5 device: a public-key
+       * half to build on. Measured against a 3.1.0 device: a public-key
        * derivation is indeed never gated, but a shared secret is gated by
        * `web_agent_derive_gate()` reading FIELD 30, which DEFAULTS TO
        * USER_INPUT_PRESS. Saying 'always' told callers there was nothing to
@@ -803,10 +803,10 @@ const gestures = (() => {
        * needs it. WHICH setting changed - field 30's enum, not field 21's bit 3
        * - and that is what `deriveReqPress` distinguishes.
        *
-       * A public-key derive needs nothing on any 3.0.5 build. Callers that only
+       * A public-key derive needs nothing on any 3.1.0 build. Callers that only
        * fetch public keys can ignore this value entirely.
        */
-      if (atLeast(info.release, [3, 0, 5])) return 'preference';
+      if (atLeast(info.release, [3, 1, 0])) return 'preference';
 
       /*
        * FROM v3.0.2 ON IT IS BROKEN ON EVERY RELEASE, and working only in the
@@ -826,7 +826,7 @@ const gestures = (() => {
        * started building releases as they ship rather than forcing DEBUG on,
        * which had every release reporting -test too.
        *
-       * This clause only answers BELOW 3.0.5 now: 3.0.5 has its own number and
+       * This clause only answers BELOW 3.1.0 now: 3.1.0 has its own number and
        * returned 'preference' above, whatever its build keyword. What is left
        * here is v3.0.2-v3.0.4, where a -test build is the pre-bump development
        * tree and a -prod build is the release. Nothing is assumed about a
@@ -843,7 +843,7 @@ const gestures = (() => {
      * Whether the REQ_PRESS derive opcodes (3 and 4) exist on this firmware.
      *
      * They were DERIVE_PUBLIC_KEY_REQ_PRESS and DERIVE_SHARED_SECRET_REQ_PRESS,
-     * and v3.0.5 removed them. The numbers are deliberately left burned
+     * and v3.1.0 removed them. The numbers are deliberately left burned
      * upstream rather than reused - ok_extension.cpp refuses anything above
      * DERIVE_SHAREDSEC outright - with the stated reason that "an old client
      * still sending them must fail loudly, not be silently reinterpreted".
@@ -856,17 +856,17 @@ const gestures = (() => {
      * DOMAIN, through `additional_data[0] = 1` in the HKDF salt. Two keys per
      * label, chosen by an opcode named after touches.
      *
-     * So the right client behaviour on v3.0.5+ is not to refuse, and not to
+     * So the right client behaviour on v3.1.0+ is not to refuse, and not to
      * ask for a press some other way - it is to send the plain opcode and let
      * the firmware decide presence. derive() does exactly that.
      *
-     * CONSEQUENCE WORTH KNOWING: on v3.0.5 `additional_data[0]` is always 0,
+     * CONSEQUENCE WORTH KNOWING: on v3.1.0 `additional_data[0]` is always 0,
      * so anything sealed against the REQ_PRESS domain on older firmware
      * derives a different key here and will not open. That is upstream's
      * decision and not something a host can paper over - the old domain is
      * unreachable, because the opcode that selected it is refused.
      */
-    deriveReqPress: !atLeast(info.release, [3, 0, 5]),
+    deriveReqPress: !atLeast(info.release, [3, 1, 0]),
 
     /**
      * Whether this firmware speaks FIDO2 transit v2 (counter IV + GCM tag).
@@ -879,15 +879,15 @@ const gestures = (() => {
      * comparison and not a measurement of behaviour. onlykey.h, beside the
      * version macros:
      *
-     *   "3.0.5 is the FIRMWARE VERSION GATE for FIDO2 transit v2 (counter IV +
+     *   "3.1.0 is the FIRMWARE VERSION GATE for FIDO2 transit v2 (counter IV +
      *    GCM tag; see okcrypto.cpp). The host reads this string out of the
      *    plain OKCONNECT response - which is not encrypted - and picks its
-     *    framing from it, so anything below 3.0.5 keeps the legacy scheme and
+     *    framing from it, so anything below 3.1.0 keeps the legacy scheme and
      *    anything at or above it speaks v2."
      *
      * So the threshold is published rather than inferred, and guessing forward
      * - the mistake this file is built to avoid - is not a risk here: a future
-     * 4.x speaks v2 because the firmware says everything at or above 3.0.5
+     * 4.x speaks v2 because the firmware says everything at or above 3.1.0
      * does, not because we are extrapolating from a release we measured.
      *
      * NOT DETECTABLE FROM THE WIRE. A v1 body and a v2 frame are both just
@@ -905,7 +905,7 @@ const gestures = (() => {
      * That `#ifdef STD_VERSION` would matter if a non-standard build existed -
      * it compiles both functions down to `return len`, no counter, no tag, no
      * encryption - but OnlyKey-Firmware@4a93dab retired the International
-     * Travel Edition and resolved STD_VERSION, so from 3.0.5 there is no
+     * Travel Edition and resolved STD_VERSION, so from 3.1.0 there is no
      * edition to be on the wrong side of.
      *
      * It would be undetectable if there were: the status string carries the
@@ -914,10 +914,10 @@ const gestures = (() => {
      * matches it rather than inventing a second definition of the contract.
      *
      * Older pinned releases still HAVE the edition, which is why nothing else
-     * in this file drops its edition handling - but they are all below 3.0.5
+     * in this file drops its edition handling - but they are all below 3.1.0
      * and therefore speak v1 regardless.
      */
-    transitV2: atLeast(info.release, [3, 0, 5]),
+    transitV2: atLeast(info.release, [3, 1, 0]),
     /**
      * Whether a captured backup carries a DIGEST to check it against.
      *
@@ -1070,7 +1070,7 @@ const gestures = (() => {
      * It used to answer a public-key request with
      * `[pk_X(32) | mlkem_seed(32)]` and a decapsulation with `ss_X`, leaving
      * the host to expand the ML-KEM half from the seed and combine - which
-     * meant A PUBLIC-KEY REQUEST RETURNED PRIVATE MATERIAL. From 3.0.5 the
+     * meant A PUBLIC-KEY REQUEST RETURNED PRIVATE MATERIAL. From 3.1.0 the
      * device does the whole thing:
      *
      *   OKGETPUBKEY  ->  [pk_M(1184) | pk_X(32)]      the real recipient, 1216
@@ -1083,9 +1083,9 @@ const gestures = (() => {
      * the test asserting "64 bytes and the halves differ" passed throughout.
      *
      * X-Wing is development-line only (see `xwingDerive`), so the 64-byte shape
-     * exists only on a pre-3.0.5 development build. No release has either.
+     * exists only on a pre-3.1.0 development build. No release has either.
      */
-    xwingDeviceCustody: atLeast(info.release, [3, 0, 5]),
+    xwingDeviceCustody: atLeast(info.release, [3, 1, 0]),
 
     /**
      * Whether fields 21, 22 and 30 are a 0/1/2 ENUM rather than a BITFIELD.
@@ -1094,13 +1094,13 @@ const gestures = (() => {
      * which - so it has to be decided from the version like everything else
      * here.
      *
-     * Before 3.0.5, field 21 is a bitmask: bit 0 raises a three-button
+     * Before 3.1.0, field 21 is a bitmask: bit 0 raises a three-button
      * challenge on raw-HID derives, and BIT 3 (value 8) is what lets a FIDO2
-     * derive happen without a touch. From 3.0.5 the same field is an enum -
+     * derive happen without a touch. From 3.1.0 the same field is an enum -
      * 0 challenge, 1 press, 2 none - and `set_slot()` REFUSES anything above
      * USER_INPUT_NONE with "Error invalid user input mode".
      *
-     * So a host that writes 8 to a 3.0.5 key is refused, and a host that
+     * So a host that writes 8 to a 3.1.0 key is refused, and a host that
      * writes 1 to an older key has asked for bit 0, which is a different
      * setting on a different code path. Neither failure names the version.
      *
@@ -1108,25 +1108,25 @@ const gestures = (() => {
      * answer OPERATION_DENIED for a whole debugging session, because the
      * touch-free setup silently never took (ok-rn@5230231).
      *
-     * `2` is NOT universally available on 21 and 22 even at 3.0.5 - builds
+     * `2` is NOT universally available on 21 and 22 even at 3.1.0 - builds
      * without OK_ALLOW_NO_PRESS (every production build) refuse it there with
      * "unsupported user input mode", and a stale 2 in EEPROM fails closed to
      * the challenge code. Field 30 takes it on every build - its setter has
      * no such test; a caller offering it on 21 or 22 is offering an error.
      */
-    userInputModeEnum: atLeast(info.release, [3, 0, 5]),
+    userInputModeEnum: atLeast(info.release, [3, 1, 0]),
 
     /**
      * Whether an ON-DEVICE Curve25519 (X25519, key type 4) generation makes a
      * random key.
      *
-     * Before 3.0.5 it DOES NOT, and nothing says so. okcrypto_generate_random_key
+     * Before 3.1.0 it DOES NOT, and nothing says so. okcrypto_generate_random_key
      * has branches for types 1, 2 and 3 only (libraries c8804e3, the v3.0.4
      * pin, okcrypto.cpp:265-272); type 4 falls through every one of them, the
      * caller's buffer - the all-FF generate trigger itself - is what gets
      * encrypted and flashed, and the device answers "Successfully set ECC
      * Key". Every such key on every such device is the same key. The
-     * `KEYTYPE_CURVE25519` branch (RNG2 into the scalar) arrives with 3.0.5
+     * `KEYTYPE_CURVE25519` branch (RNG2 into the scalar) arrives with 3.1.0
      * (57340df, okcrypto.cpp:829) and is in release 3.1.0 (eb25290:583).
      *
      * So a generation of type 4 is REFUSED where this is false, rather than
@@ -1134,7 +1134,7 @@ const gestures = (() => {
      * such gate and stores the constant key on v3.0.4. Types 1-3 generate on
      * every release; the post-quantum types are `postQuantum`.
      */
-    curve25519Keygen: atLeast(info.release, [3, 0, 5]),
+    curve25519Keygen: atLeast(info.release, [3, 1, 0]),
 
     /**
      * Whether the DEVICE VAULT is offered on this firmware.
@@ -1148,7 +1148,7 @@ const gestures = (() => {
      * It is a PRODUCT decision, taken on 2026-09-23, and the reasoning is
      * about data rather than about what the silicon can do.
      *
-     * 3.0.5 changed how a derived key is built (libraries@40464ca: the rpId
+     * 3.1.0 changed how a derived key is built (libraries@40464ca: the rpId
      * left okcrypto_hkdf()'s salt for a fixed info string), so anything sealed
      * on older firmware stops opening after an upgrade - silently, with the
      * blobs still present. The seed survives; the construction does not. And
@@ -1167,7 +1167,7 @@ const gestures = (() => {
      * the derive is genuinely available and a caller that means it (a test, a
      * recovery tool reading old data on purpose) must still be able to.
      */
-    deviceVault: atLeast(info.release, [3, 0, 5]),
+    deviceVault: atLeast(info.release, [3, 1, 0]),
 
     /**
      * Whether "Error incorrect challenge was entered", answered to an OKPING
@@ -1180,7 +1180,7 @@ const gestures = (() => {
      * (protocol/chunk.js TRANSIENT_ERROR) came from onlykey-3rd-party.js,
      * which had seen it followed by a success.
      *
-     * On 3.0.5 a success cannot pass through that state.
+     * On 3.1.0 a success cannot pass through that state.
      * okcore_run_pending_op() runs the operation synchronously and
      * store_FIDO_response() stages the answer before CRYPTO_AUTH clears, on a
      * single-threaded loop, so no poll lands between them. The two known ways
@@ -1194,7 +1194,7 @@ const gestures = (() => {
      * Older releases keep the transient reading, because those fixes are not
      * in them and "a success follows" was observed on one.
      */
-    challengeErrorIsFinal: atLeast(info.release, [3, 0, 5]),
+    challengeErrorIsFinal: atLeast(info.release, [3, 1, 0]),
 
     /**
      * Whether the X-Wing hybrid key type exists at all.
@@ -1231,13 +1231,13 @@ const gestures = (() => {
      * a screen that produces an identity the device cannot use.
      */
     /*
-     * From 3.0.5 by version - the working tree declares it, carries X-Wing
+     * From 3.1.0 by version - the working tree declares it, carries X-Wing
      * (libraries@b412e78) and a PRODUCTION build of it has it too: the soft
-     * key's v3.0.5 column skipped the X-Wing and age tests only because this
-     * read the keyword. Below 3.0.5 the keyword still separates the pre-bump
+     * key's v3.1.0 column skipped the X-Wing and age tests only because this
+     * read the keyword. Below 3.1.0 the keyword still separates the pre-bump
      * development tree (-test) from the release (-prod).
      */
-    xwingDerive: atLeast(info.release, [3, 0, 5])
+    xwingDerive: atLeast(info.release, [3, 1, 0])
       || (info.build === BUILD.DEBUG && atLeast(info.release, [3, 0, 4])),
 
     /**
@@ -1251,13 +1251,13 @@ const gestures = (() => {
 
     /**
      * AGENT DERIVATION v2 - the HKDF derivation (info "onlykey/agent/v2"),
-     * codes 232 and 221-224. Present in 3.0.5 (libraries 57340df) and release
+     * codes 232 and 221-224. Present in 3.1.0 (libraries 57340df) and release
      * 3.1.0 (eb25290), absent from 3.0.4 and earlier, where 232 has no branch
      * and a request goes unanswered. 3.1.0 has no capabilities report to ask
      * ('c'), so the version is the only signal. A DIFFERENT key from v1 for the
      * same identity - never a silent upgrade.
      */
-    agentDerivationV2: atLeast(info.release, [3, 0, 5]),
+    agentDerivationV2: atLeast(info.release, [3, 1, 0]),
 
     /**
      * How the device asks for a touch, and therefore how a host must press.

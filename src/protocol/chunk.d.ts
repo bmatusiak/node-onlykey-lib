@@ -31,7 +31,7 @@ export function nextPacketNum(): number;
  * duplicate guard reads that 1 as `opt3 <= last` and DROPS the rest silently.
  *
  * Restarting at 1 is safe at an operation boundary and nowhere else. From
- * 3.0.5 the high-water mark is cleared by the final chunk of the previous
+ * 3.1.0 the high-water mark is cleared by the final chunk of the previous
  * operation (`if (opt2) last_request_opt3 = 0`, ok_extension.cpp:701); on
  * 3.0.4 and earlier it is cleared by wipetasks(), which the tunnel path waits
  * out before a stored-key operation anyway (see okcrypto's staged-reply
@@ -132,7 +132,7 @@ export function sendChunked({ cmd, slot, payload, send, seal, interChunkDelayMs,
  * @param {boolean}  [spec.challengeErrorIsFinal]  treat "incorrect challenge
  *                   was entered" as the end of the operation rather than a
  *                   state to poll through. Pass
- *                   `capabilities().challengeErrorIsFinal` - true from 3.0.5,
+ *                   `capabilities().challengeErrorIsFinal` - true from 3.1.0,
  *                   where the device only says it with nothing left to give.
  */
 export function pollForResponse({ poll, expected, untilShortChunk, open, intervalMs, noProgressBudgetMs, onProgress, challengeErrorIsFinal, }: {

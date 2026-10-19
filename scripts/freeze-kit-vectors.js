@@ -25,7 +25,7 @@
  *
  * TWO COMMITS, because the kit's transit changed format. v1 (box) is recorded
  * from adac782, the last kit commit that still has it - and every release
- * before firmware 3.0.5 still speaks it. v2 (session/seal/open) is recorded
+ * before firmware 3.1.0 still speaks it. v2 (session/seal/open) is recorded
  * from 9eb1de6 (the owner's kit main on 2026-09-27), whose transit.js has run
  * against the device; cbor and ctap2 come from the v1 commit, as before.
  */

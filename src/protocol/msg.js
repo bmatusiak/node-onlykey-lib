@@ -133,7 +133,7 @@ const FIELD = {
   TOUCHSENSE: 28,
   YUBIANDHMAC: 29,
   /*
-   * Firmware 3.0.5 and later. The user-input mode for the WEB-AND-AGENT derived
+   * Firmware 3.1.0 and later. The user-input mode for the WEB-AND-AGENT derived
    * key (slot 128), which is a different byte from the derived-key challenge
    * mode at 21: okcore_user_input_mode_for_slot() routes slot 128 straight to
    * this field, and web_agent_derive_gate() calls okcore_web_agent_derive_mode()
@@ -148,7 +148,7 @@ const FIELD = {
    */
   webAgentDeriveMode: 30,
   /*
-   * Firmware 3.0.5 and later. WHAT the browser may do over the FIDO2
+   * Firmware 3.1.0 and later. WHAT the browser may do over the FIDO2
    * extension, which is a different question from field 30's HOW the user
    * confirms it - and they are deliberately separate bytes: packing "may this
    * happen at all" together with "how is it authorised" is what produced the

@@ -17,6 +17,9 @@ the commit that release ended at.
 
 ## 0.4.0 - in progress
 
+- **Every firmware-version gate is 3.1.0** (owner, 2026-10-19: the interim number below it "is a bug and needs to be fixed"). The 13 gates in `src/device/version.js` (transit v2, X-Wing custody, the 0/1/2 input-mode enum, agent derivation v2, Curve25519 keygen, the device vault and the rest) read `atLeast([3, 1, 0])`, and every text, message and test names 3.1.0. A development build from before the release that reports a lower number reads as older firmware: it is rebuilt from 3.1.0, not supported. Proven on a developer OnlyKey flashed with release 3.1.0 (kit `00-sanity` + `01-protocol --hardware`, `okt byhand`).
+- **versions: v3.1.0 re-pinned to libraries 37aa531** - trustcrypto/libraries PR #33 re-squashed on 2026-10-19 with the CTAPHID wipe fix (`upstream/watch.json` follows it).
+- **gpg-agent on Windows opens no console windows** (b588e34): `run-agent.cmd` runs a hidden `run-agent.vbs` through `wscript.exe`; the background agent and its gpgconf calls are spawned with `windowsHide`.
 - **The Key Chain sync converges** (the A13, 2026-10-05: every sync moved the same entries and asked for a press): `list.merge` now JOINS the fields of an entry both sides hold (`joined`) instead of keeping one side's copy - it was dropping the computer's PGP certificate, which the next agent start put back; the sync compares and digests a canonical text (keys sorted) without `lastSeen`, which moves by itself on every derive. Proven on the A13: one sync took the certificate fields, the next found the lists matching - no sheet, no press.
 - **okedge sync merges the Key Chain lists** (P2a done, 2026-10-05): the place sends its whole public list in signed parts (`EDGE_SYNC_KEYCHAIN`), `EDGE_SYNC_COMMIT` brings up ONE sheet for links and list, and after the press the place `EDGE_SYNC_TAKE`s back the merged list - kept only if none of its entries is missing (`sync.checkTaken`), every entry re-parsed (nothing private, no "yours"). The sync link's last field is `sync.keychainDigest` (the list in id order); a sync that moved only the list names no seq range (0xFFFFFFFF, CHOSEN). Proven on the Pixel: 1 entry in, 8 back, both lists identical (a second sync moved nothing). The agent sends `~/.onlykey-js/keychain.json` and saves the merged list.
 - **A stale Windows GATT cache**: when the quick (cached) discovery never answers, the one retry asks the phone for its whole table (uncached).
@@ -337,7 +340,7 @@ the commit that release ended at.
   them: python-onlykey's 32-byte FF trigger, sent ONCE (`ackRetries: 0`; a
   resent trigger generates again), the "Successfully set ECC Key" answer
   returned as `response`, and Curve25519 refused unless the firmware is KNOWN
-  to be 3.0.5+ (`curve25519Keygen`; the version is asked when missing) - v3.0.4
+  to be 3.1.0+ (`curve25519Keygen`; the version is asked when missing) - v3.0.4
   would flash the trigger itself as every device's key and report success. No
   public key is read back: generation runs in config mode, which drops
   OKGETPUBKEY (okcore.cpp:335), so the caller reads it after the restart. The
@@ -357,14 +360,14 @@ the commit that release ended at.
   the App port's `OnlyKeyComm.js` wipeSlot callback (`text` -> `r.response`).
 
 - **The preference table is public, and setPreference checks the row this
-  firmware has** (G-4). PREFERENCES and its 3.0.5 enum overlay moved out of the
+  firmware has** (G-4). PREFERENCES and its 3.1.0 enum overlay moved out of the
   device plugin's setup() into `src/device/preferences.js`, exported as
   `node-onlykey-lib/device/preferences` and `device.preferences`, with pure
   `preferenceRow(name, capabilities)` / `preferenceRows(capabilities)` - a GUI
   reads the rows for any firmware without composing a stack.
   `device.preferences()` is now `preferenceRows(session.capabilities)`, and
   `setPreference` validates against `preferenceRow(name, session.capabilities)`
-  instead of the static max: on 3.0.5+ `derivedChallengeMode` 8 (the old bit 3)
+  instead of the static max: on 3.1.0+ `derivedChallengeMode` 8 (the old bit 3)
   and `storedChallengeMode` 2 are refused before the wire, where they used to
   go out for the firmware to refuse; v3.0.4 keeps the bitmask and bit 3.
   Unknown capabilities keep the legacy row, as before.
@@ -385,13 +388,13 @@ the commit that release ended at.
 - **X-Wing asks the firmware version first, or refuses; it never guesses the
   old shape** (G-6, G-9). okcrypto read "capabilities unknown" (never
   connected, or connected while LOCKED - status INITIALIZED, no version) as the
-  pre-3.0.5 world: a 3.1.0 key's 1216-byte recipient was sliced into a 64-byte
+  pre-3.1.0 world: a 3.1.0 key's 1216-byte recipient was sliced into a 64-byte
   "pair" and a decapsulation took the split path, with no error. Now
   `deviceAge.identity` / `decrypt` and every X-Wing derive learn the version
   first - `connectTunnel()` with a supplied ctap, `session.connect()` (set_time,
   no prompt) on the vendor interface - and refuse with
   `code: 'XWING_VERSION_UNKNOWN'` if the device still does not say. The split
-  shape stays only for a version KNOWN below 3.0.5. The learned version also
+  shape stays only for a version KNOWN below 3.1.0. The learned version also
   makes the `xwingDerive` gate fire on an unconnected session, so a v3.0.4
   release key is refused by name. `okconnect.publicKeyWidth` / `publicKeyFrom` /
   `sharedSecretFrom` no longer default X-Wing to 64 bytes: `xwingCustody` must be
@@ -493,12 +496,10 @@ the commit that release ended at.
   the VM against the real firmware (a private kit emulator): `ssh-add -L`,
   and an `ssh localhost` login with each key type. `main()` now takes
   per-command options and refuses one given to a command that does not take it.
-- **versions: v3.0.5 dropped from the table.** It was never released or signed,
-  and 3.1.0 supersedes it. v3.1.0 - the proposed release, pinned to its PR heads
-  (libraries eb25290, OnlyKey-Firmware 9fceea1) - is treated like the signed
-  release. `list()` no longer offers v3.0.5 and `pinsFor('v3.0.5')` refuses it
-  by name. The firmware-version gates in `src/device/version.js` are unchanged:
-  a key running a 3.0.5 build is still read correctly.
+- **versions: the interim pre-release row dropped from the table.** It was never
+  released or signed, and 3.1.0 supersedes it. v3.1.0 - the proposed release,
+  pinned to its PR heads (libraries eb25290, OnlyKey-Firmware 9fceea1) - is
+  treated like the signed release.
 - **onlykey-js step 2: python's write commands.** `setslot` (every python
   field, python's slot names), `wipeslot`, the fifteen settings commands,
   `settime`, `genkey`, `setkey`, `loadkey` (armored PGP) and `wipekey`, each
@@ -508,7 +509,7 @@ the commit that release ended at.
   update, backup or restore. See cli/README.md for each command's
   differences from python's, most of them python bugs not copied.
 
-- **`capabilities().curve25519Keygen`** - false below 3.0.5, where
+- **`capabilities().curve25519Keygen`** - false below 3.1.0, where
   okcrypto_generate_random_key has no type-4 branch and a Curve25519
   "generation" flashes the all-FF trigger itself as the key. `genkey c`
   refuses there.
@@ -545,7 +546,7 @@ the commit that release ended at.
   Vectors from the App rewrite's keyMaterial tests.
 
 - **age docs match device custody.** `crypto/age_pqc` and `crypto/age_file`
-  described the old split-custody X-Wing; from 3.0.5 the device returns the
+  described the old split-custody X-Wing; from 3.1.0 the device returns the
   finished recipient and secret. `mlkemKeypairFromSeed`, `buildRecipient`,
   `splitDecapsulate` and `ctXOf` serve only the old design and are marked
   deprecated - still exported, since consumers pin by hash.
@@ -584,7 +585,7 @@ the commit that release ended at.
   `agent.ecdh(identity, peerPublicKey)`. `identity` is a 32-byte hash or
   `{ssh: {user, host}}` / `{gpg: userId}`, hashed as lib-agent does (non-ASCII
   refused: lib-agent transliterates it). v1 (132, 201-204; every release from
-  2.1.0; the default) and v2 (232, 221-224; HKDF "onlykey/agent/v2"; 3.0.5 on)
+  2.1.0; the default) and v2 (232, 221-224; HKDF "onlykey/agent/v2"; 3.1.0 on)
   are different keys. New capabilities `agentDerivation`, `agentDerivationV2`;
   `src/protocol/agent.js` is the spec, read at release 3.1.0. The fake firmware
   carries a K132 and the real derivation, so the tests verify signatures and ECDH
@@ -600,7 +601,7 @@ the commit that release ended at.
 
 - **`device.generateKey` asks for no button challenge - the firmware dropped it.**
   libraries 97f0149 (2026-09-22) removed the PQC keygen gate; the bench key
-  (b412e78), 3.0.5 and release 3.1.0 all generate on the one OKSETPRIV, and no
+  (b412e78), the pre-release master and release 3.1.0 all generate on the one OKSETPRIV, and no
   signed release has PQC keygen. The lib still computed digits, emitted
   `challenge` and called `confirm` - so a caller pressing on the user's behalf
   typed slot contents on an unlocked key. Now no digits, no event; `confirm`,
@@ -649,13 +650,13 @@ the commit that release ended at.
 - **Composite sign/decrypt over a supplied ctap.** `composite_sign`,
   `composite_decrypt` and the derived X-Wing decapsulation run as tunnelled
   OKSIGN/OKDECRYPT when a ctap is supplied: every keyhandle (and every OKPING)
-  sealed under the tunnel's transit session - transit v2 frames from 3.0.5,
+  sealed under the tunnel's transit session - transit v2 frames from 3.1.0,
   the v1 box on 3.0.4 - with a counter that persists across operations and
   resets at each key exchange (a derive re-keys, and its reply becomes the
   session). Chunks are 171 bytes sealed (v2) or 228 (v1), whole 57-byte
   packets but the last, never a length the encoder would pad. opt2 marks the
   final chunk and opt3 never wraps inside an operation. Results are collected
-  by OKPING and, from 3.0.5, opened as v2 frames (+20 bytes, libraries
+  by OKPING and, from 3.1.0, opened as v2 frames (+20 bytes, libraries
   a29b063). The three-button challenge and `confirm({ digits, isAnswered })`
   are the vendor path's. The reply to each request chunk is CHECKED: a
   transit-authentication failure, a stale staged reply or a dropped duplicate
@@ -665,7 +666,7 @@ the commit that release ended at.
   staged-reply wipe (`settle` event), because a reply still staged is served
   again to the request and hides whether it was accepted. Cost per operation,
   in ceremonies (browser prompts): one connect per session, one per request
-  keyhandle (Ed25519/X25519 1, ML-KEM 7 on v3.0.5 / 5 on v3.0.4), one per
+  keyhandle (Ed25519/X25519 1, ML-KEM 7 on v3.1.0 / 5 on v3.0.4), one per
   1-second poll while the user enters the challenge, and one per 512-byte
   result chunk (ML-DSA-65: 7). Vendor-HID behaviour is unchanged.
 - `protocol/chunk`: `planKeyhandleChunks`, `reservePacketRun`, `PACKET_DATA`,

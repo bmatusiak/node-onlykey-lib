@@ -238,7 +238,7 @@ function errorKind(message) {
     return 'backup';
   }
   /*
-   * THREE confirmation failures on v3.0.5, where earlier firmware reported one.
+   * THREE confirmation failures on v3.1.0, where earlier firmware reported one.
    * Up to v3.0.4 every failed button confirmation printed "Error incorrect
    * challenge was entered", including a window that simply closed and a press
    * the firmware refused. OnlyKey-Firmware 8b3d5c0 ("Stop calling every failed
@@ -264,7 +264,7 @@ function errorKind(message) {
    */
   if (/stored key use over FIDO2 not enabled/i.test(said)) return 'notEnabled';
   /*
-   * The 3.0.5 caller errors, checked BEFORE the crypto rule below because
+   * The 3.1.0 caller errors, checked BEFORE the crypto rule below because
    * several of them name a decaps or X-Wing and would otherwise read as the
    * device's crypto failing. Each one is the host sending the wrong thing:
    * a value the enum does not have (or this build does not allow), a policy

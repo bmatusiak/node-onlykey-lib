@@ -15,7 +15,7 @@
  *
  * TWO BOXES. What follows describes transit v1 - box() - which is what every
  * firmware through v3.0.4, the last signed release, speaks, so it stays for
- * interop. From 3.0.5 (and release 3.1.0) the firmware speaks transit v2,
+ * interop. From 3.1.0 the firmware speaks transit v2,
  * which IS authenticated: [ctr BE4][ct][tag16], IV [dir][ctr][0x7] - see
  * "transit v2" further down. A session picks by capabilities().transitV2.
  *
@@ -307,7 +307,7 @@ function parseConnectReply(reply, key) {
 /* ------------------------------------------------------------- transit v2 */
 
 /*
- * TRANSIT v2 - the box from firmware 3.0.5 on (v1's box() above is what the
+ * TRANSIT v2 - the box from firmware 3.1.0 on (v1's box() above is what the
  * releases before it speak, and the caller picks by firmware version: there is
  * no flag in a frame saying which it is). Ported from onlykey-testing's
  * lib/device/transit.js (f207db9, run against the device), which had BOTH
@@ -446,7 +446,7 @@ module.exports = {
   box,
   connectPayload,
   parseConnectReply,
-  /* transit v2 (firmware 3.0.5+) */
+  /* transit v2 (firmware 3.1.0+) */
   CTR_LEN,
   TAG_LEN,
   OVERHEAD,

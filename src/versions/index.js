@@ -46,10 +46,10 @@
  * v3.1.0 is the PROPOSED release, not a signed one yet: it is treated like the
  * signed release (unreleased: false), because it is what ships next.
  *
- * v3.0.5 was dropped from the table (2026-09-29): never released or signed, and
- * superseded by 3.1.0. The firmware-version GATES in src/device/version.js
- * (atLeast 3.0.5 for transit v2 and the rest) stay - a key running a 3.0.5
- * build is still read correctly; it is only no longer a row to build or test.
+ * The firmware-version GATES in src/device/version.js are atLeast 3.1.0
+ * (owner, 2026-10-19). A development build from before the release that still
+ * reports an interim number below 3.1.0 reads as older firmware to every gate:
+ * it is not supported, it is rebuilt from 3.1.0.
  */
 'use strict';
 

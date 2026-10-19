@@ -152,8 +152,8 @@ test('v2 is refused before anything is sent to firmware that lacks it', async ()
   const { app, pipe, ok } = await start({ fw: { version: 'v3.0.4' }, agent: { v2: false } });
   await app.services.device.connect();
   const before = pipe.writes.length;
-  await assert.rejects(() => ok.agent.publicKey(SSH, { keyType: 1, version: 2 }), /arrived in 3\.0\.5/);
-  await assert.rejects(() => ok.agent.sign(SSH, ascii('m'), { keyType: 1, version: 2 }), /arrived in 3\.0\.5/);
+  await assert.rejects(() => ok.agent.publicKey(SSH, { keyType: 1, version: 2 }), /arrived in 3\.1\.0/);
+  await assert.rejects(() => ok.agent.sign(SSH, ascii('m'), { keyType: 1, version: 2 }), /arrived in 3\.1\.0/);
   assert.equal(pipe.writes.length, before);
   assert.equal((await ok.agent.publicKey(SSH, { keyType: 1 })).length, 32, 'v1 still works there');
   await app.destroy();

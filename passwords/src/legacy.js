@@ -6,7 +6,7 @@
  * key (okcrypto.deviceVault.load - one derive per site, as before) and this re-seals what it got
  * as a `login` entry under the manager key. The old store is left as it is.
  *
- * Only records made on firmware with the hardened derive open (3.0.5+): an older firmware
+ * Only records made on firmware with the hardened derive open (3.1.0+): an older firmware
  * derived another key. A record that does not open is counted, never guessed at.
  */
 

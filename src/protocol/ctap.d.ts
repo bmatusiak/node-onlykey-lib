@@ -8,7 +8,7 @@ export const MAX_PAYLOAD: 245;
 /**
  * The relying-party id, and it is NOT a hosting detail.
  *
- * WHAT IT MEANS CHANGED AT FIRMWARE 3.0.5, and both halves of the old model
+ * WHAT IT MEANS CHANGED AT FIRMWARE 3.1.0, and both halves of the old model
  * are gone.
  *
  * It used to be an INPUT TO THE KEY: okcrypto_hkdf() v1 folded SHA256(rpId) in
@@ -40,7 +40,7 @@ export const RP_ID: "apps.crp.to";
  * DIFFERENT key at every origin, with no error anywhere - it surfaces much
  * later as a file that will not open. There the order chooses a KEYSPACE.
  *
- * From 3.0.5 (libraries@40464ca, and release 3.1.0: "The origin is not part of
+ * From 3.1.0 (libraries@40464ca and the release: "The origin is not part of
  * the derivation; webcryptcheck() decides which origins may ask") it chooses
  * only ADMISSION - see RP_ID above. Every admitted origin derives the same key.
  *
@@ -64,13 +64,13 @@ export const RP_ID: "apps.crp.to";
  * site's own hostname landed its derives in that site's keyspace. That is gone
  * twice over: the origin is not in the derivation (so it cannot separate keys),
  * and it is not admitted (so the request is refused outright). A third-party
- * BROWSER integration is not possible on 3.0.5 - WebAuthn requires an RP ID to
+ * BROWSER integration is not possible on 3.1.0 - WebAuthn requires an RP ID to
  * be a registrable suffix of the page's own origin, so a third-party page
  * cannot assert either trusted name. Third-party integration is native, over
  * the VENDOR interface, which has no origin table.
  *
  * `onlyagent.app` is dropped from the list: no released firmware ever carried
- * it as an rpId string, and 3.0.5 does not admit it at all.
+ * it as an rpId string, and 3.1.0 does not admit it at all.
  *
  * A host can still override with
  * `plugins.config = { okcrypto: { rpIds: [...] } }` - to select the other

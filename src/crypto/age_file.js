@@ -291,13 +291,13 @@ function encryptAgeFile(plaintext, { ciphertext, sharedSecret }) {
 // X-Wing ciphertext from the stanza and must return (sync or async) the
 // 32-byte combined X-Wing shared secret for this file's recipient.
 //
-// On current firmware (capability xwingDeviceCustody, 3.0.5 on) that is one
+// On current firmware (capability xwingDeviceCustody, 3.1.0 on) that is one
 // device call: OKDECRYPT to RESERVED_KEY_WEB_AGENT_DERIVATION carrying
 // [ label32 | ciphertext ], which answers the finished secret - the device
 // holds both halves and runs the combiner (okcrypto.cpp okcrypto_decrypt,
 // :431 at release 3.1.0). plugins/okcrypto's deviceAge.decrypt does exactly
 // that. The old split-custody route - ctXOf() to the device, then
-// splitDecapsulate() on the host with the seed - applies only to pre-3.0.5
+// splitDecapsulate() on the host with the seed - applies only to pre-3.1.0
 // development builds and is deprecated (see age_pqc.js).
 // Returns the decrypted plaintext as a Uint8Array.
 async function decryptAgeFile(fileBytes, deriveSharedSecret) {

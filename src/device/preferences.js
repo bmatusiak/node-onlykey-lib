@@ -9,7 +9,7 @@
  * connecting, or a test that wanted the rows for a given firmware, had to
  * compose a whole plugin stack to read a table - and setPreference validated
  * against the STATIC row while preferences() handed out the version-shaped
- * one: on 3.0.5+ `derivedChallengeMode` was drawn as 0/1 and still accepted
+ * one: on 3.1.0+ `derivedChallengeMode` was drawn as 0/1 and still accepted
  * 2..255 (bitmask 8 included), which the enum firmware refuses (G-4 of the G1
  * audit). One function now answers "what is this row on this firmware" for
  * both the screen and the write.
@@ -126,7 +126,7 @@ const PREFERENCES = {
    *              (libraries 20e1623 okcore.cpp:7128). This was labelled the
    *              other way round - "three-button challenge" - which offered
    *              a user the opposite of what the bit does. Same sense as the
-   *              3.0.5 enum's 1 = press, so the meaning did not flip there;
+   *              3.1.0 enum's 1 = press, so the meaning did not flip there;
    *              only the width did.
    *   bit 3 (8)  FIDO2 derives are allowed WITHOUT a touch; clear, they are
    *              refused as CTAP2_ERR_EXTENSION_NOT_SUPPORTED, which names
@@ -153,13 +153,13 @@ const PREFERENCES = {
   storedChallengeMode:  { field: FIELD.storedchallengeMode, max: 1, label: 'Stored keys (PGP, SSH, RSA and ECC slots)', requires: 'configMode', section: USER_INPUT_MODES },
 
   /*
-   * FIRMWARE 3.0.5 REINTERPRETS FIELD 21 ABOVE, and this field replaces it for
+   * FIRMWARE 3.1.0 REINTERPRETS FIELD 21 ABOVE, and this field replaces it for
    * the derive path.
    *
-   * From 3.0.5 fields 21, 22 and 30 are a 0/1/2 ENUM, not bitmasks, and
+   * From 3.1.0 fields 21, 22 and 30 are a 0/1/2 ENUM, not bitmasks, and
    * set_slot() refuses anything above 2 with "Error invalid user input mode" -
    * so the value 8 documented above stops working entirely. It is left as it is
-   * because every pinned release before 3.0.5 still wants it.
+   * because every pinned release before 3.1.0 still wants it.
    *
    * And 21 is the wrong byte for the web-and-agent derive in any case:
    * okcore_user_input_mode_for_slot() routes slot 128 straight to field 30, and
@@ -177,7 +177,7 @@ const PREFERENCES = {
    * choice the desktop App offers and the key takes.
    *
    * THE ROW EXISTS ONLY ON THE ENUM LINE (ENUM_ONLY_PREFERENCES), so this IS
-   * its 3.0.5 shape and it has no entry in USER_INPUT_ENUM_ROWS below: an
+   * its 3.1.0 shape and it has no entry in USER_INPUT_ENUM_ROWS below: an
    * overlay repeating it is how the wrong note came to be written twice.
    */
   webAgentDeriveMode: {
@@ -252,7 +252,7 @@ const PREFERENCES = {
      * would have it turned back on by a save - the note says so.
      *
      * An earlier version of the note below said "stored keys no". That was
-     * wrong for 3.0.5 and is what this corrects.
+     * wrong for 3.1.0 and is what this corrects.
      */
     unwritten: 1,
     note: 'Governs the BROWSER, which cannot set it itself - a web app reaches only the FIDO interface. Until it is first written the key behaves as v3.0.4 did: derived keys yes, stored keys (PGP) YES, and the extension off only if the old SSH/GPG setting turned it off. Writing it once permanently ends that inheritance - leaving bit 0 off turns web PGP off - so set it only when you mean to.',
@@ -365,7 +365,7 @@ const PREFERENCES = {
 };
 
 /**
- * What fields 21, 22 and 30 become at firmware 3.0.5 - applied over the rows
+ * What fields 21, 22 and 30 become at firmware 3.1.0 - applied over the rows
  * above by preferences(), never instead of them.
  *
  * An OVERLAY rather than a second table, because only the SHAPE changes:
@@ -394,7 +394,7 @@ const PREFERENCES = {
  * say it for every line.
  */
 /**
- * Fields that DO NOT EXIST before 3.0.5, as against 21 and 22, which exist
+ * Fields that DO NOT EXIST before 3.1.0, as against 21 and 22, which exist
  * everywhere and only change shape.
  *
  * v3.0.4's set_slot() has no `case 30` or `case 31` (libraries@c8804e3); both
@@ -405,7 +405,7 @@ const PREFERENCES = {
  * "Webcrypt Access") and a derive
  * mode, set them, and nothing happened.
  *
- * Gated on userInputModeEnum because that capability IS the 3.0.5 line - both
+ * Gated on userInputModeEnum because that capability IS the 3.1.0 line - both
  * fields arrived with the enum (97c8353, 720abfe) - and a second capability
  * with the same bound would be two names for one fact. An unknown version
  * (locked) hides them, the same safe direction as the reshaping: a row that
@@ -431,7 +431,7 @@ const USER_INPUT_ENUM_ROWS = {
 /**
  * One row, in the shape THIS firmware reads it.
  *
- * The static row with the 3.0.5 enum overlay applied when the capabilities say
+ * The static row with the 3.1.0 enum overlay applied when the capabilities say
  * the fields are enums (see USER_INPUT_ENUM_ROWS for why an overlay). Unknown
  * capabilities - null, or a locked device's `version: null` - give the legacy
  * shape, the same safe direction preferences() has always taken.
@@ -453,7 +453,7 @@ function preferenceRow(name, capabilities = null) {
 
 /**
  * Every row this firmware has, each in its shape - what a settings screen
- * draws. The rows that do not exist before 3.0.5 are left out unless the
+ * draws. The rows that do not exist before 3.1.0 are left out unless the
  * capabilities say the enum line (ENUM_ONLY_PREFERENCES says why).
  *
  * @param {object|null} [capabilities]
