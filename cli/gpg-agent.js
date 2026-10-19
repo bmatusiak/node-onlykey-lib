@@ -571,7 +571,8 @@ function gnupgProgram(name) {
 function runGpgconf(args, env) {
   try {
     return require('child_process').execFileSync(gnupgProgram('gpgconf'), args, {
-      env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000,
+      /* windowsHide: the agent runs with its window hidden, and gpgconf would otherwise get a window of its own. */
+      env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000, windowsHide: true,
     });
   } catch {
     return null;

@@ -1674,11 +1674,29 @@ function agentScript(homedir, skey, dkey, windows, device = []) {
    */
   const nodePath = process.env.NODE_PATH;
   if (windows) {
+    /*
+     * NO WINDOW (owner, 2026-10-19: a console window that kept popping up
+     * minimised a fullscreen program until it crashed). gpg starts the
+     * agent-program with no console, and Windows gives every console program
+     * started that way - node.exe here - a window of its own. Node has no
+     * window-less build (Python has pythonw.exe), so the .cmd gpg starts runs
+     * a VBScript through wscript.exe, which has no console, and the script
+     * starts node with its window hidden (Run's style 0) and waits for it, so
+     * gpg still sees the agent-program exit when the background agent is up.
+     */
+    const command = [node, cli, ...args].map((a) => `"${a}"`).join(' ');
     return {
       name: 'run-agent.cmd',
-      text: `@echo off\r\nrem ${GPG_HOME_MARK.slice(2)}: gpg.conf's agent-program.\r\n`
-        + (nodePath ? `set "NODE_PATH=${nodePath}"\r\n` : '')
-        + `"${node}" "${cli}" ${args.map((a) => (a === homedir || /\s/.test(a) ? `"${a}"` : a)).join(' ')}\r\n`,
+      text: `@echo off\r\nrem ${GPG_HOME_MARK.slice(2)}: gpg.conf's agent-program; it runs run-agent.vbs so node gets no window.\r\n`
+        + 'wscript.exe //B //NoLogo "%~dp0run-agent.vbs"\r\n'
+        + 'exit /b %ERRORLEVEL%\r\n',
+      extra: [{
+        name: 'run-agent.vbs',
+        text: `' ${GPG_HOME_MARK.slice(2)}: run-agent.cmd starts this with wscript.exe (no console).\r\n`
+          + 'Set shell = CreateObject("WScript.Shell")\r\n'
+          + (nodePath ? `shell.Environment("Process")("NODE_PATH") = "${nodePath.replace(/"/g, '""')}"\r\n` : '')
+          + `WScript.Quit shell.Run("${command.replace(/"/g, '""')}", 0, True)\r\n`,
+      }],
     };
   }
   return {
@@ -1857,8 +1875,10 @@ COMMANDS.gpg = {
     const at = (name) => pathm.join(homedir, name);
     fsm.mkdirSync(homedir, { recursive: true, mode: 0o700 });
     fsm.chmodSync(homedir, 0o700);
-    fsm.writeFileSync(at(script.name), script.text, { mode: 0o700 });
-    fsm.chmodSync(at(script.name), 0o700);
+    for (const file of [script, ...(script.extra || [])]) {
+      fsm.writeFileSync(at(file.name), file.text, { mode: 0o700 });
+      fsm.chmodSync(at(file.name), 0o700);
+    }
     /* lib-agent's gpg.conf, line for line. */
     fsm.writeFileSync(at('gpg.conf'), '# Hardware-based GPG configuration\n'
       + `agent-program ${at(script.name)}\n`
@@ -2057,8 +2077,10 @@ function startBackgroundAgent(io, opts, homedir, logFile, log) {
      * detached: its own session, so it outlives gpg and this process; no
      * stdio of gpg's - a pipe held open by the agent would keep whoever
      * reads gpg's output waiting; 'ipc' for the one "ready" message.
+     * windowsHide: on Windows a detached child gets a console window of its
+     * own unless it is hidden.
      */
-    detached: true, env: e, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    detached: true, windowsHide: true, env: e, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
   })))(process.execPath, args, env);
 
   return new Promise((resolve, reject) => {
@@ -2373,7 +2395,7 @@ async function main(argv, io = {}) {
 }
 
 module.exports = {
-  main, COMMANDS, CliError, DeviceRefusal, duoSlotName, classicSlotName, parseSlot, parseKeySlot,
+  main, COMMANDS, CliError, DeviceRefusal, duoSlotName, classicSlotName, parseSlot, parseKeySlot, agentScript,
 };
 
 if (require.main === module) {

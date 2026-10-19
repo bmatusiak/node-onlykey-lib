@@ -518,8 +518,11 @@ test('--ble reaches every device command: status, agent (the ssh key line), and 
     const r = await run(['gpg', 'init', 'OnlyKey Test <okt@example.com>', '--homedir', home, '-t', '1700000000',
       '--ble', '--address', 'Pixel 6a'], { gpg });
     assert.equal(r.code, 0, r.err.join('\n'));
-    const script = fs.readFileSync(path.join(home, process.platform === 'win32' ? 'run-agent.cmd' : 'run-agent.sh'), 'utf8');
-    assert.match(script, /--dkey'? '?ECC32'? '?--ble'? '?--address'? ["']Pixel 6a["'] '?--daemon/);
+    /* run-agent.sh, or on Windows the run-agent.vbs the .cmd starts (VBScript doubles its quotes). */
+    const script = process.platform === 'win32'
+      ? fs.readFileSync(path.join(home, 'run-agent.vbs'), 'utf8').replace(/""/g, '"')
+      : fs.readFileSync(path.join(home, 'run-agent.sh'), 'utf8');
+    assert.match(script, /--dkey['"]? ['"]?ECC32['"]? ['"]?--ble['"]? ['"]?--address['"]? ["']Pixel 6a["'] ['"]?--daemon/);
 
     /* And gpg-agent --daemon hands --ble to the background agent it starts. */
     const { EventEmitter } = require('events');

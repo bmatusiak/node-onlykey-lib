@@ -28,6 +28,16 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+/*
+ * The agent command `gpg init` wrote: run-agent.sh, or on Windows the
+ * run-agent.vbs the .cmd starts (VBScript doubles its quotes, undone here).
+ */
+function agentCommand(home) {
+  return process.platform === 'win32'
+    ? fs.readFileSync(path.join(home, 'run-agent.vbs'), 'utf8').replace(/""/g, '"')
+    : fs.readFileSync(path.join(home, 'run-agent.sh'), 'utf8');
+}
+
 const A = require('../cli/assuan');
 const gpgKey = require('../cli/gpg-key');
 const agentSrv = require('../cli/gpg-agent');
@@ -434,10 +444,15 @@ test('gpg init: the device\'s keys in a certificate gpg is told to import, and a
     assert.ok(conf.includes(`agent-program ${path.join(home, script)}\n`));
     assert.ok(conf.includes(`default-key "${USER_ID}"\n`));
     assert.ok(conf.includes('personal-digest-preferences SHA512\n'));
-    const run = fs.readFileSync(path.join(home, script), 'utf8');
-    assert.match(run, /gpg-agent'? '?--homedir/);
-    assert.match(run, /--skey'? '?ECC32'? '?--dkey'? '?ECC32'? '?--daemon/);
+    const run = agentCommand(home);
+    assert.match(run, /gpg-agent['"]? ['"]?--homedir/);
+    assert.match(run, /--skey['"]? ['"]?ECC32['"]? ['"]?--dkey['"]? ['"]?ECC32['"]? ['"]?--daemon/);
     assert.ok(run.includes(process.execPath), 'an absolute node: gpg starts it with gpg\'s PATH');
+    if (process.platform === 'win32') {
+      /* No console window: gpg starts the .cmd, which runs the .vbs with wscript, which hides node. */
+      assert.match(fs.readFileSync(path.join(home, script), 'utf8'), /wscript\.exe \/\/B \/\/NoLogo "%~dp0run-agent\.vbs"/);
+      assert.match(fs.readFileSync(path.join(home, 'run-agent.vbs'), 'utf8'), /shell\.Run\(".*", 0, True\)/);
+    }
     assert.equal(fs.readFileSync(path.join(home, 'ownertrust.txt'), 'utf8'), `${(await openpgp.readKey({ armoredKey: armored })).getFingerprint().toUpperCase()}:6:\n`);
     if (process.platform !== 'win32') {
       assert.equal(fs.statSync(home).mode & 0o777, 0o700);
@@ -683,8 +698,7 @@ test('(Key Chain) gpg init --skey ECC2 --dkey ECC1 --import-pub: the slots\' cer
     const kept = await openpgp.readKey({ armoredKey: fs.readFileSync(path.join(home, 'pubkey.asc'), 'utf8') });
     assert.equal(kept.getFingerprint(), c.fingerprint.toLowerCase(), 'the SAME certificate - its fingerprint is the published one');
     assert.ok(fs.readFileSync(path.join(home, 'gpg.conf'), 'utf8').includes(`default-key "${USER_ID}"`), 'the certificate\'s user id');
-    const script = process.platform === 'win32' ? 'run-agent.cmd' : 'run-agent.sh';
-    assert.match(fs.readFileSync(path.join(home, script), 'utf8'), /--skey'? '?ECC2'? '?--dkey'? '?ECC1/);
+    assert.match(agentCommand(home), /--skey['"]? ['"]?ECC2['"]? ['"]?--dkey['"]? ['"]?ECC1/);
 
     /* refused: the wrong slot, an edited certificate, no certificate at all */
     const wrong = await runCli(['gpg', 'init', '--skey', 'ECC3', '--dkey', 'ECC1', '--import-pub', file, '--homedir', path.join(parent, 'h2')], { start, gpg: fakeGpg([]) });
