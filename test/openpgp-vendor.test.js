@@ -72,10 +72,19 @@ const SIBLINGS = {
   ),
 };
 
+/*
+ * A sibling's line endings depend on how ITS checkout converts them: python-
+ * onlykey stores this file with LF and Git turns it into CRLF only on Windows
+ * (autocrlf), so on Linux the bytes differ while the content is the same. The
+ * sibling check compares the text with line endings set aside; this copy's own
+ * bytes, CRLF included, are pinned by BODY_MD5 and the tests above.
+ */
+const lf = (buf) => Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+
 for (const [name, file] of Object.entries(SIBLINGS)) {
   const present = fs.existsSync(file);
   test(`the body matches ${name}'s copy`, { skip: !present }, () => {
-    assert.equal(md5(fs.readFileSync(file)), md5(body), `drifted from ${name}`);
+    assert.equal(md5(lf(fs.readFileSync(file))), md5(lf(body)), `drifted from ${name}`);
   });
 }
 
