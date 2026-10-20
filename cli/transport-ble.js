@@ -568,6 +568,9 @@ async function nobleSession({ noble, target, onData, onDisconnect, timeouts, log
        */
       get mtu() { return peripheral.mtu || 23; },
       describe: `${name} (${peripheral.id})`,
+      /* the phone this link reached, whatever --address said (a name, a MAC, nothing): the key its pairing is filed under */
+      address: peripheral.address || peripheral.id,
+      name,
       /* WITH response: the phone acknowledges each fragment, so a lost one is an error, not silence. */
       write: (frag) => req.writeAsync(Buffer.from(frag), false),
       async close() {
@@ -908,6 +911,14 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
       mtu: vendor.mtu || 23,
       describe: `${name} (${vendor.device})`,
       /*
+       * The phone this link reached: BlueZ's Address for the device it picked,
+       * which is the phone's real (identity) address once it is bonded - even
+       * when the link itself sits on a rotating private address's D-Bus path
+       * (ZBOX + A13, 2026-10-20: dev_5B_03_59_D7_E3_02 reports 8C:6A:3B:71:C6:72).
+       */
+      address: device.Address,
+      name,
+      /*
        * type 'request' = write WITH response, as on Windows: the phone
        * acknowledges each fragment. A failure here with LE down is BlueZ's
        * "Not connected"; it is reported by the pipe as the link going away.
@@ -975,7 +986,16 @@ function armSignals() {
   process.prependListener('SIGTERM', () => onSignal('SIGTERM'));
 }
 
-function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, computerName = null, onPairingRenewed = null, now = () => Date.now(), reconnect = true, onLink = null } = {}) {
+/*
+ * pairingFor(address): the pairing for the phone the link REACHED, looked up
+ * once it is open and before the hello. The phone is filed under that one
+ * address, so `--address "Galaxy A13 5G"`, `--address 8C:6A:3B:71:C6:72` and
+ * no --address at all find the same pairing (audit F1/F2, 2026-10-20: it was
+ * filed under --address as typed, and a name and a MAC missed each other).
+ * `pairing` (a record handed in directly) is for tests and for callers that
+ * already know it. onPairingRenewed(record, address) gets the same address.
+ */
+function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, pairingFor = null, computerName = null, onPairingRenewed = null, now = () => Date.now(), reconnect = true, onLink = null } = {}) {
   const btpair = require('../src/btpair');
   /* Part T: the session (null = plaintext, until this user is paired with this phone) and waiters for 0x85 answers */
   let session = null;
@@ -1099,7 +1119,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
        * reaches the phone or the link ends first, the next connection tries
        * `next`, falls back to the current one, and settles it (see start()).
        */
-      if (onPairingRenewed) await onPairingRenewed(acc.record);
+      if (onPairingRenewed) await onPairingRenewed(acc.record, link && link.address);
       pairing = acc.record;
       await sendRaw(CMD_SEALED, btpair.seal(session, concat2(Uint8Array.of(KIND_CONTROL), acc.payload)));
       trace(`pairing renewal sent (epoch ${acc.record.next.epoch} takes over on the next connection)`);
@@ -1196,6 +1216,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       writing = false;
       wrote = false;
       link = await openLink();
+      if (!pairing && pairingFor) pairing = (await pairingFor(link.address)) || null;
       const tOpen = Date.now();
       lastError = null;
       session = null;
@@ -1224,7 +1245,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
           if (!session) session = await hello(settled);
           if (session) {
             pairing = settled;
-            if (onPairingRenewed) await onPairingRenewed(pairing);
+            if (onPairingRenewed) await onPairingRenewed(pairing, link && link.address);
             trace(`pairing at epoch ${pairing.epoch}`);
           }
         } else {
@@ -1418,6 +1439,8 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
 
     /** This computer's Part T pairing id with the phone (the Edge wire's dev), or null. */
     get pairingId() { return pairing && pairing.id ? String(pairing.id) : null; },
+    /** The phone the open link reached - its address and Bluetooth name - or null before start(). */
+    get phone() { return link && link.address ? { address: String(link.address), name: link.name || '' } : null; },
 
     async stop() {
       /*

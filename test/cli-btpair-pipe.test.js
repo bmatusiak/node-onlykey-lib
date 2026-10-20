@@ -22,6 +22,8 @@ const quiet = () => {};
 const cat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
 const report = (msg, payload = []) => { const r = new Uint8Array(64); r.set([0xff, 0xff, 0xff, 0xff, msg, ...payload]); return r; };
 const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okt-btpair-'));
+/* the fake phone's address (test/helpers/fake-ble.js): where `pair` files the pairing, whatever --address said */
+const PHONE = '24:29:34:86:EA:AF';
 
 /* ok-rn's gate, as T3 will build it: pairing only inside the window, then sealed traffic only */
 function gate({ windowOpen = true, approve = true, batch = false, mtu } = {}) {
@@ -116,17 +118,17 @@ test('pair, then every report travels sealed: the key answers, nothing readable 
   const p0 = pipeOver(g);
   await p0.start();
   const lines = [];
-  const { record, code } = await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', out: (l) => lines.push(l), windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  const { record, code } = await store.pairOverPipe(p0, { home, name: 'NITRO16', out: (l) => lines.push(l), windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
   await p0.stop();
   assert.strictEqual(code, g.code, 'the CLI and the phone showed different codes');
   assert.match(lines[0], new RegExp(code));
   assert.strictEqual(g.records.length, 1);
   assert.strictEqual(g.records[0].name, 'NITRO16');
-  assert.deepStrictEqual(store.pairingFor('pixel', home).ps, record.ps, 'not stored (or the address key is case-sensitive)');
+  assert.deepStrictEqual(store.pairingFor(PHONE.toLowerCase(), home).ps, record.ps, 'not stored under the address the link reached (or the key is case-sensitive)');
   if (process.platform !== 'win32') assert.strictEqual(fs.statSync(store.fileOf(home)).mode & 0o777, 0o600);
 
   /* a paired run */
-  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+  const p = pipeOver(g, { pairing: store.pairingFor(PHONE, home) });
   const started = await p.start();
   assert.strictEqual(started.encrypted, true);
   const before = g.noble.phone.received.length;
@@ -160,8 +162,8 @@ test('pairing outside the phone\'s window: no answer, nothing stored', async () 
   const g = gate({ windowOpen: false });
   const p = pipeOver(g);
   await p.start();
-  await assert.rejects(() => store.pairOverPipe(p, { address: 'PIXEL', home, windowWaitMs: 900, askEveryMs: 300 }), (e) => e.code === 'EBTPAIR_SILENT');
-  assert.strictEqual(store.pairingFor('PIXEL', home), null);
+  await assert.rejects(() => store.pairOverPipe(p, { home, windowWaitMs: 900, askEveryMs: 300 }), (e) => e.code === 'EBTPAIR_SILENT');
+  assert.strictEqual(store.pairingFor(PHONE, home), null);
   await p.stop();
 });
 
@@ -170,11 +172,11 @@ test('renewal on day 6 travels inside the session; the CLI saves the new secret;
   const g = gate();
   const p0 = pipeOver(g);
   await p0.start();
-  const { record } = await store.pairOverPipe(p0, { address: 'PIXEL', home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  const { record } = await store.pairOverPipe(p0, { home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
   await p0.stop();
   const copied = { ...record }; /* someone copied ~/.onlykey-js before the renewal */
   const saved = [];
-  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), onPairingRenewed: (rec) => { saved.push(rec); store.savePairing('PIXEL', rec, home); } });
+  const p = pipeOver(g, { pairing: store.pairingFor(PHONE, home), onPairingRenewed: (rec) => { saved.push(rec); store.savePairing(PHONE, rec, home); } });
   await p.start();
   g.offerRenewal();
   for (let i = 0; i < 40 && !g.renewed; i++) await new Promise((r) => setTimeout(r, 25));
@@ -182,14 +184,14 @@ test('renewal on day 6 travels inside the session; the CLI saves the new secret;
   assert.strictEqual(saved.length, 1);
   /* two-phase: saved beside the current secret, the phone holds it pending */
   assert.strictEqual(saved[0].next.epoch, 1);
-  assert.strictEqual(store.pairingFor('PIXEL', home).next.ps, g.renewed.pending.ps, 'the CLI did not save the renewed secret');
+  assert.strictEqual(store.pairingFor(PHONE, home).next.ps, g.renewed.pending.ps, 'the CLI did not save the renewed secret');
   await p.stop();
   /* the next connection uses the renewed secret, the phone promotes it, the CLI settles and saves */
-  const ok = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), onPairingRenewed: (rec) => store.savePairing('PIXEL', rec, home) });
+  const ok = pipeOver(g, { pairing: store.pairingFor(PHONE, home), onPairingRenewed: (rec) => store.savePairing(PHONE, rec, home) });
   assert.strictEqual((await ok.start()).encrypted, true);
   await ok.stop();
-  assert.strictEqual(store.pairingFor('PIXEL', home).epoch, 1);
-  assert.strictEqual(store.pairingFor('PIXEL', home).next, undefined);
+  assert.strictEqual(store.pairingFor(PHONE, home).epoch, 1);
+  assert.strictEqual(store.pairingFor(PHONE, home).next, undefined);
   assert.strictEqual(g.records[0].epoch, 1);
   const thief = pipeOver(g, { pairing: copied });
   await assert.rejects(() => thief.start(), (e) => e.code === 'ESILENT');
@@ -201,12 +203,12 @@ test('the CLI says its CURRENT computer name: after a rename the phone revokes t
   const g = gate();
   const p0 = pipeOver(g);
   await p0.start();
-  await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await store.pairOverPipe(p0, { home, name: 'NITRO16', windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
   await p0.stop();
-  const same = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), computerName: 'NITRO16' });
+  const same = pipeOver(g, { pairing: store.pairingFor(PHONE, home), computerName: 'NITRO16' });
   assert.strictEqual((await same.start()).encrypted, true);
   await same.stop();
-  const renamed = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), computerName: 'NITRO16-NEW' });
+  const renamed = pipeOver(g, { pairing: store.pairingFor(PHONE, home), computerName: 'NITRO16-NEW' });
   await assert.rejects(() => renamed.start(), (e) => e.code === 'ESILENT');
   assert.deepStrictEqual({ revoke: g.lastHello.revoke, reason: g.lastHello.reason }, { revoke: g.records[0].id, reason: 'name' });
 });
@@ -216,17 +218,17 @@ test('a short command still answers a renewal: stop() waits for it (the Pixel, 2
   const g = gate();
   const p0 = pipeOver(g);
   await p0.start();
-  await store.pairOverPipe(p0, { address: 'PIXEL', home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await store.pairOverPipe(p0, { home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
   await p0.stop();
   /* a slow save (a real disk) keeps the renewal in flight when the command ends */
-  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), onPairingRenewed: async (rec) => { await new Promise((r) => setTimeout(r, 200)); store.savePairing('PIXEL', rec, home); } });
+  const p = pipeOver(g, { pairing: store.pairingFor(PHONE, home), onPairingRenewed: async (rec) => { await new Promise((r) => setTimeout(r, 200)); store.savePairing(PHONE, rec, home); } });
   await p.start();
   g.offerRenewal();
   await new Promise((r) => setTimeout(r, 30)); /* the offer is in; the command is already done */
   await p.stop();
   await new Promise((r) => setTimeout(r, 50)); /* the fake phone handles a write on a later tick */
   assert.ok(g.renewed, 'the link closed before the CLI answered the renewal');
-  assert.strictEqual(store.pairingFor('PIXEL', home).next.epoch, 1);
+  assert.strictEqual(store.pairingFor(PHONE, home).next.epoch, 1);
 });
 
 /*
@@ -242,10 +244,10 @@ test('a paired link that drops reconnects inside the next write - the hello is n
   const g = gate();
   const p0 = pipeOver(g);
   await p0.start();
-  await store.pairOverPipe(p0, { address: 'PIXEL', home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await store.pairOverPipe(p0, { home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
   await p0.stop();
   const said = [];
-  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home), onLink: (l) => said.push(l) });
+  const p = pipeOver(g, { pairing: store.pairingFor(PHONE, home), onLink: (l) => said.push(l) });
   assert.strictEqual((await p.start()).encrypted, true);
   g.noble.peripheral(g.noble.phoneId || '24293486eaaf').emit('disconnect', 'the phone app restarted');
   assert.strictEqual(p.isRunning(), false);
@@ -265,9 +267,9 @@ test('several reports in one write: 9 reports in 2 writes to a phone that reads 
     const g = gate(opts);
     const p0 = pipeOver(g);
     await p0.start();
-    await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+    await store.pairOverPipe(p0, { home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
     await p0.stop();
-    const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+    const p = pipeOver(g, { pairing: store.pairingFor(PHONE, home) });
     assert.strictEqual((await p.start()).encrypted, true);
     await new Promise((r) => setTimeout(r, 50)); /* the phone's announcement lands */
     const echoes = [];
@@ -300,10 +302,10 @@ test('release(): the link is let go, the next write connects fresh and says hell
   const g = gate();
   const p0 = pipeOver(g);
   await p0.start();
-  await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await store.pairOverPipe(p0, { home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
   await p0.stop();
   const seen = g.noble;
-  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+  const p = pipeOver(g, { pairing: store.pairingFor(PHONE, home) });
   await p.start();
   const firstSession = g.session;
   let r = nextOut(p);
@@ -328,9 +330,9 @@ test('link counts: connects and reconnects are counted, and a failed reconnect i
   const g = gate();
   const p0 = pipeOver(g);
   await p0.start();
-  await store.pairOverPipe(p0, { address: 'PIXEL', home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await store.pairOverPipe(p0, { home, name: 'NITRO16', out: quiet, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
   await p0.stop();
-  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+  const p = pipeOver(g, { pairing: store.pairingFor(PHONE, home) });
   await p.start();
   await p.release('idle');
   let r = nextOut(p);
@@ -359,12 +361,60 @@ test('stop(): a command\'s end tells the phone goodbye, sealed - not only releas
   const g = gate();
   const p0 = pipeOver(g);
   await p0.start();
-  await store.pairOverPipe(p0, { address: 'PIXEL', home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await store.pairOverPipe(p0, { home, windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
   await p0.stop();
-  const p = pipeOver(g, { pairing: store.pairingFor('PIXEL', home) });
+  const p = pipeOver(g, { pairing: store.pairingFor(PHONE, home) });
   assert.strictEqual((await p.start()).encrypted, true);
   const before = g.bye || 0;
   await p.stop();
   await new Promise((r) => setTimeout(r, 50)); /* the fake phone handles a write on a later tick */
   assert.strictEqual((g.bye || 0) - before, 1);
+});
+
+/*
+ * Audit F1/F2 (2026-10-20): a pairing was filed under --address as typed, so a
+ * phone paired by its name was not found by a command that named its address
+ * (devices --ble always does), and one paired with no --address was found by
+ * nothing that named the phone. The round trip: pair in each form, then use the
+ * pairing in every form - each one must open an encrypted session.
+ */
+test('audit F1/F2: pair by name, by address or with no --address - every form finds the one pairing', async () => {
+  for (const pairAs of ['Pixel 6a', PHONE, undefined]) {
+    const home = tmpHome();
+    const g = gate();
+    const p0 = pipeOver(g, pairAs ? { address: pairAs } : {});
+    await p0.start();
+    const { phone } = await store.pairOverPipe(p0, { home, name: 'NITRO16', windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+    await p0.stop();
+    const all = store.list(home);
+    assert.strictEqual(all.length, 1, `paired as ${pairAs}: one record`);
+    assert.strictEqual(all[0].address.toUpperCase(), PHONE, `paired as ${pairAs}: filed under the address the link reached`);
+    assert.strictEqual(all[0].phoneName, 'Pixel 6a');
+    assert.strictEqual(phone.address.toUpperCase(), PHONE);
+    for (const useAs of ['Pixel 6a', 'pixel 6A', PHONE, '24293486eaaf', '24-29-34-86-ea-af', undefined]) {
+      const p = pipeOver(g, { ...(useAs ? { address: useAs } : {}), pairingFor: (reached) => store.pairingFor(reached, home) });
+      const started = await p.start();
+      assert.strictEqual(started.encrypted, true, `paired as ${pairAs}, used as ${useAs}: no pairing found`);
+      await p.stop();
+    }
+  }
+});
+
+test('a renewal is saved under the address the link reached, so the next command still finds it', async () => {
+  const home = tmpHome();
+  const g = gate();
+  const p0 = pipeOver(g, { address: 'Pixel 6a' });
+  await p0.start();
+  await store.pairOverPipe(p0, { home, name: 'NITRO16', windowWaitMs: 2000, askEveryMs: 300, approveWaitMs: 2000 });
+  await p0.stop();
+  const where = [];
+  const p = pipeOver(g, { address: 'Pixel 6a', pairingFor: (reached) => store.pairingFor(reached, home), onPairingRenewed: (rec, reached) => { where.push(reached); store.savePairing(reached, rec, home); } });
+  await p.start();
+  g.offerRenewal();
+  await new Promise((r) => setTimeout(r, 300));
+  await p.stop();
+  assert.strictEqual(where.length, 1, 'the renewal was not saved');
+  assert.strictEqual(String(where[0]).toUpperCase(), PHONE);
+  assert.strictEqual(store.list(home).length, 1, 'a second record appeared');
+  assert.ok(store.pairingFor(PHONE, home).next, 'the renewed secret is not on the record commands find');
 });

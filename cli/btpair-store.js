@@ -12,8 +12,10 @@
  * the user profile's own ACL (C:\Users\<name> is readable only by that user, SYSTEM
  * and administrators) - the same as agent.key and the Edge copies.
  *
- * Phones are found by the --address the CLI was given (normalised), and each record
- * also names the phone by its pairing id.
+ * Phones are filed under the address the Bluetooth link REACHED (normalised), never
+ * under --address as typed: a name, a MAC and no --address must all find the same
+ * pairing (audit F1/F2, 2026-10-20). Each record also keeps the phone's Bluetooth
+ * name (`phoneName`, for forget and list) and its pairing id (`phoneId`).
  */
 const fs = require('fs');
 const os = require('os');
@@ -68,17 +70,37 @@ function pairingFor(address, home) {
   return (read(home).pairings || {})[phoneKey(address)] || null;
 }
 
-/** Store (or replace) the pairing with the phone at this --address. */
-function savePairing(address, record, home) {
+/**
+ * Store (or replace) the pairing with the phone at this address - the address the
+ * link reached, so it is never empty: a pairing filed under '' was found by no
+ * later command that named the phone (audit F2).
+ */
+function savePairing(address, record, home, phoneName) {
+  if (!address) throw new Error('a pairing is filed under the phone\'s Bluetooth address, and none is known');
   const data = read(home);
-  data.pairings = { ...(data.pairings || {}), [phoneKey(address)]: { ...record, address: String(address || '') } };
+  const old = (data.pairings || {})[phoneKey(address)] || {};
+  const name = phoneName !== undefined ? phoneName : old.phoneName;
+  data.pairings = { ...(data.pairings || {}), [phoneKey(address)]: { ...record, address: String(address), ...(name ? { phoneName: name } : {}) } };
   write(home, data);
 }
 
+/**
+ * Forget the pairing(s) for a phone named by address OR Bluetooth name, as --address
+ * takes either. Returns the records removed - an empty list means nothing matched,
+ * and the caller says so (audit F3: it used to say "forgot" regardless).
+ */
 function removePairing(address, home) {
   const data = read(home);
-  if (data.pairings) delete data.pairings[phoneKey(address)];
+  const all = data.pairings || {};
+  const want = String(address || '').toLowerCase();
+  const gone = Object.keys(all).filter((k) => (address
+    ? k === phoneKey(address) || String(all[k].phoneName || '').toLowerCase() === want
+    : false));
+  const removed = gone.map((k) => all[k]);
+  if (!removed.length) return [];
+  for (const k of gone) delete all[k];
   write(home, data);
+  return removed;
 }
 
 function list(home) {
@@ -91,7 +113,10 @@ function list(home) {
  * -> reveal + print the code -> the phone's approval -> confirm -> the phone's
  * PAIRED -> only then this side is stored.
  */
-async function pairOverPipe(pipe, { address, home, name = computerName(), out = () => {}, windowWaitMs = 120000, askEveryMs = 5000, approveWaitMs = 150000 } = {}) {
+async function pairOverPipe(pipe, { home, name = computerName(), out = () => {}, windowWaitMs = 120000, askEveryMs = 5000, approveWaitMs = 150000 } = {}) {
+  /* filed under the phone the link reached - checked BEFORE pairing, so a pairing is never made that nothing could find */
+  const phone = pipe.phone;
+  if (!phone) throw Object.assign(new Error('the Bluetooth link did not say which phone it reached - not pairing'), { code: 'EBTPAIR_NOPHONE' });
   const id = identity(home);
   const a = btpair.cliPairStart({ identity: id, name });
   let keys = null;
@@ -105,8 +130,8 @@ async function pairOverPipe(pipe, { address, home, name = computerName(), out = 
   const ack = await pipe.pairExchange(f.msg, 8000);
   if (!ack || !btpair.cliPairOnAck(f.record, ack)) throw Object.assign(new Error('the phone did not confirm it stored the pairing - pair again'), { code: 'EBTPAIR_NOACK' });
   const record = { ...f.record, name };
-  savePairing(address, record, home);
-  return { record, code: c.code };
+  savePairing(phone.address, record, home, phone.name);
+  return { record, code: c.code, phone };
 }
 
 module.exports = { fileOf, computerName, phoneKey, identity, pairingFor, savePairing, removePairing, list, pairOverPipe };

@@ -64,15 +64,24 @@ function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, lo
      * with nothing but "no reply". Plaintext still works only against a phone
      * in testing mode with transit switched off.
      */
-    if (!store.pairingFor(address, pairingHome)) {
-      process.stderr.write(`onlykey-js: this computer user is not paired with ${address || 'the phone'} - ok-rn answers only paired computers. `
-        + `Pair first: onlykey-js --ble${address ? ` --address ${address}` : ''} pair (and ok-rn > Bluetooth > Pair a computer).\n`);
-    }
+    /*
+     * Looked up under the phone the link REACHED, not --address as typed (audit F1):
+     * the warning comes once the phone is known, before the request that would
+     * otherwise time out on its silence.
+     */
+    const pairingFor = (reached) => {
+      const rec = store.pairingFor(reached, pairingHome);
+      if (!rec) {
+        process.stderr.write(`onlykey-js: this computer user is not paired with ${reached || address || 'the phone'} - ok-rn answers only paired computers. `
+          + `Pair first: onlykey-js --ble${address ? ` --address ${address}` : ''} pair (and ok-rn > Bluetooth > Pair a computer).\n`);
+      }
+      return rec;
+    };
     return require('./transport-ble').createBlePipe({
       address, loadNoble, loadDbus,
-      pairing: store.pairingFor(address, pairingHome),
+      pairingFor,
       computerName: store.computerName(),
-      onPairingRenewed: (record) => store.savePairing(address, record, pairingHome),
+      onPairingRenewed: (record, reached) => store.savePairing(reached, record, pairingHome),
       /* the link going down and coming back, said where a long-running edge-agent's log shows it */
       onLink: (line) => process.stderr.write(`onlykey-js ble: ${line}\n`),
     });

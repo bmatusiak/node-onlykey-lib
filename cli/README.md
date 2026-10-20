@@ -269,6 +269,48 @@ The steps:
   as WinRT does.
 - **The bond.** Paired by **numeric comparison**: accept the same number on the
   phone. A Just Works pair ended up bonded on one side only.
+- **Sometimes a second pairing.** The phone is two links, classic and LE, and
+  each needs a bond. On the ZBOX (Intel `8087:07dc`, `btmgmt info` version 6 =
+  Bluetooth 4.0) the Galaxy A13 appeared twice, a "Smartphone" at its real
+  address and a "Miscellaneous" device at a rotating private address, and
+  needed both pairings: numeric comparison for the first, a passkey shown on
+  the computer and typed into the phone for the second (2026-10-19). After
+  that, BlueZ resolves the rotating address to the real one:
+  `bluetoothctl info <real address>` shows `LE.Bonded: yes`, and the real
+  address is the one to pass as `--address`. The Pi 4 (a Bluetooth 5.0 radio)
+  was paired once, by numeric comparison, and worked.
+  Likely cause, NOT tested: from Bluetooth 4.2 a radio can derive the LE key
+  from the classic pairing (cross-transport key derivation, needs LE Secure
+  Connections); a 4.0 radio cannot. No 4.2+ radio has been tried on the ZBOX,
+  and the Pi's `LE.Bonded` was not checked. Whatever the cause, the script
+  warns when `LE.Bonded` is missing. (The Pixel's own Bluetooth record of the
+  ZBOX reads `LE:LE_LEGACY` - a legacy LE pairing, as a 4.0 radio does.)
+- **BlueZ 5.87's Ranging plugin (RAP) can block the LE link.** On the ZBOX
+  (2026-10-20) every connect to the Pixel logged `rap profile accept failed`;
+  the LE link came up but its services never resolved ("connected but its
+  services never resolved"), or the phone's hello went unanswered - through a
+  phone reboot, a cleared GATT cache and a bluetoothd restart. Starting
+  bluetoothd without that plugin fixed it at once (onlykey-js does not use
+  ranging):
+
+      sudo mkdir -p /etc/systemd/system/bluetooth.service.d
+      printf '[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=rap\n' | sudo tee /etc/systemd/system/bluetooth.service.d/no-rap.conf
+      sudo systemctl daemon-reload && sudo systemctl restart bluetooth && bluetoothctl power on
+
+  Check: `ps -o args= -C bluetoothd` shows `--noplugin=rap`, and its log says
+  `Excluding (cli) rap`.
+- **`Cache = no` under `[GATT]` in /etc/bluetooth/main.conf.** ok-rn registers
+  its Bluetooth services again each time the app restarts; BlueZ's default
+  (`Cache = always`) kept the bonded phone's old layout, and after every app
+  restart the box failed with "services never resolved" until bluetoothd was
+  restarted (ZBOX + Pixel, 2026-10-20, three times in a row). With `Cache = no`
+  BlueZ reads the services on each connect (a few hundred ms) and the first
+  connect after an app restart works:
+
+      sudo sed -i 's/^#Cache = always/Cache = no/' /etc/bluetooth/main.conf && sudo systemctl restart bluetooth && bluetoothctl power on
+ Also on that desktop: a phone that is not Trusted
+  makes Blueman ask "Authorization request … Human Interface Device Service"
+  on every connect; unanswered, they pile up. The script sets Trusted.
 - **The device.** Trusted, with `PreferredBearer = le`.
 
 Proven on a Raspberry Pi 4 (Debian 13, BlueZ 5.82) against a Pixel 6a:

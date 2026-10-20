@@ -142,5 +142,12 @@ fi
 say "---"
 bt info "$ADDR" | grep -E 'Name:|Paired|Bonded|Trusted|Connected|PreferredBearer' | sed 's/^[[:space:]]*//'
 say "---"
+# "Paired: yes" is true after the classic pair alone. On the ZBOX's Bluetooth
+# 4.0 radio the phone then showed up again as a "Miscellaneous" device that
+# needed its own pairing (a passkey typed into the phone); without it the LE
+# link the key uses has no bond. The Pi 4 (5.0) needed one pairing.
+if ! bt info "$ADDR" | grep -q 'LE.Bonded: yes'; then
+  say "NOTE: no LE bond yet. Pair the phone's second (Miscellaneous) entry as well - type the passkey this computer shows into the phone."
+fi
 say "ready: the link is prepared. The phone's keyboard (if targeted at this computer) connects over classic;"
 say "onlykey-js talks to the key over LE."

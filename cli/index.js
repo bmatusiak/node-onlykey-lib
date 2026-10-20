@@ -1234,24 +1234,44 @@ function parseExpires(text) {
  */
 COMMANDS.pair = {
   mirrors: '(new)',
-  usage: '[list | forget] [--name <computer>]   (with --ble [--address <phone>])',
+  usage: '[list | forget]   (with --ble [--address <phone>])',
   summary: 'Part T: pair this computer with ok-rn over Bluetooth (the phone shows the same 6-digit code); pair list | pair forget',
   device: false,
-  options: { name: { type: 'string' } },
+  /*
+   * NO --name (removed 2026-10-20). Every later command introduces this
+   * computer by its hostname, and the phone revokes a pairing that arrives
+   * under another name than it was made with. A `pair --name zbox` on the
+   * ZBOX made a pairing the A13 revoked on its first use, by design on the
+   * phone's side - the bug was that the CLI let anyone make it. The name is
+   * now the hostname, always: what `pair` records is what every command sends.
+   */
   async run(io, opts, args = []) {
     const store = require('./btpair-store');
     /* pair list | pair forget (CLI.md §2, 2026-10-06 - was `pairing [--forget]`) */
     if (args[0] === 'list') {
       const all = store.list();
       if (!all.length) { io.out(`no pairings for this user on ${store.computerName()} (onlykey-js --ble pair)`); return 0; }
+      /*
+       * One row per PHONE: its name, address and phone id. The pairing `id` is this
+       * computer user's own id - the same on every row - so it told nothing apart.
+       * A row that cannot work says so (audit F4): made under another computer name
+       * (the phone revokes it on first use), or filed under no address (nothing
+       * finds it).
+       */
+      const here = store.computerName();
       for (const r of all) {
-        io.out(`${r.name || store.computerName()}  phone ${r.address || '(default)'}  pairing ${String(r.id).slice(0, 8)}...  epoch ${r.epoch}  renewed ${new Date(r.renewedAt).toISOString().slice(0, 10)}`);
+        const phone = `${r.phoneName ? `${r.phoneName} ` : ''}${r.address || '(no address)'}`;
+        io.out(`${phone}  phone id ${String(r.phoneId || '?').slice(0, 8)}...  as ${r.name || '?'}  epoch ${r.epoch}  renewed ${new Date(r.renewedAt).toISOString().slice(0, 10)}`);
+        if (r.name && r.name !== here) io.out(`  WILL NOT WORK: made as "${r.name}", this computer is "${here}" - the phone revokes it on first use; pair again`);
+        if (!r.address) io.out('  WILL NOT WORK: filed under no phone address, so no command finds it; pair again');
       }
       return 0;
     }
     if (args[0] === 'forget') {
-      store.removePairing(opts.address);
-      io.out(`forgot the pairing for ${opts.address || 'the default phone'} (revoke it on the phone too)`);
+      if (!opts.address) throw usage('pair forget takes the phone: --address <its address or Bluetooth name> (see pair list)');
+      const removed = store.removePairing(opts.address);
+      if (!removed.length) throw new CliError(`no pairing matches ${opts.address} - nothing forgotten (see onlykey-js pair list)`);
+      for (const r of removed) io.out(`forgot the pairing with ${r.phoneName ? `${r.phoneName} ` : ''}${r.address || ''} (remove this computer on the phone too)`);
       return 0;
     }
     if (args.length) throw usage('pair | pair list | pair forget');
@@ -1259,15 +1279,16 @@ COMMANDS.pair = {
     const pipe = require('./transport-ble').createBlePipe({ address: opts.address }); /* no pairing yet: the pairing messages themselves */
     await pipe.start();
     try {
-      const name = opts.name || store.computerName();
+      const name = store.computerName();
       io.out(`pairing ${name}: on the phone open ok-rn > Bluetooth > Pair a computer (it stays open about 2 minutes)`);
       let result;
       try {
-        result = await store.pairOverPipe(pipe, { address: opts.address, name, out: (l) => io.out(l) });
+        result = await store.pairOverPipe(pipe, { name, out: (l) => io.out(l) });
       } catch (e) {
         throw new CliError(e.message);
       }
-      io.out(`paired: ${name} with the phone (pairing ${result.record.id.slice(0, 8)}...); from now on this user's Bluetooth commands are encrypted`);
+      const ph = result.phone;
+      io.out(`paired: ${name} with ${ph.name ? `${ph.name} ` : ''}${ph.address}; any --address form (its name, its address, or none when it is the only one) finds it, and from now on this user's Bluetooth commands to it are encrypted`);
     } finally {
       await pipe.stop();
     }
