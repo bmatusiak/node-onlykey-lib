@@ -21,14 +21,14 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const which = process.argv[2];
-const LEFT_OUT = { edge: ['edge'], keychain: ['keychain', 'edge'], passwords: ['passwords'], guestbook: ['guestbook'], cryptobox: ['cryptobox'] }[which];
+const LEFT_OUT = { edge: ['edge'], keychain: ['keychain', 'edge'], passwords: ['passwords'], guestbook: ['guestbook'], cryptobox: ['cryptobox'], bucket: ['bucket'] }[which];
 if (!LEFT_OUT) {
-  console.error('usage: node scripts/check-without.js edge|keychain|passwords|guestbook|cryptobox');
+  console.error('usage: node scripts/check-without.js edge|keychain|passwords|guestbook|cryptobox|bucket');
   process.exit(2);
 }
-const KEPT_PLUGINS = ['keychain', 'edge', 'passwords', 'guestbook', 'cryptobox'].filter((d) => !LEFT_OUT.includes(d));
-/* passwords, guestbook and cryptobox have no CLI command yet: their names stand in, and --help never lists them */
-const COMMAND = { keychain: 'keychain', edge: 'edge', passwords: 'passwords', guestbook: 'guestbook', cryptobox: 'cryptobox' };
+const KEPT_PLUGINS = ['keychain', 'edge', 'passwords', 'guestbook', 'cryptobox', 'bucket'].filter((d) => !LEFT_OUT.includes(d));
+/* passwords, guestbook, cryptobox and bucket have no CLI command yet: their names stand in, and --help never lists them */
+const COMMAND = { keychain: 'keychain', edge: 'edge', passwords: 'passwords', guestbook: 'guestbook', cryptobox: 'cryptobox', bucket: 'bucket' };
 const TAG = { keychain: 'Key Chain', edge: 'Edge', passwords: 'Passwords', guestbook: 'Guest Book' };
 const SKIP = new Set(['.git', 'node_modules', ...LEFT_OUT]);
 

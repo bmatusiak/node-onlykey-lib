@@ -1,0 +1,7 @@
+'use strict';
+
+/**
+ * The bucket (PROPOSAL-one-gui.md): one portable, key-sealed file for everything a front end keeps.
+ * Its own plugin: core never requires this folder.
+ */
+module.exports = require('./bucket');
