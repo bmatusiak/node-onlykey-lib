@@ -1276,6 +1276,14 @@ COMMANDS.pair = {
     }
     if (args.length) throw usage('pair | pair list | pair forget');
     if (!opts.ble) throw usage('pair works over Bluetooth only: onlykey-js --ble [--address <phone>] pair');
+    /*
+     * The radio first (cli/bt-radio.js; Brad, 2026-10-20: "no support for bt4"): a pairing made
+     * on a radio that cannot hold it costs the phone its bond on the first failure. A radio that
+     * cannot be read is said, not refused.
+     */
+    const radio = await require('./bt-radio').checkRadio();
+    if (!radio.ok) throw new CliError(radio.message);
+    if (!radio.known) io.err(`onlykey-js: ${radio.message}`);
     const pipe = require('./transport-ble').createBlePipe({ address: opts.address }); /* no pairing yet: the pairing messages themselves */
     await pipe.start();
     try {

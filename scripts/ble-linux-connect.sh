@@ -62,6 +62,12 @@ bt()   { bluetoothctl "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
 
 command -v bluetoothctl >/dev/null || fail "bluetoothctl not found - install bluez"
 
+# ---- 0. the radio: Bluetooth 5.0 or newer (cli/bt-radio.js - the one check, the same words as onlykey-js) ----
+if command -v node >/dev/null; then
+  RADIO="$(node "$(dirname "$0")/../cli/bt-radio.js")" || fail "$RADIO"
+  say "radio: $RADIO"
+fi
+
 # ---- 1. the adapter: soft-blocked, powered -------------------------------
 blocked=0
 for r in /sys/class/rfkill/rfkill*; do

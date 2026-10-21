@@ -269,22 +269,19 @@ The steps:
   as WinRT does.
 - **The bond.** Paired by **numeric comparison**: accept the same number on the
   phone. A Just Works pair ended up bonded on one side only.
-- **Sometimes a second pairing.** The phone is two links, classic and LE, and
-  each needs a bond. On the ZBOX (Intel `8087:07dc`, `btmgmt info` version 6 =
-  Bluetooth 4.0) the Galaxy A13 appeared twice, a "Smartphone" at its real
-  address and a "Miscellaneous" device at a rotating private address, and
-  needed both pairings: numeric comparison for the first, a passkey shown on
-  the computer and typed into the phone for the second (2026-10-19). After
-  that, BlueZ resolves the rotating address to the real one:
-  `bluetoothctl info <real address>` shows `LE.Bonded: yes`, and the real
-  address is the one to pass as `--address`. The Pi 4 (a Bluetooth 5.0 radio)
-  was paired once, by numeric comparison, and worked.
-  Likely cause, NOT tested: from Bluetooth 4.2 a radio can derive the LE key
-  from the classic pairing (cross-transport key derivation, needs LE Secure
-  Connections); a 4.0 radio cannot. No 4.2+ radio has been tried on the ZBOX,
-  and the Pi's `LE.Bonded` was not checked. Whatever the cause, the script
-  warns when `LE.Bonded` is missing. (The Pixel's own Bluetooth record of the
-  ZBOX reads `LE:LE_LEGACY` - a legacy LE pairing, as a 4.0 radio does.)
+- **Bluetooth 5.0 or newer.** Check with `node cli/bt-radio.js` (Linux reads
+  `btmgmt info`, Windows the radio's LMP version); `onlykey-js --ble pair` and
+  this script refuse an older radio with the same words. Why (ZBOX, Intel
+  `8087:07dc`, Bluetooth 4.0, 2026-10-20): the phone pairs with Secure
+  Connections, and the classic-link key that makes needs AES-CCM encryption on
+  the classic link, a Bluetooth 4.1 feature. The kernel refused every classic
+  connect (`Invalid security: Missing AES-CCM usage`), the phone's keyboard
+  never connected and retried every 15 s, and the LE link onlykey-js uses
+  answered only now and then. With `SecureConnections = off` (main.conf, plus
+  `btmgmt sc off`) a 4.0 radio could be paired - classic first, then a second,
+  LE pairing with a passkey typed into the phone - but every failed attempt
+  made Android drop the whole bond. A USB Bluetooth 5 adapter is the answer;
+  the Pi 4 (5.0) and NITRO16 (5.4) work with one ordinary pairing.
 - **BlueZ 5.87's Ranging plugin (RAP) can block the LE link.** On the ZBOX
   (2026-10-20) every connect to the Pixel logged `rap profile accept failed`;
   the LE link came up but its services never resolved ("connected but its

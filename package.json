@@ -48,6 +48,7 @@
     "./browser": "./plugins/browser.js",
     "./cli/desktop": "./cli/desktop.js",
     "./cli/edge-agent": "./edge/cli/agent.js",
+    "./cli/bt-radio": "./cli/bt-radio.js",
     "./cli/edge-control": "./edge/cli/control.js",
     "./cli/keychain-record": "./keychain/cli/record.js",
     "./edge/cli/commands": "./edge/cli/commands.js",
