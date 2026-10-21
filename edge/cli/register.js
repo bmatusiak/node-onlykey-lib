@@ -27,7 +27,8 @@ const net = require('net');
 const path = require('path');
 
 const USAGE = [
-  'onlykey-js edge setup --ssh ssh://user@host [--gpg "Name <email>" --committer-name N --committer-email E --expires 1y|<n>d|never]',
+  'onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>" [--committer-name N --committer-email E --expires 1y|<n>d|never --created <unix>]',
+  '                                                              the agent identity: made here, kept by the phone (approve on its Edge sheet)',
   'onlykey-js edge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES',
   'onlykey-js edge continue --ttl MINUTES [--caps n,n] | end | status',
   'onlykey-js edge exec --head H --intent "…" -- <command…>     the only way to spend a budget',
@@ -61,38 +62,79 @@ function budgetStore(home) {
   return { store };
 }
 
-/* agent.json: the agent's own identities, its certificate, its budget */
-function loadConfig(home) {
-  const file = path.join(home, 'agent.json');
-  const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-  /*
-   * Version 1 since the clean start (Brad, 2026-10-07). An older file keeps the
-   * person's settings - identities, committer, expiry, certificate, pins - and drops
-   * its budget, which belonged to the chain the reset ended.
-   */
-  if (config.v !== 1) {
-    delete config.budget;
-    config.v = 1;
-  }
-  const save = (c) => {
-    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(file, JSON.stringify({ ...c, v: 1 }, null, 2), { mode: 0o600 });
+/*
+ * THIS COMPUTER'S OWN EDGE STATE: one budget pointer per key (edge/src/store.js), over a
+ * small JSON file in the Edge home with the host-store seam (getItem/setItem/removeItem).
+ * The agent's identity is NOT here: the phone keeps it (SPEC H7, 2026-10-20 - it was
+ * agent.json, one per computer folder; a new computer had to be given a copy by hand).
+ */
+function fileKv(home, name) {
+  const file = path.join(home, name);
+  const read = () => {
+    try { const all = JSON.parse(fs.readFileSync(file, 'utf8')); return all && all.v === 1 ? all : { v: 1 }; } catch { return { v: 1 }; }
   };
-  return { config, save };
+  const write = (all) => {
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, JSON.stringify(all, null, 2), { mode: 0o600 });
+  };
+  return {
+    getItem: (k) => (k === 'v' ? null : (read()[k] ?? null)),
+    setItem: (k, v) => { const all = read(); all[k] = String(v); write(all); },
+    removeItem: (k) => { const all = read(); if (k in all) { delete all[k]; write(all); } },
+  };
 }
 
-function applySetup(config, args, h) {
+/* edge setup's flags: only what was given (the rest comes from the identity the phone keeps) */
+function parseSetup(args, h) {
   const ssh = opt(args, '--ssh');
   const gpg = opt(args, '--gpg');
   const cn = opt(args, '--committer-name');
   const ce = opt(args, '--committer-email');
   const expires = opt(args, '--expires');
-  if (ssh) config.ssh = ssh;
-  if (gpg) config.gpgUid = gpg;
-  if (cn || ce) config.committer = { name: cn || (config.committer || {}).name, email: ce || (config.committer || {}).email };
+  const created = opt(args, '--created');
+  const s = {};
+  if (ssh) s.ssh = ssh;
+  if (gpg) s.gpgUid = gpg;
+  if (cn || ce) s.committer = { name: cn, email: ce };
   /* the certificate's lifetime (Brad, 2026-10-03: one year for the real key): 1y, <n>d, or never */
-  if (expires !== undefined) config.expires = h.parseExpires(expires);
-  return Boolean(ssh || gpg || cn || ce || expires !== undefined);
+  if (expires !== undefined) s.expires = h.parseExpires(expires);
+  /*
+   * --created <unix seconds>: remake the certificate with that creation time. The time is
+   * part of the fingerprint, so the same key and the same time give the SAME fingerprint -
+   * how an identity made elsewhere moves to the phone without changing a key on GitHub.
+   */
+  if (created !== undefined) {
+    const n = Number(created);
+    if (!Number.isInteger(n) || n <= 0 || n > 0xffffffff) throw h.usage('--created takes the certificate\'s creation time in unix seconds');
+    s.created = n;
+  }
+  return s;
+}
+
+/* the phone's identity record (or null), asked over the paired channel */
+async function askIdentity(channel) {
+  const lib = require('../src/identity');
+  const a = await channel.send(lib.buildGet(), { timeoutMs: 20000 });
+  if (!a) throw new Error('the phone did not answer the identity question (EDGE_IDENTITY_GET) - is ok-rn up to date and open?');
+  if (a.ok === false) throw new Error(`the phone refused the identity question: ${a.detail || a.refusal}`);
+  if (!a.record) return null;
+  const c = lib.checkRecord(a.record);
+  if (!c.ok) throw new Error(`the phone's agent identity is not usable (${c.reason}) - set it again: onlykey-js edge setup`);
+  return lib.clean(a.record);
+}
+
+/* the certificate into the host's Key Chain list, so `keychain export --pgp` prints the fingerprint git signs with (audit F10/F11) */
+function recordCert(io, record, tool) {
+  if (!io.keychainRecord || !record) return;
+  try {
+    io.keychainRecord({
+      scheme: 'gpg', label: `gpg://${record.gpgUid}`, type: 'ed25519', publicKey: record.cert.signPublic, code: 232,
+      pgp: record.cert.armored, pgpFingerprint: record.cert.fingerprint, certCreated: record.cert.created,
+      certExpires: record.cert.expires || 0, tool,
+    });
+  } catch (e) {
+    io.err(`edge: the certificate was not recorded in the Key Chain list (${e.message})`);
+  }
 }
 
 /* is the optional service running? a connect, no request */
@@ -118,19 +160,12 @@ function keyAnswers(connected, h, what) {
 }
 
 /*
- * The stack - the phone, the key's Edge, the wire to the app, the agent with its
- * own keys - for one command (serve: false) or for the service (serve: true).
+ * The phone and the key's Edge, with the wire to the app - what `edge setup` needs, and
+ * what the stack below is built on.
  */
-async function openStack(io, opts, h, { serve, dev, wait }) {
-  const control = require('./control');
-  const { client, wire } = require('../src');
-  const { startEdgeAgent, openWithOneRetry } = require('./agent');
-  const home = control.edgeHome();
-  const { config, save } = loadConfig(home);
-  if (!config.ssh) {
-    throw h.usage('set up the agent once first: onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>"');
-  }
-  const { store } = budgetStore(home);
+async function openDevice(io, opts, h, { dev, wait }) {
+  const { wire } = require('../src');
+  const { openWithOneRetry } = require('./agent');
   const say = (l) => io.err(`edge: ${l}`);
   /* ENOVENDOR at start: one more try after ~5 s (agent.js openWithOneRetry) */
   const app = await openWithOneRetry(async () => {
@@ -138,22 +173,47 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
     try { keyAnswers(await a.services.device.connect(), h, 'edge'); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
     return a;
   }, { log: say });
+  const { transport, okcrypto } = app.services;
+  let edge = null;
+  require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
+  /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */
+  const wired = wire.createWireChannel(transport, {
+    timeoutMs: (Number(wait) || 180) * 1000,
+    device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
+    log: say,
+    net: NET,
+  });
+  /* timing logs are a dev-build switch only (edge/cli/dev; CLI.md §5) */
+  const timed = dev && dev.timed ? dev.timed({ edge, wired, okcrypto, say }) : { channel: wired, okcrypto };
+  return { app, transport, okcrypto: timed.okcrypto, edge, channel: timed.channel, say };
+}
+
+/*
+ * The stack - the phone, the key's Edge, the wire to the app, the agent with its
+ * own keys - for one command (serve: false) or for the service (serve: true).
+ * The agent's identity comes from the phone (SPEC H7); the budget pointer is this
+ * computer's, per key.
+ */
+async function openStack(io, opts, h, { serve, dev, wait }) {
+  const control = require('./control');
+  const { client, store: edgeStore } = require('../src');
+  const { startEdgeAgent } = require('./agent');
+  const home = control.edgeHome();
+  const { store } = budgetStore(home);
+  const d = await openDevice(io, opts, h, { dev, wait });
+  const { app, transport, okcrypto, edge, channel, say } = d;
   try {
-    const { transport, okcrypto } = app.services;
-    let edge = null;
-    require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
-    /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */
-    const wired = wire.createWireChannel(transport, {
-      timeoutMs: (Number(wait) || 180) * 1000,
-      device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
-      log: say,
-      net: NET,
-    });
-    /* timing logs are a dev-build switch only (edge/cli/dev; CLI.md §5) */
-    const timed = dev && dev.timed ? dev.timed({ edge, wired, okcrypto, say }) : { channel: wired, okcrypto };
-    const c = client.createEdgeClient({ edge, channel: timed.channel, store });
+    const identity = await askIdentity(channel);
+    if (!identity) {
+      throw h.usage('the phone keeps no agent identity yet - set it once, from any paired computer: onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>"');
+    }
+    recordCert(io, identity, serve ? 'onlykey-js edge agent' : 'onlykey-js edge');
+    const { deviceId } = await edge.publicKey();
+    const c = client.createEdgeClient({ edge, channel, store });
     const svc = await startEdgeAgent({
-      okcrypto: timed.okcrypto, client: c, edge, config, saveConfig: save, openpgp: require('../../src/crypto/pgp'),
+      okcrypto, client: c, edge, identity, deviceId,
+      pointers: edgeStore.createPointerStore(fileKv(home, 'pointers.json')),
+      openpgp: require('../../src/crypto/pgp'),
       shimCommand: path.resolve(__dirname, 'gpg-shim.js').split(path.sep).join('/'),
       /* for one command the command itself prints the signed line; the service logs it to its own console */
       log: serve ? say : (l) => { if (!l.startsWith('signed: link')) say(l); },
@@ -163,7 +223,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
       onSilence: opts.ble ? async () => { await transport.release('nobody answered').catch(() => {}); } : null,
       serve,
     });
-    return { app, transport, svc, config, home, close: async () => { await svc.close(); await app.destroy(); } };
+    return { app, transport, svc, identity, home, close: async () => { await svc.close(); await app.destroy(); } };
   } catch (e) {
     await app.destroy().catch(() => undefined);
     throw e;
@@ -310,38 +370,71 @@ module.exports = function register(COMMANDS, h) {
       }
 
       if (sub === 'setup') {
-        /* the agent's own identities, once - nothing to do with the phone */
-        const home = control.edgeHome();
-        const { config, save } = loadConfig(home);
-        if (!applySetup(config, rest, h)) throw h.usage('edge setup --ssh ssh://user@host [--gpg "Name <email>" --committer-name N --committer-email E --expires 1y|<n>d|never]');
-        save(config);
-        io.out(h.row('ssh', config.ssh || '-'));
-        if (config.gpgUid) io.out(h.row('gpg', config.gpgUid));
-        return 0;
+        /*
+         * THE AGENT IDENTITY, SET FROM A COMPUTER AND KEPT BY THE PHONE (SPEC H7; Brad,
+         * 2026-10-20: "computer sets, phone keeps"). The certificate is made HERE - the key
+         * signs it, two presses - and sent with the labels; the phone shows it on its Edge
+         * sheet and keeps it only when the person approves. Flags not given keep the
+         * phone's current values; a certificate is remade only when the gpg user ID, the
+         * lifetime or --created changes it.
+         */
+        const given = parseSetup(rest, h);
+        if (!Object.keys(given).length) {
+          throw h.usage('edge setup --ssh ssh://user@host --gpg "Name <email>" [--committer-name N --committer-email E --expires 1y|<n>d|never --created <unix seconds>]');
+        }
+        const lib = require('../src/identity');
+        const d = await openDevice(io, opts, h, { dev, wait });
+        try {
+          const now = await askIdentity(d.channel);
+          const record = {
+            ssh: given.ssh || (now && now.ssh),
+            gpgUid: given.gpgUid || (now && now.gpgUid),
+            committer: given.committer
+              ? { name: given.committer.name || (now && now.committer && now.committer.name), email: given.committer.email || (now && now.committer && now.committer.email) }
+              : (now ? now.committer : null),
+            expires: given.expires !== undefined ? given.expires : (now ? now.expires : 0),
+          };
+          if (!record.ssh || !record.gpgUid) throw h.usage('the first edge setup names both --ssh ssh://user@host and --gpg "Name <email>"');
+          if (record.committer && (!record.committer.name || !record.committer.email)) throw h.usage('a committer takes both --committer-name and --committer-email');
+          const keep = now && now.gpgUid === record.gpgUid && now.expires === record.expires && given.created === undefined;
+          if (keep) {
+            record.cert = now.cert;
+          } else {
+            d.say('making the agent\'s PGP certificate - two signatures by the OnlyKey (press when asked)');
+            const { makeCertificate } = require('../../keychain/src/cert');
+            const { subjectFingerprint } = require('../../src/protocol/challenge');
+            const made = await makeCertificate(d.okcrypto, require('../../src/crypto/pgp'), {
+              label: record.gpgUid, version: 2, expires: record.expires,
+              ...(given.created !== undefined ? { created: given.created } : {}),
+              /* each press said with what is sent (the fingerprint a soft key's sheet shows too) - on a hard key this line is all there is */
+              onPress: ({ subject } = {}) => d.say(`press on the OnlyKey: sign the agent's PGP certificate for gpg://${record.gpgUid}${subject ? ` (message ${subjectFingerprint(subject)})` : ''}`),
+            });
+            record.cert = { armored: made.armored, fingerprint: made.fingerprint, created: made.created, expires: made.expires, signPublic: Buffer.from(made.signPublic).toString('hex') };
+          }
+          if (now && lib.same(now, record)) {
+            io.out('the phone already keeps this identity - nothing to change');
+          } else {
+            io.out('the phone shows the identity on its Edge sheet - approve it there');
+            const a = await d.channel.send(lib.buildSet({ record }), { timeoutMs: (Number(wait) || 180) * 1000 });
+            if (!a) throw new h.CliError('the phone did not answer (its sheet ran out, or ok-rn is not up to date) - nothing was kept');
+            if (a.ok === false) throw new h.CliError(`the phone did not keep it: ${a.refusal}${a.detail ? ` - ${a.detail}` : ''}`);
+          }
+          for (const [k, v] of lib.rows(record)) io.out(h.row(k, v));
+          recordCert(io, record, 'onlykey-js edge setup');
+          return 0;
+        } finally {
+          await d.app.destroy().catch(() => undefined);
+        }
       }
 
       if (sub === 'agent') {
         /* the optional service: one link kept open between commands; nothing it can do that a command can't */
-        const home = control.edgeHome();
-        const { config, save } = loadConfig(home);
-        if (applySetup(config, rest, h)) save(config);
+        if (Object.keys(parseSetup(rest, h)).length) throw h.usage('the identity is set with onlykey-js edge setup (the phone keeps it); edge agent takes no identity flags');
         const st = await openStack(io, opts, h, { serve: true, dev, wait });
         try {
           const { svc, transport } = st;
           io.out(h.row('ssh key', svc.sshLine));
           if (svc.fingerprint) io.out(h.row('gpg key', svc.fingerprint));
-          /* the certificate into the host's Key Chain list too, so `keychain export --pgp` prints it */
-          if (io.keychainRecord && st.config.cert && st.config.gpgUid) {
-            try {
-              io.keychainRecord({
-                scheme: 'gpg', label: `gpg://${st.config.gpgUid}`, type: 'ed25519', publicKey: st.config.cert.signPublic, code: 232,
-                pgp: st.config.cert.armored, pgpFingerprint: st.config.cert.fingerprint, certCreated: st.config.cert.created,
-                certExpires: st.config.cert.expires || 0, tool: 'onlykey-js edge agent',
-              });
-            } catch (e) {
-              io.err(`edge: the certificate was not recorded in the Key Chain list (${e.message})`);
-            }
-          }
           if (svc.certArmored) {
             fs.writeFileSync(path.join(st.home, 'agent-gpg.asc'), svc.certArmored);
             io.out(h.row('gpg cert', path.join(st.home, 'agent-gpg.asc')));
@@ -398,5 +491,6 @@ module.exports = function register(COMMANDS, h) {
 
 module.exports.USAGE = USAGE;
 /* the PC store's two files, for tests (version 1 since the clean start) */
-module.exports.loadConfig = loadConfig;
+module.exports.fileKv = fileKv;
+module.exports.parseSetup = parseSetup;
 module.exports.budgetStore = budgetStore;

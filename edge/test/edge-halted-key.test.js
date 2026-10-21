@@ -44,8 +44,7 @@ test('edge status against a halted soft key: stops at connect and says to restar
     start: () => assert.fail('setup connected to the phone'),
   };
   try {
-    /* the agent's identities first - local, no phone */
-    assert.equal(await main(['edge', '--edge-home', home, 'setup', '--ssh', 'ssh://claude@test', '--gpg', 'Claude <claude@test>'], io), 0);
+    /* no setup first: the identity is the phone's (SPEC H7), asked only after the key answers - a halted key stops before that */
     const code = await main(['edge', '--edge-home', home, 'status'], {
       ...io,
       start: (opts) => startDesktop({ ...opts, pipe: haltedPhone() }),

@@ -505,18 +505,20 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
  * The agent service, put together over a running app (the CLI's `edge-agent`
  * command, and the kit's emulator test). Derives the agent's OWN keys (D2:
  * derived identities, separate from the person's - ed25519, agent derivation
- * v2), makes its PGP certificate ONCE (two signatures by the device - presses
- * on a real key) and keeps it in agent.json, resumes a budget the store still
- * has, and serves the control endpoint (onlykey-js edge, the gpg shim). Exec
+ * v2) from the identity THE PHONE KEEPS (SPEC H7, 2026-10-20 - made and sent by
+ * `onlykey-js edge setup`; it was agent.json, one per computer folder), checks
+ * the derived gpg key against that identity's certificate (never remade here:
+ * a mismatch stops the agent), resumes the budget this computer holds on THIS
+ * key, and serves the control endpoint (onlykey-js edge, the gpg shim). Exec
  * endpoints open per command; there is no shared ssh-agent endpoint.
  *
  * @param {object} o
  * @param {object} o.okcrypto the app's okcrypto service (agent.publicKey / agent.sign)
  * @param {object} o.client the L7 client (createEdgeClient) for this key and channel
- * @param {object} o.config {ssh: 'ssh://user@host', gpgUid, committer: {name, email}, pins?, expires?}
- *   expires: the certificate's lifetime in seconds after it is made (absent or 0: it
- *   never expires). Changing it makes a new certificate - two presses again.
- * @param {(cfg: object) => void} o.saveConfig persists config changes (the certificate, the budget id)
+ * @param {object} o.identity the phone's record (edge/src/identity.js): {ssh, gpgUid, committer, expires, cert}
+ * @param {object} [o.pointers] edge/src/store.js createPointerStore: the budget held per key
+ * @param {Uint8Array|string} [o.deviceId] this key's Edge device id (edge.publicKey().deviceId)
+ * @param {string[]} [o.pins] host key fingerprints for the ssh binding (default: GitHub's)
  * @param {object} o.openpgp the openpgp fork (src/crypto/pgp)
  * @param {string} [o.shimCommand] what git runs as gpg.program
  */
@@ -552,51 +554,50 @@ async function openWithOneRetry(open, { waitMs = 5000, log = () => {} } = {}) {
   }
 }
 
-async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfig = () => {}, openpgp, shimCommand = null, log = () => {}, confirm, onSilence = null, linkStats = null, serve = true }) {
+async function startEdgeAgent({ okcrypto, client, edge = null, identity, pointers = null, deviceId = null, pins = null, openpgp, shimCommand = null, log = () => {}, confirm, onSilence = null, linkStats = null, serve = true }) {
   const wire = require('../../cli/ssh-wire');
   const sshPub = require('../../src/crypto/ssh-pub');
-  const pgpCert = require('../../src/crypto/pgp-cert');
-  const { subjectFingerprint } = require('../../src/protocol/challenge');
+  const { checkRecord } = require('../src/identity');
   const { serveControl } = require('./control');
+  const checked = checkRecord(identity);
+  if (!checked.ok) {
+    throw Object.assign(new Error(`the phone keeps no usable agent identity (${checked.reason}) - set one: onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>"`), { code: 'EIDENTITY' });
+  }
+  /* the budget this computer holds on THIS key - per key, never per folder (audit F8) */
+  const held = {
+    get: async () => (pointers && deviceId ? pointers.budget(deviceId) : null),
+    set: async (id) => { if (pointers && deviceId) await pointers.setBudget(deviceId, id); },
+  };
   const VERSION = 2;
   const ED25519 = 1;
-  const X25519 = 4;
   const device = {
     publicKey: (identity) => okcrypto.agent.publicKey(identity, { keyType: ED25519, version: VERSION }),
     sign: (identity, message) => okcrypto.agent.sign(identity, message, { keyType: ED25519, version: VERSION, ...(confirm ? { confirm } : {}) }),
   };
 
-  const sshId = wire.parseIdentity(config.ssh);
+  const sshId = wire.parseIdentity(identity.ssh);
   const sshName = `ssh://${sshId.user ? `${sshId.user}@` : ''}${sshId.host}`;
   const sshIdentity = wire.derivationIdentity(sshId);
   const sshRaw = await device.publicKey(sshIdentity);
   const ssh = { identity: sshIdentity, name: sshName, comment: sshName, curve: 'ed25519', raw: sshRaw };
 
-  let gpg = null;
-  if (config.gpgUid) {
-    const gpgIdentity = { gpg: config.gpgUid };
-    const gpgRaw = await device.publicKey(gpgIdentity);
-    if (!config.cert || config.cert.signPublic !== Buffer.from(gpgRaw).toString('hex') || (config.cert.expires || 0) !== (config.expires || 0)) {
-      log('making the agent\'s PGP certificate - two signatures by the OnlyKey (press when asked)');
-      const created = Math.floor(Date.now() / 1000);
-      const ecdhPublic = await okcrypto.agent.publicKey(gpgIdentity, { keyType: X25519, version: VERSION });
-      const cert = await pgpCert.buildCertificate(openpgp, {
-        userId: config.gpgUid, curve: 'ed25519', created, signPublic: gpgRaw, ecdhPublic,
-        ...(config.expires ? { expires: config.expires } : {}),
-        /* each press said with what is sent (the fingerprint a soft key's sheet shows too) - on a hard key this line is all there is */
-        sign: (digest) => okcrypto.agent.sign(gpgIdentity, digest, {
-          keyType: ED25519, version: VERSION,
-          confirm: confirm || (({ subject }) => log(`press on the OnlyKey: sign the agent's PGP certificate for gpg://${config.gpgUid}${subject ? ` (message ${subjectFingerprint(subject)})` : ''}`)),
-        }),
-      });
-      config.cert = { armored: cert.armored, fingerprint: cert.fingerprint, created, expires: config.expires || 0, signPublic: Buffer.from(gpgRaw).toString('hex') };
-      saveConfig(config);
-    }
-    gpg = {
-      identity: gpgIdentity, name: `gpg://${config.gpgUid}`, raw: gpgRaw, created: config.cert.created,
-      fingerprint: config.cert.fingerprint, committer: config.committer || null,
-    };
+  /*
+   * THE CERTIFICATE IS NEVER REMADE HERE (audit F9, 2026-10-20). It was rebuilt whenever
+   * the derived key differed from the one on file - a second phone, a hard key - with a
+   * new creation time, so a new fingerprint and two presses nobody was waiting for (an
+   * unattended `edge sync --all` hung on them). The phone's record is the agent; a key
+   * that derives a different gpg key is not this agent's key, and that is said, not fixed.
+   */
+  const gpgIdentity = { gpg: identity.gpgUid };
+  const gpgRaw = await device.publicKey(gpgIdentity);
+  if (Buffer.from(gpgRaw).toString('hex') !== identity.cert.signPublic.toLowerCase()) {
+    throw Object.assign(new Error(`this key derives a different gpg key for "${identity.gpgUid}" than the certificate the phone keeps (${identity.cert.fingerprint}) - `
+      + 'it is another key\'s identity; make one for this key: onlykey-js edge setup'), { code: 'EIDENTITY_KEY' });
   }
+  const gpg = {
+    identity: gpgIdentity, name: `gpg://${identity.gpgUid}`, raw: gpgRaw, created: identity.cert.created,
+    fingerprint: identity.cert.fingerprint, committer: identity.committer || null,
+  };
 
   /*
    * The automatic continue (spec session, 2026-10-03): only for a budget the
@@ -612,19 +613,18 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
       }
     }
     const nb = await client.continue(old.grantId, {});
-    config.budget = nb.grantId;
-    saveConfig(config);
+    await held.set(nb.grantId);
     return nb;
   };
-  const agent = createEdgeAgent({ device, ssh, pins: config.pins || bindLib.GITHUB_FINGERPRINTS, log, edge, onGone, client });
-  if (config.budget) {
+  const agent = createEdgeAgent({ device, ssh, pins: pins || bindLib.GITHUB_FINGERPRINTS, log, edge, onGone, client });
+  const was = await held.get();
+  if (was) {
     try {
-      agent.setBudget(await client.resume(config.budget));
-      log(`resumed budget ${config.budget}`);
+      agent.setBudget(await client.resume(was));
+      log(`resumed budget ${was}`);
     } catch (e) {
-      log(`budget ${config.budget} is not live any more (${e.message})`);
-      config.budget = null;
-      saveConfig(config);
+      log(`budget ${was} is not live any more (${e.message})`);
+      await held.set(null);
     }
   }
 
@@ -636,8 +636,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
     const h = handlers[op];
     handlers[op] = async (req) => {
       const r = await h(req);
-      config.budget = op === 'end' ? null : r.budget;
-      saveConfig(config);
+      await held.set(op === 'end' ? null : r.budget);
       return r;
     };
   }
@@ -652,8 +651,8 @@ async function startEdgeAgent({ okcrypto, client, edge = null, config, saveConfi
     agent,
     handlers,
     sshLine: sshPub.publicKeyLine('ed25519', sshRaw, sshName),
-    certArmored: config.cert ? config.cert.armored : null,
-    fingerprint: gpg ? gpg.fingerprint : null,
+    certArmored: identity.cert.armored,
+    fingerprint: gpg.fingerprint,
   };
   /* no service (CLI.md §4, the default): the caller runs the handlers in-process for one command */
   if (!serve) return { ...base, controlPath: null, async close() { await agent.closeAll(); } };

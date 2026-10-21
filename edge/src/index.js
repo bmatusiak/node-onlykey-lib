@@ -27,4 +27,8 @@ module.exports = {
   /* a pure Bluetooth link test: the phone echoes, testing mode only (onlykey-js edge ping) */
   ping: require('./ping'),
   block: require('./block'),
+  /* SPEC H7 (2026-10-20): the agent identity the phone keeps - its record, checks, messages and words */
+  identity: require('./identity'),
+  /* the computer's own small state over a host store (getItem/setItem): one budget pointer per key */
+  store: require('./store'),
 };

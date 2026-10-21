@@ -75,10 +75,12 @@ async function ping(args, { out, ask }) {
 /*
  * THE CLEAN START ON THIS COMPUTER (R31, SPEC.md; Brad, 2026-10-07: "we are
  * doing a reset"): the Edge records of the chain the reset ended go - its budgets
- * (budgets.json) and its copies (copy-*.json). What stays: peer.key, control.key,
- * agent-gpg.asc (keys and the agent's own certificate - R31 keeps every key) and
- * agent.json's settings (its old budget is dropped). No registration to redo: the
- * phone trusts this computer by its Bluetooth pairing. Local: no phone.
+ * (budgets.json), its copies (copy-*.json) and the budgets this computer held on
+ * each key (pointers.json). What stays: peer.key, control.key and agent-gpg.asc
+ * (keys and the agent's own certificate - R31 keeps every key). The agent's
+ * identity is the phone's (SPEC H7), not this computer's: a reset here leaves it.
+ * No registration to redo: the phone trusts this computer by its Bluetooth
+ * pairing. Local: no phone.
  * -> the files removed
  */
 function reset(home, out) {
@@ -87,23 +89,14 @@ function reset(home, out) {
   const removed = [];
   if (fs.existsSync(home)) {
     for (const n of fs.readdirSync(home)) {
-      if (n === 'budgets.json' || /^copy-[0-9a-f]{16}\.json$/.test(n)) {
+      if (n === 'budgets.json' || n === 'pointers.json' || /^copy-[0-9a-f]{16}\.json$/.test(n)) {
         fs.rmSync(path.join(home, n), { force: true });
         removed.push(n);
       }
     }
-    const cfg = path.join(home, 'agent.json');
-    if (fs.existsSync(cfg)) {
-      const c = JSON.parse(fs.readFileSync(cfg, 'utf8'));
-      if (c.budget !== undefined) {
-        delete c.budget;
-        fs.writeFileSync(cfg, JSON.stringify({ ...c, v: 1 }, null, 2), { mode: 0o600 });
-        removed.push('agent.json: its budget');
-      }
-    }
   }
   out(removed.length ? `edge reset (${home}): removed ${removed.join(', ')}` : `edge reset (${home}): nothing of an old chain here`);
-  out('kept: peer.key, control.key, agent-gpg.asc and agent.json\'s settings');
+  out('kept: peer.key, control.key and agent-gpg.asc; the agent identity is the phone\'s');
   return removed;
 }
 

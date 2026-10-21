@@ -12,3 +12,5 @@ export let sync: typeof import("./sync");
 export let devices: typeof import("./devices");
 export let ping: typeof import("./ping");
 export let block: typeof import("./block");
+export let identity: typeof import("./identity");
+export let store: typeof import("./store");
