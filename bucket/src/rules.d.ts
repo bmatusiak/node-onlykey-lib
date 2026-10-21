@@ -80,4 +80,44 @@ export function guestbook({ key }?: {
         };
     }[];
 };
+/**
+ * The Edge copies (edge/src/copyfile.js): one key per device, its copy's JSON. Two copies of one
+ * device merge by the copy's own rules; a FORK - the copies disagree at a seq both hold, or name
+ * different keys - is reported and never repaired: this copy stays, nothing of the other is taken,
+ * and the conflict cannot be picked away.
+ * @param {{fromJSON: Function, toJSON: Function, merge: Function}} copyfile edge's copyfile module
+ */
+export function edgeCopies(copyfile: {
+    fromJSON: Function;
+    toJSON: Function;
+    merge: Function;
+}): (into?: {}, from?: {}) => {
+    store: {};
+    taken: number;
+    conflicts: {
+        key: string;
+        reason: any;
+        into: any;
+        from: any;
+        apply(): never;
+    }[];
+};
+/**
+ * THE AUDIT DUMP (Brad, 2026-10-21: "the bucket may contain passwords, so the dump is just for the
+ * Edge blockchain so it can be externally verified using pubkeys"): every Edge copy in the bucket
+ * as JSON blocks, each checked against the keys kept with its copy. Public by nature - nothing
+ * else in the bucket ever leaves it unsealed.
+ * @param {{stores: Object}} bucket an opened bucket
+ * @param {{fromJSON: Function, blocks: Function}} copyfile edge's copyfile module
+ * @param {{net: string, store?: string}} opts
+ */
+export function edgeBlocks(bucket: {
+    stores: Object;
+}, copyfile: {
+    fromJSON: Function;
+    blocks: Function;
+}, { net, store }: {
+    net: string;
+    store?: string;
+}): any[];
 import { mergeKeys } from "./bucket";

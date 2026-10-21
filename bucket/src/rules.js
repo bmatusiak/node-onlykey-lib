@@ -123,4 +123,63 @@ function guestbook({ key = 'guestbook:v1' } = {}) {
   };
 }
 
-module.exports = { settings, keychain, passwords, guestbook };
+/**
+ * The Edge copies (edge/src/copyfile.js): one key per device, its copy's JSON. Two copies of one
+ * device merge by the copy's own rules; a FORK - the copies disagree at a seq both hold, or name
+ * different keys - is reported and never repaired: this copy stays, nothing of the other is taken,
+ * and the conflict cannot be picked away.
+ * @param {{fromJSON: Function, toJSON: Function, merge: Function}} copyfile edge's copyfile module
+ */
+function edgeCopies(copyfile) {
+  const { fromHex } = require('../../src/bytes');
+  return (into = {}, from = {}) => {
+    const store = { ...into };
+    const conflicts = [];
+    let taken = 0;
+    for (const [key, rec] of Object.entries(from)) {
+      const have = into[key];
+      if (!rec || rec.v === null) continue;
+      if (!have || have.v === null) {
+        store[key] = { ...rec };
+        taken += JSON.parse(rec.v).links.length;
+        continue;
+      }
+      const ja = JSON.parse(have.v);
+      const jb = JSON.parse(rec.v);
+      const id = fromHex(ja.deviceId);
+      const r = copyfile.merge(copyfile.fromJSON(ja, id), copyfile.fromJSON(jb, id));
+      if (r.fork) {
+        conflicts.push({
+          key, reason: r.fork.reason, into: { ...have }, from: { ...rec },
+          apply() { throw new Error(`${r.fork.reason}: a fork is reported, never repaired`); },
+        });
+        continue;
+      }
+      if (!r.taken && JSON.stringify(copyfile.toJSON(r.copy)) === JSON.stringify(ja)) continue;
+      store[key] = { v: JSON.stringify(copyfile.toJSON(r.copy)), at: later(have.at, rec.at) };
+      taken += r.taken;
+    }
+    return { store, taken, conflicts };
+  };
+}
+
+/**
+ * THE AUDIT DUMP (Brad, 2026-10-21: "the bucket may contain passwords, so the dump is just for the
+ * Edge blockchain so it can be externally verified using pubkeys"): every Edge copy in the bucket
+ * as JSON blocks, each checked against the keys kept with its copy. Public by nature - nothing
+ * else in the bucket ever leaves it unsealed.
+ * @param {{stores: Object}} bucket an opened bucket
+ * @param {{fromJSON: Function, blocks: Function}} copyfile edge's copyfile module
+ * @param {{net: string, store?: string}} opts
+ */
+function edgeBlocks(bucket, copyfile, { net, store = 'edge.copies' }) {
+  const { fromHex } = require('../../src/bytes');
+  return Object.values(bucket.stores[store] || {})
+    .filter((rec) => rec && rec.v !== null)
+    .map((rec) => {
+      const j = JSON.parse(rec.v);
+      return copyfile.blocks(copyfile.fromJSON(j, fromHex(j.deviceId)), { net });
+    });
+}
+
+module.exports = { settings, keychain, passwords, guestbook, edgeCopies, edgeBlocks };

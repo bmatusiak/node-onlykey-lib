@@ -29,6 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chain, copy: copyLib } = require('../src');
+const copyfile = require('../src/copyfile');
 const { toHex, fromHex } = require('../../src/bytes');
 
 const PICKUP_MAX = 8;
@@ -39,53 +40,15 @@ function copyFile(home, deviceId) {
   return path.join(home, `copy-${toHex(deviceId).slice(0, 16)}.json`);
 }
 
+/* the copy's JSON is edge/src/copyfile.js's: the bucket carries the same copy */
 function load(home, deviceId) {
   const f = copyFile(home, deviceId);
-  if (!fs.existsSync(f)) return { deviceId, links: [], lastSeen: null, publicKey: null, publicKeyPq: null, seals: [], checkpoint: null, statement: null, openings: [] };
-  const s = JSON.parse(fs.readFileSync(f, 'utf8'));
-  /* version 1 since the clean start: an older copy is the old chain's - read as no copy */
-  if (s.v !== 1) return { deviceId, links: [], lastSeen: null, publicKey: null, publicKeyPq: null, seals: [], checkpoint: null, statement: null, openings: [] };
-  return {
-    deviceId,
-    links: s.links.map((l) => ({ link: fromHex(l.link), head: fromHex(l.head), ...(l.reveal ? { reveal: fromHex(l.reveal) } : {}) })),
-    lastSeen: s.lastSeen ? { seq: s.lastSeen.seq, head: fromHex(s.lastSeen.head) } : null,
-    publicKey: s.publicKey ? fromHex(s.publicKey) : null,
-    publicKeyPq: s.publicKeyPq ? fromHex(s.publicKeyPq) : null,
-    /* only the newest seal keeps signaturePq ("B"); the checkpoint without one loads as empty bytes and fails its check */
-    seals: (s.seals || []).map((x) => ({ seq: x.seq, head: fromHex(x.head), signature: fromHex(x.signature), ...(x.signaturePq ? { signaturePq: fromHex(x.signaturePq) } : {}) })),
-    openings: Array.isArray(s.openings) ? s.openings : [],
-    notes: s.notes && typeof s.notes === 'object' ? s.notes : { reasons: {}, messages: {} },
-    checkpoint: s.checkpoint ? {
-      seq: s.checkpoint.seq, head: fromHex(s.checkpoint.head), signature: fromHex(s.checkpoint.signature), signaturePq: fromHex(s.checkpoint.signaturePq || ''),
-    } : null,
-    statement: s.statement ? {
-      deviceId: fromHex(s.statement.deviceId), publicKey: fromHex(s.statement.publicKey), publicKeyPq: fromHex(s.statement.publicKeyPq || ''),
-      seq: s.statement.seq ?? null, nametag: s.statement.nametag, signature: fromHex(s.statement.signature), signaturePq: fromHex(s.statement.signaturePq || ''),
-    } : null,
-  };
+  return copyfile.fromJSON(fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null, deviceId);
 }
 
 function save(home, c) {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  const s = {
-    v: 1,
-    deviceId: toHex(c.deviceId),
-    links: c.links.map((l) => ({ link: toHex(l.link), head: toHex(l.head), ...(l.reveal ? { reveal: toHex(l.reveal) } : {}) })),
-    lastSeen: c.lastSeen ? { seq: c.lastSeen.seq, head: toHex(c.lastSeen.head) } : null,
-    ...(c.publicKey ? { publicKey: toHex(c.publicKey) } : {}),
-    ...(c.publicKeyPq ? { publicKeyPq: toHex(c.publicKeyPq) } : {}),
-    seals: (c.seals || []).map((x) => ({ seq: x.seq, head: toHex(x.head), signature: toHex(x.signature), ...(x.signaturePq && x.signaturePq.length ? { signaturePq: toHex(x.signaturePq) } : {}) })),
-    ...(c.openings && c.openings.length ? { openings: c.openings } : {}),
-    ...(c.notes ? { notes: c.notes } : {}),
-    ...(c.checkpoint ? { checkpoint: {
-      seq: c.checkpoint.seq, head: toHex(c.checkpoint.head), signature: toHex(c.checkpoint.signature), signaturePq: toHex(c.checkpoint.signaturePq || new Uint8Array(0)),
-    } } : {}),
-    ...(c.statement ? { statement: {
-      deviceId: toHex(c.statement.deviceId), publicKey: toHex(c.statement.publicKey), publicKeyPq: toHex(c.statement.publicKeyPq || new Uint8Array(0)),
-      seq: c.statement.seq ?? null, nametag: c.statement.nametag, signature: toHex(c.statement.signature), signaturePq: toHex(c.statement.signaturePq || new Uint8Array(0)),
-    } } : {}),
-  };
-  fs.writeFileSync(copyFile(home, c.deviceId), JSON.stringify(s, null, 1) + '\n', { mode: 0o600 });
+  fs.writeFileSync(copyFile(home, c.deviceId), JSON.stringify(copyfile.toJSON(c), null, 1) + '\n', { mode: 0o600 });
 }
 
 /*
@@ -295,19 +258,10 @@ function keepSeals(home, deviceId, { seals = [] }) {
  * it. -> [{deviceId, blocks: [{block, id, ok, reason?}], open, reason?}]
  */
 function blocks(home, { net }) {
-  const { block } = require('../src');
   if (!fs.existsSync(home)) return [];
   return fs.readdirSync(home).filter((n) => /^copy-[0-9a-f]{16}\.json$/.test(n)).map((n) => {
     const s = JSON.parse(fs.readFileSync(path.join(home, n), 'utf8'));
-    const c = load(home, fromHex(s.deviceId));
-    const r = block.blocksFrom({ net, deviceId: c.deviceId, records: c.links, seals: c.seals });
-    const out = [];
-    for (const [i, b] of r.blocks.entries()) {
-      const anchor = i === r.blocks.length - 1;
-      const v = c.publicKey ? block.verifyBlock(b, c.publicKey, c.publicKeyPq, out.length ? out[out.length - 1].block : null, { anchor }) : { ok: false, reason: 'no public key kept - run onlykey-js edge sync' };
-      out.push({ block: b, id: block.blockId(b), ok: v.ok, ...(v.ok ? {} : { reason: v.reason }) });
-    }
-    return { deviceId: toHex(c.deviceId), blocks: out, open: r.open, ...(r.reason ? { reason: r.reason } : {}) };
+    return copyfile.blocks(load(home, fromHex(s.deviceId)), { net });
   });
 }
 
