@@ -31,16 +31,18 @@ async function run(argv) {
   return { code, out, err };
 }
 const base = path.join(os.homedir(), '.onlykey-js');
+/* the testnet's Key Chain: a store in the CLI's bucket (bucket/cli/home.js) */
+const TEST_KC = path.join(base, 'bucket.json') + ' (keychain-test)';
 
 test('--test-mode: the testnet home and Key Chain file, said first; the next run is live again', async () => {
   const t = await run(['edge', '--test-mode', 'blocks']);
   assert.match(t.err[0], /^edge: TESTNET - the test chain/);
   assert.equal(control.edgeHome(), path.join(base, 'edge-test'));
-  assert.equal(record.keychainFile(), path.join(base, 'keychain-test.json'));
+  assert.equal(String(record.keychainFile()), TEST_KC);
   const l = await run(['edge', 'blocks']);
   assert.ok(!l.err.some((x) => /TESTNET/.test(x)));
   assert.equal(control.edgeHome(), path.join(base, 'edge'));
-  assert.notEqual(record.keychainFile(), path.join(base, 'keychain-test.json'));
+  assert.notEqual(String(record.keychainFile()), TEST_KC);
 });
 
 /*
@@ -56,9 +58,9 @@ test('--test-mode: hints carry it, keychain --test-mode reads the testnet list, 
   assert.match(r.err.join('\n'), /onlykey-js edge help/);
 
   await run(['keychain', '--test-mode', 'list']);
-  assert.equal(record.keychainFile(), path.join(base, 'keychain-test.json'));
+  assert.equal(String(record.keychainFile()), TEST_KC);
   await run(['keychain', 'list']);
-  assert.notEqual(record.keychainFile(), path.join(base, 'keychain-test.json'));
+  assert.notEqual(String(record.keychainFile()), TEST_KC);
 
   try {
     r = await run(['edge', '--edge-home', path.join(base, 'edge-test'), 'blocks']);
@@ -89,14 +91,24 @@ test('edge clear: the testnet\'s only - refused live; with --test-mode it remove
   const testHome = path.join(base, 'edge-test');
   fs.mkdirSync(testHome, { recursive: true });
   fs.writeFileSync(path.join(testHome, 'marker'), 'x');
+  /* the testnet's data and the live side's, both in the bucket */
+  const bucketHome = require('../../bucket/cli/home');
+  bucketHome.kv(bucketHome.at('keychain-test')).setItem('list', '[]');
+  bucketHome.kv(bucketHome.at('edge-test.copies')).setItem('0'.repeat(16), '{"v":1}');
+  bucketHome.kv(bucketHome.at('keychain')).setItem('list', '[]');
+  bucketHome.kv(bucketHome.at('edge.copies')).setItem('1'.repeat(16), '{"v":1}');
   /* what the live side holds before - it must hold the same after */
   const liveHome = path.join(base, 'edge');
-  const liveKc = record.keychainFile();
-  const before = { home: fs.existsSync(liveHome) && fs.readdirSync(liveHome).sort().join(','), kc: fs.existsSync(liveKc) && fs.statSync(liveKc).mtimeMs };
+  const liveSide = () => {
+    const b = bucketHome.read();
+    return { home: fs.existsSync(liveHome) && fs.readdirSync(liveHome).sort().join(','), kc: JSON.stringify(b.stores.keychain), copies: JSON.stringify(b.stores['edge.copies']) };
+  };
+  const before = liveSide();
   const c = await run(['edge', '--test-mode', 'clear']);
   assert.equal(c.code, 0, c.err.join('\n'));
   assert.ok(!fs.existsSync(testHome));
   assert.match(c.out.join('\n'), /testnet cleared on this computer/);
-  const after = { home: fs.existsSync(liveHome) && fs.readdirSync(liveHome).sort().join(','), kc: fs.existsSync(liveKc) && fs.statSync(liveKc).mtimeMs };
-  assert.deepEqual(after, before, 'the live home and the live Key Chain file are not touched');
+  assert.equal(bucketHome.kv(bucketHome.at('keychain-test')).getItem('list'), null, 'the testnet Key Chain left the bucket');
+  assert.equal(bucketHome.kv(bucketHome.at('edge-test.copies')).keys().length, 0, 'the testnet copies left the bucket');
+  assert.deepEqual(liveSide(), before, 'the live home and the live stores are not touched');
 });

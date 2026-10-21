@@ -36,7 +36,7 @@ const sealAt = (seq) => ({ seq, head: heads[seq], ...K.sign({ deviceId: id, seq,
 
 function homeWithCopy() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'okblocks-'));
-  fs.writeFileSync(copy.copyFile(home, id), JSON.stringify({ v: 1,
+  copy.store(home).setItem(toHex(id).slice(0, 16), JSON.stringify({ v: 1,
     deviceId: toHex(id), publicKey: toHex(pub), publicKeyPq: toHex(pubPq), lastSeen: null,
     links: links.map((l, i) => ({ link: toHex(l), head: toHex(heads[i]) })),
   }));

@@ -7,7 +7,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { sync, load, copyFile } = require('../cli/copy');
+const { sync, load, store } = require('../cli/copy');
+/* one device's copy as the bucket keeps it (the home's copies store, key = device id, 16 hex) */
+const kept = (h, deviceId) => store(h).getItem(Buffer.from(deviceId).toString('hex').slice(0, 16));
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 
 async function keyWith(n) {
@@ -27,11 +29,11 @@ test('first sync keeps every link the key holds and verifies; --status then chan
   assert.equal(r.verdict.kind, 'verified');
   assert.equal(r.copy.newest, k.seq);
   assert.ok(r.copy.saved);
-  const before = fs.readFileSync(copyFile(h, (await edge.publicKey()).deviceId), 'utf8');
+  const before = kept(h, (await edge.publicKey()).deviceId);
   const s = await sync(edge, h, { status: true });
   assert.equal(s.verdict.kind, 'verified');
   assert.equal(s.copy.saved, false);
-  assert.equal(fs.readFileSync(copyFile(h, (await edge.publicKey()).deviceId), 'utf8'), before, '--status wrote the copy');
+  assert.equal(kept(h, (await edge.publicKey()).deviceId), before, '--status wrote the copy');
 });
 
 test('a later sync picks up only the new links', async () => {
@@ -50,16 +52,16 @@ test('a copy edited by hand is reported and not saved over - repairs are the pho
   const h = home();
   await sync(edge, h);
   const { deviceId } = await edge.publicKey();
-  const f = copyFile(h, deviceId);
-  const s = JSON.parse(fs.readFileSync(f, 'utf8'));
+  const key = Buffer.from(deviceId).toString('hex').slice(0, 16);
+  const s = JSON.parse(store(h).getItem(key));
   const mid = s.links[1];
   mid.link = mid.link.slice(0, 40) + (mid.link[40] === 'a' ? 'b' : 'a') + mid.link.slice(41); /* one byte of the subject */
-  fs.writeFileSync(f, JSON.stringify(s));
-  const edited = fs.readFileSync(f, 'utf8');
+  store(h).setItem(key, JSON.stringify(s));
+  const edited = store(h).getItem(key);
   transport.edgeRecord();
   const r = await sync(edge, h);
   assert.equal(r.verdict.kind, 'tampered');
   assert.equal(r.copy.saved, false);
-  assert.equal(fs.readFileSync(f, 'utf8'), edited, 'a copy that does not verify was saved');
+  assert.equal(store(h).getItem(key), edited, 'a copy that does not verify was saved');
   assert.equal(load(h, deviceId).links.length, s.links.length);
 });

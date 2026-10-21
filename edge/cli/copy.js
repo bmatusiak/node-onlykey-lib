@@ -13,7 +13,7 @@
  * and it REPORTS problems (a gap, a fork, tampering); it never repairs them - the
  * repairs stay on the phone.
  *
- * The copy: <edge home>/copy-<device id, 16 hex>.json
+ * The copy: the CLI's bucket, the home's `copies` store, key = device id (16 hex):
  *   {deviceId, links: [{link, head, reveal?}] (hex), lastSeen: {seq, head} | null,
  *    publicKey, publicKeyPq, seals: [{seq, head, signature, signaturePq?}], checkpoint?, statement?}
  * One file per device: this phone's key, and since 2026-10-08 your OTHER devices' logs too
@@ -28,6 +28,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const bucketHome = require('../../bucket/cli/home');
 const { chain, copy: copyLib } = require('../src');
 const copyfile = require('../src/copyfile');
 const { toHex, fromHex } = require('../../src/bytes');
@@ -36,19 +37,36 @@ const PICKUP_MAX = 8;
 const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 const seqOf = (r) => chain.decodeLink(r.link).seq;
 
-function copyFile(home, deviceId) {
-  return path.join(home, `copy-${toHex(deviceId).slice(0, 16)}.json`);
+/*
+ * The copies live in the CLI's bucket (bucket/cli/home.js): the home's `copies` store, one key
+ * per device (its id, 16 hex), the copy's JSON as edge/src/copyfile.js writes it - the same
+ * record every front end's bucket carries.
+ */
+function store(home) {
+  return bucketHome.kv(bucketHome.edgeAt(home, 'copies'));
 }
 
-/* the copy's JSON is edge/src/copyfile.js's: the bucket carries the same copy */
+const keyOf = (deviceId) => toHex(deviceId).slice(0, 16);
+
+/* where one device's copy is kept, as a person reads it: the bucket, the store and the key */
+function where(home, deviceId) {
+  const at = bucketHome.edgeAt(home, 'copies');
+  return `${at.file} (${at.store} ${keyOf(deviceId)})`;
+}
+
 function load(home, deviceId) {
-  const f = copyFile(home, deviceId);
-  return copyfile.fromJSON(fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null, deviceId);
+  const text = store(home).getItem(keyOf(deviceId));
+  return copyfile.fromJSON(text ? JSON.parse(text) : null, deviceId);
 }
 
 function save(home, c) {
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(copyFile(home, c.deviceId), JSON.stringify(copyfile.toJSON(c), null, 1) + '\n', { mode: 0o600 });
+  store(home).setItem(keyOf(c.deviceId), JSON.stringify(copyfile.toJSON(c)));
+}
+
+/* every copy in the home, as the JSON each was kept as */
+function allJSON(home) {
+  const s = store(home);
+  return s.keys().map((k) => JSON.parse(s.getItem(k)));
 }
 
 /*
@@ -173,7 +191,7 @@ async function sync(edge, home, { status = false, history = null } = {}) {
   return {
     deviceId: toHex(deviceId),
     key: { seq: keySeq, head: toHex(h.head), ringFrom },
-    copy: { file: copyFile(home, deviceId), count: candidate.links.length, newest, added, saved },
+    copy: { file: where(home, deviceId), count: candidate.links.length, newest, added, saved },
     verdict,
     stoppedAt: stopped,
   };
@@ -258,11 +276,7 @@ function keepSeals(home, deviceId, { seals = [] }) {
  * it. -> [{deviceId, blocks: [{block, id, ok, reason?}], open, reason?}]
  */
 function blocks(home, { net }) {
-  if (!fs.existsSync(home)) return [];
-  return fs.readdirSync(home).filter((n) => /^copy-[0-9a-f]{16}\.json$/.test(n)).map((n) => {
-    const s = JSON.parse(fs.readFileSync(path.join(home, n), 'utf8'));
-    return copyfile.blocks(load(home, fromHex(s.deviceId)), { net });
-  });
+  return allJSON(home).map((s) => copyfile.blocks(copyfile.fromJSON(s, fromHex(s.deviceId)), { net }));
 }
 
 /*
@@ -299,13 +313,10 @@ function keepLog(home, { deviceId, publicKey, publicKeyPq, records, checkpoint, 
 
 /** Every log this computer can offer, but the one of `exceptId` (the phone being synced): those with a checkpoint and a statement. */
 function logsToOffer(home, exceptId) {
-  if (!fs.existsSync(home)) return [];
-  const skip = exceptId ? toHex(exceptId).slice(0, 16) : null;
-  return fs.readdirSync(home)
-    .filter((n) => /^copy-[0-9a-f]{16}\.json$/.test(n) && n.slice(5, 21) !== skip)
-    .map((n) => JSON.parse(fs.readFileSync(path.join(home, n), 'utf8')))
-    .filter((j) => j.v === 1 && j.checkpoint && j.statement)
-    .map((j) => load(home, fromHex(j.deviceId)));
+  const skip = exceptId ? keyOf(exceptId) : null;
+  return allJSON(home)
+    .filter((j) => j.v === 1 && j.checkpoint && j.statement && keyOf(fromHex(j.deviceId)) !== skip)
+    .map((j) => copyfile.fromJSON(j, fromHex(j.deviceId)));
 }
 
 /**
@@ -336,4 +347,4 @@ function keepNotes(home, deviceId, notes) {
   return { reasons: Object.keys(got.reasons).length, messages: Object.keys(got.messages).length };
 }
 
-module.exports = { sync, lines, load, copyFile, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };
+module.exports = { sync, lines, load, store, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };

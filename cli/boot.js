@@ -28,6 +28,7 @@ function listPlugins() {
     require('./core'),
     optional('../keychain/cli/plugin', 'keychain'),
     optional('../edge/cli/plugin', 'edge'),
+    optional('../bucket/cli/plugin', 'bucket'),
   ].filter(Boolean);
 }
 

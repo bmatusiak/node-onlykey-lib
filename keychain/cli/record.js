@@ -10,10 +10,12 @@
  * scripts need to look that up (`onlykey-js keychain list --json`), and the
  * person needs to see it next to the phone's list.
  *
- * The file is ~/.onlykey-js/keychain.json (ONLYKEY_KEYCHAIN moves it), in the
- * phone's own export format (src/keychain/list.js), so merging with the phone
- * is the existing import - no sync. Public data only: list.createEntry refuses
- * anything private. Written owner-only (0600, in a 0700 directory).
+ * The list lives in the CLI's bucket (bucket/cli/home.js): the 'keychain' store, key 'list'
+ * ('keychain-test' for the testnet), in the phone's own export format
+ * (src/keychain/list.js), so merging with the phone is the existing import - no sync.
+ * ONLYKEY_KEYCHAIN (or setFile with a path) names a plain list file instead. Public
+ * data only: list.createEntry refuses anything private. Written owner-only (0600, in
+ * a 0700 directory).
  *
  * "Yours" - the own-identities mark that drives the phone's red warning - is
  * NEVER set or cleared here: it is the phone's, set and removed only there,
@@ -24,9 +26,9 @@
  * for; a list that cannot be written is reported once on stderr.
  */
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const list = require('../src/list');
+const bucketHome = require('../../bucket/cli/home');
 const { toHex } = require('../../src/bytes');
 
 /* okcrypto.agent keyType -> the list's type */
@@ -38,22 +40,39 @@ const LABEL_TYPE_OF_KEYTYPE = { 1: 'p256', 2: 'secp256k1', 3: 'x25519' };
  * The testnet's list is its own (onlykey-js edge --test-mode; BLOCKS.md): its soft
  * key is another key with other keys, so its entries never land in the live list.
  */
+/*
+ * WHERE THE LIST IS: a bucket store (the default) or a plain list file (a path: ONLYKEY_KEYCHAIN,
+ * or setFile with one - a test's scratch list). A bucket store prints as the bucket and the store,
+ * so messages that name where the list is stay readable.
+ */
 let fileOverride = null;
-function setFile(file) { fileOverride = file ? path.resolve(file) : null; }
-/** The testnet's Key Chain file: edge --test-mode records here, keychain --test-mode reads it. */
-function testFile() { return path.join(os.homedir(), '.onlykey-js', 'keychain-test.json'); }
+function setFile(file) { fileOverride = !file ? null : typeof file === 'string' ? path.resolve(file) : file; }
+function inBucket(store) {
+  const at = bucketHome.at(store);
+  return { ...at, toString: () => `${at.file} (${store})` };
+}
+/** The testnet's Key Chain: edge --test-mode records here, keychain --test-mode reads it. */
+function testFile() { return inBucket('keychain-test'); }
 
 function keychainFile() {
   if (fileOverride) return fileOverride;
-  return process.env.ONLYKEY_KEYCHAIN ? path.resolve(process.env.ONLYKEY_KEYCHAIN) : path.join(os.homedir(), '.onlykey-js', 'keychain.json');
+  return process.env.ONLYKEY_KEYCHAIN ? path.resolve(process.env.ONLYKEY_KEYCHAIN) : inBucket('keychain');
 }
 
 function load(file = keychainFile()) {
+  if (typeof file !== 'string') {
+    const text = bucketHome.kv(file).getItem('list');
+    return text ? list.parse(text) : [];
+  }
   if (!fs.existsSync(file)) return [];
   return list.parse(fs.readFileSync(file, 'utf8'));
 }
 
 function save(entries, file = keychainFile()) {
+  if (typeof file !== 'string') {
+    bucketHome.kv(file).setItem('list', list.serialize(entries));
+    return;
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, list.serialize(entries), { mode: 0o600 });

@@ -21,9 +21,14 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const which = process.argv[2];
-const LEFT_OUT = { edge: ['edge'], keychain: ['keychain', 'edge'], passwords: ['passwords'], guestbook: ['guestbook'], cryptobox: ['cryptobox'], bucket: ['bucket'] }[which];
+/*
+ * bucket/ is not left out: since stage 3 it is the CLI's storage (bucket/cli/home.js) - the
+ * pairings' neighbours, Key Chain's list and Edge's state all live in it - so it is core, as
+ * src/ is. Its tests still run with every other folder left out.
+ */
+const LEFT_OUT = { edge: ['edge'], keychain: ['keychain', 'edge'], passwords: ['passwords'], guestbook: ['guestbook'], cryptobox: ['cryptobox'] }[which];
 if (!LEFT_OUT) {
-  console.error('usage: node scripts/check-without.js edge|keychain|passwords|guestbook|cryptobox|bucket');
+  console.error('usage: node scripts/check-without.js edge|keychain|passwords|guestbook|cryptobox');
   process.exit(2);
 }
 const KEPT_PLUGINS = ['keychain', 'edge', 'passwords', 'guestbook', 'cryptobox', 'bucket'].filter((d) => !LEFT_OUT.includes(d));

@@ -26,6 +26,7 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const { edgeCmd } = require('./control');
+const bucketHome = require('../../bucket/cli/home');
 
 const USAGE = [
   'onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>" [--committer-name N --committer-email E --expires 1y|<n>d|never --created <unix>]',
@@ -44,45 +45,28 @@ const USAGE = [
 
 const opt = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 
-/* the budgets this computer asked for (no agent key since 2026-10-08: the Bluetooth pairing says who asks) */
+/*
+ * The budgets this computer asked for (no agent key since 2026-10-08: the Bluetooth pairing says
+ * who asks): the home's `budgets` store in the CLI's bucket (bucket/cli/home.js), one key per
+ * budget, its JSON.
+ */
 function budgetStore(home) {
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  const storeFile = path.join(home, 'budgets.json');
-  /*
-   * Version 1 since the clean start (Brad, 2026-10-07: every schema v1): a store
-   * without it holds the old chain's budgets, which the reset ended - read as empty.
-   */
-  const read = () => {
-    const all = fs.existsSync(storeFile) ? JSON.parse(fs.readFileSync(storeFile, 'utf8')) : {};
-    return all && all.v === 1 ? all : { v: 1 };
-  };
+  const kv = bucketHome.kv(bucketHome.edgeAt(home, 'budgets'));
   const store = {
-    async get(k) { return k === 'v' ? null : read()[k] || null; },
-    async set(k, v) { const all = read(); all[k] = v; fs.writeFileSync(storeFile, JSON.stringify(all, null, 2), { mode: 0o600 }); },
+    async get(k) { const t = kv.getItem(k); return t ? JSON.parse(t) : null; },
+    async set(k, v) { kv.setItem(k, JSON.stringify(v)); },
   };
   return { store };
 }
 
 /*
- * THIS COMPUTER'S OWN EDGE STATE: one budget pointer per key (edge/src/store.js), over a
- * small JSON file in the Edge home with the host-store seam (getItem/setItem/removeItem).
+ * THIS COMPUTER'S OWN EDGE STATE: one budget pointer per key (edge/src/store.js), the home's
+ * `pointers` store in the CLI's bucket, through the host-store seam (getItem/setItem/removeItem).
  * The agent's identity is NOT here: the phone keeps it (SPEC H7, 2026-10-20 - it was
  * agent.json, one per computer folder; a new computer had to be given a copy by hand).
  */
-function fileKv(home, name) {
-  const file = path.join(home, name);
-  const read = () => {
-    try { const all = JSON.parse(fs.readFileSync(file, 'utf8')); return all && all.v === 1 ? all : { v: 1 }; } catch { return { v: 1 }; }
-  };
-  const write = (all) => {
-    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(file, JSON.stringify(all, null, 2), { mode: 0o600 });
-  };
-  return {
-    getItem: (k) => (k === 'v' ? null : (read()[k] ?? null)),
-    setItem: (k, v) => { const all = read(); all[k] = String(v); write(all); },
-    removeItem: (k) => { const all = read(); if (k in all) { delete all[k]; write(all); } },
-  };
+function pointerKv(home) {
+  return bucketHome.kv(bucketHome.edgeAt(home, 'pointers'));
 }
 
 /* edge setup's flags: only what was given (the rest comes from the identity the phone keeps) */
@@ -213,7 +197,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
     const c = client.createEdgeClient({ edge, channel, store });
     const svc = await startEdgeAgent({
       okcrypto, client: c, edge, identity, deviceId,
-      pointers: edgeStore.createPointerStore(fileKv(home, 'pointers.json')),
+      pointers: edgeStore.createPointerStore(pointerKv(home)),
       openpgp: require('../../src/crypto/pgp'),
       shimCommand: path.resolve(__dirname, 'gpg-shim.js').split(path.sep).join('/'),
       /* for one command the command itself prints the signed line; the service logs it to its own console */
@@ -357,10 +341,15 @@ module.exports = function register(COMMANDS, h) {
         const os = require('os');
         const testHome = path.join(os.homedir(), '.onlykey-js', 'edge-test');
         if (control.edgeHome() !== testHome) throw h.usage(`clear removes only the testnet's own home (${testHome}), not ${control.edgeHome()}`);
-        const kc = require('../../keychain/cli/record').keychainFile();
-        const gone = [testHome, kc].filter((p) => fs.existsSync(p));
+        /* its machine files (keys) go with the folder; its data - copies, budgets, pointers, Key Chain list - leaves the bucket */
+        const stores = ['edge-test.copies', 'edge-test.budgets', 'edge-test.pointers', 'keychain-test'];
+        const b = bucketHome.read();
+        const held = stores.filter((s) => Object.values(b.stores[s] || {}).some((r) => r.v !== null));
+        if (held.length) bucketHome.clear(bucketHome.at(stores[0]).file, stores);
+        const gone = fs.existsSync(testHome) ? [testHome] : [];
         for (const p of gone) fs.rmSync(p, { recursive: true, force: true });
-        io.out(gone.length ? `testnet cleared on this computer: ${gone.join(', ')}` : 'nothing to clear: no testnet data on this computer');
+        const what = [...gone, ...held.map((s) => `bucket ${s}`)];
+        io.out(what.length ? `testnet cleared on this computer: ${what.join(', ')}` : 'nothing to clear: no testnet data on this computer');
         return 0;
       }
 
@@ -504,6 +493,6 @@ module.exports = function register(COMMANDS, h) {
 
 module.exports.USAGE = USAGE;
 /* the PC store's two files, for tests (version 1 since the clean start) */
-module.exports.fileKv = fileKv;
+module.exports.pointerKv = pointerKv;
 module.exports.parseSetup = parseSetup;
 module.exports.budgetStore = budgetStore;
