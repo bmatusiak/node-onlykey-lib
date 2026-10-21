@@ -51,7 +51,7 @@ function controlKey({ home = os.homedir(), create = false } = {}) {
   const dir = edgeHome(home);
   const file = path.join(dir, 'control.key');
   if (!fs.existsSync(file)) {
-    if (!create) throw Object.assign(new Error('the agent service is not set up here (no control key) - start `onlykey-js edge agent`'), { code: 'EEDGE_NO_AGENT' });
+    if (!create) throw Object.assign(new Error(`the agent service is not set up here (no control key) - start \`${edgeCmd('agent')}\``), { code: 'EEDGE_NO_AGENT' });
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(file, crypto.randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
   }
@@ -133,7 +133,7 @@ function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeo
     try {
       key = controlKey({ home });
     } catch (e) {
-      return Promise.reject(Object.assign(new Error('no edge agent is running here (it was never set up) - start `onlykey-js --ble --address <phone> edge agent`'), { code: 'EEDGE_NO_AGENT' }));
+      return Promise.reject(Object.assign(new Error(`no edge agent is running here (it was never set up) - start \`${edgeCmd('agent', '--ble --address <phone> ')}\``), { code: 'EEDGE_NO_AGENT' }));
     }
   }
   return new Promise((resolve, reject) => {
@@ -146,7 +146,7 @@ function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeo
     sock.once('error', (e) => {
       finish(reject, connected
         ? Object.assign(new Error(`the edge agent stopped while handling "${op}" (${e.code || e.message}) - see its log, then start it again`), { code: 'EEDGE_AGENT_GONE' })
-        : Object.assign(new Error(`no edge agent is running (${e.code || e.message}) - start \`onlykey-js --ble --address <phone> edge agent\``), { code: 'EEDGE_NO_AGENT' }));
+        : Object.assign(new Error(`no edge agent is running (${e.code || e.message}) - start \`${edgeCmd('agent', '--ble --address <phone> ')}\``), { code: 'EEDGE_NO_AGENT' }));
     });
     sock.on('connect', () => {
       connected = true;
@@ -168,4 +168,14 @@ function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeo
   });
 }
 
-module.exports = { edgeHome, setHome, controlPath, controlKey, serveControl, ask };
+/*
+ * The command a hint tells someone to run. On the testnet it must carry
+ * --test-mode: a hint without it, followed as printed, works on the live chain
+ * and the same error comes back. register.js's takeTestMode sets the net for
+ * each run; every hint in edge/cli is built here.
+ */
+let NET_FLAG = '';
+function setNet(net) { NET_FLAG = net === 'test' ? ' --test-mode' : ''; }
+function edgeCmd(rest, before = '') { return `onlykey-js ${before}edge${NET_FLAG} ${rest}`; }
+
+module.exports = { edgeHome, setHome, controlPath, controlKey, serveControl, ask, setNet, edgeCmd };

@@ -48,6 +48,7 @@ side: the bin is named `onlykey-js` so it can never shadow `onlykey-cli`.
 | `wipekey <RSA1-4\|ECC1-16\|HMAC1-2>` | `wipekey` | writes | two lines, as python: the wipe, then the label clear - which the library skips after a refused wipe and for HMAC |
 | `agent <[user@]host \| file> [-e ed25519\|nist256p1] [--skey ECC32\|derived-v2] [-f \| -s \| -c \| -- cmd]` | lib-agent's `onlykey-agent` | reads, signs | SSH keys derived in the key. Prints the key line (the same line python prints, comment `<ssh://user@host\|curve>` included), or serves an ssh-agent: `-f` foreground, `-- cmd` / `-s` / `-c` under a command. POSIX: Unix socket in a private 0700 dir; Windows: a private named pipe (Windows OpenSSH only - Git Bash's ssh cannot use a pipe). v2 is `--skey derived-v2`, refused on firmware without it. Not carried: stored-slot keys (`--skey ECC1-16`), `--daemonize`, `--mosh`, `.pub` import. See below |
 | `gpg init "<user id>" [-e ed25519|nist256p1] [-t <time>] [--homedir <dir>] [--skey|--dkey ECC32|derived-v2] [--force]` | lib-agent's `onlykey-gpg init` | reads, signs, writes files | A GPG key derived in the key from `gpg://<user id>`: signing primary + ECDH subkey, both self-signatures made by the device (two confirmations). Prints the armored key and writes lib-agent's GnuPG home (`run-agent.sh`, `gpg.conf`, `env`, `pubkey.asc`, ownertrust), then gpg imports it. Same key packets, fingerprint and keygrips as python for the same device, user id, curve and time. Refuses an existing home; `--force` replaces only one it made. Not carried: `-s/--subkey`, `-i/--import-pub` (stored keys). See below |
+| `gpg check [--homedir <dir>] [--fix]` | (new) | reads; `--fix` writes the launcher | Does the home's launcher still point at a node and a CLI that exist, and what does it use (keys, bus)? `--fix` rewrites it from the home's `onlykey-agent.json`. See below |
 | `gpg-agent [--homedir <dir>] [--skey|--dkey ECC32|derived-v2] [--daemon]` | lib-agent's `onlykey-gpg-agent` | signs, decrypts | The gpg-agent gpg starts for that home (gpg.conf `agent-program`): lib-agent's Assuan command set on gpg's own socket path; on Windows libassuan's port-and-nonce socket file. See below |
 
 "Reads" means it connects - the OKCONNECT every client sends, which sets the
@@ -110,8 +111,18 @@ the fingerprint covers it, so the same device, user id, curve and time give
 the same key on any machine. The self-signatures of a key dated 0 are dated 1 -
 GnuPG takes a signature at 0 as undated and then verifies the person's own
 key's signatures as `[uncertain]` (measured; lib-agent's keys have that fault).
-v2 is `--skey derived-v2` / `--dkey derived-v2`, written into `run-agent.sh`
-so the agent uses the same derivation.
+v2 is `--skey derived-v2` / `--dkey derived-v2`. What init chose - the keys, the
+bus (`--ble --address …` or `--path`) and `NODE_PATH` - is written once, into
+the home's `onlykey-agent.json`, and every agent for that home reads it: the
+one gpg starts, and `gpg-agent` run by hand to watch it (`--homedir` defaults
+to `~/.gnupg/onlykey`, as for init; an option given still wins for that run).
+
+The launcher names node and this CLI by absolute path (gpg starts it with
+gpg's own PATH), so a node upgrade or a moved checkout breaks it silently.
+`onlykey-js gpg check [--homedir <dir>]` says whether it still matches;
+`--fix` rewrites it for this node and CLI from the home's settings - no
+device, no keys touched. A home made before the settings file is made again
+with `gpg init --force`.
 
 gpg starts the agent itself: `run-agent.sh` runs `gpg-agent --daemon`, which - like
 gpg-agent's own `--daemon` - leaves the agent serving in the background and
@@ -199,8 +210,8 @@ ok-rn's soft key publishes the OnlyKey **vendor** interface as a GATT service
 `--ble` swaps only the pipe: `cli/transport-ble.js` under
 `plugins/transport/ble`, everything above it the code a USB key runs. The
 option is global - every device command takes it, including `agent`,
-`gpg init` (its `run-agent` script says `--ble`, since gpg starts the agent
-later with none of our options) and `gpg-agent` (`--daemon` passes it to the
+`gpg init` (the home's `onlykey-agent.json` keeps `--ble`, since gpg starts
+the agent later with none of our options) and `gpg-agent` (`--daemon` passes it to the
 background agent). `--address` takes the phone's address or Bluetooth name;
 without it, the one paired phone advertising FIDO (0xFFFD) is used.
 `--path` with `--ble`, or `--address` without it, is refused.

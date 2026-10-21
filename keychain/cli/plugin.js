@@ -61,6 +61,38 @@ function setup(imports, register) {
   }
   const slotName = (n) => (n <= 4 ? `RSA${n}` : `ECC${n - 100}`);
 
+  /*
+   * One label can hold several keys: gpg init records the ed25519 signing key
+   * and the x25519 encryption key under one uid, gpg and ssh derive v1 by
+   * default while the Edge agent derives v2 for the same name, and ssh -e adds
+   * a P-256 key. Taking the first entry in the file certified or exported
+   * whichever key happened to be written first. So every lookup by name goes
+   * through here: --type and --v1/--v2 narrow it, and more than one key left is
+   * refused with each candidate listed, never guessed.
+   */
+  const versionOf = (e) => (e.code === 232 ? 2 : e.code === 132 ? 1 : null);
+  /*
+   * One name, two spellings: this CLI files an agent key as "gpg://<uid>" (and
+   * ssh://…), the phone and keychain/src/derive.js as the bare uid with scheme
+   * gpg. When both record one key the merge keeps whichever came first, so a
+   * lookup compares the full name - scheme and uid - not the stored text.
+   */
+  const fullName = (e) => (['gpg', 'ssh'].includes(e.scheme) && !/^(gpg|ssh):\/\//.test(e.label || '') ? `${e.scheme}://${e.label}` : e.label);
+  /* the fingerprint as `keychain list` prints it, spaces or not: what tells two keys under one name apart */
+  const flat = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+  const named = (e, q) => e.label === q || e.id === q || fullName(e) === q
+    || (flat(q).length >= 16 && (flat(e.fingerprint) === flat(q) || flat(e.pgpFingerprint) === flat(q)));
+  function narrow(entries, opts) {
+    if (opts.v1 && opts.v2) throw usage('--v1 and --v2 name different keys; give one');
+    return entries.filter((e) => (!opts.type || e.type === opts.type)
+      && (!opts.v1 || versionOf(e) === 1) && (!opts.v2 || versionOf(e) === 2));
+  }
+  function onlyOne(found, name, file) {
+    if (found.length <= 1) return found[0];
+    const lines = found.map((e) => `  ${e.type.padEnd(9)} ${versionOf(e) ? `v${versionOf(e)}` : '  '}  ${e.fingerprint || ''}  ${(e.tools || []).join(', ')}`);
+    throw new CliError([`${found.length} keys in ${file} match "${name}" - say which with --type <type> and/or --v1 / --v2, or give its fingerprint (as listed below):`, ...lines].join('\n'));
+  }
+
   function printArtifacts(io, a) {
     if (a.ssh) io.out(`ssh     ${a.ssh}`);
     if (a.age) io.out(`age     ${a.age}`);
@@ -71,7 +103,7 @@ function setup(imports, register) {
 
   const KEYCHAIN = {
     mirrors: '(new)',
-    usage: 'list [--json] | show <label> [--json] | import <file> | export <label|fingerprint> --pgp|--ssh|--age [-o file] | cert <gpg-label> [--expires 1y] [--revoke [--reason N]] [--v2] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
+    usage: 'list [--json] | show <label> [--type T] [--v1|--v2] [--json] | import <file> | export <label|fingerprint> --pgp|--ssh|--age [--type T] [--v1|--v2] [-o file] | cert <gpg-label> [--expires 1y] [--revoke [--reason N]] [--v1|--v2] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
     writes: true,
     summary: 'Key Chain: the derived keys this machine has used (list, show), the key slots, derive/generate keys',
     options: {
@@ -82,7 +114,10 @@ function setup(imports, register) {
       'export-pem': { type: 'string' },
       'export-pgp': { type: 'string' },
       'user-id': { type: 'string' },
+      v1: { type: 'boolean' },
+      'test-mode': { type: 'boolean' },
       v2: { type: 'boolean' },
+      type: { type: 'string' },
       json: { type: 'boolean' },
       pgp: { type: 'boolean' },
       ssh: { type: 'boolean' },
@@ -95,6 +130,8 @@ function setup(imports, register) {
     async run(io, opts, args) {
       const keychain = require('../src');
       const [sub, ...rest] = args;
+      /* --test-mode: the testnet's list (keychain-test.json), the one edge --test-mode records into */
+      { const rec = require('./record'); rec.setFile(opts['test-mode'] ? rec.testFile() : null); }
 
       /*
        * list / show: the host's Key Chain list (~/.onlykey-js/keychain.json) -
@@ -104,9 +141,10 @@ function setup(imports, register) {
       if (sub === 'list' || sub === 'show') {
         const rec = require('./record');
         const entries = rec.load();
-        const pick = sub === 'show' ? entries.filter((e) => e.label === rest[0] || e.id === rest[0]) : entries;
         if (sub === 'show' && (rest.length !== 1)) throw usage('keychain show takes one label (as `keychain list` prints it)');
+        const pick = sub === 'show' ? narrow(entries.filter((e) => named(e, rest[0])), opts) : entries;
         if (sub === 'show' && !pick.length) throw new CliError(`no derived key "${rest[0]}" in ${rec.keychainFile()}`);
+        if (sub === 'show') onlyOne(pick, rest[0], rec.keychainFile());
         const shape = (e) => ({
           label: e.label, scheme: e.scheme, type: e.type, code: e.code, publicKey: Buffer.from(e.publicKey).toString('hex'),
           fingerprint: e.fingerprint || keychain.list.fingerprint(e.publicKey), firstSeen: e.firstSeen, lastSeen: e.lastSeen, tools: e.tools || [],
@@ -141,10 +179,13 @@ function setup(imports, register) {
         const want = ['pgp', 'ssh', 'age'].filter((k) => opts[k]);
         if (rest.length !== 1 || want.length !== 1) throw usage('keychain export takes one label or fingerprint and one of --pgp, --ssh, --age');
         const key = rest[0].replace(/\s+/g, '').toLowerCase();
-        const e = rec.load().find((x) => x.label === rest[0] || x.id === rest[0]
-          || String(x.fingerprint || '').replace(/\s+/g, '') === key || String(x.pgpFingerprint || '').toLowerCase() === key);
-        if (!e) throw new CliError(`no key "${rest[0]}" in ${rec.keychainFile()} - keychain list shows what is there`);
-        const text = want[0] === 'pgp' ? e.pgp : (e.artifacts || {})[want[0]];
+        const found = narrow(rec.load().filter((x) => named(x, rest[0])
+          || String(x.fingerprint || '').replace(/\s+/g, '') === key || String(x.pgpFingerprint || '').toLowerCase() === key), opts);
+        if (!found.length) throw new CliError(`no key "${rest[0]}" in ${rec.keychainFile()} - keychain list shows what is there`);
+        const formOf = (x) => (want[0] === 'pgp' ? x.pgp : (x.artifacts || {})[want[0]]);
+        /* only keys that have the asked form compete: the x25519 key beside a gpg uid has no certificate of its own */
+        const e = onlyOne(found.some(formOf) ? found.filter(formOf) : found, rest[0], rec.keychainFile());
+        const text = formOf(e);
         if (!text) {
           throw new CliError(want[0] === 'pgp'
             ? `no certificate saved for ${e.label} - make one: ${NAME} keychain cert ${e.label}`
@@ -170,8 +211,8 @@ function setup(imports, register) {
         if (rest.length !== 1) throw usage('keychain cert takes one gpg label: gpg://Name <email>');
         const rec = require('./record');
         const label = `gpg://${keychain.cert.uidOf(rest[0])}`;
-        const saved = rec.load().find((x) => x.label === label && x.type === 'ed25519');
-        const version = opts.v2 || (saved && saved.code === 232) ? 2 : 1;
+        const saved = onlyOne(narrow(rec.load().filter((x) => named(x, label) && x.type === 'ed25519'), opts), label, rec.keychainFile());
+        const version = opts.v2 ? 2 : opts.v1 ? 1 : saved ? versionOf(saved) || 1 : 1;
         const expires = opts.expires !== undefined ? parseExpires(opts.expires) : (saved && saved.certExpires) || 0;
         const record = io.keychainRecord || rec.record;
         return withDevice(io, opts, async ({ okcrypto, identity, transport }) => {
@@ -276,6 +317,20 @@ function setup(imports, register) {
     },
   };
 
+  /*
+   * The overwrite guard reads the slot's LABEL - in config mode, where writes
+   * happen, the device cannot be asked what a slot holds (probeKeySlot works
+   * out of config mode only). A key written with no label is invisible to the
+   * next gen or load, which then destroys it without --yes. So a key this
+   * command writes into a slot always carries a name.
+   */
+  function needLabel(opts) {
+    if (opts.label === undefined || opts.label === '') {
+      throw usage('a key written into a slot needs --label (up to 16 characters): the name is what makes the next gen or load into that slot ask for --yes');
+    }
+    return opts.label;
+  }
+
   async function keychainGenDevice(io, opts, type) {
     const spec = KEYCHAIN_DEVICE_TYPES[type];
     if (!spec) {
@@ -284,7 +339,7 @@ function setup(imports, register) {
     if (!opts.slot) throw usage('keychain gen on the OnlyKey needs --slot (ECC1-16)');
     const slot = keychainSlot(opts.slot);
     if (slot < 101) throw usage('the OnlyKey generates into ECC1-16 only; RSA is made with --host');
-    const label = opts.label === undefined ? null : opts.label;
+    const label = needLabel(opts);
     return withDevice(io, opts, async ({ device, identity }) => {
       requireUnlocked(identity, 'keychain gen');
       const { keys } = await device.readKeyLabels();
@@ -313,6 +368,7 @@ function setup(imports, register) {
     if (!store && !pem && !pgpFile) {
       throw usage('a key made here must be stored (--slot) or exported (--export-pem / --export-pgp) - otherwise it is made and lost');
     }
+    if (store && type !== 'pgp') needLabel(opts);
 
     if (type === 'pgp') {
       if (pem) throw usage('a PGP key exports with --export-pgp; --export-pem is for a single key');
@@ -341,6 +397,17 @@ function setup(imports, register) {
       if (store) {
         await withDevice(io, opts, async ({ device, identity }) => {
           requireUnlocked(identity, 'keychain gen');
+          /* the slots loadPgpKey's own plan will write, checked as every other slot write is */
+          const planned = deviceKeys.assignPgpSlots(deviceKeys.fromPgpKey(privateKey)).map(({ slot, key }) => {
+            const p = deviceKeys.prepareKey(key, { slot, autoAssign: true }); /* role slot 1/2 -> ECC1/ECC2 for an ECC key */
+            p.key.fill(0);
+            return p.slot;
+          });
+          const { keys } = await device.readKeyLabels();
+          const named = keys.filter((k) => planned.includes(k.slot) && k.label);
+          if (named.length && !opts.yes) {
+            throw new CliError(`${named.map((k) => `${slotName(k.slot)} is named "${k.label}"`).join(', ')} - loading the PGP key destroys ${named.length > 1 ? 'them' : 'it'}. Run again with --yes to replace.`);
+          }
           const loaded = await deviceWrite(() => device.loadPgpKey(privateKey, {}));
           io.out(`Loaded: ${loaded.map((l) => `${l.role} in slot ${l.slot}`).join(', ')}`);
         });
@@ -379,7 +446,7 @@ function setup(imports, register) {
             throw new CliError(`${slotName(slot)} is named "${existing}" - it holds a key, and loading over it destroys it. Run again with --yes to replace it.`);
           }
           const r = await deviceWrite(() => device.loadKey(slot, { type: prepared.type, key: prepared.key },
-            { label: opts.label === undefined ? null : opts.label }));
+            { label: opts.label }));
           prepared.key.fill(0);
           if (r.response) io.out(r.response);
         });

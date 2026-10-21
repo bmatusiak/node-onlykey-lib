@@ -1645,6 +1645,32 @@ const IS_WINDOWS_CLI = process.platform === 'win32';
 /* The comment line init writes into run-agent.sh: how --force knows a home is ours to replace. */
 const GPG_HOME_MARK = `# written by ${NAME} gpg init`;
 
+/*
+ * What `gpg init` chose for a home - the signing and decryption keys and the
+ * bus/phone (deviceArgs) - written once, in the home, and read by every
+ * agent started for it: gpg starts the agent later with none of our options,
+ * and a person runs `gpg-agent --homedir H` by hand to watch it. Settings
+ * only, nothing secret.
+ */
+const GPG_SETTINGS = 'onlykey-agent.json';
+function readGpgSettings(homedir) {
+  try {
+    return JSON.parse(require('fs').readFileSync(require('path').join(homedir, GPG_SETTINGS), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+/** deviceArgs() read back into options: what a home's settings say about the bus. */
+function deviceOptsFromArgs(args = []) {
+  const o = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--ble') o.ble = true;
+    else if (args[i] === '--address') o.address = args[++i];
+    else if (args[i] === '--path') o.path = args[++i];
+  }
+  return o;
+}
+
 /** lib-agent's default homedir: ~/.gnupg/<device name>. */
 function defaultGpgHome() {
   return require('path').join(require('os').homedir(), '.gnupg', 'onlykey');
@@ -1686,22 +1712,23 @@ function runGpg(io, args) {
  * this CLI, because gpg starts it with whatever PATH gpg had - lib-agent
  * bakes its PATH into the script for the same reason.
  */
-function agentScript(homedir, skey, dkey, windows, device = []) {
+function agentScript(homedir, windows, nodePath = process.env.NODE_PATH || null) {
   const node = process.execPath;
   const cli = require('path').resolve(__filename);
   /*
-   * `device` is deviceArgs(): the bus and key `gpg init` used. gpg starts
-   * this script later with none of our options, so a home made over --ble
-   * must say --ble here, or its agent would go looking for a USB key.
+   * Only the program and the home: the keys and the bus are in the home's
+   * settings file (GPG_SETTINGS), the one place both readers - this script's
+   * agent and `gpg-agent` run by hand - take them from. A script that carried
+   * its own copy disagreed with a hand-run agent that defaulted to ECC32.
    */
-  const args = ['gpg-agent', '--homedir', homedir, '--skey', skey, '--dkey', dkey, ...device, '--daemon'];
+  const args = ['gpg-agent', '--homedir', homedir, '--daemon'];
   /*
    * NODE_PATH, when init ran with one: gpg starts this script with ITS
    * environment, and the optional BLE package (@stoprocent/noble) is an
    * optional peer that may live outside the lib (owner, 2026-10-03:
    * ~/.onlykey-js/node_modules) - without it the agent's --ble cannot load.
    */
-  const nodePath = process.env.NODE_PATH;
+  /* nodePath: the one init ran with, kept in the settings so check --fix writes it back */
   if (windows) {
     /*
      * NO WINDOW (owner, 2026-10-19: a console window that kept popping up
@@ -1740,7 +1767,7 @@ function agentScript(homedir, skey, dkey, windows, device = []) {
 COMMANDS.gpg = {
   mirrors: 'onlykey-gpg init (lib-agent)',
   usage: 'init "<user id>" [-e ed25519|nist256p1] [-t <time>] [--homedir <dir>] '
-    + '[--skey ECC32|derived-v2|ECC1-16] [--dkey ECC32|derived-v2|ECC1-16] [--import-pub <key.asc>] [--force]',
+    + '[--skey ECC32|derived-v2|ECC1-16] [--dkey ECC32|derived-v2|ECC1-16] [--import-pub <key.asc>] [--force] | check [--homedir <dir>] [--fix]',
   summary: 'a GPG key derived in the key: print it, and make a GnuPG home that uses it',
   device: true,
   /*
@@ -1761,6 +1788,7 @@ COMMANDS.gpg = {
     dkey: { type: 'string' },
     /* a slot pair's certificate, already made (Key Chain -> Share PGP public key): imported, never re-signed */
     force: { type: 'boolean' },
+    fix: { type: 'boolean' },
   },
   /**
    * `gpg init "<user id>"`, lib-agent's run_init():
@@ -1783,7 +1811,50 @@ COMMANDS.gpg = {
     const agentProto = require('../src/protocol/agent');
 
     const [action, givenUserId, ...extra] = args;
-    if (action !== 'init') throw usage('gpg takes one action: init "<user id>"');
+    /*
+     * check: does the launcher gpg starts still point at a node and a CLI that
+     * exist, and does the home have its settings? Its paths are absolute (gpg
+     * starts it with gpg's own PATH), so a node upgrade or a moved checkout
+     * leaves gpg signing silently failing. --fix rewrites the launcher for
+     * this node and this CLI - no device, no keys touched.
+     */
+    if (action === 'check') {
+      if (givenUserId || extra.length) throw usage('gpg check takes no arguments, only [--homedir <dir>] [--fix]');
+      const homedir = pathm.resolve(opts.homedir || process.env.GNUPGHOME || defaultGpgHome());
+      const names = ((s) => [s, ...(s.extra || [])].map((f) => f.name))(agentScript(homedir, IS_WINDOWS_CLI));
+      const old = {};
+      for (const n of names) {
+        try { old[n] = fsm.readFileSync(pathm.join(homedir, n), 'utf8'); } catch { old[n] = null; }
+      }
+      if (!Object.values(old).some((t) => t && t.includes(GPG_HOME_MARK.slice(2)))) throw new CliError(`${homedir} is not a home \`${NAME} gpg init\` made`);
+      const saved = readGpgSettings(homedir);
+      io.out(row('home', homedir));
+      /* a home with no settings file is from before it, and is made again - not read back from its old launcher */
+      if (!saved) {
+        io.out(row('settings', `none - ${GPG_SETTINGS} is missing (made by an older ${NAME}); ${NAME} gpg init --force makes the home again`));
+        return 1;
+      }
+      /* NODE_PATH from the home, not from the shell that runs check: without it the agent's --ble cannot load */
+      const script = agentScript(homedir, IS_WINDOWS_CLI, saved.nodePath || null);
+      const files = [script, ...(script.extra || [])];
+      const stale = files.filter((f) => old[f.name] !== f.text);
+      io.out(row('settings', `signing ${saved.skey}, decryption ${saved.dkey}, ${saved.device.length ? saved.device.join(' ') : 'USB'}${saved.nodePath ? `, NODE_PATH ${saved.nodePath}` : ''}`));
+      if (!stale.length) {
+        io.out(row('launcher', `ok - ${process.execPath}`));
+        return 0;
+      }
+      if (!opts.fix) {
+        io.out(row('launcher', `out of date (another node or CLI) - ${NAME} gpg check --fix rewrites it`));
+        return 1;
+      }
+      for (const f of files) {
+        fsm.writeFileSync(pathm.join(homedir, f.name), f.text, { mode: 0o700 });
+        fsm.chmodSync(pathm.join(homedir, f.name), 0o700);
+      }
+      io.out(row('launcher', `rewritten for ${process.execPath}`));
+      return 0;
+    }
+    if (action !== 'init') throw usage('gpg takes init "<user id>" or check [--fix]');
     if (extra.length) throw usage(`gpg init takes ONE user id - quote it: "${args.slice(1).join(' ')}"`);
     const slotMode = /^ecc([1-9]|1[0-6])$/i.test(String(opts.skey || '')) || /^ecc([1-9]|1[0-6])$/i.test(String(opts.dkey || ''));
     let userId = givenUserId;
@@ -1833,7 +1904,7 @@ COMMANDS.gpg = {
      * run-agent script carries the mark) - and only after the new key is
      * made, so a refused confirmation leaves the old home as it was.
      */
-    const script = agentScript(homedir, skeyName, dkeyName, IS_WINDOWS_CLI, deviceArgs(opts));
+    const script = agentScript(homedir, IS_WINDOWS_CLI);
     if (fsm.existsSync(homedir)) {
       if (!opts.force) throw new CliError(`GPG home directory ${homedir} exists; remove it, or pass --force to replace a home ${NAME} made`);
       const ours = ['run-agent.sh', 'run-agent.cmd'].some((f) => {
@@ -1908,6 +1979,7 @@ COMMANDS.gpg = {
       fsm.writeFileSync(at(file.name), file.text, { mode: 0o700 });
       fsm.chmodSync(at(file.name), 0o700);
     }
+    fsm.writeFileSync(at(GPG_SETTINGS), `${JSON.stringify({ skey: skeyName, dkey: dkeyName, device: deviceArgs(opts), nodePath: process.env.NODE_PATH || null }, null, 2)}\n`, { mode: 0o600 });
     /* lib-agent's gpg.conf, line for line. */
     fsm.writeFileSync(at('gpg.conf'), '# Hardware-based GPG configuration\n'
       + `agent-program ${at(script.name)}\n`
@@ -1984,8 +2056,14 @@ COMMANDS['gpg-agent'] = {
     const gpgKey = require('./gpg-key');
     const agentSrv = require('./gpg-agent');
 
-    const homedir = opts.homedir || process.env.GNUPGHOME;
-    if (!homedir) throw usage('gpg-agent needs --homedir (or GNUPGHOME): the home `gpg init` made');
+    const homedir = opts.homedir || process.env.GNUPGHOME || defaultGpgHome();
+    /*
+     * The home's own settings fill what the command line leaves out: the keys
+     * and the bus init chose. A given option still wins, for one run.
+     */
+    const saved = readGpgSettings(homedir) || {};
+    opts = { ...opts, skey: opts.skey || saved.skey, dkey: opts.dkey || saved.dkey };
+    if (!opts.ble && !opts.path) Object.assign(opts, deviceOptsFromArgs(saved.device));
     const skey = parseSkey(opts.skey || 'ECC32', '--skey', 'gpg-agent', { allowSlot: true });
     const dkey = parseSkey(opts.dkey || 'ECC32', '--dkey', 'gpg-agent', { allowSlot: true });
     const background = io.daemonChild !== undefined ? io.daemonChild : process.env[GPG_AGENT_CHILD] === '1';

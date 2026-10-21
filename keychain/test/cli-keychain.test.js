@@ -80,7 +80,7 @@ test('keychain gen on the OnlyKey: the trigger and the label; a named slot needs
   assert.equal(sent(r.firmware, MSG.OKSETSLOT).length, 1, 'the label after the key');
   assert.match(r.out.join('\n'), /keychain pub ECC3/);
 
-  r = await run(['keychain', 'gen', 'p256', '--slot', 'ECC1'], { keyLabels: { 29: 'pgp:alice' } });
+  r = await run(['keychain', 'gen', 'p256', '--slot', 'ECC1', '--label', 'sig:new'], { keyLabels: { 29: 'pgp:alice' } });
   assert.notEqual(r.code, 0);
   assert.match(r.err.join('\n'), /named "pgp:alice".*--yes/);
   assert.equal(sent(r.firmware, MSG.OKSETPRIV).length, 0, 'nothing generated');
@@ -90,8 +90,30 @@ test('keychain gen on the OnlyKey: the trigger and the label; a named slot needs
   assert.match(r.err[0], /use --host/);
 });
 
+/*
+ * The overwrite guard reads labels only (config mode cannot say what a slot
+ * holds), so every key gen writes into a slot carries one, and a PGP load
+ * checks the two slots it will write.
+ */
+test('keychain gen into a slot needs --label; gen pgp --host --slot auto asks --yes before a named slot', async () => {
+  let r = await run(['keychain', 'gen', 'ed25519', '--slot', 'ECC3'], {}, { start: NO_DEVICE });
+  assert.equal(r.code, 2);
+  assert.match(r.err.join('\n'), /needs --label/);
+  r = await run(['keychain', 'gen', 'p256', '--host', '--slot', 'ECC2'], {}, { start: NO_DEVICE });
+  assert.equal(r.code, 2, 'checked before a key is made');
+  assert.match(r.err.join('\n'), /needs --label/);
+
+  r = await run(['keychain', 'gen', 'pgp', '--host', '--slot', 'auto', '--user-id', 'A <a@example.org>'], { keyLabels: { 29: 'pgp:alice', 30: 'pgp:alice' } });
+  assert.equal(r.code, 1);
+  assert.match(r.err.join('\n'), /named "pgp:alice".*--yes/);
+  assert.equal(sent(r.firmware, MSG.OKSETPRIV).length, 0, 'nothing loaded');
+  r = await run(['keychain', 'gen', 'pgp', '--host', '--slot', 'auto', '--user-id', 'A <a@example.org>', '--yes'], { keyLabels: { 29: 'pgp:alice', 30: 'pgp:alice' } });
+  assert.equal(r.code, 0, r.err.join('\n'));
+  assert.ok(sent(r.firmware, MSG.OKSETPRIV).length >= 1);
+});
+
 test('keychain gen --host: stored and exported encrypted; OpenSSL opens the copy', async () => {
-  const r = await run(['keychain', 'gen', 'p256', '--host', '--slot', 'ECC2', '--export-pem', 'k.pem'], {},
+  const r = await run(['keychain', 'gen', 'p256', '--host', '--slot', 'ECC2', '--label', 'sig:host', '--export-pem', 'k.pem'], {},
     { answers: [PASS, PASS] });
   assert.equal(r.code, 0, r.err.join('\n'));
   const pem = r.files['k.pem'];

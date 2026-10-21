@@ -446,7 +446,9 @@ test('gpg init: the device\'s keys in a certificate gpg is told to import, and a
     assert.ok(conf.includes('personal-digest-preferences SHA512\n'));
     const run = agentCommand(home);
     assert.match(run, /gpg-agent['"]? ['"]?--homedir/);
-    assert.match(run, /--skey['"]? ['"]?ECC32['"]? ['"]?--dkey['"]? ['"]?ECC32['"]? ['"]?--daemon/);
+    assert.match(run, /--homedir['"]? .* ['"]?--daemon/);
+    assert.doesNotMatch(run, /--skey|--dkey/, 'the keys live in the settings file only');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'onlykey-agent.json'), 'utf8')), { skey: 'ECC32', dkey: 'ECC32', device: [], nodePath: process.env.NODE_PATH || null });
     assert.ok(run.includes(process.execPath), 'an absolute node: gpg starts it with gpg\'s PATH');
     if (process.platform === 'win32') {
       /* No console window: gpg starts the .cmd, which runs the .vbs with wscript, which hides node. */
@@ -481,10 +483,78 @@ test('gpg init: the device\'s keys in a certificate gpg is told to import, and a
   }
 });
 
+/*
+ * One writer, every reader: what init chose for a home is in its settings
+ * file, and an agent started with no options - by gpg, or by hand to watch
+ * it - serves those keys on that bus. gpg check finds a launcher written for
+ * another node or CLI, and --fix rewrites it without the device.
+ */
+test('gpg home settings: a hand-run agent serves what init chose; gpg check finds and fixes a stale launcher', async () => {
+  const { EventEmitter } = require('events');
+  const parent = tmpdir();
+  const home = path.join(parent, 'home');
+  try {
+    const { start } = stack();
+    const r = await runCli(['gpg', 'init', USER_ID, '--homedir', home, '-t', '1700000000'], { start, gpg: fakeGpg([]) });
+    assert.equal(r.code, 0, r.err.join('\n'));
+    /* as if init had chosen these: the reader must take them, not ECC32 */
+    fs.writeFileSync(path.join(home, 'onlykey-agent.json'), JSON.stringify({ skey: 'derived-v2', dkey: 'derived-v2', device: ['--path', 'P'], nodePath: process.env.NODE_PATH || null }));
+    let spawned = null;
+    const d = await runCli(['gpg-agent', '--homedir', home, '--daemon'], {
+      start: () => assert.fail('the parent opened the key'),
+      spawnDaemon: (file, args) => {
+        spawned = args;
+        const c = new EventEmitter();
+        c.unref = () => {};
+        setImmediate(() => c.emit('message', 'ready'));
+        return c;
+      },
+    });
+    assert.equal(d.code, 0, d.err.join('\n'));
+    assert.deepEqual(spawned.slice(1), ['gpg-agent', '--homedir', home, '--skey', 'derived-v2', '--dkey', 'derived-v2', '--path', 'P']);
+
+    let c = await runCli(['gpg', 'check', '--homedir', home]);
+    assert.equal(c.code, 0, c.out.join('\n'));
+    assert.match(c.out.join('\n'), /signing derived-v2, decryption derived-v2, --path P/);
+    const script = process.platform === 'win32' ? 'run-agent.vbs' : 'run-agent.sh';
+    const good = fs.readFileSync(path.join(home, script), 'utf8');
+    fs.writeFileSync(path.join(home, script), good.replace(process.execPath, '/gone/node'));
+    c = await runCli(['gpg', 'check', '--homedir', home]);
+    assert.equal(c.code, 1);
+    assert.match(c.out.join('\n'), /out of date .* gpg check --fix/);
+    c = await runCli(['gpg', 'check', '--homedir', home, '--fix']);
+    assert.equal(c.code, 0, c.out.join('\n'));
+    assert.equal(fs.readFileSync(path.join(home, script), 'utf8'), good);
+
+    /* NODE_PATH comes from the home's settings, not from the shell that runs --fix: without it --ble cannot load */
+    const settings = JSON.parse(fs.readFileSync(path.join(home, 'onlykey-agent.json'), 'utf8'));
+    fs.writeFileSync(path.join(home, 'onlykey-agent.json'), JSON.stringify({ ...settings, nodePath: '/np' }));
+    c = await runCli(['gpg', 'check', '--homedir', home, '--fix']);
+    assert.equal(c.code, 0, c.out.join('\n'));
+    assert.ok(fs.readFileSync(path.join(home, script), 'utf8').includes('/np'), 'NODE_PATH from the settings');
+
+    /* no settings file: a home from before it is made again, never guessed from its old launcher */
+    fs.rmSync(path.join(home, 'onlykey-agent.json'));
+    const before = fs.readFileSync(path.join(home, script), 'utf8');
+    c = await runCli(['gpg', 'check', '--homedir', home, '--fix']);
+    assert.equal(c.code, 1);
+    assert.match(c.out.join('\n'), /gpg init --force makes the home again/);
+    assert.equal(fs.readFileSync(path.join(home, script), 'utf8'), before, 'nothing rewritten');
+
+    const foreign = path.join(parent, 'foreign');
+    fs.mkdirSync(foreign);
+    c = await runCli(['gpg', 'check', '--homedir', foreign]);
+    assert.equal(c.code, 1);
+    assert.match(c.err.join('\n'), /not a home/);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
 test('gpg init: the options are checked before gpg or the key is touched', async () => {
   const calls = [];
   for (const [argv, re] of [
-    [['gpg'], /one action: init/],
+    [['gpg'], /takes init .* or check/],
     [['gpg', 'init'], /needs a user id/],
     [['gpg', 'init', 'Alice', '<a@b>'], /ONE user id/],
     [['gpg', 'init', 'Zoë <z@b>'], /not printable ASCII/],
@@ -698,7 +768,8 @@ test('(Key Chain) gpg init --skey ECC2 --dkey ECC1 --import-pub: the slots\' cer
     const kept = await openpgp.readKey({ armoredKey: fs.readFileSync(path.join(home, 'pubkey.asc'), 'utf8') });
     assert.equal(kept.getFingerprint(), c.fingerprint.toLowerCase(), 'the SAME certificate - its fingerprint is the published one');
     assert.ok(fs.readFileSync(path.join(home, 'gpg.conf'), 'utf8').includes(`default-key "${USER_ID}"`), 'the certificate\'s user id');
-    assert.match(agentCommand(home), /--skey['"]? ['"]?ECC2['"]? ['"]?--dkey['"]? ['"]?ECC1/);
+    const settings = JSON.parse(fs.readFileSync(path.join(home, 'onlykey-agent.json'), 'utf8'));
+    assert.deepEqual([settings.skey, settings.dkey], ['ECC2', 'ECC1']);
 
     /* refused: the wrong slot, an edited certificate, no certificate at all */
     const wrong = await runCli(['gpg', 'init', '--skey', 'ECC3', '--dkey', 'ECC1', '--import-pub', file, '--homedir', path.join(parent, 'h2')], { start, gpg: fakeGpg([]) });

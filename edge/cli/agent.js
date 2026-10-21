@@ -30,6 +30,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { edgeCmd } = require('./control');
 const agentSrv = require('../../cli/ssh-agent');
 const bindLib = require('../../cli/ssh-session-bind');
 const agentProto = require('../../src/protocol/agent');
@@ -164,18 +165,18 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
   }
   async function openExecChecked({ head, reason, capMs = EXEC_CAP_MS }) {
     if (typeof reason !== 'string' || !reason.trim()) throw fail('EEDGE_REASON', 'an exec needs a reason');
-    if (!budget) throw fail('EEDGE_NO_BUDGET', 'no work budget - ask for one first (onlykey-js edge budget)');
+    if (!budget) throw fail('EEDGE_NO_BUDGET', `no work budget - ask for one first (${edgeCmd('budget')})`);
     /*
      * Refused BEFORE the command runs (daily-loop §3, must fail safely): a
      * receipt still owed (R18 - the key would refuse the TX start anyway, mid-git),
      * the budget held or gone on the key (Hold from the phone), a stale head.
      */
     const owed = budget.pending();
-    if (owed.length) throw fail('EEDGE_RECEIPT_OWED', `receipt owed for #${owed.join(', #')} - onlykey-js edge receipt first`);
+    if (owed.length) throw fail('EEDGE_RECEIPT_OWED', `receipt owed for #${owed.join(', #')} - ${edgeCmd('receipt')} first`);
     if (edge) {
       const h = await edge.head();
       const k = await keyOwed(h);
-      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - onlykey-js edge receipt it first`);
+      if (k.seqs.length || k.older) throw fail('EEDGE_KEY_OWED', `the key owes ${owedText(k)} - ${edgeCmd('receipt')} it first`);
       if (!h.live.includes(budget.grantId) && onGone && !continued.has(budget.grantId)) {
         /*
          * The budget is gone - the soft key's idle restart, a lock (spec session,
@@ -561,7 +562,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, identity, pointer
   const { serveControl } = require('./control');
   const checked = checkRecord(identity);
   if (!checked.ok) {
-    throw Object.assign(new Error(`the phone keeps no usable agent identity (${checked.reason}) - set one: onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>"`), { code: 'EIDENTITY' });
+    throw Object.assign(new Error(`the phone keeps no usable agent identity (${checked.reason}) - set one: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`), { code: 'EIDENTITY' });
   }
   /* the budget this computer holds on THIS key - per key, never per folder (audit F8) */
   const held = {
@@ -592,7 +593,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, identity, pointer
   const gpgRaw = await device.publicKey(gpgIdentity);
   if (Buffer.from(gpgRaw).toString('hex') !== identity.cert.signPublic.toLowerCase()) {
     throw Object.assign(new Error(`this key derives a different gpg key for "${identity.gpgUid}" than the certificate the phone keeps (${identity.cert.fingerprint}) - `
-      + 'it is another key\'s identity; make one for this key: onlykey-js edge setup'), { code: 'EIDENTITY_KEY' });
+      + 'it is another key\'s identity; make one for this key: ' + edgeCmd('setup')), { code: 'EIDENTITY_KEY' });
   }
   const gpg = {
     identity: gpgIdentity, name: `gpg://${identity.gpgUid}`, raw: gpgRaw, created: identity.cert.created,

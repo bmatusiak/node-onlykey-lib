@@ -43,6 +43,32 @@ test('--test-mode: the testnet home and Key Chain file, said first; the next run
   assert.notEqual(record.keychainFile(), path.join(base, 'keychain-test.json'));
 });
 
+/*
+ * A hint followed as printed must stay on the chain it came from, and the
+ * testnet's Key Chain file must be readable; the testnet's home chosen by hand
+ * without --test-mode is refused, not quietly put back to live.
+ */
+test('--test-mode: hints carry it, keychain --test-mode reads the testnet list, the test home without it is refused', async () => {
+  let r = await run(['edge', '--test-mode', 'nope']);
+  assert.equal(r.code, 2);
+  assert.match(r.err.join('\n'), /onlykey-js edge --test-mode help/);
+  r = await run(['edge', 'nope']);
+  assert.match(r.err.join('\n'), /onlykey-js edge help/);
+
+  await run(['keychain', '--test-mode', 'list']);
+  assert.equal(record.keychainFile(), path.join(base, 'keychain-test.json'));
+  await run(['keychain', 'list']);
+  assert.notEqual(record.keychainFile(), path.join(base, 'keychain-test.json'));
+
+  try {
+    r = await run(['edge', '--edge-home', path.join(base, 'edge-test'), 'blocks']);
+    assert.equal(r.code, 2);
+    assert.match(r.err.join('\n'), /testnet's home - add --test-mode/);
+  } finally {
+    control.setHome(null); /* --edge-home sticks within one process; the CLI is one run per process */
+  }
+});
+
 test('--test-mode keeps a home chosen with --edge-home (dev), and only before --', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oktestnet-'));
   try {

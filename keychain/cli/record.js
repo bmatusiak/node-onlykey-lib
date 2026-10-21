@@ -40,6 +40,8 @@ const LABEL_TYPE_OF_KEYTYPE = { 1: 'p256', 2: 'secp256k1', 3: 'x25519' };
  */
 let fileOverride = null;
 function setFile(file) { fileOverride = file ? path.resolve(file) : null; }
+/** The testnet's Key Chain file: edge --test-mode records here, keychain --test-mode reads it. */
+function testFile() { return path.join(os.homedir(), '.onlykey-js', 'keychain-test.json'); }
 
 function keychainFile() {
   if (fileOverride) return fileOverride;
@@ -147,4 +149,4 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record }) {
   };
 }
 
-module.exports = { keychainFile, setFile, load, save, record, recordingStart, identityName };
+module.exports = { keychainFile, setFile, testFile, load, save, record, recordingStart, identityName };

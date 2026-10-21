@@ -522,13 +522,15 @@ test('--ble reaches every device command: status, agent (the ssh key line), and 
     const script = process.platform === 'win32'
       ? fs.readFileSync(path.join(home, 'run-agent.vbs'), 'utf8').replace(/""/g, '"')
       : fs.readFileSync(path.join(home, 'run-agent.sh'), 'utf8');
-    assert.match(script, /--dkey['"]? ['"]?ECC32['"]? ['"]?--ble['"]? ['"]?--address['"]? ["']Pixel 6a["'] ['"]?--daemon/);
+    assert.match(script, /gpg-agent['"]? ['"]?--homedir['"]? .* ['"]?--daemon/);
+    /* the bus is in the home's settings, the one place every agent for it reads */
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'onlykey-agent.json'), 'utf8')),
+      { skey: 'ECC32', dkey: 'ECC32', device: ['--ble', '--address', 'Pixel 6a'], nodePath: process.env.NODE_PATH || null });
 
-    /* And gpg-agent --daemon hands --ble to the background agent it starts. */
+    /* And gpg-agent --daemon, given NO bus (as gpg starts it), hands the home's --ble to the background agent. */
     const { EventEmitter } = require('events');
     let spawned = null;
-    fs.writeFileSync(path.join(parent, 'pubkey.asc'), fs.readFileSync(path.join(home, 'pubkey.asc')));
-    const d = await run(['gpg-agent', '--homedir', parent, '--daemon', '--ble', '--address', 'Pixel 6a'], {
+    const d = await run(['gpg-agent', '--homedir', home, '--daemon'], {
       start: () => assert.fail('the parent opened the key'),
       spawnDaemon: (file, args) => {
         spawned = args;

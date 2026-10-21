@@ -25,6 +25,7 @@
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
+const { edgeCmd } = require('./control');
 
 const USAGE = [
   'onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>" [--committer-name N --committer-email E --expires 1y|<n>d|never --created <unix>]',
@@ -119,7 +120,7 @@ async function askIdentity(channel) {
   if (a.ok === false) throw new Error(`the phone refused the identity question: ${a.detail || a.refusal}`);
   if (!a.record) return null;
   const c = lib.checkRecord(a.record);
-  if (!c.ok) throw new Error(`the phone's agent identity is not usable (${c.reason}) - set it again: onlykey-js edge setup`);
+  if (!c.ok) throw new Error(`the phone's agent identity is not usable (${c.reason}) - set it again: ${edgeCmd('setup')}`);
   return lib.clean(a.record);
 }
 
@@ -205,7 +206,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
   try {
     const identity = await askIdentity(channel);
     if (!identity) {
-      throw h.usage('the phone keeps no agent identity yet - set it once, from any paired computer: onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>"');
+      throw h.usage(`the phone keeps no agent identity yet - set it once, from any paired computer: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`);
     }
     recordCert(io, identity, serve ? 'onlykey-js edge agent' : 'onlykey-js edge');
     const { deviceId } = await edge.publicKey();
@@ -253,25 +254,37 @@ const DEV = (() => {
  * stamped net: test - a phone on the live chain refuses it, and the other way round.
  */
 let NET = 'live';
-function takeTestMode(argv, io) {
+/* takeTestMode moved the home itself last run: only then is it its to move back */
+let MOVED_HOME = false;
+function takeTestMode(argv, io, usage) {
   const control = require('./control');
   const record = require('../../keychain/cli/record');
   const os = require('os');
   const live = path.join(os.homedir(), '.onlykey-js', 'edge');
   const test = path.join(os.homedir(), '.onlykey-js', 'edge-test');
-  /* each run starts live: a run before it in the same process (a test) may have been on the testnet */
+  /*
+   * Each run starts live: a run before it in the same process (a test) may
+   * have been on the testnet. Only a home THIS function moved goes back - one
+   * chosen with --edge-home stays where it was put.
+   */
   NET = 'live';
-  if (control.edgeHome() === test) control.setHome(null);
+  control.setNet(NET);
+  if (MOVED_HOME) { control.setHome(null); MOVED_HOME = false; }
   record.setFile(null);
   const a = argv.slice();
   const dd = a.indexOf('--');
   const i = a.indexOf('--test-mode');
-  if (i < 0 || (dd >= 0 && i > dd)) return a;
+  if (i < 0 || (dd >= 0 && i > dd)) {
+    /* the testnet's copy driven as the live chain: neither chain would be right */
+    if (path.resolve(control.edgeHome()) === test) throw usage(`${test} is the testnet's home - add --test-mode`);
+    return a;
+  }
   a.splice(i, 1);
   NET = 'test';
+  control.setNet(NET);
   /* a home chosen with --edge-home (dev) stays; the default moves to the testnet's */
-  if (control.edgeHome() === live) control.setHome(test);
-  record.setFile(path.join(os.homedir(), '.onlykey-js', 'keychain-test.json'));
+  if (control.edgeHome() === live) { control.setHome(test); MOVED_HOME = true; }
+  record.setFile(record.testFile());
   io.err("edge: TESTNET - the test chain (" + control.edgeHome() + ")");
   return a;
 }
@@ -285,7 +298,7 @@ module.exports = function register(COMMANDS, h) {
     summary: 'Edge: an agent uses the key inside a budget you approve on the phone - budget or no go',
     device: true,
     async run(io, opts, argv) {
-      const args = takeTestMode(dev && dev.prepare ? dev.prepare(argv) : argv, io);
+      const args = takeTestMode(dev && dev.prepare ? dev.prepare(argv) : argv, io, h.usage);
       const [sub, ...rest] = args;
       if (!sub || sub === 'help') {
         for (const l of USAGE) io.out(l);
@@ -293,7 +306,7 @@ module.exports = function register(COMMANDS, h) {
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
       const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
-      if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - onlykey-js edge help`);
+      if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
 
       /*
        * EDGE SYNC --ALL (Brad, 2026-10-11: "pull from all devices,, (dont update them) then on the
@@ -358,7 +371,7 @@ module.exports = function register(COMMANDS, h) {
           io.out(JSON.stringify(found.flatMap((d) => d.blocks.map((b) => b.block)), null, 2));
           return found.every((d) => d.blocks.every((b) => b.ok)) ? 0 : 1;
         }
-        if (!found.length) io.out('no copy yet - onlykey-js edge sync');
+        if (!found.length) io.out(`no copy yet - ${edgeCmd('sync')}`);
         for (const d of found) {
           io.out(h.row(`key ${d.deviceId.slice(0, 16)}`, `${d.blocks.length} block(s), ${d.open} link(s) after the last seal${d.reason ? ` - ${d.reason}` : ''}`));
           for (const b of d.blocks) {
@@ -429,7 +442,7 @@ module.exports = function register(COMMANDS, h) {
 
       if (sub === 'agent') {
         /* the optional service: one link kept open between commands; nothing it can do that a command can't */
-        if (Object.keys(parseSetup(rest, h)).length) throw h.usage('the identity is set with onlykey-js edge setup (the phone keeps it); edge agent takes no identity flags');
+        if (Object.keys(parseSetup(rest, h)).length) throw h.usage(`the identity is set with ${edgeCmd('setup')} (the phone keeps it); edge agent takes no identity flags`);
         const st = await openStack(io, opts, h, { serve: true, dev, wait });
         try {
           const { svc, transport } = st;
@@ -440,7 +453,7 @@ module.exports = function register(COMMANDS, h) {
             io.out(h.row('gpg cert', path.join(st.home, 'agent-gpg.asc')));
           }
           io.out(h.row('control', svc.controlPath));
-          io.out('ready - onlykey-js edge budget / exec / receipt use this service; Ctrl-C to stop');
+          io.out(`ready - ${edgeCmd('budget / exec / receipt')} use this service; Ctrl-C to stop`);
           /*
            * RELEASE WHEN IDLE (Brad, 2026-10-06): the link is let go once the key's
            * lane has been quiet 60 s - nothing running, nothing waiting. The phone

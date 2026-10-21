@@ -123,6 +123,56 @@ test('keychain export --ssh / --age / --pgp: what the list saved; no certificate
   assert.doesNotMatch(r.out.join('\n'), /PRIVATE/);
 });
 
+/*
+ * One label, several keys: gpg init writes the uid's ed25519 and x25519 keys
+ * (v1), the Edge agent derives the same uid as v2. Every reader by name must
+ * refuse to guess, and --type / --v1 / --v2 must reach each key.
+ */
+test('one label, several keys: show, export and cert refuse to guess; --type, --v1, --v2 pick one', async () => {
+  fs.rmSync(FILE, { force: true });
+  const L = 'gpg://Agent <a@x>';
+  const key = (b) => new Uint8Array(32).fill(b);
+  rec.record({ scheme: 'gpg', label: L, type: 'ed25519', publicKey: key(1), code: 132, tool: 'onlykey-js gpg' });
+  rec.record({ scheme: 'gpg', label: L, type: 'x25519', publicKey: key(2), code: 132, tool: 'onlykey-js gpg' });
+  rec.record({ scheme: 'gpg', label: L, type: 'ed25519', publicKey: key(3), code: 232, tool: 'onlykey-js edge agent' });
+  const v1 = rec.load().find((e) => e.type === 'ed25519' && e.code === 132);
+
+  let r = await run(['keychain', 'show', L], { record: false });
+  assert.equal(r.code, 1);
+  assert.match(r.err.join('\n'), /3 keys .* match .* --type <type> and\/or --v1 \/ --v2/s);
+  r = await run(['keychain', 'show', L, '--type', 'ed25519'], { record: false });
+  assert.equal(r.code, 1, 'still two ed25519 keys');
+  assert.match(r.err.join('\n'), /2 keys/);
+  r = await run(['keychain', 'show', L, '--v2', '--json'], { record: false });
+  assert.equal(r.code, 0, r.err.join('\n'));
+  assert.equal(JSON.parse(r.out.join('\n')).publicKey, '03'.repeat(32));
+  r = await run(['keychain', 'show', L, '--type', 'x25519', '--json'], { record: false });
+  assert.equal(JSON.parse(r.out.join('\n')).publicKey, '02'.repeat(32));
+
+  r = await run(['keychain', 'export', L, '--ssh'], { record: false });
+  assert.equal(r.code, 1, 'two ed25519 keys have an ssh form');
+  assert.match(r.err.join('\n'), /2 keys/);
+  r = await run(['keychain', 'export', L, '--ssh', '--v1'], { record: false });
+  assert.equal(r.code, 0, r.err.join('\n'));
+  assert.equal(r.out[0], v1.artifacts.ssh);
+
+  r = await run(['keychain', 'cert', L], { record: false });
+  assert.equal(r.code, 1, 'v1 and v2 under one uid: refused before the device');
+  assert.match(r.err.join('\n'), /2 keys/);
+  r = await run(['keychain', 'show', L, '--v1', '--v2'], { record: false });
+  assert.equal(r.code, 2);
+
+  /* the phone's spelling (scheme gpg, the bare uid) is the same name; a fingerprint tells two keys apart */
+  rec.record({ scheme: 'gpg', label: 'Agent <a@x>', type: 'ed25519', publicKey: key(4), code: 232, tool: 'soft key' });
+  r = await run(['keychain', 'show', L, '--v2'], { record: false });
+  assert.equal(r.code, 1, 'two v2 ed25519 keys under the one name now');
+  assert.match(r.err.join('\n'), /or give its fingerprint/);
+  const fp = rec.load().find((e) => e.tools.includes('soft key')).fingerprint;
+  r = await run(['keychain', 'show', fp, '--json'], { record: false });
+  assert.equal(r.code, 0, r.err.join('\n'));
+  assert.equal(JSON.parse(r.out.join('\n')).publicKey, '04'.repeat(32));
+});
+
 test('keychain import pairs the phone hash entry with the named one: one entry per key, under the name', async () => {
   fs.rmSync(FILE, { force: true });
   await run(['keychain', 'derive', 'ssh', 'ed25519', 'me@host']);
