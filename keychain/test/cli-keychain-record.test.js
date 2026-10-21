@@ -42,7 +42,10 @@ test('a derive is recorded once, with its label, type, code, fingerprint and too
   let r = await run(['keychain', 'derive', 'ssh', 'ed25519', 'me@host']);
   assert.equal(r.code, 0, r.err.join('\n'));
   let [e] = rec.load();
-  assert.equal(e.label, 'ssh://me@host');
+  assert.equal(e.label, 'me@host', 'filed bare, beside its scheme');
+  assert.equal(e.scheme, 'ssh');
+  assert.equal(require('../src').derive.labelHashOf(e), require('crypto').createHash('sha256').update('me@host').digest('hex'),
+    'the label hash the key sees for it, so the phone can name the key');
   assert.equal(e.type, 'ed25519');
   assert.equal(e.code, 132, 'v1 getpubkey');
   assert.deepEqual(e.tools, ['onlykey-js keychain']);
@@ -60,7 +63,8 @@ test('keychain list / show read the recorded list - plain and --json, no device'
   let r = await run(['keychain', 'list', '--json'], { record: false });
   assert.equal(r.code, 0, r.err.join('\n'));
   const rows = JSON.parse(r.out.join('\n'));
-  assert.equal(rows[0].label, 'ssh://me@host');
+  assert.equal(rows[0].name, 'ssh://me@host', 'shown by its full name');
+  assert.equal(rows[0].label, 'me@host');
   assert.equal(rows[0].publicKey.length, 64, 'ed25519 public key, hex');
   r = await run(['keychain', 'show', 'ssh://me@host', '--json'], { record: false });
   assert.match(JSON.parse(r.out.join('\n')).artifacts.ssh || '', /^ssh-ed25519 /);
@@ -92,8 +96,8 @@ test('recordingStart: any command\'s agent.publicKey is recorded (ssh and gpg na
   await okcrypto.agent.publicKey({ ssh: { user: 'claude', host: 'nitro16' } }, { keyType: 1, version: 2 });
   await okcrypto.agent.publicKey({ gpg: 'Claude (nitro16) 2026 <a@b>' }, { keyType: 4, version: 2 });
   assert.deepEqual(seen.map((f) => [f.label, f.type, f.tool]), [
-    ['ssh://claude@nitro16', 'ed25519', 'onlykey-js edge-agent'],
-    ['gpg://Claude (nitro16) 2026 <a@b>', 'x25519', 'onlykey-js edge-agent'],
+    ['claude@nitro16', 'ed25519', 'onlykey-js edge-agent'],
+    ['Claude (nitro16) 2026 <a@b>', 'x25519', 'onlykey-js edge-agent'],
   ]);
   const errs = [];
   const broken = rec.recordingStart(async () => app, { tool: 't', err: (l) => errs.push(l), recordFn: () => { throw new Error('disk full'); } });
@@ -190,7 +194,7 @@ test('keychain import pairs the phone hash entry with the named one: one entry p
   assert.match(out[0], /1 added, 1 paired/);
   const all = rec.load();
   assert.equal(all.length, 2, 'one entry per key');
-  const one = all.find((e) => e.label === 'ssh://me@host');
+  const one = all.find((e) => e.label === 'me@host');
   assert.equal(one.labelHash, hash, 'the hash the phone saw, kept beside the name');
   assert.equal(one.transport, 'vendor');
   assert.deepEqual(one.tools.sort(), ['onlykey-js keychain', 'soft key']);

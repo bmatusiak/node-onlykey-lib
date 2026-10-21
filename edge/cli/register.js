@@ -129,7 +129,7 @@ function recordCert(io, record, tool) {
   if (!io.keychainRecord || !record) return;
   try {
     io.keychainRecord({
-      scheme: 'gpg', label: `gpg://${record.gpgUid}`, type: 'ed25519', publicKey: record.cert.signPublic, code: 232,
+      scheme: 'gpg', label: record.gpgUid, type: 'ed25519', publicKey: record.cert.signPublic, code: 232,
       pgp: record.cert.armored, pgpFingerprint: record.cert.fingerprint, certCreated: record.cert.created,
       certExpires: record.cert.expires || 0, tool,
     });

@@ -98,9 +98,15 @@ function identityName(identity) {
   if (identity instanceof Uint8Array) return { scheme: 'hash', label: toHex(identity) };
   if (identity && identity.ssh) {
     const { user, host } = identity.ssh;
-    return { scheme: 'ssh', label: `ssh://${user ? `${user}@` : ''}${host}` };
+    return { scheme: 'ssh', label: `${user ? `${user}@` : ''}${host}` };
   }
-  if (identity && typeof identity.gpg === 'string') return { scheme: 'gpg', label: `gpg://${identity.gpg}` };
+  /*
+   * The scheme and the bare name, as the phone and keychain/src/derive.js file
+   * them (Brad, 2026-10-21: one spelling): the label is what the key hashes
+   * (labelHashOf), so "gpg://<uid>" in it would name a key the phone can never
+   * match. derive.identityName gives the full gpg:// / ssh:// name to show.
+   */
+  if (identity && typeof identity.gpg === 'string') return { scheme: 'gpg', label: identity.gpg };
   return null;
 }
 

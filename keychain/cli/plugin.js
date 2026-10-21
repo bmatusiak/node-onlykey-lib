@@ -72,12 +72,12 @@ function setup(imports, register) {
    */
   const versionOf = (e) => (e.code === 232 ? 2 : e.code === 132 ? 1 : null);
   /*
-   * One name, two spellings: this CLI files an agent key as "gpg://<uid>" (and
-   * ssh://…), the phone and keychain/src/derive.js as the bare uid with scheme
-   * gpg. When both record one key the merge keeps whichever came first, so a
-   * lookup compares the full name - scheme and uid - not the stored text.
+   * An entry is filed as its scheme and bare name (gpg + "Name <email>"), as the
+   * phone does; the name a person types and reads is the full one,
+   * gpg://Name <email> or ssh://user@host - derive.identityName, the one place
+   * that builds it. A slot or an imported key has no scheme: its label is its name.
    */
-  const fullName = (e) => (['gpg', 'ssh'].includes(e.scheme) && !/^(gpg|ssh):\/\//.test(e.label || '') ? `${e.scheme}://${e.label}` : e.label);
+  const fullName = (e) => String(require('../src').derive.identityName(e) || e.label || e.name || '');
   /* the fingerprint as `keychain list` prints it, spaces or not: what tells two keys under one name apart */
   const flat = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
   const named = (e, q) => e.label === q || e.id === q || fullName(e) === q
@@ -103,7 +103,7 @@ function setup(imports, register) {
 
   const KEYCHAIN = {
     mirrors: '(new)',
-    usage: 'list [--json] | show <label> [--type T] [--v1|--v2] [--json] | import <file> | export <label|fingerprint> --pgp|--ssh|--age [--type T] [--v1|--v2] [-o file] | cert <gpg-label> [--expires 1y] [--revoke [--reason N]] [--v1|--v2] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> | --host ...)',
+    usage: 'list [--json] | show <label> [--type T] [--v1|--v2] [--json] | import <file> | export <label|fingerprint> --pgp|--ssh|--age [--type T] [--v1|--v2] [-o file] | cert <gpg-label> [--expires 1y] [--revoke [--reason N]] [--v1|--v2] | slots | pub <slot> | derive <label|ssh|gpg> <type> <label> [--v2] | gen <type> (--slot <slot> --label <name> | --host [--slot <slot> --label <name>] ...)',
     writes: true,
     summary: 'Key Chain: the derived keys this machine has used (list, show), the key slots, derive/generate keys',
     options: {
@@ -146,7 +146,7 @@ function setup(imports, register) {
         if (sub === 'show' && !pick.length) throw new CliError(`no derived key "${rest[0]}" in ${rec.keychainFile()}`);
         if (sub === 'show') onlyOne(pick, rest[0], rec.keychainFile());
         const shape = (e) => ({
-          label: e.label, scheme: e.scheme, type: e.type, code: e.code, publicKey: Buffer.from(e.publicKey).toString('hex'),
+          name: fullName(e), label: e.label, scheme: e.scheme, type: e.type, code: e.code, publicKey: Buffer.from(e.publicKey).toString('hex'),
           fingerprint: e.fingerprint || keychain.list.fingerprint(e.publicKey), firstSeen: e.firstSeen, lastSeen: e.lastSeen, tools: e.tools || [],
           ...(sub === 'show' ? { artifacts: e.artifacts || {} } : {}),
         });
@@ -160,11 +160,11 @@ function setup(imports, register) {
         }
         if (sub === 'show') {
           const e = shape(pick[0]);
-          for (const [k, v] of Object.entries({ label: e.label, type: e.type, code: e.code, fingerprint: e.fingerprint, 'first seen': e.firstSeen, 'last seen': e.lastSeen, 'derived by': e.tools.join(', ') })) io.out(row(k, String(v ?? '')));
+          for (const [k, v] of Object.entries({ name: e.name, type: e.type, code: e.code, fingerprint: e.fingerprint, 'first seen': e.firstSeen, 'last seen': e.lastSeen, 'derived by': e.tools.join(', ') })) io.out(row(k, String(v ?? '')));
           printArtifacts(io, pick[0].artifacts || {});
           return 0;
         }
-        for (const e of pick.map(shape)) io.out(`${e.label.padEnd(44)} ${e.type.padEnd(8)} ${e.fingerprint}  ${e.tools.join(', ')}`.trimEnd());
+        for (const e of pick.map(shape)) io.out(`${e.name.padEnd(44)} ${e.type.padEnd(8)} ${e.fingerprint}  ${e.tools.join(', ')}`.trimEnd());
         return 0;
       }
 
@@ -188,8 +188,8 @@ function setup(imports, register) {
         const text = formOf(e);
         if (!text) {
           throw new CliError(want[0] === 'pgp'
-            ? `no certificate saved for ${e.label} - make one: ${NAME} keychain cert ${e.label}`
-            : `${e.label} (${e.type}) has no ${want[0]} form`);
+            ? `no certificate saved for ${fullName(e)} - make one: ${NAME} keychain cert "${fullName(e)}"`
+            : `${fullName(e)} (${e.type}) has no ${want[0]} form`);
         }
         if (opts.output) {
           await io.writeFile(opts.output, text.endsWith('\n') ? text : `${text}\n`);
@@ -210,7 +210,8 @@ function setup(imports, register) {
       if (sub === 'cert') {
         if (rest.length !== 1) throw usage('keychain cert takes one gpg label: gpg://Name <email>');
         const rec = require('./record');
-        const label = `gpg://${keychain.cert.uidOf(rest[0])}`;
+        const uid = keychain.cert.uidOf(rest[0]);
+        const label = `gpg://${uid}`; /* the full name, for the device and the messages; the list files the bare uid */
         const saved = onlyOne(narrow(rec.load().filter((x) => named(x, label) && x.type === 'ed25519'), opts), label, rec.keychainFile());
         const version = opts.v2 ? 2 : opts.v1 ? 1 : saved ? versionOf(saved) || 1 : 1;
         const expires = opts.expires !== undefined ? parseExpires(opts.expires) : (saved && saved.certExpires) || 0;
@@ -222,7 +223,7 @@ function setup(imports, register) {
           if (opts.revoke) {
             if (!saved || !saved.certCreated) throw new CliError(`no certificate saved for ${label} - there is nothing to revoke yet`);
             const r = await keychain.cert.makeRevocation(okcrypto, openpgp, { label, version, created: saved.certCreated, reason: Number(opts.reason) || 0, onPress });
-            record({ scheme: 'gpg', label, type: 'ed25519', publicKey: saved.publicKey, code: version === 2 ? 232 : 132, revocation: r.armored, tool: `${NAME} keychain cert` });
+            record({ scheme: 'gpg', label: uid, type: 'ed25519', publicKey: saved.publicKey, code: version === 2 ? 232 : 132, revocation: r.armored, tool: `${NAME} keychain cert` });
             io.out(row('revoked', r.fingerprint));
             if (opts.output) { await io.writeFile(opts.output, r.armored); io.out(`wrote ${opts.output}`); } else io.out(r.armored.replace(/\n$/, ''));
             return 0;
@@ -230,7 +231,7 @@ function setup(imports, register) {
           /* a renewal keeps the creation time, so the fingerprint stays */
           const c = await keychain.cert.makeCertificate(okcrypto, openpgp, { label, version, created: saved && saved.certCreated, expires, onPress });
           record({
-            scheme: 'gpg', label, type: 'ed25519', publicKey: c.signPublic, code: version === 2 ? 232 : 132,
+            scheme: 'gpg', label: uid, type: 'ed25519', publicKey: c.signPublic, code: version === 2 ? 232 : 132,
             pgp: c.armored, pgpFingerprint: c.fingerprint, certCreated: c.created, certExpires: c.expires, tool: `${NAME} keychain cert`,
           });
           io.out(row('fingerprint', c.fingerprint));
@@ -369,6 +370,21 @@ function setup(imports, register) {
       throw usage('a key made here must be stored (--slot) or exported (--export-pem / --export-pgp) - otherwise it is made and lost');
     }
     if (store && type !== 'pgp') needLabel(opts);
+    /*
+     * A PGP key's two slots carry one tag, pgp:<name> (keychain/src/tag.js) -
+     * the kind and the name, as a Key Chain entry has them, in the 16 bytes the
+     * device keeps. Checked here, before the key is made.
+     */
+    let pgpTag = null;
+    if (store && type === 'pgp') {
+      const given = needLabel(opts);
+      const t = keychain.tag.parseTag(given);
+      try {
+        pgpTag = t && t.kind === 'pgp' ? given : keychain.tag.formatTag('pgp', given);
+      } catch (err) {
+        throw usage(err.message);
+      }
+    }
 
     if (type === 'pgp') {
       if (pem) throw usage('a PGP key exports with --export-pgp; --export-pem is for a single key');
@@ -409,7 +425,8 @@ function setup(imports, register) {
             throw new CliError(`${named.map((k) => `${slotName(k.slot)} is named "${k.label}"`).join(', ')} - loading the PGP key destroys ${named.length > 1 ? 'them' : 'it'}. Run again with --yes to replace.`);
           }
           const loaded = await deviceWrite(() => device.loadPgpKey(privateKey, {}));
-          io.out(`Loaded: ${loaded.map((l) => `${l.role} in slot ${l.slot}`).join(', ')}`);
+          for (const s of planned) await deviceWrite(() => device.setKeyLabel(s, pgpTag));
+          io.out(`Loaded: ${loaded.map((l) => `${l.role} in slot ${l.slot}`).join(', ')} - named ${pgpTag}`);
         });
       }
       io.out(privateKey.toPublic().armor().trimEnd());

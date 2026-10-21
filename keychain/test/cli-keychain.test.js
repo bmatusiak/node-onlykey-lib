@@ -103,13 +103,21 @@ test('keychain gen into a slot needs --label; gen pgp --host --slot auto asks --
   assert.equal(r.code, 2, 'checked before a key is made');
   assert.match(r.err.join('\n'), /needs --label/);
 
-  r = await run(['keychain', 'gen', 'pgp', '--host', '--slot', 'auto', '--user-id', 'A <a@example.org>'], { keyLabels: { 29: 'pgp:alice', 30: 'pgp:alice' } });
+  r = await run(['keychain', 'gen', 'pgp', '--host', '--slot', 'auto', '--user-id', 'A <a@example.org>'], {}, { start: NO_DEVICE });
+  assert.equal(r.code, 2, 'a PGP load names its slots too');
+  assert.match(r.err.join('\n'), /needs --label/);
+  r = await run(['keychain', 'gen', 'pgp', '--host', '--slot', 'auto', '--user-id', 'A <a@example.org>', '--label', 'a-name-far-too-long'], {}, { start: NO_DEVICE });
+  assert.equal(r.code, 2, 'pgp:<name> must fit the 16-byte label - checked before the key is made');
+
+  r = await run(['keychain', 'gen', 'pgp', '--host', '--slot', 'auto', '--user-id', 'A <a@example.org>', '--label', 'bob'], { keyLabels: { 29: 'pgp:alice', 30: 'pgp:alice' } });
   assert.equal(r.code, 1);
   assert.match(r.err.join('\n'), /named "pgp:alice".*--yes/);
   assert.equal(sent(r.firmware, MSG.OKSETPRIV).length, 0, 'nothing loaded');
-  r = await run(['keychain', 'gen', 'pgp', '--host', '--slot', 'auto', '--user-id', 'A <a@example.org>', '--yes'], { keyLabels: { 29: 'pgp:alice', 30: 'pgp:alice' } });
+  r = await run(['keychain', 'gen', 'pgp', '--host', '--slot', 'auto', '--user-id', 'A <a@example.org>', '--label', 'bob', '--yes'], { keyLabels: { 29: 'pgp:alice', 30: 'pgp:alice' } });
   assert.equal(r.code, 0, r.err.join('\n'));
   assert.ok(sent(r.firmware, MSG.OKSETPRIV).length >= 1);
+  assert.equal(sent(r.firmware, MSG.OKSETSLOT).length, 2, 'both slots named, so the next write asks for --yes');
+  assert.match(r.out.join('\n'), /named pgp:bob/);
 });
 
 test('keychain gen --host: stored and exported encrypted; OpenSSL opens the copy', async () => {
