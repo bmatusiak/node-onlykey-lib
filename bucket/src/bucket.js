@@ -232,6 +232,11 @@ function merge(into, from, { rules = {} } = {}) {
 function resolve(bucket, conflict, side) {
   if (side !== 'into' && side !== 'from') throw new Error("pick 'into' or 'from'");
   if (!bucket.stores[conflict.store]) bucket.stores[conflict.store] = {};
+  /* a conflict inside one value (a contact in the Guest Book's blob) brings its own way to apply the pick */
+  if (typeof conflict.apply === 'function') {
+    conflict.apply(bucket.stores[conflict.store], side);
+    return;
+  }
   bucket.stores[conflict.store][conflict.key] = { ...conflict[side] };
 }
 
