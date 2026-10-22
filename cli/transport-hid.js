@@ -290,6 +290,7 @@ function selectDevice({ vendor, onlykeys }, path) {
  */
 function createHidPipe({ loadHid, path, usbParentOf = sysfsUsbParent } = {}) {
   const listeners = new Set();
+  const closeListeners = new Set();
   let hid = null;
   let opened = null;
   let lastError = null;
@@ -298,6 +299,7 @@ function createHidPipe({ loadHid, path, usbParentOf = sysfsUsbParent } = {}) {
   let fidoHid = null;      // opened on the first FIDO write
   let seremuHid = null;    // opened at start(), when the key has a console
   let seremuWhy = null;    // why it is not open, for a console write
+  let seremuDevice = null; // its enumeration entry
 
   function emit(event) {
     for (const listener of [...listeners]) listener(event);
@@ -317,6 +319,7 @@ function createHidPipe({ loadHid, path, usbParentOf = sysfsUsbParent } = {}) {
         + 'an "Access is denied" here is a per-device lock (DEVPKEY_Device_SecuritySDS) on that interface.';
       return;
     }
+    seremuDevice = pair.device;
     seremuHid.on('data', onSeremuData);
     seremuHid.on('error', onError);
   }
@@ -358,8 +361,11 @@ function createHidPipe({ loadHid, path, usbParentOf = sysfsUsbParent } = {}) {
      * stops being "running", so the next write fails with this cause instead
      * of hanging on a device that is gone.
      */
+    const wasOpen = hid !== null;
     lastError = err;
     close();
+    /* told once, to a host that shows it (a GUI's status line); the CLI learns on its next write */
+    if (wasOpen) for (const listener of [...closeListeners]) listener(err);
   }
 
   function close() {
@@ -474,14 +480,38 @@ function createHidPipe({ loadHid, path, usbParentOf = sysfsUsbParent } = {}) {
       return typeof written === 'number' ? written : frame.length + 1;
     },
 
+    /**
+     * 'stream' - every report, both directions (the pipe contract).
+     * 'close'  - (err) the key went away while open (unplugged, restarted);
+     *            not fired by stop().
+     */
     on(event, listener) {
-      if (event !== 'stream') throw new Error(`the HID pipe has no "${event}" event`);
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      const set = event === 'stream' ? listeners : event === 'close' ? closeListeners : null;
+      if (!set) throw new Error(`the HID pipe has no "${event}" event`);
+      set.add(listener);
+      return () => set.delete(listener);
     },
 
     /** The enumeration entry of the key that was opened, or null. */
     get device() { return opened; },
+
+    /**
+     * The interfaces this pipe can reach on the opened key, as
+     * {iface, path, interfaceNumber, usagePage, usage}: the vendor interface,
+     * FIDO when it is certainly this key's (opened on first use), and the
+     * debug console when it is open. Empty while stopped. A GUI decides from
+     * this what it can offer - console presses only when SEREMU is here.
+     */
+    interfaces() {
+      if (!hid) return [];
+      const entry = (iface, d) => ({
+        iface, path: d.path, interfaceNumber: d.interface, usagePage: d.usagePage, usage: d.usage,
+      });
+      const out = [entry(IFACE.VENDOR, opened)];
+      if (fidoPair && fidoPair.device) out.push(entry(IFACE.FIDO, fidoPair.device));
+      if (seremuHid) out.push(entry(IFACE.SEREMU, seremuDevice));
+      return out;
+    },
   };
 }
 

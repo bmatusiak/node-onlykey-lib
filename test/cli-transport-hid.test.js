@@ -263,6 +263,30 @@ test('beside the emulator\'s virtual interfaces (interface -1), the real key\'s 
   await soft.stop();
 });
 
+test('interfaces() says what the pipe can reach; close fires when the key goes away, not on stop()', async () => {
+  const HID = fakeNodeHid();
+  const pipe = createHidPipe({ loadHid: () => HID });
+  assert.deepEqual(pipe.interfaces(), []);
+  await pipe.start();
+  assert.deepEqual(pipe.interfaces().map((i) => [i.iface, i.path, i.interfaceNumber]),
+    [[IFACE.VENDOR, 'key1-if2', 2], [IFACE.FIDO, 'key1-if1', 1], [IFACE.SEREMU, 'key1-if3', 3]]);
+
+  const closes = [];
+  pipe.on('close', (err) => closes.push(err.message));
+  HID.opened[0].emit('error', new Error('could not read from HID device'));
+  assert.deepEqual(closes, ['could not read from HID device']);
+  assert.deepEqual(pipe.interfaces(), []);
+
+  await pipe.start();
+  await pipe.stop();
+  assert.equal(closes.length, 1, 'stop() is not a close');
+
+  const production = createHidPipe({ loadHid: () => fakeNodeHid({ devices: onlykeyInterfaces().filter((d) => d.usagePage !== 0xffc9) }) });
+  await production.start();
+  assert.deepEqual(production.interfaces().map((i) => i.iface), [IFACE.VENDOR, IFACE.FIDO]);
+  await production.stop();
+});
+
 test('two keys: with a USB parent (sysfs on Linux) each gets its own console; without one it is refused', async () => {
   const devices = [...onlykeyInterfaces('keyA'), ...onlykeyInterfaces('keyB')];
   const usbParentOf = (p) => p.split('-')[0];
