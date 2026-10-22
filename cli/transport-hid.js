@@ -28,9 +28,29 @@
  * protocol (PIN bracket, labels, slots, keys - see
  * src/transport/usbDescriptors.js), and - on first use only - the FIDO
  * interface, for what the firmware serves over CTAPHID alone: a label's
- * derived key (`keychain derive label`) is the one the CLI has. The keyboard
- * is device-to-host only and SEREMU is compiled out of a production key, so a
- * write to either is refused by name rather than sent somewhere it is ignored.
+ * derived key (`keychain derive label`) is the one the CLI has. On a DEBUG
+ * build it also opens SEREMU, the debug console (button presses, the
+ * console's own lines). The keyboard is device-to-host only, so a write to it
+ * is refused by name rather than sent somewhere it is ignored.
+ *
+ * WHY SEREMU OPENS AT START, AND IS NOT FATAL. The console talks without being
+ * asked - "UNLOCKED", the prompts - and the device plugin's console buffer and
+ * unlock() read those lines, so a console opened on the first write would
+ * miss everything said before it. A production key does not enumerate SEREMU
+ * at all (it is compiled out), and Windows can refuse to open it (a stale
+ * per-device lock - DEVPKEY_Device_SecuritySDS - on one key's record, the one
+ * Windows puts on FIDO interfaces). Either way every vendor command still
+ * works, and only a console write says why it cannot be sent.
+ *
+ * WHICH INTERFACES BELONG TO THE OPENED KEY. hidapi lists interfaces, not
+ * devices, and the emulator's Windows driver (okvhid) lists a full set of
+ * OnlyKey interfaces - same ids, same usage pages, same serial - beside a real
+ * key. So a FIDO or SEREMU interface is used only when it is certainly the
+ * opened key's: among the interfaces of the same device as the chosen vendor
+ * interface, exactly one vendor and one of the kind wanted. "Same device" is
+ * the USB parent in sysfs on Linux (hidraw nodes of one key share it); without
+ * that, the same KIND - interface-numbered USB interfaces, or the virtual
+ * devices hidapi lists with interface -1. Anything less certain is refused.
  *
  * WHY FIDO OPENS LAZILY, AND ONLY WHEN THE MATCH IS CERTAIN (owner,
  * 2026-10-01: "add FIDO support to the pipe"). Every vendor-only command keeps
@@ -44,7 +64,10 @@
 'use strict';
 
 const { IFACE, DIR, REPORT_SIZE, withReportId } = require('../src/transport/contract');
-const { VENDOR_ID, PRODUCT_ID, identify } = require('../src/transport/usbDescriptors');
+const { VENDOR_ID, PRODUCT_ID, identify, describe } = require('../src/transport/usbDescriptors');
+
+/* SEREMU's out-report: 32 bytes, not 64 (usbDescriptors.js). */
+const SEREMU_OUT = describe(IFACE.SEREMU).endpointOut;
 
 const hex4 = (n) => Number(n).toString(16).padStart(4, '0');
 /*
@@ -132,32 +155,73 @@ function findOnlyKeys(HID) {
     (d) => identify({ usagePage: d.usagePage, usage: d.usage }) === IFACE.VENDOR);
   const fido = onlykeys.filter(
     (d) => identify({ usagePage: d.usagePage, usage: d.usage }) === IFACE.FIDO);
-  return { vendor, fido, onlykeys };
+  const seremu = onlykeys.filter(
+    (d) => identify({ usagePage: d.usagePage, usage: d.usage }) === IFACE.SEREMU);
+  return { vendor, fido, seremu, onlykeys };
 }
 
 /**
- * The FIDO interface of the key the pipe opened - only when that is certain:
- * one OnlyKey's vendor interface and one FIDO interface on the bus. Otherwise
- * null, and `why` says what to do.
+ * The USB device a Linux hidraw node belongs to, from sysfs, or null.
+ *
+ * /sys/class/hidraw/hidrawN/device resolves to
+ * .../<usb device>/<usb device>:<config>.<interface>/<hid id>, so two levels
+ * up is the USB device itself - the same directory for every interface of one
+ * key, and a different one for the emulator's dummy_hcd gadget.
  */
-function pairFido({ vendor, fido }) {
-  if (vendor.length === 1 && fido.length === 1) return { fido: fido[0], why: null };
+function sysfsUsbParent(path) {
+  const m = /^\/dev\/(hidraw\d+)$/.exec(String(path));
+  if (!m || process.platform !== 'linux') return null;
+  try {
+    const fsys = require('fs');
+    const nodePath = require('path');
+    return nodePath.dirname(nodePath.dirname(fsys.realpathSync(`/sys/class/hidraw/${m[1]}/device`)));
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * The interface of `kind` that belongs to the opened key - only when that is
+ * certain (see "WHICH INTERFACES BELONG TO THE OPENED KEY" above). Otherwise
+ * null, and `why` says what to do.
+ *
+ * @param {object} found    findOnlyKeys()'s lists
+ * @param {object} chosen   the vendor interface the pipe opened
+ * @param {'fido'|'seremu'} kind
+ * @param {(path: string) => string|null} usbParentOf
+ */
+function pairSibling(found, chosen, kind, usbParentOf) {
+  const parent = usbParentOf(chosen.path);
+  const sameDevice = parent
+    ? (d) => usbParentOf(d.path) === parent
+    : (d) => (d.interface >= 0) === (chosen.interface >= 0);
+  const vendor = found.vendor.filter(sameDevice);
+  const candidates = found[kind].filter(sameDevice);
+  if (vendor.length === 1 && candidates.length === 1) return { device: candidates[0], why: null };
+
+  const name = kind === 'fido' ? 'FIDO' : 'debug console (SEREMU)';
   if (vendor.length > 1) {
     return {
-      fido: null,
-      why: `${vendor.length} OnlyKeys are plugged in, and a FIDO interface cannot be matched to the one `
+      device: null,
+      why: `${vendor.length} OnlyKeys are plugged in, and a ${name} interface cannot be matched to the one `
         + 'chosen with --path (hidapi lists interfaces, not devices). Unplug the others for this command.',
     };
   }
-  if (!fido.length && process.platform === 'win32') {
+  if (kind === 'fido' && !candidates.length && process.platform === 'win32') {
     return {
-      fido: null,
+      device: null,
       why: 'Windows shows a security key\'s FIDO interface only to an elevated program (it keeps it for '
         + 'its WebAuthn service). Run onlykey-js from an elevated shell for this command - or, for a '
         + 'derived key, use the ssh or gpg scheme, which run over the vendor interface.',
     };
   }
-  return { fido: null, why: 'this OnlyKey\'s FIDO interface (usage page 0xf1d0) is not listed by hidapi.' };
+  if (kind === 'seremu' && !candidates.length) {
+    return {
+      device: null,
+      why: 'this OnlyKey lists no debug console (usage page 0xffc9) - a production build has none.',
+    };
+  }
+  return { device: null, why: 'this OnlyKey\'s FIDO interface (usage page 0xf1d0) is not listed by hidapi.' };
 }
 
 /**
@@ -219,17 +283,21 @@ function selectDevice({ vendor, onlykeys }, path) {
  * @param {object} [opts]
  * @param {() => object} [opts.loadHid] returns the node-hid module; injectable
  * @param {string} [opts.path] a specific key's hidapi path (see `--path`)
+ * @param {(path: string) => string|null} [opts.usbParentOf] the USB device an
+ *   interface path belongs to; injectable (default: sysfs on Linux, else null)
  * @returns the pipe contract (start/stop/isRunning/write/on) plus `device`,
  *   the enumeration entry of the key that was opened, once started
  */
-function createHidPipe({ loadHid, path } = {}) {
+function createHidPipe({ loadHid, path, usbParentOf = sysfsUsbParent } = {}) {
   const listeners = new Set();
   let hid = null;
   let opened = null;
   let lastError = null;
   let HIDmodule = null;
-  let fidoPair = null;     // {fido, why} from the enumeration at start()
+  let fidoPair = null;     // {device, why} from the enumeration at start()
   let fidoHid = null;      // opened on the first FIDO write
+  let seremuHid = null;    // opened at start(), when the key has a console
+  let seremuWhy = null;    // why it is not open, for a console write
 
   function emit(event) {
     for (const listener of [...listeners]) listener(event);
@@ -237,6 +305,21 @@ function createHidPipe({ loadHid, path } = {}) {
 
   const onData = (data) => deliver(IFACE.VENDOR, data);
   const onFidoData = (data) => deliver(IFACE.FIDO, data);
+  const onSeremuData = (data) => deliver(IFACE.SEREMU, data);
+
+  function openSeremu(found, chosen) {
+    const pair = pairSibling(found, chosen, 'seremu', usbParentOf);
+    if (!pair.device) { seremuWhy = pair.why; return; }
+    try {
+      seremuHid = new HIDmodule.HID(pair.device.path);
+    } catch (err) {
+      seremuWhy = `its debug console (${pair.device.path}) would not open (${err && err.message}). On Windows, `
+        + 'an "Access is denied" here is a per-device lock (DEVPKEY_Device_SecuritySDS) on that interface.';
+      return;
+    }
+    seremuHid.on('data', onSeremuData);
+    seremuHid.on('error', onError);
+  }
 
   function deliver(iface, data) {
     let bytes = Uint8Array.from(data);
@@ -254,11 +337,11 @@ function createHidPipe({ loadHid, path } = {}) {
 
   function openFido() {
     if (fidoHid) return fidoHid;
-    if (!fidoPair || !fidoPair.fido) {
+    if (!fidoPair || !fidoPair.device) {
       throw hidError('ENOFIDO', `this command needs the OnlyKey's FIDO interface: ${fidoPair ? fidoPair.why : 'the pipe is not open.'}`);
     }
     try {
-      fidoHid = new HIDmodule.HID(fidoPair.fido.path);
+      fidoHid = new HIDmodule.HID(fidoPair.device.path);
     } catch (err) {
       throw hidError('EOPEN',
         `Could not open the OnlyKey's FIDO interface (${err && err.message}). A browser or another `
@@ -280,7 +363,7 @@ function createHidPipe({ loadHid, path } = {}) {
   }
 
   function close() {
-    for (const [device, listener] of [[hid, onData], [fidoHid, onFidoData]]) {
+    for (const [device, listener] of [[hid, onData], [fidoHid, onFidoData], [seremuHid, onSeremuData]]) {
       if (!device) continue;
       device.removeListener('data', listener);
       device.removeListener('error', onError);
@@ -288,6 +371,28 @@ function createHidPipe({ loadHid, path } = {}) {
     }
     hid = null;
     fidoHid = null;
+    seremuHid = null;
+  }
+
+  /*
+   * A console line goes out as SEREMU out-reports: 32 bytes each, zero-padded,
+   * behind the report ID. Windows refuses a write of any other length, and the
+   * firmware's console skips the padding (the probe "Z" padded this way is
+   * echoed once, on Windows and on Linux). A line longer than one report is
+   * cut into several, which the console reads as one byte stream.
+   */
+  function writeSeremu(frame) {
+    if (!seremuHid) {
+      throw hidError('ENOSEREMU', `this command needs the OnlyKey's debug console: ${seremuWhy || 'the pipe is not open.'}`);
+    }
+    let written = 0;
+    for (let at = 0; at < Math.max(frame.length, 1); at += SEREMU_OUT) {
+      const report = new Uint8Array(SEREMU_OUT);
+      report.set(frame.subarray(at, at + SEREMU_OUT));
+      const n = seremuHid.write(Array.from(withReportId(report)));
+      written += typeof n === 'number' ? n : report.length + 1;
+    }
+    return written;
   }
 
   return {
@@ -297,7 +402,7 @@ function createHidPipe({ loadHid, path } = {}) {
       const found = findOnlyKeys(HID);
       const chosen = selectDevice(found, path);
       HIDmodule = HID;
-      fidoPair = pairFido(found);
+      fidoPair = pairSibling(found, chosen, 'fido', usbParentOf);
       try {
         hid = new HID.HID(chosen.path);
       } catch (err) {
@@ -315,6 +420,8 @@ function createHidPipe({ loadHid, path } = {}) {
       /* Attaching 'data' is what starts hidapi's read thread. */
       hid.on('data', onData);
       hid.on('error', onError);
+      seremuWhy = null;
+      openSeremu(found, chosen);
       return { started: true, path: chosen.path };
     },
 
@@ -327,17 +434,22 @@ function createHidPipe({ loadHid, path } = {}) {
     },
 
     async write(iface, bytes) {
-      if (iface !== IFACE.VENDOR && iface !== IFACE.FIDO) {
+      if (iface !== IFACE.VENDOR && iface !== IFACE.FIDO && iface !== IFACE.SEREMU) {
         throw new Error(
-          `the desktop HID pipe opens the vendor (${IFACE.VENDOR}) and FIDO (${IFACE.FIDO}) interfaces only; `
-          + `interface ${iface} is not open`);
+          `the desktop HID pipe opens the vendor (${IFACE.VENDOR}), FIDO (${IFACE.FIDO}) and debug console `
+          + `(${IFACE.SEREMU}) interfaces only; interface ${iface} is not open`);
       }
       if (!hid) {
         throw hidError('ENOTOPEN',
           lastError ? `the OnlyKey went away: ${lastError.message}` : 'the OnlyKey is not open');
       }
-      const device = iface === IFACE.FIDO ? openFido() : hid;
       const frame = Uint8Array.from(bytes);
+      if (iface === IFACE.SEREMU) {
+        const written = writeSeremu(frame);
+        emit({ iface, dir: DIR.IN, bytes: frame });
+        return written;
+      }
+      const device = iface === IFACE.FIDO ? openFido() : hid;
       /*
        * THE REPORT ID. hidapi takes the first byte of every write as the report
        * ID - on Windows, on Linux (hidraw; usbhid strips a leading 0 before

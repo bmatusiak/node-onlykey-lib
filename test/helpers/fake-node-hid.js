@@ -43,19 +43,28 @@ function onlykeyInterfaces(prefix = 'key1', { usagePages = true } = {}) {
  * @param {object} [opts.firmware]   a pipe that answers vendor writes
  * @param {boolean} [opts.readWithReportId] deliver reads as 65 bytes, ID first
  * @param {string} [opts.openError]  make `new HID(path)` throw this
+ * @param {Object<string,string>} [opts.openErrors] the same, for one path each
+ *
+ * Only a VENDOR interface (usage page 0xffab) is wired to `firmware`: the
+ * other handles record their writes and emit only what a test emits on them.
  */
-function fakeNodeHid({ devices = onlykeyInterfaces(), firmware = null, readWithReportId = false, openError = null } = {}) {
+function fakeNodeHid({
+  devices = onlykeyInterfaces(), firmware = null, readWithReportId = false, openError = null, openErrors = {},
+} = {}) {
   const opened = [];
 
   class HID extends EventEmitter {
     constructor(path) {
       super();
       if (openError) throw new Error(openError);
+      if (openErrors[path]) throw new Error(openErrors[path]);
+      const entry = devices.find((d) => d.path === path);
+      this.isVendor = !entry || entry.usagePage === 0xffab;
       this.path = path;
       this.writes = [];
       this.closed = false;
       opened.push(this);
-      this.off = firmware
+      this.off = firmware && this.isVendor
         ? firmware.on('stream', (event) => {
           if (event.dir !== DIR.OUT || event.iface !== IFACE.VENDOR || this.closed) return;
           const report = readWithReportId
@@ -72,7 +81,7 @@ function fakeNodeHid({ devices = onlykeyInterfaces(), firmware = null, readWithR
       const raw = Array.from(array);
       this.writes.push(raw);
       if (raw[0] !== 0x00) throw new Error(`report ID ${raw[0]} - this device has no numbered reports`);
-      if (firmware) firmware.write(IFACE.VENDOR, Uint8Array.from(raw.slice(1)));
+      if (firmware && this.isVendor) firmware.write(IFACE.VENDOR, Uint8Array.from(raw.slice(1)));
       return raw.length;
     }
 

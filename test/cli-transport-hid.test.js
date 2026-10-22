@@ -69,8 +69,7 @@ test('opens the VENDOR interface, chosen by usage page, not by position', async 
   const HID = fakeNodeHid({ devices });
   const pipe = createHidPipe({ loadHid: () => HID });
   await pipe.start();
-  assert.equal(HID.opened.length, 1);
-  assert.equal(HID.opened[0].path, 'key1-if2');
+  assert.deepEqual(HID.opened.map((d) => d.path), ['key1-if2', 'key1-if3'], 'the vendor interface, then the console');
   assert.equal(pipe.device.usagePage, 0xffab);
   await pipe.stop();
   assert.equal(HID.opened[0].closed, true);
@@ -158,11 +157,11 @@ test('writes carry a 0x00 report ID for hidapi; the echo does not', async () => 
   await pipe.stop();
 });
 
-test('the keyboard and SEREMU are not writable, and a closed pipe says so', async () => {
+test('the keyboard is not writable, and a closed pipe says so', async () => {
   const pipe = createHidPipe({ loadHid: () => fakeNodeHid() });
   await assert.rejects(() => pipe.write(IFACE.VENDOR, new Uint8Array(64)), { code: 'ENOTOPEN' });
+  await assert.rejects(() => pipe.write(IFACE.SEREMU, new Uint8Array(8)), { code: 'ENOTOPEN' });
   await pipe.start();
-  await assert.rejects(() => pipe.write(IFACE.SEREMU, new Uint8Array(8)), /vendor \(2\) and FIDO \(1\) interfaces only/);
   await assert.rejects(() => pipe.write(IFACE.KEYBOARD, new Uint8Array(8)), /interfaces only/);
   await pipe.stop();
 });
@@ -171,15 +170,15 @@ test('FIDO opens on first use: its writes carry the report ID, its reads come ba
   const HID = fakeNodeHid();
   const pipe = createHidPipe({ loadHid: () => HID });
   await pipe.start();
-  assert.deepEqual(HID.opened.map((d) => d.path), ['key1-if2'], 'only the vendor interface opens at start');
+  assert.deepEqual(HID.opened.map((d) => d.path), ['key1-if2', 'key1-if3'], 'vendor and the console open at start');
 
   const events = [];
   pipe.on('stream', (e) => events.push(e));
   const frame = new Uint8Array(64).fill(0x5a);
   frame[0] = 0xff;
   await pipe.write(IFACE.FIDO, frame);
-  assert.deepEqual(HID.opened.map((d) => d.path), ['key1-if2', 'key1-if1'], 'the FIDO interface opened on the first FIDO write');
-  const fido = HID.opened[1];
+  assert.deepEqual(HID.opened.map((d) => d.path), ['key1-if2', 'key1-if3', 'key1-if1'], 'the FIDO interface opened on the first FIDO write');
+  const fido = HID.opened[2];
   assert.equal(fido.writes[0][0], 0x00, 'the report ID');
   assert.deepEqual(fido.writes[0].slice(1), Array.from(frame));
   assert.equal(HID.opened[0].writes.length, 0, 'nothing reached the vendor interface');
@@ -189,9 +188,96 @@ test('FIDO opens on first use: its writes carry the report ID, its reads come ba
   assert.deepEqual(events.slice(1).map((e) => [e.iface, e.dir, e.bytes[0]]), [[IFACE.FIDO, DIR.OUT, 0x33]]);
 
   await pipe.write(IFACE.FIDO, frame);
-  assert.equal(HID.opened.length, 2, 'the FIDO interface is opened once');
+  assert.equal(HID.opened.length, 3, 'the FIDO interface is opened once');
   await pipe.stop();
-  assert.ok(HID.opened.every((d) => d.closed), 'stop() closes both interfaces');
+  assert.ok(HID.opened.every((d) => d.closed), 'stop() closes every interface');
+});
+
+/* ------------------------------------------------------------ debug console (SEREMU) */
+
+test('the console opens at start; a line goes out as 32-byte reports behind the report ID', async () => {
+  const HID = fakeNodeHid();
+  const pipe = createHidPipe({ loadHid: () => HID });
+  await pipe.start();
+  const seremu = HID.opened.find((d) => d.path === 'key1-if3');
+  assert.ok(seremu, 'the debug console is open before anything is written to it');
+
+  const events = [];
+  pipe.on('stream', (e) => events.push(e));
+  const line = Uint8Array.from(Buffer.from('Z\n', 'latin1'));
+  await pipe.write(IFACE.SEREMU, line);
+  assert.equal(seremu.writes.length, 1);
+  assert.equal(seremu.writes[0].length, 33, 'report ID + one 32-byte out-report (Windows takes no other length)');
+  assert.deepEqual(seremu.writes[0].slice(0, 3), [0x00, 0x5a, 0x0a]);
+  assert.ok(seremu.writes[0].slice(3).every((b) => b === 0), 'zero-padded');
+  assert.deepEqual(events.map((e) => [e.iface, e.dir, e.bytes.length]), [[IFACE.SEREMU, DIR.IN, 2]],
+    'the echo is the line, not the padding');
+
+  await pipe.write(IFACE.SEREMU, new Uint8Array(40).fill(0x31));
+  assert.deepEqual(seremu.writes.slice(1).map((w) => w.length), [33, 33], 'a longer line is cut into reports');
+  assert.equal(HID.opened[0].writes.length, 0, 'nothing reached the vendor interface');
+
+  seremu.emit('data', Buffer.from('UNLOCKED\r\n', 'latin1'));
+  assert.equal(events.at(-1).iface, IFACE.SEREMU, 'what the console says comes back tagged SEREMU');
+  assert.equal(events.at(-1).dir, DIR.OUT);
+  await pipe.stop();
+  assert.ok(seremu.closed);
+});
+
+test('a production key (no console) still opens; a console write says why it cannot', async () => {
+  const devices = onlykeyInterfaces('key1').filter((d) => d.usagePage !== 0xffc9);
+  const HID = fakeNodeHid({ devices });
+  const pipe = createHidPipe({ loadHid: () => HID });
+  await pipe.start();
+  await pipe.write(IFACE.VENDOR, new Uint8Array(64));
+  await assert.rejects(() => pipe.write(IFACE.SEREMU, new Uint8Array(2)),
+    (err) => err.code === 'ENOSEREMU' && /production build has none/.test(err.message));
+  await pipe.stop();
+});
+
+test('a console that will not open (Windows "Access is denied") is not fatal, and is named', async () => {
+  const HID = fakeNodeHid({ openErrors: { 'key1-if3': 'open_device: (0x00000005) Access is denied.' } });
+  const pipe = createHidPipe({ loadHid: () => HID });
+  await pipe.start();
+  await pipe.write(IFACE.VENDOR, new Uint8Array(64));
+  await assert.rejects(() => pipe.write(IFACE.SEREMU, new Uint8Array(2)),
+    (err) => err.code === 'ENOSEREMU' && /Access is denied/.test(err.message) && /SecuritySDS/.test(err.message));
+  await pipe.stop();
+});
+
+test('beside the emulator\'s virtual interfaces (interface -1), the real key\'s own console and FIDO are used', async () => {
+  /* okvhid lists a full set with the same ids, usage pages and serial; only the interface number differs. */
+  const virtual = onlykeyInterfaces('devgen').map((d) => ({ ...d, interface: -1 }));
+  const HID = fakeNodeHid({ devices: [...virtual, ...onlykeyInterfaces('usb')] });
+
+  const pipe = createHidPipe({ loadHid: () => HID, path: 'usb-if2' });
+  await pipe.start();
+  await pipe.write(IFACE.SEREMU, new Uint8Array(2));
+  await pipe.write(IFACE.FIDO, new Uint8Array(64));
+  assert.deepEqual(HID.opened.map((d) => d.path), ['usb-if2', 'usb-if3', 'usb-if1']);
+  await pipe.stop();
+
+  const soft = createHidPipe({ loadHid: () => HID, path: 'devgen-if2' });
+  await soft.start();
+  assert.deepEqual(HID.opened.slice(3).map((d) => d.path), ['devgen-if2', 'devgen-if3'], 'and the soft key gets its own');
+  await soft.stop();
+});
+
+test('two keys: with a USB parent (sysfs on Linux) each gets its own console; without one it is refused', async () => {
+  const devices = [...onlykeyInterfaces('keyA'), ...onlykeyInterfaces('keyB')];
+  const usbParentOf = (p) => p.split('-')[0];
+  const HID = fakeNodeHid({ devices });
+  const pipe = createHidPipe({ loadHid: () => HID, path: 'keyB-if2', usbParentOf });
+  await pipe.start();
+  await pipe.write(IFACE.FIDO, new Uint8Array(64));
+  assert.deepEqual(HID.opened.map((d) => d.path), ['keyB-if2', 'keyB-if3', 'keyB-if1']);
+  await pipe.stop();
+
+  const blind = createHidPipe({ loadHid: () => fakeNodeHid({ devices }), path: 'keyB-if2' });
+  await blind.start();
+  await assert.rejects(() => blind.write(IFACE.SEREMU, new Uint8Array(2)),
+    (err) => err.code === 'ENOSEREMU' && /2 OnlyKeys/.test(err.message));
+  await blind.stop();
 });
 
 test('with two OnlyKeys a FIDO write is refused - it could reach the other key', async () => {
