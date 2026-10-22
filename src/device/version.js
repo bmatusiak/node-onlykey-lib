@@ -211,8 +211,15 @@ function parseStatus(status) {
 
     out.release = parseRelease(stripModelSuffix(out.version));
     if (out.release) {
-      if (out.release.prerelease === 'test') out.build = BUILD.DEBUG;
-      else if (out.release.prerelease === 'prod') out.build = BUILD.PRODUCTION;
+      /*
+       * The keyword is the FIRST part of the prerelease. A build from the maintainer's rig carries
+       * its sources after it - "v3.1.0-test-9fceea1-37aa531c" - and reading the whole tail as the
+       * keyword made that build "unknown": no debug console, no console presses, on exactly the
+       * build that has both.
+       */
+      const keyword = String(out.release.prerelease || '').split('-')[0];
+      if (keyword === 'test') out.build = BUILD.DEBUG;
+      else if (keyword === 'prod') out.build = BUILD.PRODUCTION;
     }
 
     if (out.state === 'unlocked') {

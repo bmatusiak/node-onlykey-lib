@@ -954,3 +954,13 @@ test('post-quantum and X-Wing follow the version from 3.1.0, the keyword below i
   assert.equal(at('v3.0.4-testc').postQuantum, true, 'a pre-bump development build does');
   assert.equal(at('v3.0.4-testc').xwingDerive, true);
 });
+
+test('a build from the maintainer\'s rig carries its sources after the keyword, and is still its build', () => {
+  const parse = require('../src/device/version').parseStatus;
+  const debug = parse('UNINITIALIZEDv3.1.0-test-9fceea1-37aa531c');
+  assert.equal(debug.build, 'debug', 'v3.1.0-test-<sources> is a debug build: its console exists');
+  assert.equal(debug.model, 'classic');
+  assert.equal(parse('UNLOCKEDv3.1.0-prod-9fceea1-37aa531c').build, 'production');
+  assert.equal(parse('UNLOCKEDv3.0.4-test').build, 'debug', 'the bare keyword still reads as before');
+  assert.equal(parse('UNLOCKEDv3.1.0-prodc').build, 'production');
+});
