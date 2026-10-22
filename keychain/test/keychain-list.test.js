@@ -90,3 +90,20 @@ test('the list refuses anything private - fields, PEM, armored private blocks, a
   assert.throws(() => list.parse(smuggled), /public data only/);
   assert.throws(() => list.parse('{"format":"other"}'), /not a Key Chain file/);
 });
+
+test('one spelling: a derived label recorded with its scheme ("gpg://<uid>") is read as the bare name, and joins its twin', () => {
+  const pub = random(32);
+  const old = list.createEntry({ kind: 'derived', scheme: 'gpg', label: 'gpg://Agent <a@b.example>', type: 'ed25519', publicKey: pub });
+  assert.equal(old.label, 'Agent <a@b.example>');
+  assert.equal(derive.identityName(old), 'gpg://Agent <a@b.example>', 'shown once, not gpg://gpg://');
+  const now = list.createEntry({ kind: 'derived', scheme: 'gpg', label: 'Agent <a@b.example>', type: 'ed25519', publicKey: pub });
+  assert.equal(old.id, now.id, 'the old spelling and the new are one entry');
+  const ssh = list.createEntry({ kind: 'derived', scheme: 'ssh', label: 'ssh://claude@nitro16', type: 'ed25519', publicKey: random(32) });
+  assert.equal(ssh.label, 'claude@nitro16');
+  /* a label that only looks like another scheme is left as it is */
+  const other = list.createEntry({ kind: 'derived', scheme: 'gpg', label: 'ssh://not-mine', type: 'ed25519', publicKey: random(32) });
+  assert.equal(other.label, 'ssh://not-mine');
+  /* read back from a file in the old spelling */
+  const file = list.serialize([old]).replace('"Agent <a@b.example>"', '"gpg://Agent <a@b.example>"');
+  assert.equal(list.parse(file)[0].label, 'Agent <a@b.example>');
+});

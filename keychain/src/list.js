@@ -67,6 +67,17 @@ function createEntry(fields) {
   if (!e.publicKey.length && e.type !== 'composite') throw new Error('an entry needs its public key');
   if (e.kind === 'slot' && !(Number.isInteger(e.slot))) throw new Error('a slot entry needs its slot number');
   if (e.kind === 'derived' && (!e.scheme || !e.label)) throw new Error('a derived entry needs its scheme and label');
+  /*
+   * ONE SPELLING (Brad, 2026-10-21): a derived entry's label is the bare name - what the key
+   * hashes (derive.labelHashOf: {gpg: label}, {ssh: user@host}) - and its scheme says ssh or gpg.
+   * Entries recorded before that rule carry the scheme in the label too ("gpg://<uid>"): hashed,
+   * that names a key the phone can never match, and shown it reads "gpg://gpg://…". Such a label
+   * is put in the one spelling here, where every entry is checked, so a list read from anywhere
+   * comes out right; its id follows, and the twin rule below joins it with any copy elsewhere.
+   */
+  if (e.kind === 'derived' && (e.scheme === 'ssh' || e.scheme === 'gpg') && String(e.label).startsWith(`${e.scheme}://`)) {
+    e.label = String(e.label).slice(e.scheme.length + 3);
+  }
   if (e.pgp !== undefined && (typeof e.pgp !== 'string' || !/BEGIN PGP PUBLIC KEY BLOCK/.test(e.pgp))) {
     throw new Error('an entry\'s pgp is an armored PUBLIC key block');
   }
