@@ -99,7 +99,20 @@ function opt(args, name) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n'), env = process.env, spawnFn = spawn, ask, dev = null } = {}) {
+/*
+ * Who paid a use, in words. The key pays from the FIRST live budget that covers the request, so
+ * another of this agent's budgets (one an interrupted run left live) can pay instead of this one -
+ * seen on the testnet hard key, 2026-10-23: link #4 SELF_PRESS from budget 1 while budget 4 was
+ * asked; it used to read "not paid by the budget", as if a press had been needed.
+ */
+function paidWords(l) {
+  if (l.paid) return '';
+  if (l.paidBy) return ` - paid by budget ${l.paidBy} (another of yours still live), not this one`;
+  return ' - not paid by a budget (a pressed use)';
+}
+
+async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n'), env = process.env, spawnFn = spawn, ask, dev = null, waiting = 'Waiting for the phone - read the request there, then press…' } = {}) {
+  /* waiting: the host's words - the phone over Bluetooth; for a hard key on USB this computer asks y/N itself (register.js) */
   if (typeof ask !== 'function') throw new Error('edge commands need ask (the service or the in-process stack)');
   const [cmd, ...args] = argv;
   try {
@@ -126,7 +139,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const uses = { ssh: Number(opt(args, '--ssh') || 0), gpg: Number(opt(args, '--gpg') || 0), identity: dev && dev.identityOption ? opt(args, '--identity') || null : null };
       if (!reason || !Number.isInteger(ttl)) { err('onlykey-js edge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES'); return 2; }
       /* said only once the agent has the request (bug 2): with no agent, the error comes at once instead */
-      const r = await ask('budget', { reason, uses, ttl }, { timeoutMs: 200000, onSent: () => out('Waiting for the phone - read the request there, then press…') });
+      const r = await ask('budget', { reason, uses, ttl }, { timeoutMs: 200000, onSent: () => out(waiting) });
       out(`budget ${r.budget}: ${r.uses} uses`);
       out(`head = ${r.head}`);
       return 0;
@@ -135,7 +148,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const ttl = Number(opt(args, '--ttl'));
       const caps = opt(args, '--caps') ? opt(args, '--caps').split(',').map(Number) : null;
       if (!Number.isInteger(ttl)) { err('onlykey-js edge continue --ttl MINUTES [--caps n,n]'); return 2; }
-      const r = await ask('continue', { ttl, caps }, { timeoutMs: 200000, onSent: () => out('Waiting for the phone - read the request there, then press…') });
+      const r = await ask('continue', { ttl, caps }, { timeoutMs: 200000, onSent: () => out(waiting) });
       out(`budget ${r.budget}: ${r.uses} uses (continues the last one)`);
       out(`head = ${r.head}`);
       return 0;
@@ -212,7 +225,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
               err(`onlykey-js edge: the failed receipt for #${l.seq} was not filed: ${e.message}`);
             }
           }
-          out(`signed: link #${l.seq} (${l.what})${l.paid ? '' : ' - not paid by the budget'} - receipt owed for #${l.seq}`);
+          out(`signed: link #${l.seq} (${l.what})${paidWords(l)} - receipt owed for #${l.seq}`);
         }
         if (!closed.links.length) out(code === 0 ? 'signed: nothing under the budget' : 'signed: nothing under the budget - the command failed before a sign');
       }

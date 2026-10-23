@@ -123,6 +123,11 @@ function recordCert(io, record, tool) {
   }
 }
 
+/* what a budget request waits on, in words: the phone over Bluetooth, this computer for a hard key on USB (local-host.js) */
+function waitingLine(opts) {
+  return opts.ble ? 'Waiting for the phone - read the request there, then press…' : 'The request is shown here - answer y/N, then press the key…';
+}
+
 /* is the optional service running? a connect, no request */
 function serviceUp(controlPath) {
   return new Promise((resolve) => {
@@ -485,7 +490,7 @@ module.exports = function register(COMMANDS, h) {
       const commands = require('./commands');
       const outs = { out: io.out, err: io.err, dev };
       /* the service, if Brad started one (CLI.md §4: for speed only) */
-      if (await serviceUp(control.controlPath())) return commands.main(args, { ...outs, ask: control.ask });
+      if (await serviceUp(control.controlPath())) return commands.main(args, { ...outs, ask: control.ask, waiting: waitingLine(opts) });
       /* no service (the default): this one command, in-process - connect, run, disconnect.
        * The phone is opened on the command's first request, not before: a usage error
        * (exec without --head) answers at once instead of after a Bluetooth connect. */
@@ -498,7 +503,7 @@ module.exports = function register(COMMANDS, h) {
           if (o.onSent) o.onSent();
           return { ok: true, ...(await fn(fields)) };
         };
-        return await commands.main(args, { ...outs, ask });
+        return await commands.main(args, { ...outs, ask, waiting: waitingLine(opts) });
       } finally {
         if (st) await st.close();
       }

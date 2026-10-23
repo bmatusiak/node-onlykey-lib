@@ -146,7 +146,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
     const { result, link } = used;
     exec.links.push({ ...link, what });
     note(link.seq, { reason: exec.reason, what });
-    log(`signed: link #${link.seq} (${what})${link.paid ? '' : ' - NOT paid by the budget'} - receipt owed for #${link.seq}`);
+    log(`signed: link #${link.seq} (${what})${link.paid ? '' : link.paidBy ? ` - paid by budget ${link.paidBy} (another live one), NOT this one` : ' - NOT paid by a budget (a pressed use)'} - receipt owed for #${link.seq}`);
     return result;
   }
 
