@@ -92,6 +92,19 @@ test('budget: a No opens nothing - declined, and the key never asked for a press
   assert.ok(!said.some((l) => /PRESS the key/.test(l)), 'no press asked');
 });
 
+test('the terminal y/N leaves stdin paused - a command exits once it is done', async () => {
+  const { terminalConfirm } = require('../cli/local-host');
+  const { PassThrough } = require('stream');
+  for (const [typed, want] of [['y\n', true], ['n\n', false], ['yes\n', true], ['\n', false]]) {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const answer = terminalConfirm('approve? [y/N] ', { input, output });
+    input.write(typed);
+    assert.equal(await answer, want, `"${typed.trim()}"`);
+    assert.ok(input.isPaused(), 'the input is paused again, so it keeps nothing alive');
+  }
+});
+
 test('what only a phone has is refused at once: a sync, a ping', async () => {
   const { host } = await setup();
   for (const type of ['EDGE_SYNC_HAVE', 'ping']) {

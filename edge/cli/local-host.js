@@ -175,8 +175,14 @@ function terminalConfirm(question, { input = process.stdin, output = process.std
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input, output, terminal: !!input.isTTY });
     let answered = false;
-    rl.question(question, (a) => { answered = true; rl.close(); resolve(/^\s*y(es)?\s*$/i.test(a)); });
-    rl.on('close', () => { if (!answered) resolve(false); });
+    /*
+     * readline resumes the input and closing it does not pause it again: stdin kept the process
+     * alive after the command was done (`edge setup` kept the identity, then never exited - the box,
+     * 2026-10-23). Paused once the answer is in.
+     */
+    const done = (yes) => { rl.close(); if (typeof input.pause === 'function') input.pause(); resolve(yes); };
+    rl.question(question, (a) => { answered = true; done(/^\s*y(es)?\s*$/i.test(a)); });
+    rl.on('close', () => { if (!answered) { answered = true; done(false); } });
   });
 }
 
