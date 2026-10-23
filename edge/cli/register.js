@@ -31,6 +31,7 @@ const bucketHome = require('../../bucket/cli/home');
 const USAGE = [
   'onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>" [--committer-name N --committer-email E --expires 1y|<n>d|never --created <unix>]',
   '                                                              the agent identity: made here, kept by the phone (approve on its Edge sheet)',
+  '                                                              - or, for a hard key on USB, by this computer (approve here, y/N)',
   'onlykey-js edge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES',
   'onlykey-js edge continue --ttl MINUTES [--caps n,n] | end | status',
   'onlykey-js edge exec --head H --intent "…" -- <command…>     the only way to spend a budget',
@@ -161,13 +162,23 @@ async function openDevice(io, opts, h, { dev, wait }) {
   const { transport, okcrypto } = app.services;
   let edge = null;
   require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
-  /* the phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn, 2026-10-03) - wait past both */
-  const wired = wire.createWireChannel(transport, {
-    timeoutMs: (Number(wait) || 180) * 1000,
-    device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
-    log: say,
-    net: NET,
-  });
+  /*
+   * WHO HOSTS EDGE. Over Bluetooth the phone does: the wire to its app. A key on USB is a hard key
+   * (or Linux's emulated one on the bus) - no phone behind it answers the wire, so this computer is
+   * the host (local-host.js: the y/N on this terminal, then the press on the key; B4, 2026-10-23).
+   * The phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn,
+   * 2026-10-03) - the wire waits past both.
+   */
+  const wired = opts.ble
+    ? wire.createWireChannel(transport, {
+      timeoutMs: (Number(wait) || 180) * 1000,
+      device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
+      log: say,
+      net: NET,
+    })
+    : require('./local-host').createLocalHost({
+      edge, home: require('./control').edgeHome(), say, confirm: require('./local-host').terminalConfirm,
+    });
   /* timing logs are a dev-build switch only (edge/cli/dev; CLI.md §5) */
   const timed = dev && dev.timed ? dev.timed({ edge, wired, okcrypto, say }) : { channel: wired, okcrypto };
   return { app, transport, okcrypto: timed.okcrypto, edge, channel: timed.channel, say };
@@ -190,7 +201,9 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
   try {
     const identity = await askIdentity(channel);
     if (!identity) {
-      throw h.usage(`the phone keeps no agent identity yet - set it once, from any paired computer: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`);
+      throw h.usage(channel.local
+        ? `this computer keeps no agent identity for this key yet - set it once: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`
+        : `the phone keeps no agent identity yet - set it once, from any paired computer: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`);
     }
     recordCert(io, identity, serve ? 'onlykey-js edge agent' : 'onlykey-js edge');
     const { deviceId } = await edge.publicKey();
@@ -279,7 +292,7 @@ module.exports = function register(COMMANDS, h) {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
     usage: 'setup | budget | continue | end | status | exec | receipt | watch | sync | blocks | agent | --test-mode … | --test-mode clear',
-    summary: 'Edge: an agent uses the key inside a budget you approve on the phone - budget or no go',
+    summary: 'Edge: an agent uses the key inside a budget you approve (on the phone, or here for a hard key on USB) - budget or no go',
     device: true,
     async run(io, opts, argv) {
       const args = takeTestMode(dev && dev.prepare ? dev.prepare(argv) : argv, io, h.usage);
@@ -413,13 +426,15 @@ module.exports = function register(COMMANDS, h) {
             });
             record.cert = { armored: made.armored, fingerprint: made.fingerprint, created: made.created, expires: made.expires, signPublic: Buffer.from(made.signPublic).toString('hex') };
           }
+          /* the host that keeps it: the phone over Bluetooth, this computer for a key on USB (local-host.js) */
+          const host = d.channel.local ? 'this computer' : 'the phone';
           if (now && lib.same(now, record)) {
-            io.out('the phone already keeps this identity - nothing to change');
+            io.out(`${host} already keeps this identity - nothing to change`);
           } else {
-            io.out('the phone shows the identity on its Edge sheet - approve it there');
+            io.out(d.channel.local ? 'approve the identity here' : 'the phone shows the identity on its Edge sheet - approve it there');
             const a = await d.channel.send(lib.buildSet({ record }), { timeoutMs: (Number(wait) || 180) * 1000 });
             if (!a) throw new h.CliError('the phone did not answer (its sheet ran out, or ok-rn is not up to date) - nothing was kept');
-            if (a.ok === false) throw new h.CliError(`the phone did not keep it: ${a.refusal}${a.detail ? ` - ${a.detail}` : ''}`);
+            if (a.ok === false) throw new h.CliError(`${host} did not keep it: ${a.refusal}${a.detail ? ` - ${a.detail}` : ''}`);
           }
           for (const [k, v] of lib.rows(record)) io.out(h.row(k, v));
           recordCert(io, record, 'onlykey-js edge setup');

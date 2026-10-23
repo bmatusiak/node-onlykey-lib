@@ -23,8 +23,9 @@
  *        approved it on the phone's sheet, or {ok: false, refusal: 'refused'|'busy'|'invalid', detail}
  *   {type: 'EDGE_IDENTITY_GET', v: 1, nonce}           -> {ok: true, record: <record> | null}
  *
- * Pure: no storage and no I/O here. ok-rn keeps the record in AsyncStorage, the desktop app
- * (a hard key has no phone) in its own store; both use these checks and these words.
+ * Pure: no storage and no I/O here. ok-rn keeps the record in AsyncStorage; for a hard key on USB
+ * (no phone) the CLI keeps it in its bucket, per net (edge/cli/local-host.js, 2026-10-23); both use
+ * these checks and these words.
  */
 const { randomBytes } = require('../../src/vendor/exports/@noble/ciphers/utils.js');
 const { utf8ToBytes, toHex } = require('../../src/bytes');
