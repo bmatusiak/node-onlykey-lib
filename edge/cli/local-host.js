@@ -178,9 +178,18 @@ function terminalConfirm(question, { input = process.stdin, output = process.std
     /*
      * readline resumes the input and closing it does not pause it again: stdin kept the process
      * alive after the command was done (`edge setup` kept the identity, then never exited - the box,
-     * 2026-10-23). Paused once the answer is in.
+     * 2026-10-23). Pausing is not enough for a PIPE: a paused pipe still holds node until its writer
+     * closes it (measured: `(echo y; sleep 20) | node ...` exited after 20 s), and under the job
+     * runner the writer never does - `edge budget` sat until its time limit. So the input is also
+     * unref'd once the answer is in (and ref'd again for the next question).
      */
-    const done = (yes) => { rl.close(); if (typeof input.pause === 'function') input.pause(); resolve(yes); };
+    if (typeof input.ref === 'function') input.ref();
+    const done = (yes) => {
+      rl.close();
+      if (typeof input.pause === 'function') input.pause();
+      if (typeof input.unref === 'function') input.unref();
+      resolve(yes);
+    };
     rl.question(question, (a) => { answered = true; done(/^\s*y(es)?\s*$/i.test(a)); });
     rl.on('close', () => { if (!answered) { answered = true; done(false); } });
   });
