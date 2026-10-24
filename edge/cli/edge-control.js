@@ -78,6 +78,8 @@ async function run({ io, opts, argv, net, home }) {
   const HOOKS = CFG.hooks || {};
   const TTL = String(CFG.ttl || 30);
   const USB = !opts.ble;
+  /* the key on USB, hosted by the ok-edge desktop app when it runs (cli deviceOpts: --desktop, or plain with a live app) */
+  const VIA_APP = USB && (opts.desktop || (!opts.path && Boolean(require('../../desktop/trust').liveTrust())));
   const keyArgs = opts.ble ? ['--ble', ...(opts.address ? ['--address', opts.address] : [])] : (opts.path ? ['--path', opts.path] : []);
   const netArgs = net === 'test' ? ['--test-mode'] : [];
   const where = USB ? 'the key on USB' : `the phone${opts.address ? ` (${opts.address})` : ''}`;
@@ -140,11 +142,13 @@ async function run({ io, opts, argv, net, home }) {
     ? `sign ${gpg} commit(s) and push: ${REPOS.map((r) => `${r.name} (${unsigned(r).length})`).join(', ')}`
     : `push: ${REPOS.map((r) => r.name).join(', ')}`);
   function sheet({ gpg, ssh }) {
-    say(USB ? '>>> On this terminal, a budget request for the key on USB:' : `>>> On ${where}, a budget request:`);
+    say(VIA_APP ? '>>> In the ok-edge desktop app\'s window, a budget request for the key on USB:'
+      : USB ? '>>> On this terminal, a budget request for the key on USB:' : `>>> On ${where}, a budget request:`);
     say(`>>>   reason: "${reasonText(gpg)}"`);
     say(`>>>   ${gpg} signature(s), ${ssh} push(es), valid ${TTL} min${net === 'test' ? ' - TESTNET' : ''}`);
     say(`>>>   ${HOOKS.watch ? 'answered by the watch hook'
-      : USB ? 'answer y, then PRESS the key within 20 s of "PRESS the key now" (it pulses); nothing else is asked until the batch is done'
+      : VIA_APP ? 'Approve it in the window, then PRESS the key within 20 s (it pulses); nothing else is asked until the batch is done'
+      : USB ?'answer y, then PRESS the key within 20 s of "PRESS the key now" (it pulses); nothing else is asked until the batch is done'
         : 'APPROVE it and PRESS the key; nothing else is asked until the batch is done'}`);
   }
 

@@ -211,7 +211,8 @@ test('a missing node-hid reaches the user as one sentence naming it', async () =
     e.code = 'MODULE_NOT_FOUND';
     throw e;
   };
-  const r = await run(['status'], {}, { start: (opts) => startDesktop({ ...opts, loadHid: missing }) });
+  /* --path: the USB key this CLI opens itself - plain would go through a running ok-edge desktop app instead */
+  const r = await run(['--path', 'a-usb-key', 'status'], {}, { start: (opts) => startDesktop({ ...opts, loadHid: missing }) });
   assert.equal(r.code, 1);
   assert.equal(r.err.length, 1);
   assert.match(r.err[0], /^onlykey-js: .*"node-hid".*npm install node-hid/);

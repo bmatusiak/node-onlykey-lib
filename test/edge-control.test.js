@@ -45,7 +45,8 @@ test('control note keeps the batch in the Edge home; preview shows the commit TO
     assert.match(batch[0], /:HEAD~1$/);
 
     const p = io();
-    assert.equal(await control.run({ io: p, opts: {}, argv: ['preview'], net: 'live', home }), 0);
+    /* --path: a USB key opened by this CLI itself, whether or not a desktop app runs on this machine */
+    assert.equal(await control.run({ io: p, opts: { path: 'a-usb-key' }, argv: ['preview'], net: 'live', home }), 0);
     const said = p.lines.join('\n');
     assert.match(said, /TO SIGN [0-9a-f]{7} work to sign/);
     assert.match(said, /On this terminal, a budget request for the key on USB/);
