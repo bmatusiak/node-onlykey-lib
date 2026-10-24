@@ -39,7 +39,7 @@ const USAGE = [
   'onlykey-js edge watch [--once] | sync [--status | --all]',
   'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
-  'onlykey-js edge migrate [--dry-run]                           copy this key\'s records from before identities into its identity (once)',
+  'onlykey-js edge migrate --dry-run                             what of the records from before identities is this key\'s (the first command copies them by itself)',
   'onlykey-js edge loss [<from> [<to>]]                          a hard key: accept links gone before this PC read them as lost (y, then the press);',
   '                                                              no numbers = the range the copy check finds missing',
   'onlykey-js edge agent                                         the optional service',
@@ -184,10 +184,21 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
    */
   const netHome = require('./control').edgeHome();
   const home = path.join(netHome, await edge.identityId());
-  /* records from before identities, not yet copied in: stop and say so - never start empty beside them */
+  /*
+   * BY ITSELF, ONCE (Brad, 2026-10-24: "something more automatic ... as simple and seamless as
+   * possible"): the first time this identity is used on this computer, what of the records from before
+   * identities is provably this key's is copied in (migrate-identity.js: copy-first, the old stores left
+   * as they were), and the command goes on with it - no step for the person, no empty start beside them.
+   */
   if (!migrating && require('./migrate-identity').needsMigration(netHome, home)) {
-    await Promise.resolve(app.destroy()).catch(() => undefined);
-    throw h.usage(`this computer holds Edge records from before identities that may be this key's - copy them in first: ${edgeCmd('migrate --dry-run')} (what it would copy), then ${edgeCmd('migrate')}`);
+    const { toHex } = require('../../src/bytes');
+    const { agentPublicKey } = require('./agent');
+    const r = await require('./migrate-identity').migrateToIdentity({
+      netHome, idHome: home, deviceIdHex: toHex((await edge.publicKey()).deviceId),
+      signPublicOf: async (gpgUid) => toHex(await agentPublicKey(okcrypto, { gpg: gpgUid })),
+    });
+    const got = [r.identity && 'the agent identity', r.copy && 'the chain copy', r.budgets.length && `budgets ${r.budgets.join(', ')}`, r.pointers && 'the pointer'].filter(Boolean);
+    say(`this key's records from before identities, copied into its identity ${path.basename(home).slice(0, 12)}…: ${got.length ? got.join(', ') : 'none were its own'}`);
   }
   /*
    * WHO HOSTS EDGE. Over Bluetooth the phone does: the wire to its app. A key on USB is a hard key

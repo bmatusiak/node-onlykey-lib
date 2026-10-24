@@ -30,7 +30,8 @@ const FILE = 'desktop.json';
 
 /* the shared home (bucket/cli/home.js root(): ~/.onlykey-js); a test may pass its own */
 function homeRoot(root) {
-  return root || path.join(os.homedir(), '.onlykey-js');
+  /* tests: ONLYKEY_JS_TRUST_ROOT - a scratch home holding a desktop.json of the test's own */
+  return root || process.env.ONLYKEY_JS_TRUST_ROOT || path.join(os.homedir(), '.onlykey-js');
 }
 
 function trustFile(root) {
@@ -86,6 +87,8 @@ function alive(pid) {
  * to choose between the desktop app and the USB key.
  */
 function liveTrust(root, { platform = process.platform, isAlive = alive } = {}) {
+  /* tests: ONLYKEY_JS_DESKTOP=off - a desktop app running on the developer's machine is not the test's */
+  if (process.env.ONLYKEY_JS_DESKTOP === 'off' && !root) return null;
   const r = readTrust(root);
   if (!r || !isAlive(r.pid)) return null;
   if (platform !== 'win32' && !fs.existsSync(r.socket)) return null;

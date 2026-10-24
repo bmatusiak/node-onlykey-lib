@@ -142,3 +142,29 @@ test('desktop: an 0xF7 request goes to the host of ITS net, never to the key; th
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/* the desktop app is the key's GUI (Brad, 2026-10-24): while it runs, plain goes through it and --path is refused */
+test('cli: with a live desktop app, plain goes through it and --path is refused', async () => {
+  const { main } = require('../cli/index.js');
+  const root = tmp();
+  const was = { desk: process.env.ONLYKEY_JS_DESKTOP, at: process.env.ONLYKEY_JS_TRUST_ROOT };
+  delete process.env.ONLYKEY_JS_DESKTOP;
+  process.env.ONLYKEY_JS_TRUST_ROOT = root;
+  try {
+    const sock = path.join(root, 'desktop.sock');
+    fs.writeFileSync(sock, '');
+    trust.writeTrust({ root, socket: sock });
+    const err = [];
+    const asked = [];
+    const io = { out: () => {}, err: (l) => err.push(l), start: async (o) => { asked.push(o); throw Object.assign(new Error('stop here'), { code: 'ESTOP' }); } };
+    assert.equal(await main(['--path', 'x', 'status'], io), 2);
+    assert.match(err.join('\n'), /desktop app is running - it holds the key and is its GUI; run without --path/);
+    assert.deepEqual(asked, [], '--path never opened anything');
+    await main(['status'], io);
+    assert.deepEqual(asked, [{ desktop: true, auto: true }], 'plain: the desktop app');
+  } finally {
+    if (was.desk === undefined) delete process.env.ONLYKEY_JS_DESKTOP; else process.env.ONLYKEY_JS_DESKTOP = was.desk;
+    if (was.at === undefined) delete process.env.ONLYKEY_JS_TRUST_ROOT; else process.env.ONLYKEY_JS_TRUST_ROOT = was.at;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

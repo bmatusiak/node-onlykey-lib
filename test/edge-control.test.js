@@ -1,5 +1,8 @@
 'use strict';
 
+/* a desktop app running on the developer's machine is not this test's (desktop/trust.js) */
+process.env.ONLYKEY_JS_DESKTOP = 'off';
+
 /*
  * onlykey-js edge control (the workspace's edge skill, moved into the CLI - Brad, 2026-10-23) and
  * edge --claude-setup. No key: note / preview / ship --plan / settings read git and the Edge home

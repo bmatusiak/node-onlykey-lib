@@ -2485,6 +2485,16 @@ async function main(argv, io = {}) {
     full.err(`${NAME}: ${apps.map((k) => `--${k}`).join(' and ')} each pick an ok-edge app; use one.`);
     return 2;
   }
+  /*
+   * THE DESKTOP APP IS THE KEY'S GUI (Brad, 2026-10-24: "desktop app is the GUI for the key, like the
+   * mobile app, so if cli talks to key while desktop app is running this is an issue"): while it runs it
+   * holds the key and hosts it, and the CLI goes through it - plain does. --path would open the key
+   * behind the app's back, so it is refused rather than fought over.
+   */
+  if (parsed.values.path && !parsed.values.ble && require('../desktop/trust').liveTrust()) {
+    full.err(`${NAME}: the ok-edge desktop app is running - it holds the key and is its GUI; run without --path (the CLI goes through the app), or close the app first.`);
+    return 2;
+  }
   if ((parsed.values.desktop || parsed.values.mcp) && parsed.values.path) {
     full.err(`${NAME}: --path picks a USB key for this CLI; with --${apps[0]} the ok-edge app holds the keys.`);
     return 2;

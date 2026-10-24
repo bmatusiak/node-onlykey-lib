@@ -9,6 +9,9 @@
  */
 'use strict';
 
+/* a desktop app running on the developer's machine is not this test's (desktop/trust.js) */
+process.env.ONLYKEY_JS_DESKTOP = 'off';
+
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
