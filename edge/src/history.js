@@ -46,7 +46,8 @@ function budgetHistory(copy) {
 
   const budgets = new Map();
   const presses = [];
-  const losses = [];
+  /* the accepted losses: the copy check's own reading of a LOSS link (copy.lossesIn), not a second one */
+  const losses = require('./copy').lossesIn(links.map((e) => bytesOf(e.link || e))).map(({ seq, from, to }) => ({ seq, from, to }));
   for (const f of decoded) {
     if (f.op === OP.GRANT_CREATE) {
       const o = openings.get(f.grantId) || {};
@@ -66,9 +67,6 @@ function budgetHistory(copy) {
     } else if (f.op === OP.GRANT_END) {
       const b = budgets.get(f.grantId);
       if (b) b.ended = { seq: f.seq, how: END_HOW[f.decision] || `end ${f.decision}` };
-    } else if (f.op === OP.LOSS) {
-      const to = (f.subject[0] | (f.subject[1] << 8) | (f.subject[2] << 16) | (f.subject[3] << 24)) >>> 0;
-      losses.push({ seq: f.seq, from: f.grantId, to: to === 0xffffffff ? f.seq - 1 : to });
     }
   }
   const newest = (a, b) => (b.seq ?? b.spends[0]?.seq ?? 0) - (a.seq ?? a.spends[0]?.seq ?? 0);

@@ -106,3 +106,24 @@ test('log recovery: a device\'s log with a stretch it accepted as lost (LOSS) st
   const found = devices.classify({ log: { ...d.log, records: all, checkpoint: await d.e.checkpoint() }, ...(await myOwner()) });
   assert.equal(found.check.ok, true, 'the lost stretch, found again, welds back in');
 });
+
+/*
+ * A receipt for a use the key lost, accepted as lost by a LOSS link in the same log: accounted
+ * for, not "a receipt that answers no use". Only inside the LOSS range.
+ */
+test('completeness: a receipt whose use is inside an accepted LOSS is accounted for; outside it, missing', () => {
+  const { chain, codes } = require('../src');
+  const { OP } = codes;
+  const z = () => new Uint8Array(32);
+  const at = (seq, f) => ({ link: chain.encodeLink({ seq, subject: z(), ...f }), head: z() });
+  const lossTo = (to) => { const s = z(); s[0] = to & 0xff; s[1] = (to >> 8) & 0xff; return s; };
+  const receipt = at(5, { op: OP.RECEIPT, decision: 0, grantId: 4 });
+  const base = { deviceId: new Uint8Array(16), publicKey: new Uint8Array(65), openings: [], notes: null };
+  const without = devices.completeness({ ...base, records: [receipt] });
+  assert.equal(without.ok, false);
+  assert.match(without.missing.join('; '), /#5: a receipt that answers no use/);
+  const covered = devices.completeness({ ...base, records: [receipt, at(6, { op: OP.LOSS, grantId: 2, subject: lossTo(4) })] });
+  assert.deepEqual(covered, { ok: true });
+  const short = devices.completeness({ ...base, records: [receipt, at(6, { op: OP.LOSS, grantId: 2, subject: lossTo(3) })] });
+  assert.equal(short.ok, false, 'a LOSS that ends before the use does not cover its receipt');
+});

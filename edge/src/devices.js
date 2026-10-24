@@ -224,7 +224,17 @@ function completeness({ deviceId, publicKey, records, openings, notes }) {
     if (u.status !== 'receipted') { missing.push(`#${u.seq}: no result (${u.status})`); continue; }
     if (u.message === null || u.message === undefined) missing.push(`#${u.seq}: the message of receipt #${u.receipt.seq} ${u.messageStatus === 'mismatch' ? 'does not match the chain' : 'did not arrive'}`);
   }
-  for (const o of paired.orphans) missing.push(`#${o.seq}: a receipt that answers no use (${o.reason})`);
+  /*
+   * A receipt whose use the key lost, and the person accepted as lost (a LOSS link, R24 - signed by
+   * the key, in this log), is accounted for: the use is not here to pair with, and the LOSS says so.
+   * Only that case - a second receipt, or one for a use that is not lost, is still missing.
+   */
+  const losses = require('./copy').lossesIn(records);
+  const lost = (seq) => losses.some((l) => l.from <= seq && seq <= l.to);
+  for (const o of paired.orphans) {
+    if (o.reason === 'not-a-use' && lost(o.refSeq)) continue;
+    missing.push(`#${o.seq}: a receipt that answers no use (${o.reason})`);
+  }
   return missing.length ? { ok: false, missing: missing.slice(0, 20) } : { ok: true };
 }
 
