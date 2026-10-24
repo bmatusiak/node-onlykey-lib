@@ -39,6 +39,7 @@ const USAGE = [
   'onlykey-js edge watch [--once] | sync [--status | --all]',
   'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
+  'onlykey-js edge loss <from> [<to>]                            a hard key: accept links gone before this PC read them as lost (y, then the press)',
   'onlykey-js edge agent                                         the optional service',
   'onlykey-js edge control note <repo>… | preview | ship [<repo>…] [--plan] | status | settings',
   '                                                              commits to sign and push, shipped in ONE budget (the batch lives in the Edge home)',
@@ -337,7 +338,7 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
+      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
 
       /*
@@ -411,6 +412,37 @@ module.exports = function register(COMMANDS, h) {
       }
 
       /* BLOCKS (BLOCKS.md, Brad 2026-10-07): this PC's copy cut at the key's seals into JSON blocks - local, no phone */
+      /*
+       * EDGE LOSS (R24) for a hard key: links gone from the key's ring before this computer read them
+       * are accepted as lost - the key links a LOSS (op 11) for #from..#to with a PHYSICAL press, and a
+       * copy then passes R27 with that gap. Key 1, 2026-10-23: #387-#389 rolled out of the ring
+       * unread, and every budget after was refused "copy does not verify". The person says yes here,
+       * then presses. Over Bluetooth the phone has its own Accept loss.
+       */
+      if (sub === 'loss') {
+        if (opts.ble) throw h.usage('over Bluetooth a loss is accepted on the phone (its Edge tab: Accept loss)');
+        const nums = rest.filter((x) => /^\d+$/.test(x)).map(Number);
+        if (!nums.length || nums.length > 2 || rest.length !== nums.length) throw h.usage(edgeCmd('loss <from> [<to>]'));
+        const [from, to = nums[0]] = nums;
+        if (to < from) throw h.usage(`a loss is #from..#to with from <= to, not ${from}..${to}`);
+        const d = await openDevice(io, opts, h, { dev, wait });
+        try {
+          const head = await d.edge.head();
+          if (head.seq === null || to > head.seq) throw h.usage(`the key's head is #${head.seq}: a loss cannot reach past it`);
+          io.out(`#${from}-#${to} would be accepted as LOST: the key links a LOSS for them (it pays no debt, it is on the chain for good),`);
+          io.out('and this computer\'s copy then verifies past the gap. Only for links that are gone - from the key\'s ring and from every copy.');
+          const yes = await require('./local-host').terminalConfirm(`accept #${from}-#${to} as lost? [y/N] `);
+          if (!yes) { io.out('nothing written'); return 1; }
+          const r = await d.edge.loss({ from, to, onPress: () => d.say('PRESS the key now - the loss is linked with the press') });
+          io.out(`loss linked at #${r.seq}`);
+          const s = await require('./copy').sync(d.edge, control.edgeHome());
+          io.out(`this computer's copy: ${s.verdict.kind}`);
+          return 0;
+        } finally {
+          await Promise.resolve(d.app.destroy()).catch(() => undefined);
+        }
+      }
+
       if (sub === 'blocks') {
         const found = require('./copy').blocks(control.edgeHome(), { net: NET });
         if (rest.includes('--json')) {
