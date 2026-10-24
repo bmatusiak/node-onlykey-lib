@@ -46,8 +46,10 @@ const { HELLO_MS, send, readLines, toB64, fromB64 } = require('./protocol');
  * @param {string} [o.root] the shared home (default ~/.onlykey-js)
  * @param {string} [o.socket] where to listen (default trust.socketPath(root))
  * @param {(line: string) => void} [o.log]
+ * @param {(connected: boolean) => void} [o.onClient] a CLI was accepted (true) / went away (false) -
+ *   the app keeps its own key traffic out of the CLI's whole conversation, as the phone's bridge does
  */
-function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () => {} }) {
+function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () => {}, onClient = () => {} }) {
   const where = socket || trust.socketPath(root);
   let server = null;
   let record = null;
@@ -95,7 +97,7 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
     sock.on('error', () => {});
     sock.on('close', () => {
       clearTimeout(helloTimer);
-      if (client === sock) { client = null; asm.current = wire.createAssembler(); }
+      if (client === sock) { client = null; asm.current = wire.createAssembler(); onClient(false); }
     });
     readLines(sock, async (m) => {
       if (!accepted) {
@@ -115,6 +117,7 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
         accepted = true;
         clearTimeout(helloTimer);
         client = sock;
+        onClient(true);
         asm.current = wire.createAssembler();
         const d = pipe.device || null;
         send(sock, {

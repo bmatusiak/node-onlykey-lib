@@ -168,3 +168,24 @@ test('cli: with a live desktop app, plain goes through it and --path is refused'
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/* the app learns when a CLI's conversation begins and ends (onClient), to keep its own key traffic out of it */
+test('desktop: onClient is told when a CLI is accepted and when it goes - not for a refused one', async () => {
+  const root = tmp();
+  const told = [];
+  const server = createDesktopServer({ pipe: fakeKeyPipe(), root, hostFor: () => ({ send: async () => null }), onClient: (c) => told.push(c) });
+  const rec = await server.start();
+  try {
+    await assert.rejects(createDesktopPipe({ record: { ...rec, token: 'f'.repeat(64) } }).start(), /refused/);
+    assert.deepEqual(told, [], 'a refused hello is no conversation');
+    const cli = createDesktopPipe({ record: rec });
+    await cli.start();
+    await until(() => told.length === 1);
+    await cli.stop();
+    await until(() => told.length === 2);
+    assert.deepEqual(told, [true, false]);
+  } finally {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
