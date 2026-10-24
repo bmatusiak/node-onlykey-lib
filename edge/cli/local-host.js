@@ -156,6 +156,22 @@ function createLocalHost({ edge, home, confirm, say = () => {} }) {
         /* what the phone would show beside the use: the intent, the receipt's words, a refused start */
         const text = message.reason || message.receiptMsg || message.txRefused;
         if (typeof text === 'string') say(`note #${message.seq}: ${text}`);
+        /*
+         * AND KEPT, as the phone keeps them (Brad, 2026-10-24: the budget history in the desktop app):
+         * the intent and the receipt's words with this computer's copy, by seq - so a hard key's
+         * history says what each use was for, here and in the desktop app (edge/src/history.js).
+         */
+        if (Number.isInteger(message.seq) && message.seq >= 0) {
+          try {
+            const { deviceId } = await edge.publicKey();
+            const now = Date.now();
+            copy.keepNotes(home, deviceId, {
+              reasons: typeof message.reason === 'string' ? { [message.seq]: message.reason } : {},
+              messages: typeof message.receiptMsg === 'string' ? { [message.seq]: message.receiptMsg } : {},
+              seen: { [message.seq]: now },
+            });
+          } catch (_) { /* a note is shown even when it cannot be kept */ }
+        }
         return { ok: true };
       }
       if (identityLib.TYPES.includes(type)) return answerIdentity(message);

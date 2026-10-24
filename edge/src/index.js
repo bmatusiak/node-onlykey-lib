@@ -31,6 +31,8 @@ module.exports = {
   copyfile: require('./copyfile'),
   /* SPEC H7 (2026-10-20): the agent identity the phone keeps - its record, checks, messages and words */
   identity: require('./identity'),
+  /* 2026-10-24: a copy described as budget history - the desktop app's Edge tab for a hard key, and any host */
+  history: require('./history'),
   /* the computer's own small state over a host store (getItem/setItem): one budget pointer per key */
   store: require('./store'),
 };
