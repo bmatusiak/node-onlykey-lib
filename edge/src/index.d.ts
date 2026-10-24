@@ -14,4 +14,5 @@ export let ping: typeof import("./ping");
 export let block: typeof import("./block");
 export let copyfile: typeof import("./copyfile");
 export let identity: typeof import("./identity");
+export let history: typeof import("./history");
 export let store: typeof import("./store");
