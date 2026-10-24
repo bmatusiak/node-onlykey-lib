@@ -15,4 +15,5 @@ export let block: typeof import("./block");
 export let copyfile: typeof import("./copyfile");
 export let identity: typeof import("./identity");
 export let history: typeof import("./history");
+export let identityId: typeof import("./identity-id");
 export let store: typeof import("./store");

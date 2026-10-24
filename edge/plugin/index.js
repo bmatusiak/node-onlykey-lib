@@ -25,6 +25,7 @@ const { IFACE } = require('../../src/protocol/msg');
 const { assertTransport } = require('../../src/transport/contract');
 const { concat, toHex } = require('../../src/bytes');
 const { codes, chain, receipts, copy: copyCheck } = require('../src');
+const { identityIdOf } = require('../src/identity-id');
 
 
 const OKEDGE = 0xf8;
@@ -378,6 +379,19 @@ function setup(imports, register) {
     },
 
     /**
+     * THE IDENTITY of the key on this connection (ok-edge B3.0; Brad, 2026-10-24: "one identity, one
+     * store"): the first 16 bytes of SHA-256 over the OWNER key's ML-DSA-65 twin, as hex. The owner key
+     * has no salt - every device made from one backup gives the same id (phones and hard keys alike),
+     * a key from another backup never does (a GitLab key and a GitHub key). Every Edge record a host
+     * keeps is filed under it; the net is a separate label. One request (31 reports), read once for
+     * this connection - a reconnect is a new service and reads again. A locked key answers nothing.
+     */
+    async identityId(opts) {
+      if (!identityIdNow) identityIdNow = identityIdOf(await edge.publicKeyPq('owner', opts));
+      return identityIdNow;
+    },
+
+    /**
      * R31, DEBUG FIRMWARE ONLY: the key erases its Edge region (state, salt) and starts a fresh
      * chain - a new device id; no key outside the Edge region is touched. A production key
      * answers it as an unknown request, so this rejects there. For a dev reset (Brad,
@@ -700,6 +714,8 @@ function setup(imports, register) {
 
   let publicKeyNow = null;
   let publicKeyPqNow = null;
+  /* this connection's identity (edge.identityId), read once */
+  let identityIdNow = null;
 
   async function verifiedHeadOf(copy) {
     const verdict = await edge.grants.check(copy || {});
