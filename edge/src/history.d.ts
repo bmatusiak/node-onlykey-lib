@@ -8,8 +8,8 @@ export function budgetHistory(copy: any): {
         receipt: any;
     }[];
     losses: {
-        seq: any;
-        from: any;
+        seq: number;
+        from: number;
         to: number;
     }[];
 };
