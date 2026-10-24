@@ -58,9 +58,20 @@ const { toHex, fromHex } = require('../../src/bytes');
 
 const fail = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
-const storeKey = (grantId) => `okedge.budget.${grantId}`;
+/*
+ * A BUDGET IS NAMED BY ITS DEVICE AND ITS ID (Brad, 2026-10-24: "budget ids are in the sequence of the
+ * blockchain requests, and each has their own salt tied, so that should not collide"). The firmware's
+ * id is the seq after its grant-create link on THAT device's chain (okplugin_edge.cpp: id = seq + 1),
+ * so two keys - even two devices of one backup - both have "budget 4". Filed by the id alone, one
+ * overwrote the other and resume/continue loaded the wrong budget. The device id (the chain's salt)
+ * is in the key now, as it is in the key's own naming.
+ */
+const storeKey = (deviceHex, grantId) => `okedge.budget.${deviceHex}.${grantId}`;
 
 function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 }) {
+  /* this key's device id, read once (edge.publicKey) - the half of every budget's name */
+  let deviceHex = null;
+  const dev = async () => deviceHex || (deviceHex = toHex((await edge.publicKey()).deviceId));
   /*
    * B7 stage 2: EDGE_NOTE - the agent's words about a use, a receipt or a refused
    * TX start, to the phone. Changes nothing anywhere, so it never fails what it
@@ -112,7 +123,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
     };
     const genesis = fromHex(record.genesis);
     const save = async () => {
-      if (store) await store.set(storeKey(record.grantId), JSON.stringify({ ...record, head: toHex(state.head), owed: state.owed, ended: state.ended, spent: state.spent }));
+      if (store) await store.set(storeKey(await dev(), record.grantId), JSON.stringify({ ...record, head: toHex(state.head), owed: state.owed, ended: state.ended, spent: state.spent }));
     };
 
     return {
@@ -312,7 +323,8 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       throw fail('EEDGE_OPENING', `edge: the answer is not a budget the key opened as asked (${verdict.reason || 'another budget'})`);
     }
     const record = { grantId: b.grantId, uses: b.uses, genesis: b.genesis, head: b.checkpoint.head, reason, scopes: msg.scopes, lifetime: ttlMinutes, owed: [], ...(continueOf !== null ? { continues: continueOf } : {}) };
-    if (store) await store.set(storeKey(b.grantId), JSON.stringify(record));
+    record.deviceId = await dev();
+    if (store) await store.set(storeKey(record.deviceId, b.grantId), JSON.stringify(record));
     return budgetOf(record);
   }
 
@@ -372,7 +384,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
      */
     async continue(grantId, { ttlMinutes, caps = null, reason = null }) {
       if (!store) throw fail('EEDGE_NO_STORE', 'edge: continue needs the store the budget was saved to');
-      const raw = await store.get(storeKey(grantId));
+      const raw = await store.get(storeKey(await dev(), grantId));
       if (!raw) throw fail('EEDGE_UNKNOWN', `edge: no saved budget ${grantId}`);
       const was = JSON.parse(raw);
       /*
@@ -387,7 +399,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       } catch (e) {
         if (!(e && e.status === 'no-such-budget')) throw e; /* already ended: expired, revoked, or the key locked */
       }
-      await store.set(storeKey(grantId), JSON.stringify({ ...was, ended: true }));
+      await store.set(storeKey(await dev(), grantId), JSON.stringify({ ...was, ended: true }));
       if (caps && caps.length !== was.scopes.length) throw fail('EEDGE_INVALID', `edge: budget ${grantId} has ${was.scopes.length} scopes - give one cap each`);
       const scopes = was.scopes.map((s, i) => ({ ...s, cap: caps ? caps[i] : s.cap }));
       /* no lifetime given (the agent's automatic continue after a key restart): the one it had */
@@ -521,7 +533,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
      */
     async resume(grantId) {
       if (!store) throw fail('EEDGE_NO_STORE', 'edge: resume needs the store the budget was saved to');
-      const raw = await store.get(storeKey(grantId));
+      const raw = await store.get(storeKey(await dev(), grantId));
       if (!raw) throw fail('EEDGE_UNKNOWN', `edge: no saved budget ${grantId}`);
       const record = JSON.parse(raw);
       if (record.ended) throw fail('EEDGE_GONE', `edge: budget ${grantId} was ended`);
