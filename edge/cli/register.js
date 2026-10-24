@@ -176,6 +176,13 @@ async function openDevice(io, opts, h, { dev, wait }) {
   let edge = null;
   require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
   /*
+   * WHOSE RECORDS (ok-edge B3.0; Brad, 2026-10-24: "one identity, one store"): the key's identity -
+   * its owner key, one read, the same on every device of one backup - picks its home inside the net's:
+   * <net home>/<identity id>. Everything this command keeps (the identity record, budgets, pointers,
+   * copies, notes) files there, so a key from another backup never reads or writes this one's.
+   */
+  const home = path.join(require('./control').edgeHome(), await edge.identityId());
+  /*
    * WHO HOSTS EDGE. Over Bluetooth the phone does: the wire to its app. A key on USB is a hard key
    * (or Linux's emulated one on the bus) - no phone behind it answers the wire, so this computer is
    * the host (local-host.js: the y/N on this terminal, then the press on the key; B4, 2026-10-23).
@@ -194,11 +201,11 @@ async function openDevice(io, opts, h, { dev, wait }) {
       net: NET,
     })
     : require('./local-host').createLocalHost({
-      edge, home: require('./control').edgeHome(), say, confirm: require('./local-host').terminalConfirm,
+      edge, home, say, confirm: require('./local-host').terminalConfirm,
     });
   /* timing logs are a dev-build switch only (edge/cli/dev; CLI.md §5) */
   const timed = dev && dev.timed ? dev.timed({ edge, wired, okcrypto, say }) : { channel: wired, okcrypto };
-  return { app, transport, okcrypto: timed.okcrypto, edge, channel: timed.channel, say };
+  return { app, transport, okcrypto: timed.okcrypto, edge, channel: timed.channel, say, home };
 }
 
 /*
@@ -211,10 +218,10 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
   const control = require('./control');
   const { client, store: edgeStore } = require('../src');
   const { startEdgeAgent } = require('./agent');
-  const home = control.edgeHome();
-  const { store } = budgetStore(home);
+  /* the key's identity home (openDevice): its budgets, pointers and copies - not the net's */
   const d = await openDevice(io, opts, h, { dev, wait });
-  const { app, transport, okcrypto, edge, channel, say } = d;
+  const { app, transport, okcrypto, edge, channel, say, home } = d;
+  const { store } = budgetStore(home);
   try {
     const identity = await askIdentity(channel);
     if (!identity) {
@@ -226,7 +233,7 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
     const { deviceId } = await edge.publicKey();
     const c = client.createEdgeClient({ edge, channel, store });
     const svc = await startEdgeAgent({
-      okcrypto, client: c, edge, identity, deviceId,
+      okcrypto, client: c, edge, home, identity, deviceId,
       pointers: edgeStore.createPointerStore(pointerKv(home)),
       openpgp: require('../../src/crypto/pgp'),
       shimCommand: path.resolve(__dirname, 'gpg-shim.js').split(path.sep).join('/'),
@@ -436,7 +443,7 @@ module.exports = function register(COMMANDS, h) {
           if (nums.length) {
             [from, to = nums[0]] = nums;
           } else {
-            const st = await require('./copy').sync(d.edge, control.edgeHome(), { status: true });
+            const st = await require('./copy').sync(d.edge, d.home, { status: true });
             const gaps = (st.verdict && st.verdict.gaps) || [];
             if (st.verdict.kind !== 'gap' || !gaps.length) { io.out(`nothing to accept: this computer's copy is ${st.verdict.kind}`); return 0; }
             from = Math.min(...gaps.map((g) => g.from));
@@ -452,7 +459,7 @@ module.exports = function register(COMMANDS, h) {
           if (!yes) { io.out('nothing written'); return 1; }
           const r = await d.edge.loss({ from, to, onPress: () => d.say('PRESS the key now - the loss is linked with the press') });
           io.out(`loss linked at #${r.seq}`);
-          const s = await require('./copy').sync(d.edge, control.edgeHome());
+          const s = await require('./copy').sync(d.edge, d.home);
           io.out(`this computer's copy: ${s.verdict.kind}`);
           return 0;
         } finally {

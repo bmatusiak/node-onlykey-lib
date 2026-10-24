@@ -13,11 +13,14 @@
  * 2026-10-21), the Edge homes' control.key, peer.key and agent.key (private keys), agent-gpg.asc
  * and the GnuPG home.
  *
- * Stores (one per net, the testnet's beside the live one):
+ * Stores (one per net, the testnet's beside the live one; Edge's per identity - edgeAt):
  *   keychain / keychain-test           key 'list': the Key Chain list (keychain/src/list.js text)
- *   edge.copies / edge-test.copies     key: device id (16 hex): its copy (edge/src/copyfile.js JSON)
- *   edge.budgets / edge-test.budgets   key: budget id: the budget this computer asked for (JSON)
- *   edge.pointers / edge-test.pointers key: as edge/src/store.js names them: one pointer per key
+ *   edge[-test].<id>.copies            key: device id (16 hex): its copy (edge/src/copyfile.js JSON)
+ *   edge[-test].<id>.budgets           key: device id + budget id: the budget this computer asked for (JSON)
+ *   edge[-test].<id>.pointers          key: as edge/src/store.js names them: one pointer per key
+ *   edge[-test].<id>.identity          key 'record': the agent identity this computer keeps for a hard key
+ *   (<id>: the key's identity, edge/src/identity-id.js. The net-only edge.copies / .budgets / .pointers /
+ *   .identity are the records from before identities - kept until moved, B3.0.)
  *
  * ONE WRITER AT A TIME: `edge agent` and a command run side by side, and a whole-file write from
  * each would drop the other's change. Every write is read-modify-write under a lock file, the
@@ -49,6 +52,21 @@ function root() { return rootOverride || path.join(os.homedir(), '.onlykey-js');
  */
 function edgeAt(home, name) {
   const h = path.resolve(home);
+  /*
+   * AN IDENTITY'S HOME (ok-edge B3.0; Brad, 2026-10-24: "one identity, one store"): <net home>/<identity
+   * id>. Its stores are the net's with the identity in their name - edge.<id>.copies, edge-test.<id>.
+   * budgets - in the same bucket file as the net's, so every piece of code that takes a home files under
+   * the key's identity once it is handed that home, and two identities (a GitLab key and a GitHub key)
+   * never meet in a store.
+   */
+  const { isIdentityId } = require('../../edge/src/identity-id');
+  if (isIdentityId(path.basename(h))) {
+    const id = path.basename(h);
+    const net = path.dirname(h);
+    if (net === path.join(root(), 'edge')) return { file: path.join(root(), FILE), store: `edge.${id}.${name}` };
+    if (net === path.join(root(), 'edge-test')) return { file: path.join(root(), FILE), store: `edge-test.${id}.${name}` };
+    return { file: path.join(net, FILE), store: `edge.${id}.${name}` };
+  }
   if (h === path.join(root(), 'edge')) return { file: path.join(root(), FILE), store: `edge.${name}` };
   if (h === path.join(root(), 'edge-test')) return { file: path.join(root(), FILE), store: `edge-test.${name}` };
   moveHomeFiles(h);

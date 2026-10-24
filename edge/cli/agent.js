@@ -415,7 +415,9 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
      */
     sync: async ({ status, phone = true, only }) => {
       if (!edge) throw new Error('this agent service has no Edge key to sync from');
-      const where = home || require('./control').edgeHome();
+      /* the key's identity home (register.js openDevice), never the net's: B3.0, one identity, one store */
+      if (!home) throw new Error('this agent service was started without the identity home of its key - nothing to sync into');
+      const where = home;
       const copy = require('./copy');
       let r = await copy.sync(edge, where, { status: !!status });
       if (status || !phone) return r;
@@ -555,7 +557,7 @@ async function openWithOneRetry(open, { waitMs = 5000, log = () => {} } = {}) {
   }
 }
 
-async function startEdgeAgent({ okcrypto, client, edge = null, identity, pointers = null, deviceId = null, pins = null, openpgp, shimCommand = null, log = () => {}, confirm, onSilence = null, linkStats = null, serve = true }) {
+async function startEdgeAgent({ okcrypto, client, edge = null, home = null, identity, pointers = null, deviceId = null, pins = null, openpgp, shimCommand = null, log = () => {}, confirm, onSilence = null, linkStats = null, serve = true }) {
   const wire = require('../../cli/ssh-wire');
   const sshPub = require('../../src/crypto/ssh-pub');
   const { checkRecord } = require('../src/identity');
@@ -629,7 +631,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, identity, pointer
     }
   }
 
-  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge });
+  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge, home });
   /* onlykey-js edge status also says how the Bluetooth link has been: connects, reconnects, failures */
   const plainStatus = handlers.status;
   handlers.status = async (req) => ({ ...(await plainStatus(req)), link: linkStats ? linkStats() : null });
