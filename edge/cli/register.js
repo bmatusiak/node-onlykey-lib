@@ -226,7 +226,7 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
  * The agent's identity comes from the phone (SPEC H7); the budget pointer is this
  * computer's, per key.
  */
-async function openStack(io, opts, h, { serve, dev, wait }) {
+async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
   const control = require('./control');
   const { client, store: edgeStore } = require('../src');
   const { startEdgeAgent } = require('./agent');
@@ -274,7 +274,20 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
       /* and its log kept ready to offer to the identity's other devices (nametag.js offerOwnLog - as a phone's pull does) */
       else await require('./nametag').offerOwnLog({ edge, home }).catch(() => undefined);
     };
-    return { app, transport, svc, identity, home, close: async () => { await svc.close(); await pickUp(); await app.destroy(); } };
+    /*
+     * LOGS GO EVERYWHERE BY THEMSELVES (Brad, 2026-10-24: "sync is invisible and a user should never
+     * have to do it"; "if a hacker gets on my PC, this should show it if it used my key across any one
+     * of my devices"). Whenever this computer and the phone talk, they swap logs before the link is
+     * let go - the phone's comes here, every log here goes to the phone - the same work as edge sync.
+     */
+    const shareLogs = async () => {
+      if (!opts.ble || !share) return;
+      const r = await svc.handlers.sync({}).catch((e) => ({ error: e }));
+      if (r.error) { say(`logs: not swapped with the phone this time (${r.error.message})`); return; }
+      const given = (r.offered || []).filter((o) => o.held).map((o) => `"${o.nametag}"`);
+      say(`logs: swapped with the phone${given.length ? ` - it now has ${given.join(', ')}` : ''}`);
+    };
+    return { app, transport, svc, identity, home, close: async () => { await shareLogs(); await svc.close(); await pickUp(); await app.destroy(); } };
   } catch (e) {
     await app.destroy().catch(() => undefined);
     throw e;
@@ -466,7 +479,7 @@ module.exports = function register(COMMANDS, h) {
           }
           const r = await names.setName({ edge: d.edge, home: d.home, nametag });
           io.out(`this device is "${r.nametag}" (device ${r.deviceId.slice(0, 16)}, identity ${path.basename(d.home).slice(0, 12)}…)`);
-          io.out(r.log && r.log.kept ? 'its log is ready to offer to your other devices (edge sync)' : `its log is not offered yet: ${(r.log && r.log.why) || 'unknown'}`);
+          io.out(r.log && r.log.kept ? 'its log goes to your other devices the next time they connect' : `its log is not shared yet:${(r.log && r.log.why) || 'unknown'}`);
           return 0;
         } finally {
           await Promise.resolve(d.app.destroy()).catch(() => undefined);
@@ -662,7 +675,8 @@ module.exports = function register(COMMANDS, h) {
       let st = null;
       try {
         const ask = async (op, fields = {}, o = {}) => {
-          if (!st) st = await openStack(io, opts, h, { serve: false, dev, wait });
+          /* a budget's own steps leave the swap to its end; sync is the swap */
+          if (!st) st = await openStack(io, opts, h, { serve: false, dev, wait, share: !['exec', 'receipt', 'sync'].includes(sub) });
           const fn = st.svc.handlers[op];
           if (!fn) throw new Error(`no such request: ${op}`);
           if (o.onSent) o.onSent();

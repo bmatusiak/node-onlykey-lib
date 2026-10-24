@@ -214,18 +214,18 @@ function lines(r, { status = false } = {}) {
   else if (p && p.refused) out.push(`phone: ${p.refused}`);
   else if (p && !p.count) out.push('phone: lacks nothing this PC holds');
   else if (p) out.push(`phone: took ${p.count} link(s)`);
-  /* whether this computer can now offer this phone's log to your other devices (keepLog) */
-  if (r.log) out.push(r.log.kept ? 'log: kept to offer to your other devices' : `log: not kept to offer - ${r.log.why}`);
+  /* this phone's log, now on this computer too (keepLog) - and from here on every device of the identity */
+  if (r.log) out.push(r.log.kept ? `log: this phone's log is on this computer${r.log.missing ? ` (${r.log.missing.length} use(s) without their words)` : ''}` : `log: not kept - ${r.log.why}`);
   /* the seals that cut the copy into JSON blocks (BLOCKS.md; read on their own, no press) */
   if (r.blocks) out.push(`seals: ${r.blocks.seals} kept with this copy - onlykey-js edge blocks shows the blocks`);
   else if (r.blocksError) out.push(`seals: not read - ${r.blocksError}`);
-  /* your other devices' logs this PC holds, offered to the phone - held there until you approve (2026-10-08) */
+  /* your other devices' logs this PC holds, given to the phone - it files a log whose signatures check, no question asked (2026-10-24) */
   for (const o of r.offered || []) {
     const who = `"${o.nametag}" (${o.deviceId.slice(0, 16)})`;
     /* a phone that already has that checkpoint (merged, declined or kept as evidence) holds nothing again (2026-10-11) */
-    out.push(o.error ? `offered ${who}: ${o.error}`
-      : o.held === false ? `offered ${who}: nothing new - the phone already has this log (merged, or answered before)`
-        : `offered ${who}: ${o.count} link(s) - held on the phone until you approve the merge (Edge tab banner)`);
+    out.push(o.error ? `log of ${who}: not given - ${o.error}`
+      : o.held === false ? `log of ${who}: the phone already has it`
+        : `log of ${who}: ${o.count} link(s) given to the phone`);
   }
   return out;
 }
@@ -299,16 +299,21 @@ function keepLog(home, { deviceId, publicKey, publicKeyPq, records, checkpoint, 
   if (!check.ok) return { kept: false, why: `its chain does not check (${check.alarm}${check.detail ? `: ${check.detail}` : ''})` };
   const c = load(home, id);
   if (c.checkpoint && c.checkpoint.seq > checkpoint.seq) return { kept: false, why: `this computer already holds it up to #${c.checkpoint.seq}` };
-  /* complete before it is kept to offer: every use's words and result, checked against the chain (devices.completeness) */
+  /*
+   * KEPT WHEN ITS SIGNATURES CHECK - NOT ONLY WHEN IT IS COMPLETE (Brad, 2026-10-24: "i should not be
+   * asked to merge anything.. i should just open a log and see everything"; "if i lose my phone, i
+   * should be able to see the log on my machine"). The chain and the statement above are the trust:
+   * every device of the identity holds every device's log. Words that did not arrive (an intent, a
+   * receipt's message) are said, not a reason to refuse - a use with no words is what the log is for.
+   */
   const full = require('../src').devices.completeness({ deviceId: id, publicKey, records: records.filter((r) => seqOf(r) <= checkpoint.seq), openings: c.openings || [], notes: c.notes || null });
-  if (!full.ok) return { kept: false, why: `not complete - ${full.missing.slice(0, 3).join('; ')}${full.missing.length > 3 ? ` (+${full.missing.length - 3} more)` : ''}` };
   c.publicKey = Uint8Array.from(publicKey);
   c.publicKeyPq = Uint8Array.from(publicKeyPq);
   c.links = records.filter((r) => seqOf(r) <= checkpoint.seq).map((r) => ({ link: Uint8Array.from(r.link), head: Uint8Array.from(r.head), ...(r.reveal ? { reveal: Uint8Array.from(r.reveal) } : {}) }));
   c.checkpoint = checkpoint;
   if (!c.statement || (statement.seq ?? -1) >= (c.statement.seq ?? -1)) c.statement = statement;
   save(home, c);
-  return { kept: true };
+  return full.ok ? { kept: true } : { kept: true, missing: full.missing };
 }
 
 /** Every log this computer can offer, but the one of `exceptId` (the phone being synced): those with a checkpoint and a statement. */

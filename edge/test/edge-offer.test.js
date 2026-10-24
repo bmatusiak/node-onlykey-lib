@@ -170,21 +170,20 @@ test('copy.sync: the phone\'s history fills a gap before the key\'s ring; a forg
  * the usage of the credental, including the result"): a use without its result, or a receipt whose
  * message did not arrive, keeps the log out of the computer's copy to offer - with the reason.
  */
-test('a log missing a use\'s result or a receipt\'s message is not kept to offer', async () => {
+test('a log whose signatures check is kept even with words missing - what is missing is said', async () => {
   const waiting = await deviceLog(1, { result: false });
-  const h1 = tmp();
-  const r1 = copy.keepLog(h1, waiting.log);
-  assert.equal(r1.kept, false);
-  assert.match(r1.why, /not complete - #0: no result/);
+  const r1 = copy.keepLog(tmp(), waiting.log);
+  assert.equal(r1.kept, true);
+  assert.match(r1.missing.join('; '), /#0: no result/);
   const noMessage = await deviceLog(1);
   const r2 = copy.keepLog(tmp(), noMessage.log);
-  assert.equal(r2.kept, false);
-  assert.match(r2.why, /message of receipt #\d+ did not arrive/);
+  assert.equal(r2.kept, true);
+  assert.match(r2.missing.join('; '), /message of receipt #\d+ did not arrive/);
   const h3 = tmp();
   copy.keepNotes(h3, noMessage.log.deviceId, { messages: { 0: 'something else' } });
-  assert.match(copy.keepLog(h3, noMessage.log).why, /does not match the chain/);
+  assert.match(copy.keepLog(h3, noMessage.log).missing.join('; '), /does not match the chain/);
   copy.keepNotes(h3, noMessage.log.deviceId, { messages: { 0: DONE0 } });
-  assert.deepEqual(copy.keepLog(h3, noMessage.log), { kept: true });
+  assert.deepEqual(copy.keepLog(tmp(), noMessage.log).kept, true);
 });
 
 test('copy.sync: a gap in the middle of a copy that began at #0 is filled from the phone\'s history', async () => {
@@ -210,12 +209,13 @@ test('copy.sync: a gap in the middle of a copy that began at #0 is filled from t
   assert.equal(copy.load(home, (await e.publicKey()).deviceId).links.length, (await e.head()).seq + 1, 'every link from #0 to the head');
 });
 
-test('copy.lines: an offer the phone did not hold again says so, not "held until you approve"', () => {
+test('copy.lines: a log the phone already has says so; a new one is given, never "held until you approve"', () => {
   const base = { deviceId: 'ab'.repeat(16), nametag: 'Pixel 6a', sent: 0, count: 0 };
   const sync = { deviceId: 'cd'.repeat(16), key: { seq: 3, head: 'ef'.repeat(32), ringFrom: 0 }, copy: { count: 4, added: 0, saved: true }, verdict: { kind: 'verified', through: 3 } };
   const out = copy.lines({ ...sync, offered: [{ ...base, held: false }, { ...base, held: true, count: 3 }] }).join('\n');
-  assert.match(out, /"Pixel 6a" \(abababababababab\): nothing new - the phone already has this log/);
-  assert.match(out, /3 link\(s\) - held on the phone until you approve the merge/);
+  assert.match(out, /log of "Pixel 6a" \(abababababababab\): the phone already has it/);
+  assert.match(out, /3 link\(s\) given to the phone/);
+  assert.doesNotMatch(out, /approve/);
 });
 
 /*
