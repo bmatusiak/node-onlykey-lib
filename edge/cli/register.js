@@ -39,6 +39,7 @@ const USAGE = [
   'onlykey-js edge watch [--once] | sync [--status | --all]',
   'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
+  'onlykey-js edge name [<a name>]                              the name of this device in its identity: shown, or set / changed (signed by the key, no press)',
   'onlykey-js edge migrate --dry-run                             what of the records from before identities is this key\'s (the first command copies them by itself)',
   'onlykey-js edge loss [<from> [<to>]]                          a hard key: accept links gone before this PC read them as lost (y, then the press);',
   '                                                              no numbers = the range the copy check finds missing',
@@ -357,7 +358,7 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', 'migrate', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
+      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', 'migrate', 'name', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
 
       /*
@@ -443,6 +444,32 @@ module.exports = function register(COMMANDS, h) {
        * only what is provably this key's (migrate-identity.js); --dry-run says what it would copy and
        * writes nothing. The net's old stores are left as they were.
        */
+      /*
+       * EDGE NAME ("my device name", Brad 2026-10-24): this device's nametag in its identity - shown, or
+       * set / changed through the key's signed statement (nametag.js: a read, no press). The desktop
+       * app's Edge Management calls the same function.
+       */
+      if (sub === 'name') {
+        const nametag = rest.join(' ').trim();
+        const d = await openDevice(io, opts, h, { dev, wait });
+        try {
+          const names = require('./nametag');
+          const { toHex } = require('../../src/bytes');
+          const deviceIdHex = toHex((await d.edge.publicKey()).deviceId);
+          if (!nametag) {
+            const n = names.getName(d.home, deviceIdHex);
+            io.out(n ? `this device: "${n.nametag}" (set ${new Date(n.at).toLocaleString()})` : `this device has no name yet - ${edgeCmd('name "<a name>"')}`);
+            for (const o of names.listNames(d.home).filter((x) => x.deviceId !== deviceIdHex)) io.out(`  another device of this identity: ${o.deviceId.slice(0, 16)} "${o.nametag}"`);
+            return 0;
+          }
+          const r = await names.setName({ edge: d.edge, home: d.home, nametag });
+          io.out(`this device is "${r.nametag}" (device ${r.deviceId.slice(0, 16)}, identity ${path.basename(d.home).slice(0, 12)}…)`);
+          return 0;
+        } finally {
+          await Promise.resolve(d.app.destroy()).catch(() => undefined);
+        }
+      }
+
       if (sub === 'migrate') {
         const dry = rest.includes('--dry-run');
         if (rest.some((a) => a !== '--dry-run')) throw h.usage(edgeCmd('migrate [--dry-run]'));
