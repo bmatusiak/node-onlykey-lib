@@ -244,6 +244,17 @@ async function run({ io, opts, argv, net, home }) {
       REPOS = (fromBatch ? readBatch() : args).map(parseSpec);
       if (!REPOS.length) stop(`nothing to ship: name repos, or note them first (${USAGE[0].replace(/ \.\.\.$/, '')})`);
       REPOS.forEach(finishRebase);
+      /*
+       * A DIRTY TREE STOPS HERE, BEFORE THE BUDGET (2026-10-24): git will not rebase over changes to
+       * tracked files - `npm test` had regenerated two .d.ts files - so the budget opened, the
+       * person approved and pressed, and the first re-sign stopped ("the rebase did not stop"),
+       * leaving an open budget to resume. Checked first now; untracked files do not block a rebase.
+       */
+      for (const r of REPOS) {
+        if (!unsigned(r).length) continue;
+        const dirty = git(r.repo, 'status', '--porcelain', '--untracked-files=no').out.trim();
+        if (dirty) stop(`${r.name}: uncommitted changes to tracked files - commit or stash them first (nothing was asked of the key):\n${dirty.split('\n').slice(0, 5).map((l) => `    ${l}`).join('\n')}`);
+      }
       const t = totals();
       say(`plan: ${t.gpg} signature(s), ${t.ssh} push(es)`);
       if (PLAN) return 0;
