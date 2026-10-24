@@ -236,7 +236,22 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
       onSilence: opts.ble ? async () => { await transport.release('nobody answered').catch(() => {}); } : null,
       serve,
     });
-    return { app, transport, svc, identity, home, close: async () => { await svc.close(); await app.destroy(); } };
+    /*
+     * A HARD KEY'S LINKS ARE PICKED UP AFTER EVERY COMMAND (key 1, 2026-10-23). The key keeps only its
+     * newest links in a ring; the phone keeps its copy current all the time, but for a hard key this
+     * computer's copy moved only when a budget opened - a ship (grant, five uses, five receipts, end)
+     * pushed #387-#389 out of the ring before anyone read them, and the next budget was refused
+     * "copy does not verify (gap at #387)" for good. So on USB, and through the desktop app (the
+     * same homes), the copy is brought to the key's head before the key is let go. Over Bluetooth
+     * the phone keeps its own copy.
+     */
+    const pickUp = async () => {
+      if (opts.ble) return;
+      const r = await require('./copy').sync(edge, home).catch((e) => ({ error: e }));
+      if (r && r.error) say(`could not bring this computer's copy to the key's head (${r.error.message})`);
+      else if (r && r.verdict && r.verdict.kind !== 'verified' && r.verdict.kind !== 'unsigned') say(`this computer's copy of the chain: ${r.verdict.kind}${r.verdict.seq !== undefined ? ` at #${r.verdict.seq}` : ''}`);
+    };
+    return { app, transport, svc, identity, home, close: async () => { await svc.close(); await pickUp(); await app.destroy(); } };
   } catch (e) {
     await app.destroy().catch(() => undefined);
     throw e;
