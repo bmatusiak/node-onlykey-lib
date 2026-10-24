@@ -590,6 +590,7 @@ const I_OM = 'org.freedesktop.DBus.ObjectManager';
 const I_PROPS = 'org.freedesktop.DBus.Properties';
 const I_ADAPTER = 'org.bluez.Adapter1';
 const I_DEVICE = 'org.bluez.Device1';
+const I_BEARER_LE = 'org.bluez.Bearer.LE1';
 const I_SERVICE = 'org.bluez.GattService1';
 const I_CHAR = 'org.bluez.GattCharacteristic1';
 const FIX = 'scripts/ble-linux-connect.sh "<phone name>"';
@@ -810,9 +811,12 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
         log(`StartDiscovery: ${dbusWhat(err)} (continuing)`);
       }
       const tc = Date.now();
+      const devIface = await iface(device.path, I_DEVICE);
+      /* the link was already up when Connect() was called (it returned at once, or said so) */
+      let foundUp = false;
       try {
         try {
-          await within((await iface(device.path, I_DEVICE)).Connect(), timeouts.connectMs,
+          await within(devIface.Connect(), timeouts.connectMs,
             () => bleError('EBUSY',
               `${name} did not accept an LE connection in ${timeouts.connectMs / 1000} s. `
               + 'The phone serves one computer at a time over LE - is another one (a Windows PC) '
@@ -822,6 +826,7 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
           const what = dbusWhat(err);
           if (/AlreadyConnected|InProgress|Already Connected/i.test(what)) {
             /* Someone else's connect (or BlueZ's own reconnect) got there first: the wait below decides. */
+            foundUp = true;
           } else if (/br-connection/i.test(what)) {
             throw bleError('ECLASSIC',
               `BlueZ tried to reach ${name} over CLASSIC Bluetooth (${what}), not LE. `
@@ -835,18 +840,47 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
           }
         }
         log(`Connect() returned in ${Date.now() - tc} ms`);
+        if (Date.now() - tc < 1000) foundUp = true;
 
         /*
          * Wait for the GATT table. Polled, not signalled: the object that
          * resolves may be a different device path from the one connected (the
          * RPA split above), and a poll of the whole tree cannot pick the wrong
          * one to listen to.
+         *
+         * A LINK FOUND UP MAY BE STALE, AND THE TOOL DROPS IT ITSELF (the box, 2026-10-23): right
+         * after a bond, BlueZ keeps the LE link the pairing opened, and with `Cache = no` it never
+         * discovers services on it - Connect() returned in 4 ms, then ServicesResolved stayed false
+         * for the whole wait, every time, until a fresh connection was made. The message used to
+         * hand the person `sudo hcitool ledc`. Now: a link found up that has not resolved within
+         * STALE_MS is disconnected and connected again ONCE - a fresh link runs discovery (8.5 s on
+         * the same phone) - and only then does the full wait decide. Disconnect() drops the classic
+         * keyboard link too; the phone reconnects its target on its own.
          */
-        const deadline = Date.now() + timeouts.resolveMs;
+        const STALE_MS = 4000;
+        let fresh = false;
+        let deadline = Date.now() + timeouts.resolveMs;
         for (;;) {
           objects = await managed();
           vendor = findVendor(objects, device);
           if (vendor && vendor.live) break;
+          if (foundUp && !fresh && Date.now() - tc >= STALE_MS) {
+            fresh = true;
+            log(`the link was already up but its services have not resolved in ${STALE_MS / 1000} s - a stale LE link: disconnecting and connecting fresh`);
+            try { await devIface.Disconnect(); } catch (err) { log(`Disconnect: ${dbusWhat(err)} (continuing)`); }
+            await sleep(1500);
+            const tr = Date.now();
+            try {
+              await within(devIface.Connect(), timeouts.connectMs,
+                () => bleError('EBUSY', `${name} did not accept a fresh LE connection in ${timeouts.connectMs / 1000} s`));
+            } catch (err) {
+              if (err.code) throw err;
+              log(`Connect (fresh): ${dbusWhat(err)} (the wait below decides)`);
+            }
+            log(`fresh Connect() returned in ${Date.now() - tr} ms`);
+            deadline = Date.now() + timeouts.resolveMs;
+            continue;
+          }
           if (Date.now() >= deadline) {
             const d = objects[device.path] && objects[device.path][I_DEVICE];
             /*
@@ -925,15 +959,25 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
        */
       write: (frag) => req.WriteValue(Buffer.from(frag), { type: new dbus.Variant('s', 'request') }),
       /*
-       * StopNotify and let go of the bus - but NOT Device1.Disconnect(). That
-       * drops every bearer, including the classic keyboard the phone keeps to
-       * this computer; the LE link is left for BlueZ to idle out (and for the
-       * next command to find already up).
+       * StopNotify, drop the LE link ALONE, and let go of the bus - never Device1.Disconnect(),
+       * which drops every bearer, including the classic keyboard the phone keeps to this computer.
+       *
+       * The LE link used to be left "for BlueZ to idle out", and BlueZ does not: it stayed up
+       * after the command was gone, and the phone's Authenticator said "connected" (not
+       * "advertising") with nothing on this side using it (the box, BlueZ 5.87, 2026-10-23).
+       * Windows drops the link when the program lets go; org.bluez.Bearer.LE1.Disconnect (BlueZ
+       * 5.80+, Experimental) does the same for LE only. On a BlueZ without it the link stays, as
+       * before.
        */
       async close() {
         rspProps.removeListener('PropertiesChanged', onChanged);
         devProps.removeListener('PropertiesChanged', onDevChanged);
         try { await rsp.StopNotify(); } catch { /* link already gone */ }
+        try {
+          await (await iface(vendor.device, I_BEARER_LE)).Disconnect();
+        } catch (err) {
+          log(`LE disconnect: ${dbusWhat(err)} (the link is left to BlueZ)`);
+        }
         closeBus();
       },
     };

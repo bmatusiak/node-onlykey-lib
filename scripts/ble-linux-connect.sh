@@ -37,6 +37,16 @@
 #     it to the identity address. Stale per-address entries are removed before
 #     a pair so the pair targets the phone as it is now.
 #
+#  6. THE PAIR LEAVES ITS LINK UP. `pair` over LE opens a link and BlueZ keeps
+#     it after the bond is made, with nothing using it. The phone then counts
+#     this computer as connected: its Authenticator stays "connected" even with
+#     the app force-stopped (Android holds the link, not the app), and bluetoothd
+#     refuses the phone's classic keyboard every 15-20 s with "Device is already
+#     marked as connected" - a keyboard that connects and drops in a loop (the
+#     ZBOX, BT 5.1 dongle, 2026-10-23; dropping the link put the phone back to
+#     "advertising" and stopped the loop). So the link is closed once the bond
+#     is in; onlykey-js opens its own when a command needs the key.
+#
 # This prepares the LINK only. Talking to the key is onlykey-js's job.
 set -u
 
@@ -129,8 +139,11 @@ if [ -z "$ADDR" ]; then
   # owner's tap on the phone is the other side. 35 s is time to read and tap.
   (echo "agent KeyboardDisplay"; sleep 1; echo "default-agent"; echo "pairable on"; echo "scan le"; sleep 4
    echo "pair $TARGET"; sleep 5; echo "yes"; sleep 35; echo "scan off"; echo "pairable off"; echo "quit") \
-    | bluetoothctl 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | tr '\r' '\n' \
-    | grep -aoE 'Confirm passkey [0-9]+|Pairing successful|Failed to pair[^[]*' | sort -u
+    | bluetoothctl 2>&1 | sed -u 's/\x1b\[[0-9;]*m//g; s/\r/\n/g' \
+    | grep -a --line-buffered -oE 'Confirm passkey [0-9]+|Pairing successful|Failed to pair[^[]*' \
+    | awk '!seen[$0]++ { print; fflush() }'
+  # Line by line, not sorted: `sort -u` held the passkey back until the 35 s were over, so the
+  # number to compare reached the person after the phone's prompt had gone (the box, 2026-10-23).
   ADDR="$(paired_addr)"
   [ -n "$ADDR" ] || fail "not paired - accept the request on the phone and rerun; if the phone already lists this computer, forget it there and rerun with --repair"
 fi
@@ -142,6 +155,12 @@ if bt info "$ADDR" | grep -q 'PreferredBearer'; then
   bt bearer "$ADDR" le >/dev/null
 else
   say "NOTE: no PreferredBearer on this device - it was paired while the host was LE-only; rerun with --repair"
+fi
+
+# Step 6: nothing here uses a link, so one left from the pair (or an earlier run) is closed.
+if bt info "$ADDR" | grep -q 'Connected: yes'; then
+  bt disconnect "$ADDR" >/dev/null
+  say "closed the link left open by pairing - the phone goes back to advertising"
 fi
 
 # ---- status ---------------------------------------------------------------

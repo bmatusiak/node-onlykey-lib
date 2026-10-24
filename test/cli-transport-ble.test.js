@@ -555,6 +555,21 @@ test('--path with --ble, or --address without it, is a usage error', async () =>
   assert.match(err.join('\n'), /use one[\s\S]*add --ble/);
 });
 
+/* ok-edge's three apps (Brad, 2026-10-23): one flag at a time; --desktop / --mcp named before they are built */
+test('--ble / --desktop / --mcp pick one ok-edge app; --desktop and --mcp say they are not built, without opening a key', async () => {
+  const err = [];
+  const io = { out: () => {}, err: (l) => err.push(l), start: () => assert.fail('opened a key') };
+  assert.equal(await main(['--ble', '--desktop', 'status'], io), 2);
+  assert.equal(await main(['--desktop', '--path', 'x', 'status'], io), 2);
+  assert.equal(await main(['--desktop', 'status'], io), 2);
+  assert.equal(await main(['--mcp', 'edge', 'status'], io), 2);
+  const said = err.join('\n');
+  assert.match(said, /--ble and --desktop each pick an ok-edge app; use one/);
+  assert.match(said, /with --desktop the ok-edge app holds the keys/);
+  assert.match(said, /--desktop .* not built yet - ok-edge TODO B4b/);
+  assert.match(said, /--mcp .* not built yet - ok-edge TODO C5/);
+});
+
 /*
  * After the phone app was reinstalled its services sat at other handles, and
  * Windows' cached table never answered the quick discovery (the Pixel,

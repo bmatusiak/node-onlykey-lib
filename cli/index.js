@@ -227,8 +227,10 @@ COMMANDS.help = {
     io.out('');
     io.out('Options:');
     io.out(`  ${'--path <path>'.padEnd(14)} which OnlyKey, when more than one is plugged in`);
-    io.out(`  ${'--ble'.padEnd(14)} reach a phone running ok-rn over Bluetooth LE instead of USB`);
+    io.out(`  ${'--ble'.padEnd(14)} reach ok-edge mobile (a phone) over Bluetooth LE instead of a USB key`);
     io.out(`  ${'--address <a>'.padEnd(14)} with --ble: the phone's address or Bluetooth name`);
+    io.out(`  ${'--desktop'.padEnd(14)} reach the ok-edge desktop app on this computer (not built yet)`);
+    io.out(`  ${'--mcp'.padEnd(14)} reach the ok-edge web app over MCP (not built yet)`);
     io.out(`  ${'--yes'.padEnd(14)} confirm a setting that cannot be undone (wipemode, backupkeymode, webcryptpolicy)`);
     io.out(`  ${'-h, --help'.padEnd(14)} this list`);
     io.out('');
@@ -2350,6 +2352,8 @@ async function main(argv, io = {}) {
     help: { type: 'boolean', short: 'h' },
     path: { type: 'string' },
     ble: { type: 'boolean' },
+    desktop: { type: 'boolean' },
+    mcp: { type: 'boolean' },
     address: { type: 'string' },
     yes: { type: 'boolean' },
   };
@@ -2363,7 +2367,7 @@ async function main(argv, io = {}) {
     while (i < argv.length) {
       const t = argv[i];
       if (t === '--path' || t === '--address') { i += 2; continue; }
-      if (t === '--ble' || t === '--yes' || t === '--help' || t === '-h' || t.startsWith('--path=') || t.startsWith('--address=')) { i += 1; continue; }
+      if (t === '--ble' || t === '--desktop' || t === '--mcp' || t === '--yes' || t === '--help' || t === '-h' || t.startsWith('--path=') || t.startsWith('--address=')) { i += 1; continue; }
       break;
     }
     const t = argv[i];
@@ -2453,6 +2457,30 @@ async function main(argv, io = {}) {
   }
   if (parsed.values.address && !parsed.values.ble) {
     full.err(`${NAME}: --address picks a phone for --ble; add --ble.`);
+    return 2;
+  }
+  /*
+   * WHICH OK-EDGE APP (Brad, 2026-10-23: "ok-edge is 3 apps in 1 - mobile, desktop, webapp - with
+   * the cli talking to each one"). No flag: a hard key on USB, the CLI its own host. --ble: the
+   * mobile app over Bluetooth. --desktop: the desktop app on this machine, which holds its keys
+   * (its hard key on USB, its emulator soft key) and does the USB talking - an IPC socket, trusted
+   * through a file the app writes and the CLI reads, no pairing (ok-edge TODO B4b). --mcp: the web
+   * app over MCP, which needs the CLI pairing (TODO C5). One at a time; the last two are named
+   * here so a command line says which app it means before they are built, and say so plainly.
+   */
+  const apps = ['ble', 'desktop', 'mcp'].filter((k) => parsed.values[k]);
+  if (apps.length > 1) {
+    full.err(`${NAME}: ${apps.map((k) => `--${k}`).join(' and ')} each pick an ok-edge app; use one.`);
+    return 2;
+  }
+  if ((parsed.values.desktop || parsed.values.mcp) && parsed.values.path) {
+    full.err(`${NAME}: --path picks a USB key for this CLI; with --${apps[0]} the ok-edge app holds the keys.`);
+    return 2;
+  }
+  if (parsed.values.desktop || parsed.values.mcp) {
+    full.err(parsed.values.desktop
+      ? `${NAME}: --desktop (the ok-edge desktop app over a local IPC socket) is not built yet - ok-edge TODO B4b. Without a flag this CLI talks to a hard key on USB itself.`
+      : `${NAME}: --mcp (the ok-edge web app over MCP, paired) is not built yet - ok-edge TODO C5.`);
     return 2;
   }
   if (rest.length && !cmd.usage) {
