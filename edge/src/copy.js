@@ -466,6 +466,15 @@ function verifyCore(copy, key, prev, out) {
       touched.add(f.grantId);
     } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS) {
       const list = spends.get(f.grantId);
+      /*
+       * A BUDGET OPENED BEHIND AN ACCEPTED LOSS (key 1, 2026-10-23): the budget checks start after the
+       * last covered gap, so a budget whose grant link (#grantId - 1: a budget is named by the seq
+       * after its grant-create) is at or before that gap's end is never opened here, and its spends
+       * after the gap failed - "budget-opening-missing at #391" for a budget opened at #386 that
+       * ended cleanly at #397, with #387-#390 lost under it. Its spends are accepted with the loss,
+       * as the gap's own links are. A budget opened after the gap is checked in full as before.
+       */
+      if (!list && lastGapEnd >= 0 && f.grantId - 1 <= lastGapEnd) continue;
       if (!list) return fail('budget-opening-missing', { seq: f.seq, detail: { grantId: f.grantId } });
       /*
        * R3 (2026-10-03): byte 46 names the scope that paid - in range, covering

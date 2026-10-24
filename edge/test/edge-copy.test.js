@@ -178,6 +178,23 @@ test('copy: a gap verifies only when a LOSS link covers it (R24, R27) - never by
   assert.deepEqual(copy.lossesIn(s.links).map((l) => [l.from, l.to]), [[0, 1]]);
 });
 
+/*
+ * Key 1, 2026-10-23: a budget opened at #386, its first links #387-#390 lost and accepted, its later
+ * spends (#391, #393...) still in the copy - they were refused "budget-opening-missing" for good.
+ * Story: grant #2 (budget 3), spend #3 lost (and #4 with it: it cannot be welded without #3),
+ * spend #5 (step 2) + receipt #6 kept after the gap.
+ */
+test('copy: a budget opened behind an accepted LOSS - its spends after the gap go with the loss, not "opening missing"', () => {
+  const s = withLoss(3, 4);
+  const kept = s.links.filter((_, i) => i !== 3);
+  const v = copy.verifyCopy({ links: kept, openings: s.openings }, s.key);
+  assert.equal(v.ok, true, JSON.stringify(v));
+  /* without the LOSS the same copy is a gap, as before */
+  const plain = story();
+  const r = copy.verifyCopy({ links: plain.links.filter((_, i) => i !== 3), openings: plain.openings }, plain.key);
+  assert.equal(r.reason, 'gap');
+});
+
 test('copy: a link the key still holds is not part of a loss - only what is really missing is (spec 4.3)', () => {
   /* the copy lost #0-#1 and can't weld #2 (its #1 is gone), but the key handed #2 over this session */
   const s = withLoss(0, 1);
