@@ -70,21 +70,43 @@ function fromTerminal(question, input, output) {
   });
 }
 
+/*
+ * ONE LINE PER PROMPT, AND THE REST KEPT FOR THE NEXT ONE. A pipe delivers in chunks, not lines:
+ * `printf 'p\np\n' | onlykey-js setbackuppassphrase` arrived as ONE chunk, the first prompt took
+ * its first line and dropped the rest, and the second prompt ("Again:") then read the end of the
+ * stream - an empty passphrase, refused (key 1's live restore, 2026-10-23). What is read past a
+ * line stays with the stream until a later prompt asks.
+ */
+const piped = new WeakMap(); /* input stream -> { buffered, ended } */
 function fromPipe(input) {
+  let st = piped.get(input);
+  if (!st) { st = { buffered: '', ended: false }; piped.set(input, st); }
+  /* the next whole line, or (once the stream ended) what is left; null = wait for more */
+  const take = () => {
+    const at = st.buffered.indexOf('\n');
+    if (at !== -1) {
+      const line = st.buffered.slice(0, at);
+      st.buffered = st.buffered.slice(at + 1);
+      return line;
+    }
+    if (st.ended) { const line = st.buffered; st.buffered = ''; return line; }
+    return null;
+  };
   return new Promise((resolve) => {
-    let buffered = '';
+    const ready = take();
+    if (ready !== null) { resolve(ready.replace(/\r$/, '')); return; }
     const finish = (line) => {
       input.removeListener('data', onData);
       input.removeListener('end', onEnd);
-      input.pause();
+      if (!st.ended) input.pause();
       resolve(line.replace(/\r$/, ''));
     };
     function onData(chunk) {
-      buffered += chunk;
-      const at = buffered.indexOf('\n');
-      if (at !== -1) finish(buffered.slice(0, at));
+      st.buffered += chunk;
+      const line = take();
+      if (line !== null) finish(line);
     }
-    function onEnd() { finish(buffered); }
+    function onEnd() { st.ended = true; finish(take() || ''); }
     input.setEncoding('utf8');
     input.on('data', onData);
     input.on('end', onEnd);
