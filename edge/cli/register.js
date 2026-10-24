@@ -40,6 +40,9 @@ const USAGE = [
   'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
   'onlykey-js edge agent                                         the optional service',
+  'onlykey-js edge control note <repo>… | preview | ship [<repo>…] [--plan] | status | settings',
+  '                                                              commits to sign and push, shipped in ONE budget (the batch lives in the Edge home)',
+  'onlykey-js edge --claude-setup [--force]                      write the edge-control skill into this workspace (.claude/skills/edge-control)',
   'add --test-mode to any of them: the testnet - its own home, its own chain on the phone (Enter testing mode)',
   'onlykey-js edge --test-mode clear                             delete the testnet on this computer (its home and Key Chain file)',
 ];
@@ -296,10 +299,15 @@ module.exports = function register(COMMANDS, h) {
   COMMANDS.edge = {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
-    usage: 'setup | budget | continue | end | status | exec | receipt | watch | sync | blocks | agent | --test-mode … | --test-mode clear',
+    usage: 'setup | budget | continue | end | status | exec | receipt | watch | sync | blocks | agent | control … | --claude-setup | --test-mode … | --test-mode clear',
     summary: 'Edge: an agent uses the key inside a budget you approve (on the phone, or here for a hard key on USB) - budget or no go',
     device: true,
     async run(io, opts, argv) {
+      /* the edge-control skill into this workspace (Brad, 2026-10-23: "edge --claude-setup that dumps a skill into the workspace") - no key */
+      if (argv[0] === '--claude-setup') {
+        if (argv.slice(1).some((a) => a !== '--force')) throw h.usage('edge --claude-setup [--force]');
+        return require('./edge-control').claudeSetup({ io, force: argv.includes('--force') });
+      }
       const args = takeTestMode(dev && dev.prepare ? dev.prepare(argv) : argv, io, h.usage);
       const [sub, ...rest] = args;
       if (!sub || sub === 'help') {
@@ -307,7 +315,7 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
+      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
 
       /*
@@ -339,6 +347,15 @@ module.exports = function register(COMMANDS, h) {
         return ok ? 0 : 1;
       }
       const control = require('./control');
+
+      /*
+       * EDGE CONTROL (Brad, 2026-10-23: the workspace's edge skill, "integrate it into the cli",
+       * its info "with its other home files"): the batch, the preview, one budget for all of it.
+       * It opens no key itself - each step is this CLI run as a child with the same flags.
+       */
+      if (sub === 'control') {
+        return require('./edge-control').run({ io, opts, argv: rest, net: NET, home: control.edgeHome() });
+      }
       const wait = opt(rest, '--wait');
 
       /*
