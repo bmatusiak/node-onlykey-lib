@@ -45,7 +45,7 @@
  */
 'use strict';
 
-function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, loadDbus, config = {}, pairingHome } = {}) {
+function startDesktop({ pipe, path, loadHid, ble = false, desktop = false, address, loadNoble, loadDbus, config = {}, pairingHome } = {}) {
   const Rectify = require('@bmatusiak/rectify');
   /*
    * The pipe is built lazily per bus: a --ble run must not touch hidapi (it
@@ -86,7 +86,10 @@ function startDesktop({ pipe, path, loadHid, ble = false, address, loadNoble, lo
       onLink: (line) => process.stderr.write(`onlykey-js ble: ${line}\n`),
     });
   };
-  const makePipe = () => (ble ? makeBlePipe() : require('./transport-hid').createHidPipe({ path, loadHid }));
+  /* desktop: the key the ok-edge desktop app holds, over its local socket (cli/transport-desktop.js) */
+  const makePipe = () => (ble ? makeBlePipe()
+    : desktop ? require('./transport-desktop').createDesktopPipe()
+      : require('./transport-hid').createHidPipe({ path, loadHid }));
   const plugins = [
     require('../plugins/host'),
     ble ? require('../plugins/transport/ble') : require('../plugins/transport/usb'),

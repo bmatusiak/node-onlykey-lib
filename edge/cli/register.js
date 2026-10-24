@@ -126,9 +126,11 @@ function recordCert(io, record, tool) {
   }
 }
 
-/* what a budget request waits on, in words: the phone over Bluetooth, this computer for a hard key on USB (local-host.js) */
-function waitingLine(opts) {
-  return opts.ble ? 'Waiting for the phone - read the request there, then press…' : 'The request is shown here - answer y/N, then press the key…';
+/* what a budget request waits on, in words: the phone over Bluetooth, the desktop app's window, or this terminal for a hard key on USB (local-host.js) */
+function waitingLine(opts, h) {
+  if (opts.ble) return 'Waiting for the phone - read the request there, then press…';
+  if (h && h.deviceOpts(opts).desktop) return 'Waiting for the desktop app - answer the request in its window, then press the key…';
+  return 'The request is shown here - answer y/N, then press the key…';
 }
 
 /* is the optional service running? a connect, no request */
@@ -162,8 +164,9 @@ async function openDevice(io, opts, h, { dev, wait }) {
   const { openWithOneRetry } = require('./agent');
   const say = (l) => io.err(`edge: ${l}`);
   /* ENOVENDOR at start: one more try after ~5 s (agent.js openWithOneRetry) */
+  const dopts = h.deviceOpts(opts);
   const app = await openWithOneRetry(async () => {
-    const a = await io.start(h.deviceOpts(opts));
+    const a = await io.start(dopts);
     try { keyAnswers(await a.services.device.connect(), h, 'edge'); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
     return a;
   }, { log: say });
@@ -176,8 +179,12 @@ async function openDevice(io, opts, h, { dev, wait }) {
    * the host (local-host.js: the y/N on this terminal, then the press on the key; B4, 2026-10-23).
    * The phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn,
    * 2026-10-03) - the wire waits past both.
+   *
+   * The ok-edge desktop app (--desktop, or plain while it runs) is the phone's twin on this machine:
+   * it holds the key and hosts it, answering the same wire (desktop/serve.js) from the same records -
+   * so the wire channel, not local-host.js, which then runs inside the app.
    */
-  const wired = opts.ble
+  const wired = (opts.ble || dopts.desktop)
     ? wire.createWireChannel(transport, {
       timeoutMs: (Number(wait) || 180) * 1000,
       device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
@@ -507,7 +514,7 @@ module.exports = function register(COMMANDS, h) {
       const commands = require('./commands');
       const outs = { out: io.out, err: io.err, dev };
       /* the service, if Brad started one (CLI.md §4: for speed only) */
-      if (await serviceUp(control.controlPath())) return commands.main(args, { ...outs, ask: control.ask, waiting: waitingLine(opts) });
+      if (await serviceUp(control.controlPath())) return commands.main(args, { ...outs, ask: control.ask, waiting: waitingLine(opts, h) });
       /* no service (the default): this one command, in-process - connect, run, disconnect.
        * The phone is opened on the command's first request, not before: a usage error
        * (exec without --head) answers at once instead of after a Bluetooth connect. */
@@ -520,7 +527,7 @@ module.exports = function register(COMMANDS, h) {
           if (o.onSent) o.onSent();
           return { ok: true, ...(await fn(fields)) };
         };
-        return await commands.main(args, { ...outs, ask, waiting: waitingLine(opts) });
+        return await commands.main(args, { ...outs, ask, waiting: waitingLine(opts, h) });
       } finally {
         if (st) await st.close();
       }

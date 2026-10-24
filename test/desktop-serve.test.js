@@ -1,0 +1,144 @@
+'use strict';
+
+/*
+ * The ok-edge desktop app's side of --desktop (desktop/serve.js) and the CLI's (cli/transport-desktop.js),
+ * over a real local socket, with a fake key (a pipe) and a fake host. What the CLI's wire channel and
+ * local-host.js do on top is their own tests'; here: the trust file, the hello, the key's reports both
+ * ways, the host's answer in 0xF7 pieces with the request's net, and the key muted while the host has it.
+ */
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const trust = require('../desktop/trust');
+const { createDesktopServer } = require('../desktop/serve');
+const { createDesktopPipe } = require('../cli/transport-desktop');
+const wire = require('../edge/src/wire');
+const { DIR } = require('../src/transport/contract');
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okjs-desk-'));
+
+/* a key on a pipe: it answers a write with the same bytes + 1 on byte 0 (dir OUT), after the echo (dir IN) */
+function fakeKeyPipe() {
+  const listeners = new Set();
+  const writes = [];
+  const emit = (ev) => { for (const l of [...listeners]) l(ev); };
+  return {
+    writes,
+    emit,
+    isRunning: () => true,
+    async start() {},
+    async write(iface, bytes) {
+      writes.push({ iface, bytes: Uint8Array.from(bytes) });
+      emit({ iface, dir: DIR.IN, bytes });
+      const reply = Uint8Array.from(bytes); reply[0] = (reply[0] + 1) & 0xff;
+      setImmediate(() => emit({ iface, dir: DIR.OUT, bytes: reply }));
+      return bytes.length + 1;
+    },
+    on(event, l) { if (event === 'stream') { listeners.add(l); return () => listeners.delete(l); } return () => {}; },
+    device: { path: 'fake-key', product: 'ONLYKEY' },
+    interfaces: () => [{ iface: 2 }],
+  };
+}
+
+const until = async (cond, ms = 3000) => {
+  const end = Date.now() + ms;
+  while (!cond()) { if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 10)); }
+};
+
+test('trust: written owner-only with a fresh token; live while its app runs; stale when not; removed only by its own app', () => {
+  const root = tmp();
+  try {
+    assert.equal(trust.liveTrust(root), null);
+    const rec = trust.writeTrust({ root, socket: path.join(root, 'x.sock') });
+    assert.match(rec.token, /^[0-9a-f]{64}$/);
+    assert.deepEqual(trust.readTrust(root), rec);
+    assert.equal(trust.liveTrust(root, { platform: 'win32' }).token, rec.token);
+    assert.equal(trust.liveTrust(root, { platform: 'win32', isAlive: () => false }), null, 'its app is gone: stale');
+    assert.equal(trust.liveTrust(root, { platform: 'linux' }), null, 'no socket file: not live');
+    assert.ok(trust.tokenMatches(rec, rec.token));
+    assert.ok(!trust.tokenMatches(rec, 'f'.repeat(64)));
+    trust.removeTrust({ token: 'a'.repeat(64) }, root);
+    assert.ok(trust.readTrust(root), 'another app\'s record does not remove it');
+    trust.removeTrust(rec, root);
+    assert.equal(trust.readTrust(root), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('desktop: the hello needs the token; one CLI at a time; the key\'s reports both ways, the echo kept local', async () => {
+  const root = tmp();
+  const key = fakeKeyPipe();
+  const server = createDesktopServer({ pipe: key, root, hostFor: () => ({ send: async () => null }) });
+  const rec = await server.start();
+  try {
+    await assert.rejects(createDesktopPipe({ record: { ...rec, token: 'f'.repeat(64) } }).start(), /refused: not this app's token/);
+
+    const cli = createDesktopPipe({ root: undefined, record: rec });
+    const seen = [];
+    cli.on('stream', (ev) => seen.push(ev));
+    await cli.start();
+    assert.ok(cli.isRunning());
+    assert.equal(cli.device.path, 'fake-key');
+    await assert.rejects(createDesktopPipe({ record: rec }).start(), /refused: busy/);
+
+    const report = new Uint8Array(64); report[0] = 7;
+    await cli.write(2, report);
+    await until(() => seen.some((e) => e.dir === DIR.OUT));
+    assert.equal(key.writes.length, 1);
+    assert.equal(key.writes[0].bytes[0], 7);
+    assert.deepEqual(seen.map((e) => [e.dir, e.bytes[0]]), [[DIR.IN, 7], [DIR.OUT, 8]], 'the echo here, the key\'s answer from the app - never the app\'s echo');
+    await cli.stop();
+  } finally {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  assert.equal(trust.readTrust(root), null, 'desktop.json goes with the app');
+});
+
+test('desktop: an 0xF7 request goes to the host of ITS net, never to the key; the answer comes back stamped; the key is muted meanwhile', async () => {
+  const root = tmp();
+  const key = fakeKeyPipe();
+  const asked = [];
+  const hostFor = (n) => ({
+    async send(message) {
+      asked.push({ net: n, type: message.type });
+      /* the host uses the key: its report must not reach the CLI */
+      key.emit({ iface: 2, dir: DIR.OUT, bytes: new Uint8Array(64).fill(0x33) });
+      return { ok: true, record: null };
+    },
+  });
+  const server = createDesktopServer({ pipe: key, root, hostFor });
+  const rec = await server.start();
+  try {
+    const cli = createDesktopPipe({ record: rec });
+    const asm = wire.createAssembler();
+    let answer = null;
+    const strays = [];
+    cli.on('stream', (ev) => {
+      if (ev.dir !== DIR.OUT) return;
+      if (!wire.isEdgeRequestFrame(ev.bytes)) { strays.push(ev); return; }
+      const got = asm.push(ev.bytes);
+      if (got && got.kind === wire.KIND.ANSWER) answer = got.message;
+    });
+    await cli.start();
+    const request = { type: 'EDGE_IDENTITY_GET', v: 1, nonce: 'ab'.repeat(16), wire: { dev: 'cli', id: 'r1', ts: Date.now(), net: 'test' } };
+    for (const frame of wire.encode(wire.KIND.REQUEST, request)) await cli.write(2, frame);
+    await until(() => answer);
+    await server.idle();
+    assert.deepEqual(asked, [{ net: 'test', type: 'EDGE_IDENTITY_GET' }]);
+    assert.equal(key.writes.length, 0, 'the host\'s message never reached the key');
+    assert.equal(answer.ok, true);
+    assert.deepEqual(answer.wire.re, { dev: 'cli', id: 'r1' });
+    assert.equal(answer.wire.net, 'test');
+    assert.equal(strays.length, 0, 'the key\'s report while the host had it stayed in the app');
+    await cli.stop();
+  } finally {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -120,13 +120,24 @@ const classicSlotName = (n) => (n <= 6 ? `${n}a` : `${n - 6}b`);
  * by gpg with the USB default while the home was made over --ble would ask a
  * key that is not there.
  */
+/*
+ * THE DESKTOP APP FIRST (Brad, 2026-10-23: "if desktop is open and cli is not using --desktop but
+ * plain, it should still communicate with desktop, and if no desktop, then cli looks for hardkey").
+ * The app holds the hard key and hosts it (desktop/serve.js), so with the app running a plain
+ * command goes through it - the key is the app's, and so are the person's approvals. --desktop
+ * insists on the app; --path names a USB key and opens it here, app or not.
+ */
 function deviceOpts(opts) {
-  return opts.ble ? { ble: true, address: opts.address } : { path: opts.path };
+  if (opts.ble) return { ble: true, address: opts.address };
+  if (opts.desktop) return { desktop: true };
+  if (!opts.path && require('../desktop/trust').liveTrust()) return { desktop: true, auto: true };
+  return { path: opts.path };
 }
 
-/** The same choice as command-line arguments, for a program this one starts later. */
+/** The same choice as command-line arguments, for a program this one starts later (plain stays plain: it chooses again). */
 function deviceArgs(opts) {
   if (opts.ble) return ['--ble', ...(opts.address ? ['--address', opts.address] : [])];
+  if (opts.desktop) return ['--desktop'];
   return opts.path ? ['--path', opts.path] : [];
 }
 
@@ -229,7 +240,7 @@ COMMANDS.help = {
     io.out(`  ${'--path <path>'.padEnd(14)} which OnlyKey, when more than one is plugged in`);
     io.out(`  ${'--ble'.padEnd(14)} reach ok-edge mobile (a phone) over Bluetooth LE instead of a USB key`);
     io.out(`  ${'--address <a>'.padEnd(14)} with --ble: the phone's address or Bluetooth name`);
-    io.out(`  ${'--desktop'.padEnd(14)} reach the ok-edge desktop app on this computer (not built yet)`);
+    io.out(`  ${'--desktop'.padEnd(14)} reach the key through the ok-edge desktop app on this computer (plain does too, while it runs)`);
     io.out(`  ${'--mcp'.padEnd(14)} reach the ok-edge web app over MCP (not built yet)`);
     io.out(`  ${'--yes'.padEnd(14)} confirm a setting that cannot be undone (wipemode, backupkeymode, webcryptpolicy)`);
     io.out(`  ${'-h, --help'.padEnd(14)} this list`);
@@ -2465,8 +2476,9 @@ async function main(argv, io = {}) {
    * mobile app over Bluetooth. --desktop: the desktop app on this machine, which holds its keys
    * (its hard key on USB, its emulator soft key) and does the USB talking - an IPC socket, trusted
    * through a file the app writes and the CLI reads, no pairing (ok-edge TODO B4b). --mcp: the web
-   * app over MCP, which needs the CLI pairing (TODO C5). One at a time; the last two are named
-   * here so a command line says which app it means before they are built, and say so plainly.
+   * app over MCP, which needs the CLI pairing (TODO C5). One at a time; --mcp is named here so a
+   * command line says which app it means before it is built, and says so plainly. Plain, with the
+   * desktop app running, also goes through the app (deviceOpts).
    */
   const apps = ['ble', 'desktop', 'mcp'].filter((k) => parsed.values[k]);
   if (apps.length > 1) {
@@ -2477,10 +2489,8 @@ async function main(argv, io = {}) {
     full.err(`${NAME}: --path picks a USB key for this CLI; with --${apps[0]} the ok-edge app holds the keys.`);
     return 2;
   }
-  if (parsed.values.desktop || parsed.values.mcp) {
-    full.err(parsed.values.desktop
-      ? `${NAME}: --desktop (the ok-edge desktop app over a local IPC socket) is not built yet - ok-edge TODO B4b. Without a flag this CLI talks to a hard key on USB itself.`
-      : `${NAME}: --mcp (the ok-edge web app over MCP, paired) is not built yet - ok-edge TODO C5.`);
+  if (parsed.values.mcp) {
+    full.err(`${NAME}: --mcp (the ok-edge web app over MCP, paired) is not built yet - ok-edge TODO C5.`);
     return 2;
   }
   if (rest.length && !cmd.usage) {
