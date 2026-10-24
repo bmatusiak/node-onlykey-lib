@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const bucketHome = require('../../bucket/cli/home');
-const { migrateToIdentity, needsMigration, MARK } = require('../cli/migrate-identity');
+const { migrateToIdentity, needsMigration, markOf } = require('../cli/migrate-identity');
 
 const DEV = 'aa'.repeat(16);
 const ID = 'bb'.repeat(16);
@@ -36,7 +36,7 @@ function scratch() {
 test('migrate: copies only this key\'s - its identity record, its device\'s copy, its budgets by genesis, its pointer; old stores untouched; once', async () => {
   const s = scratch();
   try {
-    assert.equal(needsMigration(s.netHome, s.idHome), true);
+    assert.equal(needsMigration(s.netHome, s.idHome, DEV), true);
     const dry = await migrateToIdentity({ netHome: s.netHome, idHome: s.idHome, deviceIdHex: DEV, signPublicOf: async () => MINE, dryRun: true });
     assert.deepEqual([dry.identity, dry.copy, dry.budgets, dry.pointers, dry.done], [true, true, [7], 1, false]);
     assert.equal(s.kv(s.idHome, 'identity').getItem('record'), null, 'a dry run writes nothing');
@@ -54,8 +54,9 @@ test('migrate: copies only this key\'s - its identity record, its device\'s copy
     assert.ok(s.kv(s.netHome, 'identity').getItem('record'));
     assert.ok(s.kv(s.netHome, 'budgets').getItem('okedge.budget.7'));
     /* once */
-    assert.ok(s.kv(s.idHome, 'identity').getItem(MARK));
-    assert.equal(needsMigration(s.netHome, s.idHome), false);
+    assert.ok(s.kv(s.idHome, 'identity').getItem(markOf(DEV)));
+    assert.equal(needsMigration(s.netHome, s.idHome, DEV), false);
+    assert.equal(needsMigration(s.netHome, s.idHome, 'ee'.repeat(16)), true, 'another device of the same identity still has its own to copy');
     assert.equal((await migrateToIdentity({ netHome: s.netHome, idHome: s.idHome, deviceIdHex: DEV, signPublicOf: async () => MINE })).already, true);
   } finally { s.done(); }
 });

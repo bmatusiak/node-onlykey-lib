@@ -21,7 +21,9 @@
 
 const bucketHome = require('../../bucket/cli/home');
 
+/* once per DEVICE of the identity (key 1 and the A13 are one identity, each with its own old records) */
 const MARK = 'migrated';
+const markOf = (deviceIdHex) => `${MARK}.${deviceIdHex}`;
 
 /**
  * @param {object} o
@@ -37,7 +39,7 @@ async function migrateToIdentity({ netHome, idHome, deviceIdHex, signPublicOf, d
   const kv = (home, name) => bucketHome.kv(bucketHome.edgeAt(home, name));
   const idStore = kv(idHome, 'identity');
   const report = { done: false, identity: false, copy: false, budgets: [], pointers: 0, skipped: [] };
-  if (idStore.getItem(MARK)) return { ...report, done: true, already: true };
+  if (idStore.getItem(markOf(deviceIdHex))) return { ...report, done: true, already: true };
 
   /* the agent identity record - this key's only if its certificate is this key's own derive */
   const oldRecord = kv(netHome, 'identity').getItem('record');
@@ -88,7 +90,7 @@ async function migrateToIdentity({ netHome, idHome, deviceIdHex, signPublicOf, d
   const idPointers = kv(idHome, 'pointers');
   if (oldPointer && !idPointers.getItem(pointerKey)) { report.pointers = 1; if (!dryRun) idPointers.setItem(pointerKey, oldPointer); }
 
-  if (!dryRun) idStore.setItem(MARK, JSON.stringify({ at: now(), from: netHome, ...report }));
+  if (!dryRun) idStore.setItem(markOf(deviceIdHex), JSON.stringify({ at: now(), from: netHome, ...report }));
   report.done = !dryRun;
   return report;
 }
@@ -98,9 +100,9 @@ async function migrateToIdentity({ netHome, idHome, deviceIdHex, signPublicOf, d
  * net's stores from before identities hold anything - then a command would start empty beside records
  * that may be this key's, and it stops instead (no second path: register.js says to run edge migrate).
  */
-function needsMigration(netHome, idHome) {
+function needsMigration(netHome, idHome, deviceIdHex) {
   const kv = (home, name) => bucketHome.kv(bucketHome.edgeAt(home, name));
-  if (kv(idHome, 'identity').getItem(MARK)) return false;
+  if (kv(idHome, 'identity').getItem(markOf(deviceIdHex))) return false;
   return ['identity', 'copies', 'budgets', 'pointers'].some((name) => kv(netHome, name).keys().length > 0);
 }
 
@@ -114,11 +116,12 @@ function needsMigration(netHome, idHome) {
 async function identityHome({ edge, okcrypto, netHome, say = () => {} }) {
   const path = require('path');
   const home = path.join(netHome, await edge.identityId());
-  if (needsMigration(netHome, home)) {
-    const { toHex } = require('../../src/bytes');
+  const { toHex } = require('../../src/bytes');
+  const deviceIdHex = toHex((await edge.publicKey()).deviceId);
+  if (needsMigration(netHome, home, deviceIdHex)) {
     const { agentPublicKey } = require('./agent');
     const r = await migrateToIdentity({
-      netHome, idHome: home, deviceIdHex: toHex((await edge.publicKey()).deviceId),
+      netHome, idHome: home, deviceIdHex,
       signPublicOf: async (gpgUid) => toHex(await agentPublicKey(okcrypto, { gpg: gpgUid })),
     });
     const got = [r.identity && 'the agent identity', r.copy && 'the chain copy', r.budgets.length && `budgets ${r.budgets.join(', ')}`, r.pointers && 'the pointer'].filter(Boolean);
@@ -127,4 +130,4 @@ async function identityHome({ edge, okcrypto, netHome, say = () => {} }) {
   return home;
 }
 
-module.exports = { migrateToIdentity, needsMigration, identityHome, MARK };
+module.exports = { migrateToIdentity, needsMigration, identityHome, MARK, markOf };
