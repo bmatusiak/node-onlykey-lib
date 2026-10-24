@@ -182,24 +182,17 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
    * <net home>/<identity id>. Everything this command keeps (the identity record, budgets, pointers,
    * copies, notes) files there, so a key from another backup never reads or writes this one's.
    */
-  const netHome = require('./control').edgeHome();
-  const home = path.join(netHome, await edge.identityId());
   /*
    * BY ITSELF, ONCE (Brad, 2026-10-24: "something more automatic ... as simple and seamless as
    * possible"): the first time this identity is used on this computer, what of the records from before
-   * identities is provably this key's is copied in (migrate-identity.js: copy-first, the old stores left
-   * as they were), and the command goes on with it - no step for the person, no empty start beside them.
+   * identities is provably this key's is copied in (copy-first) and the command goes on with it - the
+   * one function every host uses (migrate-identity.js identityHome; the desktop app's host too).
+   * edge migrate --dry-run looks without it.
    */
-  if (!migrating && require('./migrate-identity').needsMigration(netHome, home)) {
-    const { toHex } = require('../../src/bytes');
-    const { agentPublicKey } = require('./agent');
-    const r = await require('./migrate-identity').migrateToIdentity({
-      netHome, idHome: home, deviceIdHex: toHex((await edge.publicKey()).deviceId),
-      signPublicOf: async (gpgUid) => toHex(await agentPublicKey(okcrypto, { gpg: gpgUid })),
-    });
-    const got = [r.identity && 'the agent identity', r.copy && 'the chain copy', r.budgets.length && `budgets ${r.budgets.join(', ')}`, r.pointers && 'the pointer'].filter(Boolean);
-    say(`this key's records from before identities, copied into its identity ${path.basename(home).slice(0, 12)}…: ${got.length ? got.join(', ') : 'none were its own'}`);
-  }
+  const netHome = require('./control').edgeHome();
+  const home = migrating
+    ? path.join(netHome, await edge.identityId())
+    : await require('./migrate-identity').identityHome({ edge, okcrypto, netHome, say });
   /*
    * WHO HOSTS EDGE. Over Bluetooth the phone does: the wire to its app. A key on USB is a hard key
    * (or Linux's emulated one on the bus) - no phone behind it answers the wire, so this computer is

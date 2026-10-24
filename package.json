@@ -67,7 +67,8 @@
     "./desktop/trust": "./desktop/trust.js",
     "./cli/transport-desktop": "./cli/transport-desktop.js",
     "./edge/cli/local-host": "./edge/cli/local-host.js",
-    "./bucket/cli/home": "./bucket/cli/home.js"
+    "./bucket/cli/home": "./bucket/cli/home.js",
+    "./edge/cli/migrate-identity": "./edge/cli/migrate-identity.js"
   },
   "files": [
     "src",

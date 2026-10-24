@@ -104,4 +104,27 @@ function needsMigration(netHome, idHome) {
   return ['identity', 'copies', 'budgets', 'pointers'].some((name) => kv(netHome, name).keys().length > 0);
 }
 
-module.exports = { migrateToIdentity, needsMigration, MARK };
+/**
+ * THE KEY'S IDENTITY HOME, filled by itself the first time - the ONE way every host gets its home (the
+ * CLI's openDevice, the desktop app's host): <net home>/<identity id>, and, while the records from
+ * before identities are not yet copied, what of them is provably this key's copied in (copy-first).
+ * @param {{edge: object, okcrypto: object, netHome: string, say?: (line: string) => void}} o
+ * @returns {Promise<string>} the identity home
+ */
+async function identityHome({ edge, okcrypto, netHome, say = () => {} }) {
+  const path = require('path');
+  const home = path.join(netHome, await edge.identityId());
+  if (needsMigration(netHome, home)) {
+    const { toHex } = require('../../src/bytes');
+    const { agentPublicKey } = require('./agent');
+    const r = await migrateToIdentity({
+      netHome, idHome: home, deviceIdHex: toHex((await edge.publicKey()).deviceId),
+      signPublicOf: async (gpgUid) => toHex(await agentPublicKey(okcrypto, { gpg: gpgUid })),
+    });
+    const got = [r.identity && 'the agent identity', r.copy && 'the chain copy', r.budgets.length && `budgets ${r.budgets.join(', ')}`, r.pointers && 'the pointer'].filter(Boolean);
+    say(`this key's records from before identities, copied into its identity ${path.basename(home).slice(0, 12)}…: ${got.length ? got.join(', ') : 'none were its own'}`);
+  }
+  return home;
+}
+
+module.exports = { migrateToIdentity, needsMigration, identityHome, MARK };

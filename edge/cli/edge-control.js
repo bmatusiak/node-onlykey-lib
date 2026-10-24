@@ -192,14 +192,40 @@ async function run({ io, opts, argv, net, home }) {
     const ahead = commits(r).length;
     say(`== ${r.name} (${r.branch}): ${ahead} to push, ${todo.length} to sign`);
     if (todo.length) {
-      runP('git', ['-C', r.repo, '-c', 'commit.gpgsign=false', 'rebase', '-q', '-i', `${todo[0].hash}^`],
-        { env: { ...process.env, GIT_SEQUENCE_EDITOR: 'sed -i s/^pick/edit/' } });
-      if (!rebasing(r)) stop(`${r.name}: the rebase did not stop at ${todo[0].hash.slice(0, 7)}`);
-      while (rebasing(r)) {
-        const subject = git(r.repo, 'log', '-1', '--format=%h %s').out.trim().slice(0, 60);
-        spend(`sign: ${r.name} ${subject}`, 'git', '-C', r.repo, 'commit', '--amend', '--no-edit', '-S');
-        say(`  signed ${subject}`);
-        git(r.repo, '-c', 'commit.gpgsign=false', 'rebase', '--continue');
+      /*
+       * RE-SIGNED IN A WORKTREE OF ITS OWN (2026-10-24): the rebase ran in the repo itself, so its files
+       * went back to older commits while it stopped at each one - and when the repo is node-onlykey-lib,
+       * that is the very CLI shipping it: at the first stop the running code was from before identity
+       * homes, and the exec could not find the budget the ship had just opened ("no work budget").
+       * Now the rebase runs in a temporary detached worktree; the repo's own files never change. Signing
+       * changes no file, so the tree is checked equal and the branch is moved to the signed commits
+       * (reset --soft: the working files stay as they are).
+       */
+      const os = require('os');
+      const wt = fs.mkdtempSync(path.join(os.tmpdir(), `okedge-ship-${r.name}-`));
+      fs.rmSync(wt, { recursive: true, force: true });
+      const added = git(r.repo, 'worktree', 'add', '--detach', wt, 'HEAD');
+      if (added.code !== 0) stop(`${r.name}: could not make a worktree to sign in: ${added.out.trim().split('\n').pop()}`);
+      const wtRebasing = () => fs.existsSync(git(wt, 'rev-parse', '--git-path', 'rebase-merge').out.trim().replace(/^(?![A-Za-z]:|\/)/, `${wt}/`));
+      try {
+        /* GIT_EDITOR=true: no step may wait on an editor nobody sees (a scratch run of this flow hung on one) */
+        const noEditor = { env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'sed -i s/^pick/edit/' } };
+        runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '-q', '-i', `${todo[0].hash}^`], noEditor);
+        if (!wtRebasing()) stop(`${r.name}: the rebase did not stop at ${todo[0].hash.slice(0, 7)}`);
+        while (wtRebasing()) {
+          const subject = git(wt, 'log', '-1', '--format=%h %s').out.trim().slice(0, 60);
+          spend(`sign: ${r.name} ${subject}`, 'git', '-C', wt, 'commit', '--amend', '--no-edit', '-S');
+          say(`  signed ${subject}`);
+          runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
+        }
+        const signed = git(wt, 'rev-parse', 'HEAD').out.trim();
+        if (git(r.repo, 'rev-parse', 'HEAD^{tree}').out.trim() !== git(wt, 'rev-parse', `${signed}^{tree}`).out.trim()) {
+          stop(`${r.name}: the signed commits do not carry the same files - the branch was not moved (signed head ${signed.slice(0, 12)})`);
+        }
+        const moved = git(r.repo, 'reset', '-q', '--soft', signed);
+        if (moved.code !== 0) stop(`${r.name}: could not move ${r.branch} to the signed commits: ${moved.out.trim()}`);
+      } finally {
+        git(r.repo, 'worktree', 'remove', '--force', wt);
       }
       if (unsigned(r).length) stop(`${r.name}: commits still unsigned`);
     }
