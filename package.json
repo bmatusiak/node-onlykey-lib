@@ -69,7 +69,8 @@
     "./edge/cli/local-host": "./edge/cli/local-host.js",
     "./bucket/cli/home": "./bucket/cli/home.js",
     "./edge/cli/migrate-identity": "./edge/cli/migrate-identity.js",
-    "./edge/cli/nametag": "./edge/cli/nametag.js"
+    "./edge/cli/nametag": "./edge/cli/nametag.js",
+    "./edge/cli/copy": "./edge/cli/copy.js"
   },
   "files": [
     "src",
