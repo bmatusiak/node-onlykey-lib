@@ -39,7 +39,8 @@ const USAGE = [
   'onlykey-js edge watch [--once] | sync [--status | --all]',
   'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
-  'onlykey-js edge loss <from> [<to>]                            a hard key: accept links gone before this PC read them as lost (y, then the press)',
+  'onlykey-js edge loss [<from> [<to>]]                          a hard key: accept links gone before this PC read them as lost (y, then the press);',
+  '                                                              no numbers = the range the copy check finds missing',
   'onlykey-js edge agent                                         the optional service',
   'onlykey-js edge control note <repo>… | preview | ship [<repo>…] [--plan] | status | settings',
   '                                                              commits to sign and push, shipped in ONE budget (the batch lives in the Edge home)',
@@ -422,11 +423,27 @@ module.exports = function register(COMMANDS, h) {
       if (sub === 'loss') {
         if (opts.ble) throw h.usage('over Bluetooth a loss is accepted on the phone (its Edge tab: Accept loss)');
         const nums = rest.filter((x) => /^\d+$/.test(x)).map(Number);
-        if (!nums.length || nums.length > 2 || rest.length !== nums.length) throw h.usage(edgeCmd('loss <from> [<to>]'));
-        const [from, to = nums[0]] = nums;
-        if (to < from) throw h.usage(`a loss is #from..#to with from <= to, not ${from}..${to}`);
+        if (nums.length > 2 || rest.length !== nums.length) throw h.usage(edgeCmd('loss [<from> [<to>]]'));
         const d = await openDevice(io, opts, h, { dev, wait });
         try {
+          /*
+           * NO NUMBERS: the range the copy check itself finds missing - the only range a person should be
+           * offered (spec APP.md), as the phone offers it. A guessed range came up short on key 1: #387-
+           * #389 accepted, the check still missing #387-#390 (#390 could not be welded or vouched for).
+           */
+          let from;
+          let to;
+          if (nums.length) {
+            [from, to = nums[0]] = nums;
+          } else {
+            const st = await require('./copy').sync(d.edge, control.edgeHome(), { status: true });
+            const gaps = (st.verdict && st.verdict.gaps) || [];
+            if (st.verdict.kind !== 'gap' || !gaps.length) { io.out(`nothing to accept: this computer's copy is ${st.verdict.kind}`); return 0; }
+            from = Math.min(...gaps.map((g) => g.from));
+            to = Math.max(...gaps.map((g) => g.to));
+            io.out(`the copy check finds missing: ${gaps.map((g) => `#${g.from}-#${g.to}`).join(', ')}`);
+          }
+          if (to < from) throw h.usage(`a loss is #from..#to with from <= to, not ${from}..${to}`);
           const head = await d.edge.head();
           if (head.seq === null || to > head.seq) throw h.usage(`the key's head is #${head.seq}: a loss cannot reach past it`);
           io.out(`#${from}-#${to} would be accepted as LOST: the key links a LOSS for them (it pays no debt, it is on the chain for good),`);
