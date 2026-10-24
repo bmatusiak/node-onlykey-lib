@@ -571,11 +571,9 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
     get: async () => (pointers && deviceId ? pointers.budget(deviceId) : null),
     set: async (id) => { if (pointers && deviceId) await pointers.setBudget(deviceId, id); },
   };
-  const VERSION = 2;
-  const ED25519 = 1;
   const device = {
-    publicKey: (identity) => okcrypto.agent.publicKey(identity, { keyType: ED25519, version: VERSION }),
-    sign: (identity, message) => okcrypto.agent.sign(identity, message, { keyType: ED25519, version: VERSION, ...(confirm ? { confirm } : {}) }),
+    publicKey: (identity) => agentPublicKey(okcrypto, identity),
+    sign: (identity, message) => okcrypto.agent.sign(identity, message, { ...AGENT_DERIVE, ...(confirm ? { confirm } : {}) }),
   };
 
   const sshId = wire.parseIdentity(identity.ssh);
@@ -663,5 +661,13 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
   return { ...base, controlPath: control.path, async close() { await agent.closeAll(); await control.close(); } };
 }
 
+/*
+ * THE AGENT'S DERIVE: ed25519, version 2 - its ssh and gpg keys, and the test that an identity record is
+ * this key's (the certificate's signPublic is this derive for its gpg user ID). One place, so the agent
+ * and the identity migration (migrate-identity.js) derive the same key.
+ */
+const AGENT_DERIVE = { keyType: 1, version: 2 };
+const agentPublicKey = (okcrypto, identity) => okcrypto.agent.publicKey(identity, AGENT_DERIVE);
+
 module.exports = {
-  isSilence, openWithOneRetry, createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS };
+  isSilence, openWithOneRetry, createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS, AGENT_DERIVE, agentPublicKey };

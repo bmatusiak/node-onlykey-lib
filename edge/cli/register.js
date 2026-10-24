@@ -39,6 +39,7 @@ const USAGE = [
   'onlykey-js edge watch [--once] | sync [--status | --all]',
   'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
+  'onlykey-js edge migrate [--dry-run]                           copy this key\'s records from before identities into its identity (once)',
   'onlykey-js edge loss [<from> [<to>]]                          a hard key: accept links gone before this PC read them as lost (y, then the press);',
   '                                                              no numbers = the range the copy check finds missing',
   'onlykey-js edge agent                                         the optional service',
@@ -161,7 +162,7 @@ function keyAnswers(connected, h, what) {
  * The phone and the key's Edge, with the wire to the app - what `edge setup` needs, and
  * what the stack below is built on.
  */
-async function openDevice(io, opts, h, { dev, wait }) {
+async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
   const { wire } = require('../src');
   const { openWithOneRetry } = require('./agent');
   const say = (l) => io.err(`edge: ${l}`);
@@ -181,7 +182,13 @@ async function openDevice(io, opts, h, { dev, wait }) {
    * <net home>/<identity id>. Everything this command keeps (the identity record, budgets, pointers,
    * copies, notes) files there, so a key from another backup never reads or writes this one's.
    */
-  const home = path.join(require('./control').edgeHome(), await edge.identityId());
+  const netHome = require('./control').edgeHome();
+  const home = path.join(netHome, await edge.identityId());
+  /* records from before identities, not yet copied in: stop and say so - never start empty beside them */
+  if (!migrating && require('./migrate-identity').needsMigration(netHome, home)) {
+    await Promise.resolve(app.destroy()).catch(() => undefined);
+    throw h.usage(`this computer holds Edge records from before identities that may be this key's - copy them in first: ${edgeCmd('migrate --dry-run')} (what it would copy), then ${edgeCmd('migrate')}`);
+  }
   /*
    * WHO HOSTS EDGE. Over Bluetooth the phone does: the wire to its app. A key on USB is a hard key
    * (or Linux's emulated one on the bus) - no phone behind it answers the wire, so this computer is
@@ -346,7 +353,7 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the phone */
-      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
+      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', 'migrate', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
 
       /*
@@ -427,6 +434,35 @@ module.exports = function register(COMMANDS, h) {
        * unread, and every budget after was refused "copy does not verify". The person says yes here,
        * then presses. Over Bluetooth the phone has its own Accept loss.
        */
+      /*
+       * EDGE MIGRATE (B3.0): the records from before identities, copied into THIS key's identity home -
+       * only what is provably this key's (migrate-identity.js); --dry-run says what it would copy and
+       * writes nothing. The net's old stores are left as they were.
+       */
+      if (sub === 'migrate') {
+        const dry = rest.includes('--dry-run');
+        if (rest.some((a) => a !== '--dry-run')) throw h.usage(edgeCmd('migrate [--dry-run]'));
+        const d = await openDevice(io, opts, h, { dev, wait, migrating: true });
+        try {
+          const { toHex } = require('../../src/bytes');
+          const { agentPublicKey } = require('./agent');
+          const deviceIdHex = toHex((await d.edge.publicKey()).deviceId);
+          const r = await require('./migrate-identity').migrateToIdentity({
+            netHome: control.edgeHome(), idHome: d.home, deviceIdHex,
+            signPublicOf: async (gpgUid) => toHex(await agentPublicKey(d.okcrypto, { gpg: gpgUid })),
+            dryRun: dry,
+          });
+          io.out(`identity ${path.basename(d.home)}, device ${deviceIdHex.slice(0, 16)}${NET === 'test' ? ' (testnet)' : ''}`);
+          if (r.already) { io.out('already migrated - nothing to do'); return 0; }
+          io.out(`${dry ? 'would copy' : 'copied'}: the agent identity record: ${r.identity ? 'yes' : 'no'} · this device's chain copy: ${r.copy ? 'yes' : 'no'} · budgets: ${r.budgets.length ? r.budgets.join(', ') : 'none'} · pointer: ${r.pointers ? 'yes' : 'no'}`);
+          for (const s of r.skipped) io.out(`left where it is: ${s}`);
+          io.out(dry ? 'nothing written (--dry-run)' : 'done - the records from before identities are left as they were');
+          return 0;
+        } finally {
+          await Promise.resolve(d.app.destroy()).catch(() => undefined);
+        }
+      }
+
       if (sub === 'loss') {
         if (opts.ble) throw h.usage('over Bluetooth a loss is accepted on the phone (its Edge tab: Accept loss)');
         const nums = rest.filter((x) => /^\d+$/.test(x)).map(Number);
