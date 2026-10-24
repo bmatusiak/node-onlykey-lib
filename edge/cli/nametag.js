@@ -52,7 +52,40 @@ async function setName({ edge, home, nametag, now = Date.now }) {
   const rec = { nametag: st.nametag, at: now(), statement: toStored(st) };
   const deviceId = toHex(st.deviceId);
   devices(home).setItem(deviceId, JSON.stringify(rec));
-  return { deviceId, nametag: rec.nametag, at: rec.at };
+  /* named: its log can now be offered to the identity's other devices */
+  const log = await offerOwnLog({ edge, home }).catch((e) => ({ kept: false, why: e.message }));
+  return { deviceId, nametag: rec.nametag, at: rec.at, log };
 }
 
-module.exports = { getName, listNames, setName };
+/* the kept statement of one device, back as the bytes copy.keepLog checks */
+function statementOf(home, deviceIdHex) {
+  const t = devices(home).getItem(deviceIdHex);
+  if (!t) return null;
+  try {
+    const s = JSON.parse(t).statement;
+    if (!s) return null;
+    const { fromHex } = require('../../src/bytes');
+    return Object.fromEntries(Object.entries(s).map(([k, v]) => [k, BYTE_FIELDS.includes(k) && typeof v === 'string' ? fromHex(v) : v]));
+  } catch (_) { return null; }
+}
+
+/**
+ * A HARD KEY'S LOG, READY TO OFFER to the other devices of its identity (Brad, 2026-10-24: "each team
+ * knows the budget history if using the same key identity"). A phone's log is kept to offer by the pull
+ * of edge sync (agent.js: its statement + its checkpoint -> copy.keepLog); a hard key has no phone to
+ * pull, so this computer does the same with the SAME function, from the key's own statement (its name,
+ * setName) and its checkpoint now. keepLog's checks decide - the statement names this device, the chain
+ * verifies, every use is complete - and say why not.
+ * @returns {Promise<{kept: boolean, why?: string}>}
+ */
+async function offerOwnLog({ edge, home }) {
+  const copy = require('./copy');
+  const { publicKey, deviceId } = await edge.publicKey();
+  const statement = statementOf(home, toHex(deviceId));
+  if (!statement) return { kept: false, why: 'this device has no name yet (onlykey-js edge name)' };
+  const c = copy.load(home, deviceId);
+  const checkpoint = await edge.checkpoint();
+  return copy.keepLog(home, { deviceId, publicKey, publicKeyPq: c.publicKeyPq || (await edge.publicKeyPq('checkpoint')), records: c.links, checkpoint, statement });
+}
+
+module.exports = { getName, listNames, setName, offerOwnLog };

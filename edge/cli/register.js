@@ -271,6 +271,8 @@ async function openStack(io, opts, h, { serve, dev, wait }) {
       const r = await require('./copy').sync(edge, home).catch((e) => ({ error: e }));
       if (r && r.error) say(`could not bring this computer's copy to the key's head (${r.error.message})`);
       else if (r && r.verdict && r.verdict.kind !== 'verified' && r.verdict.kind !== 'unsigned') say(`this computer's copy of the chain: ${r.verdict.kind}${r.verdict.seq !== undefined ? ` at #${r.verdict.seq}` : ''}`);
+      /* and its log kept ready to offer to the identity's other devices (nametag.js offerOwnLog - as a phone's pull does) */
+      else await require('./nametag').offerOwnLog({ edge, home }).catch(() => undefined);
     };
     return { app, transport, svc, identity, home, close: async () => { await svc.close(); await pickUp(); await app.destroy(); } };
   } catch (e) {
@@ -464,6 +466,7 @@ module.exports = function register(COMMANDS, h) {
           }
           const r = await names.setName({ edge: d.edge, home: d.home, nametag });
           io.out(`this device is "${r.nametag}" (device ${r.deviceId.slice(0, 16)}, identity ${path.basename(d.home).slice(0, 12)}…)`);
+          io.out(r.log && r.log.kept ? 'its log is ready to offer to your other devices (edge sync)' : `its log is not offered yet: ${(r.log && r.log.why) || 'unknown'}`);
           return 0;
         } finally {
           await Promise.resolve(d.app.destroy()).catch(() => undefined);
