@@ -522,8 +522,9 @@ function verifyCore(copy, key, prev, out) {
 
   /* the debts the copy implies (from after the last covered gap), against the debts the key reports */
   const d = keyDebts(raw.filter((l) => chain.decodeLink(l).seq > lastGapEnd));
-  if (d.owed.length !== h.owed) {
-    return fail('debts', { detail: { copy: { owed: d.owed }, key: { owed: h.owed } } });
+  /* a debt a CONTINUE carried counts too: the key owes it until a receipt or a settle on this chain (receipts.keyDebts) */
+  if (d.owed.length + d.carried !== h.owed) {
+    return fail('debts', { detail: { copy: { owed: d.owed, carried: d.carried }, key: { owed: h.owed } } });
   }
   const result = { ok: true, verifiedThrough: h.seq, head: h.head };
   const last = entries.length ? entries[entries.length - 1] : null;

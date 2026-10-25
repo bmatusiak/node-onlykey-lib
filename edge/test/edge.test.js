@@ -477,3 +477,22 @@ test('receipts: the message check is kept per receipt link, and a changed messag
     provider.setCryptoProvider(null);
   }
 });
+
+/*
+ * A DEBT CARRIED BY A CONTINUE (R28): a restored chain starts owing what its CONTINUE carried
+ * (grant_id); a receipt or a settle naming a seq from before the CONTINUE pays it. (Box developer
+ * key, 2026-10-24: the key reported one owed, the replay saw none, and every budget was refused.)
+ */
+test('receipts: a CONTINUE that carried a debt owes it until a receipt or a settle for an old seq', () => {
+  const z = () => new Uint8Array(32);
+  const at = (f) => ({ link: chain.encodeLink({ subject: z(), ...f }), head: z() });
+  const cont = (debts) => at({ seq: 28, op: codes.OP.CONTINUE, grantId: debts });
+  assert.deepEqual(receipts.keyDebts([cont(0)]), { owed: [], carried: 0 }, 'nothing carried');
+  assert.deepEqual(receipts.keyDebts([cont(1)]), { owed: [], carried: 1 }, 'one carried');
+  const paid = [cont(1), at({ seq: 29, op: codes.OP.RECEIPT, decision: 0x00, grantId: 27 })];
+  assert.equal(receipts.keyDebts(paid).carried, 0, 'a receipt for the old seq pays it');
+  const settled = [cont(1), at({ seq: 29, op: codes.OP.RECEIPT, decision: 0x8f, flags: codes.FLAG.PRESS_OBSERVED, grantId: 27 })];
+  assert.equal(receipts.keyDebts(settled).carried, 0, 'a settle clears it');
+  const unrelated = [cont(1), at({ seq: 30, op: codes.OP.RECEIPT, decision: 0x00, grantId: 29 })];
+  assert.equal(receipts.keyDebts(unrelated).carried, 1, 'a receipt for a seq of this chain does not');
+});

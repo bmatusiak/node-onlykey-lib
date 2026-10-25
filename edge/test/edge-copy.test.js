@@ -136,7 +136,7 @@ test('copy: every way a copy can fail is named, and the first one is the answer'
 
   const owes = check({}, { ...s.key, head: { ...s.key.head, owed: 1 } });
   assert.equal(owes.reason, 'debts');
-  assert.deepEqual(owes.detail, { copy: { owed: [] }, key: { owed: 1 } });
+  assert.deepEqual(owes.detail, { copy: { owed: [], carried: 0 }, key: { owed: 1 } });
 });
 
 test('copy: an empty key verifies only an empty copy', () => {

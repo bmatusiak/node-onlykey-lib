@@ -80,20 +80,35 @@ const OWING = new Set([DECISION.APPROVE, DECISION.SELF_PRESS]);
  *   - a receipt for it pays it;
  *   - a SETTLE (0x8F, the press flag, the subject over its seq) clears it.
  * Replay from the chain's first link; a copy that starts later cannot know what it started with.
- * -> {owed: [seq] or []}
+ *
+ * A DEBT CARRIED BY A CONTINUE (R28; box developer key, 2026-10-24: a chain restored at #28 carried
+ * one, the key reported it owed, this replay did not - and every budget was refused "debts"). A
+ * restore's CONTINUE has grant_id = the debts it carried (the firmware carries at most one, the use
+ * from the old chain); its seq is inside the subject's hash, so it cannot be named here. It "stays
+ * owed here and is paid by receipt or settle on this chain" (okplugin_edge.cpp): a receipt naming a
+ * seq from before the CONTINUE, or a SETTLE, pays it.
+ * -> {owed: [seq] or [], carried: 0 | 1}
  */
 function keyDebts(entries) {
   let owed = null;
+  let carried = 0;
+  let continuedAt = null;
   for (const e of entries) {
     const f = decodeLink(e instanceof Uint8Array ? e : e.link);
+    if (f.op === OP.CONTINUE) {
+      continuedAt = f.seq;
+      carried = f.grantId > 0 ? 1 : 0;
     /* R16: the KEY decided at the sign, and wrote it into the link (owes_receipt) - the chain could not replay it */
-    if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && OWING.has(f.decision) && (f.flags & FLAG.OWES_RECEIPT)) owed = f.seq;
+    } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && OWING.has(f.decision) && (f.flags & FLAG.OWES_RECEIPT)) owed = f.seq;
     else if (f.op === OP.RECEIPT && owed !== null) {
       const settled = f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED) && same(f.subject, settleSubject(owed));
       if (settled || f.refSeq === owed) owed = null;
+    } else if (f.op === OP.RECEIPT && carried) {
+      const settle = f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED);
+      if (settle || (continuedAt !== null && f.refSeq < continuedAt)) carried = 0;
     }
   }
-  return { owed: owed === null ? [] : [owed] };
+  return { owed: owed === null ? [] : [owed], carried };
 }
 
 function pairReceipts(entries, messages = {}) {
