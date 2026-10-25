@@ -64,7 +64,7 @@ function loadMe(id, net) {
 }
 
 async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
-  say('bucket: making this computer\'s bucket key, once - the key asks for two presses');
+  say('sync: making this computer\'s bucket key, once - the key asks for two presses');
   const bucketKey = await bid.deriveBucketKey(okcrypto, identityPublicKey, opts);
   const certificate = await bid.certify(okcrypto, identityPublicKey, bucketKey.publicKey, opts);
   const file = keyFile(id, net);

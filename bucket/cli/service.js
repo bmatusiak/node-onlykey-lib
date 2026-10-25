@@ -1,6 +1,6 @@
 'use strict';
 /*
- * THE BUCKET SERVICE: watch this computer's bucket and trade it, by itself (Brad, 2026-10-25: "we don't have a service
+ * THE SYNC SERVICE (Brad, 2026-10-25: "this service is a sync service"): watch this computer's bucket and trade it, by itself (Brad, 2026-10-25: "we don't have a service
  * for watching changes - the desktop app is long-lived so a service can live in that, but for normal cli `--service`
  * will be our long-lived, and --soft-key is also long-lived until it ends").
  *
@@ -53,11 +53,13 @@ function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOU
     if (stopped) return;
     if (running) { again = true; return running; }
     running = (async () => {
+      /* said first, so a host shows a sync in progress (ok-edge: the 🔁 flashes) */
+      say(`sync: trading (${why})`);
       try {
         const r = await tradeOnce();
-        say(r.traded ? `bucket: traded (${why}) - took ${n(r.taken)}, gave ${n(r.gave)}` : `bucket: not traded (${why}) - ${r.why}`);
+        say(r.traded ? `sync: traded (${why}) - took ${n(r.taken)}, gave ${n(r.gave)}` : `sync: not traded (${why}) - ${r.why}`);
       } catch (e) {
-        say(`bucket: not traded (${why}) - ${e.message}`);
+        say(`sync: not traded (${why}) - ${e.message}`);
       } finally {
         synced = contentsOf(dir);
         running = null;
@@ -80,7 +82,7 @@ function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOU
       }, debounceMs);
     });
   } catch (e) {
-    say(`bucket: cannot watch ${dir} (${e.message}) - trading on the timer only`);
+    say(`sync: cannot watch ${dir} (${e.message}) - trading on the timer only`);
   }
   const tick = setInterval(() => { void trade('the regular check'); }, intervalMs);
   if (tick.unref) tick.unref();

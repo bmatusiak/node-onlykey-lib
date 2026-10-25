@@ -2386,7 +2386,7 @@ async function main(argv, io = {}) {
    */
   /*
    * --service: THIS COMPUTER'S ONE LONG-LIVED PROCESS (Brad, 2026-10-25: "for normal cli --service will be our
-   * long-lived"; one service, not two): the Edge agent (edge agent) with the bucket service in it, which watches this
+   * long-lived"; one service, not two): the Edge agent (edge agent) with the sync service in it, which watches this
    * computer's buckets and trades them with the paired devices it reaches. `onlykey-js [--ble] --service [--test-mode]`
    * is `onlykey-js [--ble] edge [--test-mode] agent`.
    */

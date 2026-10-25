@@ -1,5 +1,5 @@
 /*
- * The bucket service (bucket/cli/service.js): a change to this computer's kept bucket is traded once a burst of writes
+ * The sync service (bucket/cli/service.js): a change to this computer's kept bucket is traded once a burst of writes
  * settles; the trade's own write is not traded again (no loop); a change during a trade is traded after it.
  */
 'use strict';

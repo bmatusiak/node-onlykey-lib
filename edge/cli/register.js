@@ -302,7 +302,7 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
       const t = await require('../../bucket/cli/trade').tradeWith({ send, okcrypto, net: NET, say })
         .catch((e) => ({ traded: false, why: e.message }));
       const n = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
-      say(t.traded ? `bucket: traded with the phone - took ${n(t.taken)}, gave ${n(t.gave)}` : `bucket: not traded this time (${t.why})`);
+      say(t.traded ? `sync: traded with the phone - took ${n(t.taken)}, gave ${n(t.gave)}` : `sync: not traded this time (${t.why})`);
     };
     return { app, transport, svc, identity, home, channel, okcrypto, say, close: async () => { await shareLogs(); await svc.close(); await pickUp(); await app.destroy(); } };
   } catch (e) {
@@ -659,7 +659,7 @@ module.exports = function register(COMMANDS, h) {
           io.out(h.row('control', svc.controlPath));
           io.out(`ready - ${edgeCmd('budget / exec / receipt')} use this service; Ctrl-C to stop`);
           /*
-           * AND THE BUCKET SERVICE (bucket/cli/service.js; Brad, 2026-10-25: "--service will be our long-lived"; "the
+           * AND THE SYNC SERVICE (bucket/cli/service.js; Brad, 2026-10-25: "--service will be our long-lived"; "the
            * service can do bluetooth stuff"): this computer's kept buckets watched, and traded with the paired phone this
            * service reaches - when they change (the desktop app writes the same files), on a slow timer, and once now.
            */
