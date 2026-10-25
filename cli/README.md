@@ -224,8 +224,13 @@ It needs one more optional peer, per platform, exactly like `node-hid`:
 
 | platform | stack | install |
 | --- | --- | --- |
-| Windows | WinRT, through `@stoprocent/noble` 2.8.0 | `npm install @stoprocent/noble@2.8.0` |
+| Windows | WinRT, through the noble fork (`@stoprocent/noble` 2.8.0-bm.1, N-API prebuilds) | `npm install github:bmatusiak/noble-ble#d41c7dd91130ae04603858249dd91edf2a324053` |
 | Linux | BlueZ's own GATT API over D-Bus, through `dbus-next` | `npm install dbus-next` |
+
+An app that syncs over Bluetooth lists them as its own dependencies - the ok-edge
+desktop app does (its `optionalDependencies`), so the lib inside it reaches the
+phone; the lib keeps them optional peers, so the web app and ok-rn download nothing
+native.
 
 Pair the phone first: in Settings on Windows, with
 `scripts/ble-linux-connect.sh` on Linux (below). Why not noble on Linux: its
