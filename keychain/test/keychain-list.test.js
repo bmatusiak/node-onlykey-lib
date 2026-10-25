@@ -107,3 +107,19 @@ test('one spelling: a derived label recorded with its scheme ("gpg://<uid>") is 
   const file = list.serialize([old]).replace('"Agent <a@b.example>"', '"gpg://Agent <a@b.example>"');
   assert.equal(list.parse(file)[0].label, 'Agent <a@b.example>');
 });
+
+/*
+ * Two devices' lists that differ only in when an entry was last used end the same, byte for byte, whichever side
+ * merges - the bucket sync compares hashes, and a list that kept each side's own time never matched (2026-10-25).
+ */
+test('merge: the later lastSeen is kept, so both sides end with the same list', () => {
+  const pub = ed25519.getPublicKey(crypto.randomBytes(32));
+  const base = { kind: 'derived', scheme: 'agent', label: 'ssh://a@b', type: 'ed25519', publicKey: pub, firstSeen: '2026-10-01T00:00:00.000Z' };
+  const phone = [list.createEntry({ ...base, lastSeen: '2026-10-25T19:16:51.000Z' })];
+  const desk = [list.createEntry({ ...base, lastSeen: '2026-10-25T18:00:00.000Z' })];
+  const onDesk = list.merge(desk, phone);
+  const onPhone = list.merge(phone, desk);
+  assert.equal(onDesk.joined + onDesk.added + onDesk.paired, 0, 'not counted as a change');
+  assert.equal(list.serialize(onDesk.entries), list.serialize(onPhone.entries));
+  assert.equal(onDesk.entries[0].lastSeen, '2026-10-25T19:16:51.000Z');
+});

@@ -10,8 +10,10 @@
  *   - THIS COMPUTER'S BUCKET CHANGED: the folder of kept buckets is watched - the desktop app writes the same files, so
  *     a password added there is traded from here (the desktop app has no Bluetooth of its own). Changes in a burst are
  *     waited out (DEBOUNCE_MS) and one trade covers them.
- *   - A SLOW BACKSTOP (INTERVAL_MS): what changed on the other device - the phone cannot start a link to a computer;
- *     the computer reaches it - and anything a watcher missed.
+ *   - A REGULAR CHECK (INTERVAL_MS): what changed on the other device - the phone cannot start a link to a computer;
+ *     the computer reaches it - and anything a watcher missed. Short, because a check costs two small messages: the
+ *     trade compares the two buckets' hashes and timestamps first, and moves records only when they differ (Brad,
+ *     2026-10-25: "shorter regular check is easy if we check hashes and timestamps").
  *
  * One trade at a time. A change this computer's own trade wrote is not a change to trade again: each trade notes the
  * kept files' contents after it, and a watch event on files that still read the same is skipped - so it never loops.
@@ -21,13 +23,14 @@ const path = require('path');
 const crypto = require('crypto');
 
 const DEBOUNCE_MS = 3000;
-const INTERVAL_MS = 5 * 60 * 1000;
+const INTERVAL_MS = 30 * 1000;
 
 /* what the kept buckets read now: one hash over every bucket file in the folder */
 function contentsOf(dir) {
   const h = crypto.createHash('sha256');
   let names = [];
-  try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort(); } catch { return ''; }
+  /* the buckets only, by identity id - not synced-with.json beside them */
+  try { names = fs.readdirSync(dir).filter((f) => /^[0-9a-f]{32}\.json$/.test(f)).sort(); } catch { return ''; }
   for (const n of names) {
     h.update(n);
     try { h.update(fs.readFileSync(path.join(dir, n))); } catch { /* replaced while read: the next event reads it */ }
@@ -53,11 +56,15 @@ function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOU
     if (stopped) return;
     if (running) { again = true; return running; }
     running = (async () => {
-      /* said first, so a host shows a sync in progress (ok-edge: the 🔁 flashes) */
-      say(`sync: trading (${why})`);
+      /*
+       * the trade itself says "sync: trading" once records move (a host flashes then - ok-edge's ⇄); a check that finds
+       * the same state says "in sync", and nothing moved
+       */
       try {
         const r = await tradeOnce();
-        say(r.traded ? `sync: traded (${why}) - took ${n(r.taken)}, gave ${n(r.gave)}` : `sync: not traded (${why}) - ${r.why}`);
+        if (r.traded && r.same) say(`sync: in sync (${why})`);
+        else if (r.traded) say(`sync: traded (${why}) - took ${n(r.taken)}, gave ${n(r.gave)}${r.settled === false ? ' - NOT settled' : ''}`);
+        else say(`sync: not traded (${why}) - ${r.why}`);
       } catch (e) {
         say(`sync: not traded (${why}) - ${e.message}`);
       } finally {

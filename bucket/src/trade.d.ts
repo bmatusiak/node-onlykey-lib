@@ -1,13 +1,14 @@
 export namespace TYPES {
     let HELLO: string;
     let PROVE: string;
+    let HAVE: string;
     let GIVE: string;
 }
 /**
- * The computer's side of one trade, round by round.
+ * The computer's side of one trade, step by step. Each step takes the peer's answer to the last message and returns
+ * the next message (or what the trade came to); null means the trade stops there (no proof, no answer, a refusal).
  * @param {{bucket: object, me: object, randomBytes: (n: number) => Uint8Array, rules?: object}} o
  *   bucket: this computer's open bucket (changed in place by take); me: its bucket identity, bucket key, certificate
- * @returns {{hello(): object, prove(answer: object): object|null, give(answer: object): object|null, finish(answer: object): {taken: object}|null}}
  */
 export function computerSide({ bucket, me, randomBytes, rules }: {
     bucket: object;
@@ -15,11 +16,99 @@ export function computerSide({ bucket, me, randomBytes, rules }: {
     randomBytes: (n: number) => Uint8Array;
     rules?: object;
 }): {
-    hello(): object;
-    prove(answer: object): object | null;
-    give(answer: object): object | null;
-    finish(answer: object): {
-        taken: object;
+    hello: () => {
+        type: string;
+        v: number;
+        nonce: string;
+        identity: any;
+    };
+    prove(answer: any): {
+        type: string;
+        v: number;
+        identity: any;
+        proof: {
+            identityPublicKey: string;
+            bucketPublicKey: string;
+            certificate: string;
+            signature: string;
+        };
+        state: {
+            hash: string;
+            at: string | null;
+            stores: {
+                [x: string]: string;
+            };
+        };
+    } | null;
+    compare(answer: any): {
+        same: boolean;
+        differs?: undefined;
+        message?: undefined;
+    } | {
+        same: boolean;
+        differs: string[];
+        message: {
+            type: string;
+            v: number;
+            identity: any;
+            have: {
+                [x: string]: {
+                    [x: string]: {
+                        at: string;
+                        h: string;
+                    };
+                };
+            };
+        };
+    } | null;
+    give(answer: any): {
+        message: {
+            type: string;
+            v: number;
+            identity: any;
+            give: {
+                [x: string]: {
+                    [x: string]: {
+                        v: string | null;
+                        at: string;
+                        archived?: true;
+                    };
+                };
+            };
+        };
+        taken: {
+            [x: string]: number;
+        };
+        mine: any;
+        theirs: any;
+    } | null;
+    settle(answer: any): {
+        same: boolean;
+        taken: any;
+        differs?: undefined;
+        message?: undefined;
+    } | {
+        same: boolean;
+        taken: any;
+        differs: string[];
+        message: {
+            type: string;
+            v: number;
+            identity: any;
+            have: {
+                [x: string]: {
+                    [x: string]: {
+                        at: string;
+                        h: string;
+                    };
+                };
+            };
+        };
+    } | {
+        same: boolean;
+        taken: any;
+        differs: string[];
+        message?: undefined;
     } | null;
 };
 /**

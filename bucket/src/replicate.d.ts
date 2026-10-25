@@ -62,4 +62,25 @@ export function take(bucket: {
     conflicts: any[];
 };
 export function hashOf(rec: any): string;
+/**
+ * A BUCKET'S STATE: one hash over every record - its store, key, value hash and date - and the time of its last
+ * change (Brad, 2026-10-25: "ping hashes and timestamps so each device can compare its state before it updates,
+ * trading until all hashes are the same"; "the phone tells the desktop a hash and timestamp"). Two devices with the
+ * same state hold the same bucket: no trade is needed, and a trade is complete only when the states match. Per store
+ * too, so a store that never settles is named. An empty store counts as none.
+ * @param {{stores: Object, clock?: string|null}} bucket
+ * @returns {{hash: string, at: string|null, stores: Object<string, string>}}
+ */
+export function stateOf(bucket: {
+    stores: Object;
+    clock?: string | null;
+}): {
+    hash: string;
+    at: string | null;
+    stores: {
+        [x: string]: string;
+    };
+};
+/** The stores whose state differs between two states (bucket names only). */
+export function differs(a: any, b: any): string[];
 import { mergeKeys } from "./bucket";

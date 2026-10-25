@@ -81,7 +81,8 @@ async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
  * @param {{send: (message: object) => Promise<object|null>, okcrypto: object, net?: 'live'|'test', say?: (l: string) => void, keyOpts?: object}} o
  *   send: one message to the paired device, its answer (null when it did not answer); okcrypto: the key this computer
  *   talks to (for the bucket identity, and the bucket key the first time); keyOpts: the presses' confirm/onKeepAlive
- * @returns {Promise<{traded: boolean, why?: string, taken?: object, gave?: object}>}
+ * @returns {Promise<{traded: boolean, same?: boolean, settled?: boolean, refused?: boolean, why?: string, taken?: object, gave?: object}>}
+ *   same: the states matched, nothing moved; settled: they match after the trade
  */
 /*
  * HOW LONG ONE TRADE MESSAGE MAY TAKE (the box, 2026-10-25): over Bluetooth a message crosses at about 2.6 KB/s (469-byte
@@ -94,46 +95,90 @@ function tradeTimeoutMs(message, first) {
   return Math.max(first ? 60000 : 30000, 30000 + Math.ceil(size / 1.5));
 }
 
+/*
+ * WHICH IDENTITY TO TRADE AS, WITHOUT ASKING THE KEY EVERY TIME (the box, 2026-10-25). Reading the bucket identity is a
+ * derive on the key this computer talks to - over Bluetooth the phone's - and the phone's Key Chain records each derive
+ * ("last used"), so a sync that read it every time changed the phone's bucket every time, and never settled. The
+ * identity of the last trade that went through is kept (buckets/<net>/synced-with.json, a public id); its bucket key is
+ * already here. The key is asked only when there is none, or the device does not prove that identity.
+ */
+const syncedWithFile = (net) => path.join(home.root(), 'buckets', net === 'test' ? 'test' : 'live', 'synced-with.json');
+function rememberedIdentity(net) {
+  try {
+    const id = JSON.parse(fs.readFileSync(syncedWithFile(net), 'utf8')).id;
+    return bid.isBucketIdentityId(id) && loadMe(id, net) ? id : null;
+  } catch {
+    return null;
+  }
+}
+function rememberIdentity(net, id) {
+  try { fs.writeFileSync(syncedWithFile(net), `${JSON.stringify({ id })}\n`, { mode: 0o600 }); } catch { /* asked again next time */ }
+}
+
+const count = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+const addTo = (sum, o) => { for (const [k, v] of Object.entries(o || {})) sum[k] = (sum[k] || 0) + v; return sum; };
+
 async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts = {} }) {
-  const { id, publicKey } = await bid.readIdentity(okcrypto);
+  const remembered = rememberedIdentity(net);
+  const first = await tradeAs({ send, okcrypto, net, say, keyOpts, id: remembered });
+  /* the remembered identity is not the one this device proves: ask the key, once */
+  if (remembered && first.refused) return tradeAs({ send, okcrypto, net, say, keyOpts, id: null });
+  return first;
+}
+
+async function tradeAs({ send, okcrypto, net, say, keyOpts, id: knownId }) {
+  let id = knownId;
+  let me = id ? loadMe(id, net) : null;
+  if (!me) {
+    const read = await bid.readIdentity(okcrypto);
+    id = read.id;
+    me = loadMe(id, net) || await makeMe(okcrypto, id, read.publicKey, net, say, keyOpts);
+  }
   const file = home.identityFile(id, net);
   if (!home.hasIdentityBucket(id, net)) home.keepIdentityBucket(id, net, bucketLib.create({ owner: id }));
-  const me = loadMe(id, net) || await makeMe(okcrypto, id, publicKey, net, say, keyOpts);
   const copy = home.read(file);
   const r = storeRules();
   const c = trade.computerSide({ bucket: copy, me, randomBytes: rnd, rules: r });
   const m2 = c.prove(await send(c.hello()));
-  if (!m2) return { traded: false, why: 'the device did not prove this bucket identity, or does not trade yet' };
-  const g = c.give(await send(m2));
-  if (!g) return { traded: false, why: 'the device did not answer the trade' };
-  /* what goes, per store - counts and size only, never a key or value - so a store that never settles shows */
-  const giving = Object.fromEntries(Object.entries(g.message.give || {}).map(([s, recs]) => [s, Object.keys(recs).length]));
-  if (Object.keys(g.taken || {}).length) say(`sync: took ${JSON.stringify(g.taken)}`);
-  /* each record given: both sides' dates - a store whose record goes every time shows which side keeps it different */
-  for (const [s, recs] of Object.entries(g.message.give || {})) {
-    for (const k of Object.keys(recs).slice(0, 3)) {
-      const m = (g.mine[s] || {})[k];
-      const t = (g.theirs[s] || {})[k];
-      say(`sync:   ${s}/${k.length > 24 ? `${k.slice(0, 8)}…${k.slice(-12)}` : k} here ${m ? m.at : '-'}, there ${t ? t.at : '-'}`);
-    }
+  if (!m2) return { traded: false, refused: true, why: 'the device did not prove this bucket identity, or does not trade yet' };
+  /* the states first: the same - in sync, nothing more is sent */
+  let step = c.compare(await send(m2));
+  if (!step) return { traded: false, why: 'the device did not say its state' };
+  rememberIdentity(net, id);
+  if (step.same) return { traded: true, same: true, settled: true, taken: {}, gave: {} };
+  say(`sync: trading - ${step.differs.join(', ') || 'the bucket'} differ`);
+  const taken = {};
+  const gave = {};
+  let settled = false;
+  for (;;) {
+    const g = c.give(await send(step.message));
+    if (!g) { say('sync: the device did not answer its HAVE'); break; }
+    addTo(taken, g.taken);
+    /* what goes, per store - counts and size only, never a key or value */
+    const giving = Object.fromEntries(Object.entries(g.message.give || {}).map(([s, recs]) => [s, Object.keys(recs).length]));
+    if (Object.keys(g.taken || {}).length) say(`sync: took ${JSON.stringify(g.taken)}`);
+    if (Object.keys(giving).length) say(`sync: giving ${JSON.stringify(giving)} (${Math.round(JSON.stringify(g.message).length / 1024)} KB)`);
+    const answer = await send(g.message);
+    const s = c.settle(answer);
+    /* what it took is the device's own count; an answer without one is said, never read as "took nothing" */
+    if (!s) { say(`sync: the device did not confirm what it took (${answer ? JSON.stringify(answer).slice(0, 160) : 'no answer'})`); break; }
+    addTo(gave, s.taken);
+    if (s.same) { settled = true; break; }
+    if (!s.message) { say(`sync: not settled - ${s.differs.join(', ')} still differ after every round`); break; }
+    say(`sync: another round - ${s.differs.join(', ')} still differ`);
+    step = s;
   }
-  if (Object.keys(giving).length) say(`sync: giving ${JSON.stringify(giving)} (${Math.round(JSON.stringify(g.message).length / 1024)} KB)`);
-  const answer = await send(g.message);
-  const done = c.finish(answer);
-  /* what it took is the phone's own count; an answer without one is said, never read as "took nothing" */
-  if (!done) say(`sync: the phone did not confirm what it took (${answer ? JSON.stringify(answer).slice(0, 160) : 'no answer'})`);
   /*
    * what the trade changed, into the kept file as it is NOW (the newer wins either way round) - and only when it took
    * something: a rewrite that changes nothing still wakes the sync service's watcher, which then traded again, and again
    * (the box, 2026-10-25: "traded - took 0, gave 0", then "trading (changed meanwhile)", without end)
    */
-  const took = Object.values(g.taken || {}).reduce((a, b) => a + b, 0);
-  if (took) home.update(file, (b) => {
+  if (count(taken)) home.update(file, (b) => {
     const merged = bucketLib.merge(b, copy, { rules: r }).bucket;
     b.stores = merged.stores;
     b.clock = merged.clock;
   });
-  return { traded: true, taken: g.taken, gave: done ? done.taken : {} };
+  return { traded: true, settled, taken, gave };
 }
 
 module.exports = { tradeWith, tradeTimeoutMs, storeRules, keyFile };

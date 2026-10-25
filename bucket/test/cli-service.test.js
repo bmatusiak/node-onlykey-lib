@@ -15,7 +15,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 test('a change is traded once its burst settles; the trade\'s own write is not traded again', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'okbucket-svc-'));
-  const file = path.join(dir, 'ab.json');
+  const file = path.join(dir, '0123456789abcdef0123456789abcdef.json');
   fs.writeFileSync(file, '{"v":1}');
   let fire = null;
   const watch = (d, cb) => { fire = cb; return { close() {} }; };
@@ -59,7 +59,7 @@ test('a trade asked while one runs runs once more after it - never two at once',
 
 test('the trade\'s own write, seen while the trade still runs, is not traded again (no loop)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'okbucket-svc-'));
-  const file = path.join(dir, 'ab.json');
+  const file = path.join(dir, '0123456789abcdef0123456789abcdef.json');
   fs.writeFileSync(file, '{"v":1}');
   let fire = null;
   const watch = (d, cb) => { fire = cb; return { close() {} }; };

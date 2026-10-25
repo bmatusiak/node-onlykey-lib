@@ -133,7 +133,12 @@ function merge(existing, incoming) {
     if (byId.has(e.id)) {
       const cur = byId.get(e.id);
       const one = combine(cur, e);
-      if (sameEntry(one, cur)) continue;
+      /*
+       * the same entry, only last used at another time: not a change to count, but the later time is kept - so two
+       * devices merging each other's lists end with the same list, byte for byte (the bucket sync compares hashes; a
+       * list that kept each side's own time never matched and went over Bluetooth whole on every sync, 2026-10-25)
+       */
+      if (sameEntry(one, cur)) { if (one.lastSeen !== cur.lastSeen) byId.set(one.id, one); continue; }
       byId.set(one.id, one);
       joined += 1;
       continue;

@@ -27,8 +27,35 @@ const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { toHex } = require('../../src/bytes');
 const { mergeKeys } = require('./bucket');
 
+const h = (text) => toHex(sha256(new TextEncoder().encode(text)));
+
 /* a record's hash: its value, and whether it is archived (a removal is a change of its own) */
-const hashOf = (rec) => toHex(sha256(new TextEncoder().encode(`${rec.archived || rec.v === null ? 'a' : 'l'}${rec.v ?? ''}`)));
+const hashOf = (rec) => h(`${rec.archived || rec.v === null ? 'a' : 'l'}${typeof rec.v === 'string' ? rec.v : JSON.stringify(rec.v ?? '')}`);
+
+/**
+ * A BUCKET'S STATE: one hash over every record - its store, key, value hash and date - and the time of its last
+ * change (Brad, 2026-10-25: "ping hashes and timestamps so each device can compare its state before it updates,
+ * trading until all hashes are the same"; "the phone tells the desktop a hash and timestamp"). Two devices with the
+ * same state hold the same bucket: no trade is needed, and a trade is complete only when the states match. Per store
+ * too, so a store that never settles is named. An empty store counts as none.
+ * @param {{stores: Object, clock?: string|null}} bucket
+ * @returns {{hash: string, at: string|null, stores: Object<string, string>}}
+ */
+function stateOf(bucket) {
+  const stores = {};
+  for (const name of Object.keys(bucket.stores || {}).sort()) {
+    const keys = Object.keys(bucket.stores[name] || {}).sort();
+    if (!keys.length) continue;
+    stores[name] = h(keys.map((k) => { const r = bucket.stores[name][k]; return `${k}\u0000${hashOf(r)}\u0000${r.at || ''}`; }).join('\n'));
+  }
+  return { hash: h(Object.entries(stores).map(([n, s]) => `${n}\u0000${s}`).join('\n')), at: bucket.clock || null, stores };
+}
+
+/** The stores whose state differs between two states (bucket names only). */
+function differs(a, b) {
+  const names = new Set([...Object.keys((a && a.stores) || {}), ...Object.keys((b && b.stores) || {})]);
+  return [...names].filter((n) => (a.stores || {})[n] !== (b.stores || {})[n]).sort();
+}
 
 /**
  * What this side has: per store, per key, its date and record hash.
@@ -90,4 +117,4 @@ function take(bucket, given, { rules = {} } = {}) {
   return { taken, conflicts };
 }
 
-module.exports = { summarize, give, take, hashOf };
+module.exports = { summarize, give, take, hashOf, stateOf, differs };

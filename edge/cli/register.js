@@ -302,7 +302,7 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
       const t = await require('../../bucket/cli/trade').tradeWith({ send, okcrypto, net: NET, say })
         .catch((e) => ({ traded: false, why: e.message }));
       const n = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
-      say(t.traded ? `sync: traded with the phone - took ${n(t.taken)}, gave ${n(t.gave)}` : `sync: not traded this time (${t.why})`);
+      say(t.traded && t.same ? 'sync: in sync with the phone' : t.traded ? `sync: traded with the phone - took ${n(t.taken)}, gave ${n(t.gave)}` : `sync: not traded this time (${t.why})`);
     };
     return { app, transport, svc, identity, home, channel, okcrypto, say, close: async () => { await shareLogs(); await svc.close(); await pickUp(); await app.destroy(); } };
   } catch (e) {

@@ -5,12 +5,20 @@
  * app/cli has what's paired with this computer, so we trade with them - it could be ble or web-app remote"; "the stale
  * mobile device will most likely talk to the desktop at one point, so they trade when they can").
  *
- * A COMPUTER asks, the PEER (the phone, a remote) answers - three rounds over whatever carries their messages (the
- * cli pair over Bluetooth, the relay), each a message and its answer:
+ * A COMPUTER asks, the PEER (the phone, a remote) answers - over whatever carries their messages (the cli pair over
+ * Bluetooth, the relay), each a message and its answer:
  *
- *   1. hello   computer -> {nonce, identity}            peer -> {nonce, proof of the computer's nonce}
- *   2. prove   computer -> {proof of the peer's nonce, HAVE}   peer -> {HAVE, GIVE}   (only after checking the proof)
- *   3. give    computer -> {GIVE}                        peer -> {taken}
+ *   1. hello   computer -> {nonce, identity}                    peer -> {nonce, proof of the computer's nonce}
+ *   2. prove   computer -> {proof of the peer's nonce, STATE}   peer -> {STATE}        (only after checking the proof)
+ *   3. have    computer -> {HAVE}                               peer -> {HAVE, GIVE}
+ *   4. give    computer -> {GIVE}                               peer -> {taken, STATE}
+ *
+ * HASHES AND TIMESTAMPS FIRST (Brad, 2026-10-25: "ping hashes and timestamps (of last change on this device) so each
+ * device can compare its state before it updates, trading until all hashes are the same"). A STATE is one hash over the
+ * whole bucket and its last change (replicate.js stateOf). The same state on both sides: in sync, nothing more is sent
+ * - so checking often costs two small messages. Different: HAVE and GIVE move what differs, and the states are compared
+ * again; rounds 3-4 repeat until they match (a few at most), and a trade that ends with them still different says which
+ * stores never settled - it is never taken for done.
  *
  * NOTHING BEFORE PROOF, AND NO HINT (Brad, 2026-10-24: "only replicate after proving identity, i dont want to fish for
  * buckets"). A proof is the device's BUCKET KEY signing the other side's fresh nonce (bucket-identity.js 'proof'),
@@ -31,8 +39,10 @@ const rep = require('./replicate');
 const bid = require('./bucket-identity');
 const { toHex, fromHex } = require('../../src/bytes');
 
-const TYPES = { HELLO: 'okbucket.hello', PROVE: 'okbucket.prove', GIVE: 'okbucket.give' };
+const TYPES = { HELLO: 'okbucket.hello', PROVE: 'okbucket.prove', HAVE: 'okbucket.have', GIVE: 'okbucket.give' };
 const NONCE = 32;
+/* HAVE/GIVE rounds in one trade: one moves what differs; more only when a side changed meanwhile */
+const ROUNDS = 3;
 const REFUSED = { ok: false, refusal: 'no' };
 
 const enc = (b) => toHex(b);
@@ -69,34 +79,55 @@ function checks(proof, nonce, side, id) {
 }
 
 /**
- * The computer's side of one trade, round by round.
+ * The computer's side of one trade, step by step. Each step takes the peer's answer to the last message and returns
+ * the next message (or what the trade came to); null means the trade stops there (no proof, no answer, a refusal).
  * @param {{bucket: object, me: object, randomBytes: (n: number) => Uint8Array, rules?: object}} o
  *   bucket: this computer's open bucket (changed in place by take); me: its bucket identity, bucket key, certificate
- * @returns {{hello(): object, prove(answer: object): object|null, give(answer: object): object|null, finish(answer: object): {taken: object}|null}}
  */
 function computerSide({ bucket, me, randomBytes, rules = {} }) {
   const nonce = randomBytes(NONCE);
   let mine = null;
-  let theirs = null;
   let peerProven = false;
+  let rounds = 0;
+  const haveMessage = () => {
+    rounds += 1;
+    mine = rep.summarize(bucket);
+    return { type: TYPES.HAVE, v: 1, identity: me.id, have: mine };
+  };
   return {
     hello: () => ({ type: TYPES.HELLO, v: 1, nonce: enc(nonce), identity: me.id }),
-    /* the peer's answer to hello: its proof over our nonce - only then do we prove ourselves and show our HAVE */
+    /* the peer's answer to hello: its proof over our nonce - only then do we prove ourselves and show our state */
     prove(answer) {
       if (!answer || !answer.ok || !answer.proof || !checks(answer.proof, nonce, 'peer', me.id)) return null;
       peerProven = true;
-      mine = rep.summarize(bucket);
-      return { type: TYPES.PROVE, v: 1, identity: me.id, proof: prove(me, dec(answer.nonce), 'computer'), have: mine };
+      return { type: TYPES.PROVE, v: 1, identity: me.id, proof: prove(me, dec(answer.nonce), 'computer'), state: rep.stateOf(bucket) };
+    },
+    /* the peer's state: the same as ours - in sync, nothing to send; different - our HAVE */
+    compare(answer) {
+      if (!peerProven || !answer || !answer.ok || !answer.state) return null;
+      if (answer.state.hash === rep.stateOf(bucket).hash) return { same: true };
+      return { same: false, differs: rep.differs(rep.stateOf(bucket), answer.state), message: haveMessage() };
     },
     /* the peer's HAVE and GIVE: take its GIVE, then give what it lacks */
     give(answer) {
-      if (!peerProven || !answer || !answer.ok || !answer.have || !answer.give) return null;
-      theirs = answer.have;
+      if (!peerProven || !mine || !answer || !answer.ok || !answer.have || !answer.give) return null;
+      const theirs = answer.have;
       const out = rep.give(bucket, mine, theirs);
       const taken = rep.take(bucket, answer.give, { rules });
       return { message: { type: TYPES.GIVE, v: 1, identity: me.id, give: out }, taken: taken.taken, mine, theirs };
     },
-    finish: (answer) => (answer && answer.ok ? { taken: answer.taken || {} } : null),
+    /*
+     * the peer's taken and its state after: the same as ours now - complete; else another HAVE, while rounds are left;
+     * else not settled, and which stores still differ
+     */
+    settle(answer) {
+      if (!answer || !answer.ok || !answer.state) return null;
+      const now = rep.stateOf(bucket);
+      const taken = answer.taken || {};
+      if (answer.state.hash === now.hash) return { same: true, taken };
+      const differs = rep.differs(now, answer.state);
+      return rounds < ROUNDS ? { same: false, taken, differs, message: haveMessage() } : { same: false, taken, differs };
+    },
   };
 }
 
@@ -108,7 +139,7 @@ function computerSide({ bucket, me, randomBytes, rules = {} }) {
  * @returns {(message: object, from: string) => object|null} null for a message that is not a trade
  */
 function peerSide({ bucket, me, randomBytes, rules = {}, seen = new Set() }) {
-  const trades = new Map(); /* from -> {nonce, computerNonce, proven, theirs, mine} */
+  const trades = new Map(); /* from -> {nonce, proven, rounds, mine} */
   return (message, from) => {
     if (!message || !Object.values(TYPES).includes(message.type)) return null;
     const b = bucket();
@@ -119,24 +150,30 @@ function peerSide({ bucket, me, randomBytes, rules = {}, seen = new Set() }) {
       if (theirNonce.length !== NONCE * 2 || seen.has(theirNonce)) return REFUSED;
       seen.add(theirNonce);
       const nonce = randomBytes(NONCE);
-      trades.set(from, { nonce, proven: false });
+      trades.set(from, { nonce, proven: false, rounds: 0, mine: null });
       return { ok: true, nonce: enc(nonce), proof: prove(m, dec(theirNonce), 'peer') };
     }
     const t = trades.get(from);
     if (message.type === TYPES.PROVE) {
-      if (!t || t.proven || !message.proof || !checks(message.proof, t.nonce, 'computer', m.id) || !message.have) {
+      if (!t || t.proven || !message.proof || !checks(message.proof, t.nonce, 'computer', m.id) || !message.state) {
         trades.delete(from);
         return REFUSED;
       }
       t.proven = true;
+      return { ok: true, state: rep.stateOf(b) };
+    }
+    /* HAVE: only after this computer's proof, a few rounds at most */
+    if (message.type === TYPES.HAVE) {
+      if (!t || !t.proven || !message.have || t.rounds >= ROUNDS) { trades.delete(from); return REFUSED; }
+      t.rounds += 1;
       t.mine = rep.summarize(b);
       return { ok: true, have: t.mine, give: rep.give(b, t.mine, message.have) };
     }
-    /* GIVE: only after this computer's proof, once */
-    if (!t || !t.proven || !message.give) { trades.delete(from); return REFUSED; }
-    trades.delete(from);
+    /* GIVE: after this round's HAVE, once per round - then the state after it, for the computer to compare */
+    if (!t || !t.proven || !t.mine || !message.give) { trades.delete(from); return REFUSED; }
+    t.mine = null;
     const r = rep.take(b, message.give, { rules });
-    return { ok: true, taken: r.taken };
+    return { ok: true, taken: r.taken, state: rep.stateOf(b) };
   };
 }
 
