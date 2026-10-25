@@ -24,11 +24,22 @@
  * Guest Book, Cryptobox, Passwords) - so a feature does not know it lives in a bucket. kv() hands a
  * store that seam over its own part of the bucket.
  *
- * EVERY KEY REMEMBERS WHEN IT CHANGED. Two copies of a bucket meet when one is imported into
- * another, and Brad's rule for a value both changed is to ask, "with the dates displayed to give
- * the user the best option to decide". A removed key stays as a marker with its date, so a merge
- * can tell "removed here" from "never had it" - without it a deletion would come back from the
- * other copy every time.
+ * IMPORT IS A MERGE INTO THE OPEN BUCKET, AND THE NEWER VALUE WINS (Brad, 2026-10-25: "when importing
+ * a bucket, its basically merging the one that is open at the start of the app"; "timestamps are how
+ * we determine who wins, overwrite old, and stuff never gets deleted, just flagged as archived, so
+ * archived can be purged later if a bucket gets too big"). Every key remembers when it last changed;
+ * where two copies differ the later one is kept, nobody is asked (this replaces the 2026-10-21 "ask,
+ * with the dates displayed"). Run both ways it is replication: whichever device imported last holds
+ * everything, and a new machine starts empty and catches up on its first import.
+ *
+ * NOTHING IS DELETED. A removal keeps the value, flagged archived and dated - a merge then tells
+ * "removed here, later" from "never had it", and the value is still there to look at until
+ * purgeArchived() drops it.
+ *
+ * THE CLOCK NEVER GOES BACK. "Newer" trusts each device's clock, so a stamp is never older than the
+ * newest this bucket has seen (bucket.clock): a device whose clock is behind still writes after
+ * what it last took in, and a clock far ahead can win one round, not stay stuck in the future for the
+ * rest - every device moves its own clock past it on the next write.
  *
  * SEALED BY THE KEY (Brad: "seals allow us to make sure the key owns the bucket"). The whole bucket
  * is AES-256-GCM sealed (src/crypto/vault.js) under a key the OnlyKey derives - the host passes it
@@ -55,7 +66,31 @@ const iso = () => new Date().toISOString();
  * @returns {{format: string, v: number, owner: string|null, stores: Object<string, Object<string, {v: string|null, at: string}>>}}
  */
 function create({ owner = null } = {}) {
-  return { format: FORMAT, v: VERSION, owner, stores: {} };
+  return { format: FORMAT, v: VERSION, owner, stores: {}, clock: null };
+}
+
+/* the next stamp for a write: now, or just after the newest this bucket has seen if that is later */
+function stamp(bucket, now) {
+  const t = now();
+  const s = !bucket.clock || t > bucket.clock ? t : new Date(Date.parse(bucket.clock) + 1).toISOString();
+  bucket.clock = s;
+  return s;
+}
+
+/* a live value: not archived, not an old-style removal marker (v null, from before 2026-10-25) */
+const live = (rec) => Boolean(rec) && !rec.archived && rec.v !== null;
+
+/**
+ * Is `b` the newer of two records of one key? Later `at` wins; the same `at` is decided the same way
+ * on every device (an archived record over a live one, then the larger value), so two copies merged
+ * in either order agree.
+ */
+function newer(a, b) {
+  if (!a) return true;
+  if (!b) return false;
+  if (b.at !== a.at) return b.at > a.at;
+  const sig = (r) => `${r.archived ? 1 : 0}${r.v ?? ''}`;
+  return sig(b) > sig(a);
 }
 
 /**
@@ -74,22 +109,27 @@ function kv(bucket, name, { now = iso } = {}) {
   return {
     getItem(key) {
       const rec = (bucket.stores[name] || {})[key];
-      return rec && rec.v !== null ? rec.v : null;
+      return live(rec) ? rec.v : null;
     },
     setItem(key, value) {
       const text = String(value);
       const rec = store()[key];
-      /* an unchanged write keeps its date: the date is when it last CHANGED, which is what a merge shows */
-      if (rec && rec.v === text) return;
-      store()[key] = { v: text, at: now() };
+      /* an unchanged write keeps its date: the date is when it last CHANGED, which is what a merge compares */
+      if (live(rec) && rec.v === text) return;
+      store()[key] = { v: text, at: stamp(bucket, now) };
     },
+    /* never deleted: the value stays, archived and dated, until purgeArchived() */
     removeItem(key) {
       const rec = store()[key];
-      if (!rec || rec.v === null) return;
-      store()[key] = { v: null, at: now() };
+      if (!live(rec)) return;
+      store()[key] = { v: rec.v, at: stamp(bucket, now), archived: true };
     },
     keys() {
-      return Object.keys(bucket.stores[name] || {}).filter((k) => bucket.stores[name][k].v !== null);
+      return Object.keys(bucket.stores[name] || {}).filter((k) => live(bucket.stores[name][k]));
+    },
+    /** the archived keys - removed, still kept */
+    archivedKeys() {
+      return Object.keys(bucket.stores[name] || {}).filter((k) => (bucket.stores[name][k] || {}).archived === true);
     },
   };
 }
@@ -129,12 +169,12 @@ function parse(text) {
   if (!b.stores || typeof b.stores !== 'object') throw err('EBUCKET_FORMAT', 'a bucket without stores');
   for (const [name, store] of Object.entries(b.stores)) {
     for (const [key, rec] of Object.entries(store || {})) {
-      if (!rec || typeof rec.at !== 'string' || (rec.v !== null && typeof rec.v !== 'string')) {
-        throw err('EBUCKET_FORMAT', `store "${name}" key "${key}" is not {v, at}`);
+      if (!rec || typeof rec.at !== 'string' || (rec.v !== null && typeof rec.v !== 'string') || (rec.archived !== undefined && rec.archived !== true)) {
+        throw err('EBUCKET_FORMAT', `store "${name}" key "${key}" is not {v, at, archived?}`);
       }
     }
   }
-  return { format: FORMAT, v: VERSION, owner: b.owner ?? null, stores: b.stores };
+  return { format: FORMAT, v: VERSION, owner: b.owner ?? null, stores: b.stores, clock: typeof b.clock === 'string' ? b.clock : null };
 }
 
 /**
@@ -241,27 +281,24 @@ function open(text, { key = null, allowUnsealed = false } = {}) {
 }
 
 /**
- * The generic merge for one store: key by key. A key only one side has is taken; the same value is
- * kept; two different values (a removal counts as a value) are a CONFLICT - both kept in the report
- * with their dates, `into`'s value stays until the person picks (resolve()).
- * @param {Object<string, {v: string|null, at: string}>} into
- * @param {Object<string, {v: string|null, at: string}>} from
- * @returns {{store: Object<string, {v: string|null, at: string}>, taken: number, conflicts: Array<{key: string, into: {v: string|null, at: string}, from: {v: string|null, at: string}}>}}
+ * The generic merge for one store, key by key: a key only one side has is taken; where both have it the
+ * NEWER record is kept (newer(): later `at`, the same tie-break on every device) - an archived record
+ * included, so a removal travels and stays a removal. Nothing is asked: `conflicts` stays empty (a
+ * feature's own rule may still report what it can never decide, as an Edge copy's fork).
+ * @param {Object<string, {v: string|null, at: string, archived?: true}>} into
+ * @param {Object<string, {v: string|null, at: string, archived?: true}>} from
+ * @returns {{store: Object<string, {v: string|null, at: string, archived?: true}>, taken: number, conflicts: Array}}
  */
 function mergeKeys(into = {}, from = {}) {
   const store = { ...into };
-  const conflicts = [];
   let taken = 0;
   for (const [key, rec] of Object.entries(from)) {
-    const have = into[key];
-    if (!have) {
+    if (newer(into[key], rec)) {
       store[key] = { ...rec };
       taken += 1;
-    } else if (have.v !== rec.v) {
-      conflicts.push({ key, into: { ...have }, from: { ...rec } });
     }
   }
-  return { store, taken, conflicts };
+  return { store, taken, conflicts: [] };
 }
 
 /**
@@ -277,7 +314,7 @@ function merge(into, from, { rules = {} } = {}) {
   if ((into.owner ?? null) !== (from.owner ?? null)) {
     throw err('EBUCKET_OWNER', 'these buckets belong to different keys - they do not merge');
   }
-  const bucket = { format: FORMAT, v: VERSION, owner: into.owner ?? null, stores: {} };
+  const bucket = { format: FORMAT, v: VERSION, owner: into.owner ?? null, stores: {}, clock: [into.clock, from.clock].filter(Boolean).sort().pop() || null };
   const report = { taken: {}, conflicts: [] };
   const names = new Set([...Object.keys(into.stores), ...Object.keys(from.stores)]);
   for (const name of [...names].sort()) {
@@ -286,8 +323,25 @@ function merge(into, from, { rules = {} } = {}) {
     bucket.stores[name] = r.store;
     report.taken[name] = r.taken;
     for (const c of r.conflicts) report.conflicts.push({ store: name, ...c });
+    /* the clock moves past every stamp taken in, so this device's next write is later than all of them */
+    for (const rec of Object.values(r.store)) if (rec && rec.at && (!bucket.clock || rec.at > bucket.clock)) bucket.clock = rec.at;
   }
   return { bucket, report };
+}
+
+/**
+ * Drop archived records changed before `before` (an ISO date) - when a bucket gets too big (Brad: "archived can be
+ * purged later"). A purged key is gone here; a copy that still holds it archived keeps it archived.
+ * @returns {number} how many were dropped
+ */
+function purgeArchived(bucket, { before }) {
+  let n = 0;
+  for (const store of Object.values(bucket.stores)) {
+    for (const [key, rec] of Object.entries(store)) {
+      if (rec && (rec.archived || rec.v === null) && rec.at < before) { delete store[key]; n += 1; }
+    }
+  }
+  return n;
 }
 
 /**
@@ -308,4 +362,4 @@ function resolve(bucket, conflict, side) {
   bucket.stores[conflict.store][conflict.key] = { ...conflict[side] };
 }
 
-module.exports = { FORMAT, SEALED_FORMAT, AGE_FORMAT, AGE_LABEL, VERSION, create, kv, serialize, parse, seal, open, sealToKey, openWithKey, mergeKeys, merge, resolve };
+module.exports = { FORMAT, SEALED_FORMAT, AGE_FORMAT, AGE_LABEL, VERSION, create, kv, newer, purgeArchived, serialize, parse, seal, open, sealToKey, openWithKey, mergeKeys, merge, resolve };

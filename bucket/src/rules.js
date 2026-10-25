@@ -3,8 +3,11 @@
 /**
  * THE MERGE RULES PER STORE (PROPOSAL-one-gui.md, "Merge: one rule, per store"). Brad, 2026-10-21:
  * merge on import, "safer to not lose important logging" - the concept Edge sync already uses,
- * cleaned up into one rule every store follows: take what the other copy has and this one lacks,
- * report what both changed, drop nothing.
+ * cleaned up into one rule every store follows: take what the other copy has and this one lacks, and
+ * where both have it the NEWER wins (Brad, 2026-10-25: "timestamps are how we determine who wins,
+ * overwrite old, and stuff never gets deleted, just flagged as archived") - per entry inside a store
+ * kept as one value (the Key Chain list, the Guest Book), so an entry added on one device is never lost
+ * to a later edit of the same list on another. Drop nothing.
  *
  * A rule is (into, from) -> {store, taken, conflicts} over one store's part of two buckets, the
  * shape bucket.merge() calls. A rule that needs a feature's own merge is MADE from that feature's
@@ -12,15 +15,16 @@
  * the others (scripts/check-without.js).
  */
 
-const { mergeKeys } = require('./bucket');
+const { mergeKeys, newer } = require('./bucket');
+
+/* a live value: not archived, not an old-style removal marker (v null) */
+const live = (rec) => Boolean(rec) && !rec.archived && rec.v !== null;
+/* both sides in a fixed order (older first, the same tie-break as newer()), so a merge run on either device is the same */
+const ordered = (a, b) => (newer(a, b) ? [a, b] : [b, a]);
 
 const later = (a, b) => (a && b ? (a > b ? a : b) : a || b);
 
-/**
- * Settings: key by key - a setting both copies changed is asked, both values shown with their
- * dates (Brad, 2026-10-21: "ask to show changes, with the dates displayed to give user the best
- * option to decide").
- */
+/** Settings: key by key, the newer value wins (bucket.mergeKeys). */
 const settings = mergeKeys;
 
 /**
@@ -35,14 +39,19 @@ function keychain(list, { key = 'list' } = {}) {
     const store = { ...into };
     const a = into[key];
     const b = from[key];
-    if (!b || b.v === null) return { store, taken: 0, conflicts: [] };
-    if (!a || a.v === null) {
+    if (!b) return { store, taken: 0, conflicts: [] };
+    /* one side has no live list (none, or the whole list archived): the newer record of the key wins */
+    if (!live(a) || !live(b)) {
+      if (!newer(a, b)) return { store, taken: 0, conflicts: [] };
       store[key] = { ...b };
-      return { store, taken: list.parse(b.v).length, conflicts: [] };
+      return { store, taken: live(b) ? list.parse(b.v).length : 1, conflicts: [] };
     }
-    const r = list.merge(list.parse(a.v), list.parse(b.v));
-    store[key] = { v: list.serialize(r.entries), at: later(a.at, b.at) };
-    return { store, taken: r.added + r.paired, conflicts: [] };
+    const [lo, hi] = ordered(a, b);
+    const r = list.merge(list.parse(lo.v), list.parse(hi.v));
+    const v = list.serialize(r.entries);
+    if (v === a.v) return { store, taken: 0, conflicts: [] };
+    store[key] = { v, at: later(a.at, b.at) };
+    return { store, taken: Math.max(1, r.added + r.paired), conflicts: [] };
   };
 }
 
@@ -62,64 +71,66 @@ function passwords() {
     for (const k of indexes) {
       const ids = new Set();
       for (const side of [into[k], from[k]]) {
-        if (side && side.v !== null) for (const id of JSON.parse(side.v)) ids.add(id);
+        if (live(side)) for (const id of JSON.parse(side.v)) ids.add(id);
       }
       /* an id whose record was removed on either side is not listed */
       const prefix = k.slice(0, -INDEX.length);
-      const live = [...ids].filter((id) => {
+      const listed = [...ids].filter((id) => {
         const rec = store[`${prefix}onlyagent-vault/credentials/${id}`];
-        return rec && rec.v !== null;
+        return live(rec);
       }).sort();
-      store[k] = { v: JSON.stringify(live), at: later(into[k] && into[k].at, from[k] && from[k].at) };
+      store[k] = { v: JSON.stringify(listed), at: later(into[k] && into[k].at, from[k] && from[k].at) };
     }
     return { store, taken: r.taken, conflicts: r.conflicts };
   };
 }
 
 /**
- * The Guest Book (guestbook/src/store.js, one blob {v, contacts}): contacts by id. One only the other
- * copy has is added; the same contact, different on the two sides, is a conflict - the person
- * picks, the copy here stays until then. (A fetched key's update is guestbook/src/merge.js
- * classify, at fetch time; two people's edits to one contact are theirs to choose between.)
+ * The Guest Book (guestbook/src/store.js, one blob {v, contacts}): per contact, by id. One only the other
+ * copy has is added; the same contact, different on the two sides, is taken from the copy where it changed
+ * LATER - its newest key's updatedAt, else the blob's date; the same time decided the same way on every
+ * device. Nothing is asked. (A fetched key's update is guestbook/src/merge.js classify, at fetch time.)
  * @param {{key?: string}} [opts] key: the blob's name ('guestbook:v1')
  */
 function guestbook({ key = 'guestbook:v1' } = {}) {
+  /* when a contact last changed: its newest key's updatedAt, else the blob's date */
+  const changedAt = (c, blobAt) => (c.keys || []).map((k) => String(k.updatedAt || '')).filter(Boolean).sort().pop() || blobAt;
   return (into = {}, from = {}) => {
     const store = { ...into };
     const a = into[key];
     const b = from[key];
-    if (!b || b.v === null) return { store, taken: 0, conflicts: [] };
-    if (!a || a.v === null) {
+    if (!b) return { store, taken: 0, conflicts: [] };
+    if (!live(a) || !live(b)) {
+      if (!newer(a, b)) return { store, taken: 0, conflicts: [] };
       store[key] = { ...b };
-      return { store, taken: JSON.parse(b.v).contacts.length, conflicts: [] };
+      return { store, taken: live(b) ? JSON.parse(b.v).contacts.length : 1, conflicts: [] };
     }
     const mine = JSON.parse(a.v);
     const theirs = JSON.parse(b.v);
-    const byId = new Map(mine.contacts.map((c) => [c.id, c]));
-    const conflicts = [];
+    const at = new Map(mine.contacts.map((c, i) => [c.id, i]));
     let taken = 0;
     for (const c of theirs.contacts) {
-      const have = byId.get(c.id);
-      if (!have) {
+      const i = at.get(c.id);
+      if (i === undefined) {
+        at.set(c.id, mine.contacts.length);
         mine.contacts.push(c);
         taken += 1;
-      } else if (JSON.stringify(have) !== JSON.stringify(c)) {
-        conflicts.push({
-          key: `${key}#${c.id}`,
-          into: { v: JSON.stringify(have), at: a.at },
-          from: { v: JSON.stringify(c), at: b.at },
-          /* the pick replaces that one contact inside the blob */
-          apply(s, side) {
-            if (side !== 'from') return;
-            const blob = JSON.parse(s[key].v);
-            blob.contacts = blob.contacts.map((x) => (x.id === c.id ? c : x));
-            s[key] = { v: JSON.stringify(blob), at: b.at };
-          },
-        });
+        continue;
+      }
+      const have = mine.contacts[i];
+      const h = JSON.stringify(have);
+      const o = JSON.stringify(c);
+      if (h === o) continue;
+      const ha = changedAt(have, a.at);
+      const oa = changedAt(c, b.at);
+      if (oa > ha || (oa === ha && o > h)) {
+        mine.contacts[i] = c;
+        taken += 1;
       }
     }
-    store[key] = { v: JSON.stringify(mine), at: taken ? later(a.at, b.at) : a.at };
-    return { store, taken, conflicts };
+    if (!taken) return { store, taken: 0, conflicts: [] };
+    store[key] = { v: JSON.stringify(mine), at: later(a.at, b.at) };
+    return { store, taken, conflicts: [] };
   };
 }
 
@@ -175,7 +186,7 @@ function edgeCopies(copyfile) {
 function edgeBlocks(bucket, copyfile, { net, store = 'edge.copies' }) {
   const { fromHex } = require('../../src/bytes');
   return Object.values(bucket.stores[store] || {})
-    .filter((rec) => rec && rec.v !== null)
+    .filter(live)
     .map((rec) => {
       const j = JSON.parse(rec.v);
       return copyfile.blocks(copyfile.fromJSON(j, fromHex(j.deviceId)), { net });

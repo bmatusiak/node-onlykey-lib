@@ -9,6 +9,8 @@ declare const _exports: {
     VERSION: 1;
     create: typeof import("./bucket").create;
     kv: typeof import("./bucket").kv;
+    newer: typeof import("./bucket").newer;
+    purgeArchived: typeof import("./bucket").purgeArchived;
     serialize: typeof import("./bucket").serialize;
     parse: typeof import("./bucket").parse;
     seal: typeof import("./bucket").seal;

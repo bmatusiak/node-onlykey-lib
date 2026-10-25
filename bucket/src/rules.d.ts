@@ -1,8 +1,4 @@
-/**
- * Settings: key by key - a setting both copies changed is asked, both values shown with their
- * dates (Brad, 2026-10-21: "ask to show changes, with the dates displayed to give user the best
- * option to decide").
- */
+/** Settings: key by key, the newer value wins (bucket.mergeKeys). */
 export const settings: typeof mergeKeys;
 /**
  * The Key Chain list: one key holding the list (the phone's export format); the list's own merge
@@ -37,26 +33,17 @@ export function passwords(): (into?: {}, from?: {}) => {
         [x: string]: {
             v: string | null;
             at: string;
+            archived?: true;
         };
     };
     taken: number;
-    conflicts: {
-        key: string;
-        into: {
-            v: string | null;
-            at: string;
-        };
-        from: {
-            v: string | null;
-            at: string;
-        };
-    }[];
+    conflicts: any[];
 };
 /**
- * The Guest Book (guestbook/src/store.js, one blob {v, contacts}): contacts by id. One only the other
- * copy has is added; the same contact, different on the two sides, is a conflict - the person
- * picks, the copy here stays until then. (A fetched key's update is guestbook/src/merge.js
- * classify, at fetch time; two people's edits to one contact are theirs to choose between.)
+ * The Guest Book (guestbook/src/store.js, one blob {v, contacts}): per contact, by id. One only the other
+ * copy has is added; the same contact, different on the two sides, is taken from the copy where it changed
+ * LATER - its newest key's updatedAt, else the blob's date; the same time decided the same way on every
+ * device. Nothing is asked. (A fetched key's update is guestbook/src/merge.js classify, at fetch time.)
  * @param {{key?: string}} [opts] key: the blob's name ('guestbook:v1')
  */
 export function guestbook({ key }?: {
@@ -65,20 +52,6 @@ export function guestbook({ key }?: {
     store: {};
     taken: any;
     conflicts: never[];
-} | {
-    store: {};
-    taken: number;
-    conflicts: {
-        key: string;
-        into: {
-            v: string;
-            at: any;
-        };
-        from: {
-            v: string;
-            at: any;
-        };
-    }[];
 };
 /**
  * The Edge copies (edge/src/copyfile.js): one key per device, its copy's JSON. Two copies of one

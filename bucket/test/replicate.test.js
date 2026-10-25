@@ -1,7 +1,8 @@
 /*
- * The bucket replicates by itself (bucket/src/replicate.js, ok-edge plan S3): two devices of one identity swap HAVE
- * and GIVE and end up holding the same bucket and the same base; an edit on one side is taken by the other with no
- * question; an edit on both sides goes to the store's rule, or to the person - never decided silently.
+ * The bucket replicates by itself (bucket/src/replicate.js, ok-edge plan S3; Brad, 2026-10-25: "the stale mobile
+ * device will most likely talk to the desktop at one point, so they trade when they can"): two devices of one
+ * identity trade HAVE and GIVE whenever they talk and each imports the other's changes - the newer value wins,
+ * removals travel as archived values, nothing is asked, and whoever traded last holds everything.
  */
 'use strict';
 
@@ -18,97 +19,77 @@ const now = () => new Date(Date.UTC(2026, 9, 25, 0, 0, tick++)).toISOString();
 const make = () => bucket.create({ owner: OWNER });
 const kv = (b, store) => bucket.kv(b, store, { now });
 
-/* one swap, both sides exactly as two devices run it: HAVE both ways, GIVE both ways, take both ways */
-function swap(a, b, baseA = {}, baseB = {}, opts = {}) {
+/* one trade, both sides exactly as two devices run it */
+function trade(a, b, opts = {}) {
   const haveA = rep.summarize(a);
   const haveB = rep.summarize(b);
-  const giveA = rep.give(a, haveA, haveB, baseA);
-  const giveB = rep.give(b, haveB, haveA, baseB);
-  const ra = rep.take(a, giveB, haveA, haveB, baseA, opts);
-  const rb = rep.take(b, giveA, haveB, haveA, baseB, opts);
+  const giveA = rep.give(a, haveA, haveB);
+  const giveB = rep.give(b, haveB, haveA);
+  const ra = rep.take(a, giveB, opts);
+  const rb = rep.take(b, giveA, opts);
   return { ra, rb, giveA, giveB, haveA };
 }
-const stores = (b) => JSON.stringify(bucket.parse(bucket.serialize(b)).stores);
+const live = (b) => JSON.stringify(Object.fromEntries(Object.entries(b.stores).map(([n, s]) => [n, Object.fromEntries(Object.entries(s).map(([k, r]) => [k, [r.v, !!r.archived]]))])));
 
-test('first swap, nothing in common: both end with everything, the same base on both sides; HAVE carries no values', () => {
-  const a = make(); const b = make();
-  kv(a, 'guestbook').setItem('myname', 'Brad');
-  kv(b, 'cryptobox').setItem('cryptobox:v1', '{"messages":[]}');
-  const { ra, rb, haveA } = swap(a, b);
-  assert.equal(stores(a), stores(b));
-  assert.deepEqual(ra.base, rb.base);
-  assert.equal(kv(b, 'guestbook').getItem('myname'), 'Brad');
-  assert.ok(!JSON.stringify(haveA).includes('Brad'), 'a HAVE holds hashes and dates only');
-  assert.deepEqual(ra.conflicts, []);
+test('a new device has nothing: one trade and it holds everything; a HAVE carries hashes and dates, no values', () => {
+  const desktop = make(); const fresh = make();
+  kv(desktop, 'guestbook').setItem('myname', 'Brad');
+  kv(desktop, 'cryptobox').setItem('cryptobox:v1', '{"messages":[]}');
+  const { haveA, giveB } = trade(desktop, fresh);
+  assert.equal(live(fresh), live(desktop));
+  assert.deepEqual(giveB, {}, 'the new device had nothing to give');
+  assert.ok(!JSON.stringify(haveA).includes('Brad'));
 });
 
-test('after a swap, an edit on one side is taken by the other - no question - and a removal travels too', () => {
+test('the stale phone catches up at its next trade - with what the desktop took from another device meanwhile', () => {
+  const phone = make(); const desktop = make(); const pixel = make();
+  kv(phone, 'guestbook').setItem('myname', 'Brad');
+  trade(phone, desktop);
+  /* the phone is away; the desktop changes, and trades with another device of the identity */
+  kv(desktop, 'guestbook').setItem('myname', 'Brad M');
+  kv(pixel, 'cryptobox').setItem('cryptobox:v1', '{"messages":[1]}');
+  trade(desktop, pixel);
+  /* the phone comes back */
+  const { ra } = trade(phone, desktop);
+  assert.equal(kv(phone, 'guestbook').getItem('myname'), 'Brad M', 'the newer value');
+  assert.equal(kv(phone, 'cryptobox').getItem('cryptobox:v1'), '{"messages":[1]}', 'passed on by the desktop');
+  assert.deepEqual(ra.conflicts, []);
+  assert.equal(live(phone), live(desktop));
+  const again = trade(phone, desktop);
+  assert.deepEqual([again.giveA, again.giveB], [{}, {}], 'nothing new: nothing given');
+});
+
+test('the same key changed on both: the later one wins on both sides; a later removal wins as an archived value', () => {
   const a = make(); const b = make();
   kv(a, 'guestbook').setItem('myname', 'Brad');
   kv(a, 'guestbook').setItem('offered', '["k1"]');
-  let { ra, rb } = swap(a, b);
-  kv(b, 'guestbook').setItem('myname', 'Brad M');
-  kv(a, 'guestbook').removeItem('offered');
-  ({ ra, rb } = swap(a, b, ra.base, rb.base));
-  assert.equal(kv(a, 'guestbook').getItem('myname'), 'Brad M');
-  assert.equal(kv(b, 'guestbook').getItem('offered'), null, 'removed there is removed here');
-  assert.deepEqual(ra.conflicts, []);
-  assert.deepEqual(rb.conflicts, []);
-  assert.equal(stores(a), stores(b));
-  assert.deepEqual(ra.base, rb.base);
-  /* nothing changed: the next swap gives nothing */
-  const again = swap(a, b, ra.base, rb.base);
-  assert.deepEqual(again.giveA, {});
-  assert.deepEqual(again.giveB, {});
-});
-
-test('the same key changed on both sides, no rule to join them: a conflict for the person on both sides, each keeps its own', () => {
-  const a = make(); const b = make();
-  kv(a, 'guestbook').setItem('myname', 'Brad');
-  let { ra, rb } = swap(a, b);
+  trade(a, b);
   kv(a, 'guestbook').setItem('myname', 'Brad (laptop)');
-  kv(b, 'guestbook').setItem('myname', 'Brad (phone)');
-  ({ ra, rb } = swap(a, b, ra.base, rb.base));
-  assert.equal(kv(a, 'guestbook').getItem('myname'), 'Brad (laptop)');
+  kv(b, 'guestbook').setItem('myname', 'Brad (phone)'); /* later */
+  kv(b, 'guestbook').removeItem('offered');
+  const { ra, rb } = trade(a, b);
+  assert.equal(kv(a, 'guestbook').getItem('myname'), 'Brad (phone)');
   assert.equal(kv(b, 'guestbook').getItem('myname'), 'Brad (phone)');
-  assert.equal(ra.conflicts.length, 1);
-  assert.equal(ra.conflicts[0].into.v, 'Brad (laptop)', 'named from this side: into is what is here');
-  assert.equal(ra.conflicts[0].from.v, 'Brad (phone)');
-  assert.equal(rb.conflicts[0].into.v, 'Brad (phone)');
-  assert.deepEqual(ra.base, rb.base, 'the base keeps what both last agreed on');
-  /* the person picks on one side: the next swap carries the pick to the other */
-  kv(b, 'guestbook').setItem('myname', 'Brad (laptop)');
-  ({ ra, rb } = swap(a, b, ra.base, rb.base));
-  /* the same value on both sides (each dated when it changed there): agreed, nothing to give */
-  assert.equal(kv(a, 'guestbook').getItem('myname'), kv(b, 'guestbook').getItem('myname'));
-  assert.deepEqual(ra.conflicts, []);
-  assert.deepEqual(ra.base, rb.base);
-  assert.deepEqual(swap(a, b, ra.base, rb.base).giveA, {});
+  assert.equal(kv(a, 'guestbook').getItem('offered'), null);
+  assert.deepEqual(kv(a, 'guestbook').archivedKeys(), ['offered'], 'never deleted - archived on both sides');
+  assert.deepEqual([ra.conflicts, rb.conflicts], [[], []]);
 });
 
-test('the Key Chain list changed on both sides: the list rule joins them, the same on both sides, nothing dropped', () => {
+test('the Key Chain list changed on both sides: joined per entry, the same on both sides, nothing dropped', () => {
   const a = make(); const b = make();
   const entry = (label, fill) => list.createEntry({ kind: 'derived', scheme: 'ssh', label, type: 'ed25519', publicKey: new Uint8Array(32).fill(fill), firstSeen: 'x', lastSeen: 'x', tools: [] });
   kv(a, 'keychain').setItem('list', list.serialize([entry('laptop@host', 1)]));
   kv(b, 'keychain').setItem('list', list.serialize([entry('phone@host', 2)]));
   const opts = { rules: { keychain: rules.keychain(list) } };
-  let { ra, rb } = swap(a, b, {}, {}, opts);
-  assert.equal(stores(a), stores(b), 'both computed the same join');
+  trade(a, b, opts);
   assert.deepEqual(list.parse(kv(a, 'keychain').getItem('list')).map((e) => e.label).sort(), ['laptop@host', 'phone@host']);
-  assert.deepEqual(ra.base, rb.base);
-  assert.deepEqual(ra.conflicts, []);
-  const again = swap(a, b, ra.base, rb.base, opts);
-  assert.deepEqual(again.giveA, {});
+  assert.equal(kv(a, 'keychain').getItem('list'), kv(b, 'keychain').getItem('list'), 'both computed the same join');
 });
 
-test('a GIVE that does not match the HAVE it came with is not taken, and nothing is agreed for it', () => {
+test('a bucket written during the trade is refused before anything is given', () => {
   const a = make(); const b = make();
-  kv(b, 'guestbook').setItem('myname', 'Brad');
+  kv(a, 'guestbook').setItem('myname', 'Brad');
   const haveA = rep.summarize(a);
-  const haveB = rep.summarize(b);
-  const giveB = rep.give(b, haveB, haveA, {});
-  giveB.guestbook.myname.v = 'Mallory';
-  const ra = rep.take(a, giveB, haveA, haveB, {});
-  assert.equal(kv(a, 'guestbook').getItem('myname'), null);
-  assert.equal(ra.base.guestbook, undefined);
+  kv(a, 'guestbook').setItem('myname', 'Brad again');
+  assert.throws(() => rep.give(a, haveA, rep.summarize(b)), /changed during the trade/);
 });

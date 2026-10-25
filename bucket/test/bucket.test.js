@@ -18,7 +18,7 @@ const rnd = (n) => new Uint8Array(crypto.randomBytes(n));
 let tick = 0;
 const clock = () => `2026-10-21T00:00:${String(tick++).padStart(2, '0')}.000Z`;
 
-test('a store over the bucket: get, set, remove; an unchanged write keeps its date; a removal stays as a dated marker', () => {
+test('a store over the bucket: get, set, remove; an unchanged write keeps its date; a removal archives the value, never deletes it', () => {
   const b = bucket.create({ owner: 'k1' });
   const s = bucket.kv(b, 'settings', { now: clock });
   assert.equal(s.getItem('theme'), null);
@@ -31,7 +31,29 @@ test('a store over the bucket: get, set, remove; an unchanged write keeps its da
   s.removeItem('theme');
   assert.equal(s.getItem('theme'), null);
   assert.deepEqual(s.keys(), []);
-  assert.equal(b.stores.settings.theme.v, null, 'kept as a removal, with its date');
+  assert.deepEqual(s.archivedKeys(), ['theme']);
+  assert.equal(b.stores.settings.theme.v, 'light', 'the value is kept, flagged archived (Brad: never deleted)');
+  assert.equal(b.stores.settings.theme.archived, true);
+  s.setItem('theme', 'dark');
+  assert.equal(s.getItem('theme'), 'dark', 'set again, live again');
+  assert.equal(bucket.purgeArchived(b, { before: '2099-01-01T00:00:00.000Z' }), 0, 'nothing archived now');
+  s.removeItem('theme');
+  assert.equal(bucket.purgeArchived(b, { before: '2099-01-01T00:00:00.000Z' }), 1, 'archived values can be purged later');
+  assert.equal(b.stores.settings.theme, undefined);
+});
+
+test('the clock never goes back: a write is stamped after the newest stamp the bucket has seen, even from a slow clock', () => {
+  const b = bucket.create({ owner: 'k1' });
+  bucket.kv(b, 'settings', { now: () => '2026-10-25T12:00:00.000Z' }).setItem('lock', '5m');
+  /* a device whose clock is an hour behind writes after what it already holds */
+  bucket.kv(b, 'settings', { now: () => '2026-10-25T11:00:00.000Z' }).setItem('lock', '1m');
+  assert.equal(b.stores.settings.lock.at, '2026-10-25T12:00:00.001Z');
+  /* and after what it took in from another copy */
+  const other = bucket.create({ owner: 'k1' });
+  bucket.kv(other, 'settings', { now: () => '2026-10-25T13:00:00.000Z' }).setItem('font', 'large');
+  const merged = bucket.merge(b, other).bucket;
+  bucket.kv(merged, 'settings', { now: () => '2026-10-25T11:30:00.000Z' }).setItem('lock', '30m');
+  assert.ok(merged.stores.settings.lock.at > '2026-10-25T13:00:00.000Z');
 });
 
 test('a lib store runs unchanged on the bucket: Edge budget pointers written, serialized, read back', async () => {
@@ -74,7 +96,7 @@ test('unsealed (development): refused unless the host allows it, and then it say
   assert.throws(() => bucket.parse('{"format":"onlykey-bucket","v":1,"stores":{"s":{"k":{"v":1}}}}'), { code: 'EBUCKET_FORMAT' });
 });
 
-test('two copies changed apart merge: what one lacks is taken, a value both changed (or one removed) is a conflict with both dates; the pick is the person\'s', () => {
+test('two copies changed apart merge into the open one: what one lacks is taken, the newer value wins, a later removal wins as archived - nothing asked, either order the same', () => {
   const phone = bucket.create({ owner: 'k1' });
   bucket.kv(phone, 'settings', { now: clock }).setItem('theme', 'dark');
   const web = bucket.parse(bucket.serialize(phone));
@@ -84,23 +106,20 @@ test('two copies changed apart merge: what one lacks is taken, a value both chan
   p.setItem('lang', 'en');
   w.setItem('font', 'large');
   p.setItem('theme', 'light');
-  w.removeItem('theme');
+  w.removeItem('theme'); /* later than the phone's change */
+  p.setItem('size', 's');
+  w.setItem('size', 'm'); /* later */
 
   const { bucket: merged, report } = bucket.merge(phone, web);
   const m = bucket.kv(merged, 'settings');
   assert.equal(m.getItem('lang'), 'en');
   assert.equal(m.getItem('font'), 'large', 'taken from the other copy');
-  assert.equal(report.taken.settings, 1);
-  assert.equal(report.conflicts.length, 1);
-  const [c] = report.conflicts;
-  assert.equal(c.store, 'settings');
-  assert.equal(c.key, 'theme');
-  assert.deepEqual([c.into.v, c.from.v], ['light', null], 'a removal is a value too');
-  assert.ok(c.into.at && c.from.at, 'both dates, to decide by');
-  assert.equal(m.getItem('theme'), 'light', 'unchanged until the person picks');
-
-  bucket.resolve(merged, c, 'from');
-  assert.equal(bucket.kv(merged, 'settings').getItem('theme'), null);
+  assert.equal(m.getItem('size'), 'm', 'the newer value wins');
+  assert.equal(m.getItem('theme'), null, 'the later removal wins');
+  assert.deepEqual(m.archivedKeys(), ['theme'], 'kept, archived');
+  assert.deepEqual(report.conflicts, [], 'nothing is asked');
+  const other = bucket.merge(web, phone).bucket;
+  assert.equal(bucket.serialize(other), bucket.serialize(merged), 'imported either way round, the same bucket');
 });
 
 test('a store can bring its own merge rule; buckets of two keys do not merge', () => {

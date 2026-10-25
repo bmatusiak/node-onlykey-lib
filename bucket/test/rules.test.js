@@ -31,9 +31,11 @@ test('Key Chain: entries from both copies, by the list\'s own merge; no conflict
   assert.equal(report.conflicts.length, 0);
 });
 
-test('Passwords: credentials merge one by one - the same entry changed on both sides is a conflict; the index is the union, not a choice', async () => {
+test('Passwords: credentials merge one by one - the same entry changed on both sides, the newer wins; the index is the union of the live ones', async () => {
+  let t = 0;
+  const now = () => `2026-10-25T00:00:${String(t++).padStart(2, '0')}.000Z`;
   const phone = bucket.create({ owner: 'k1' });
-  const v = (b) => createVaultStore({ store: bucket.kv(b, 'passwords') });
+  const v = (b) => createVaultStore({ store: bucket.kv(b, 'passwords', { now }) });
   await v(phone).put({ serviceId: 'mail', encrypted: 'sealed-1' });
   const web = copy(phone);
   await v(phone).put({ serviceId: 'bank', encrypted: 'sealed-2' });
@@ -44,38 +46,37 @@ test('Passwords: credentials merge one by one - the same entry changed on both s
   const { bucket: m, report } = bucket.merge(phone, web, { rules: { passwords: bucket.rules.passwords() } });
   const ids = (await v(m).list()).map((r) => r.serviceId).sort();
   assert.deepEqual(ids, ['bank', 'mail', 'shop'], 'nothing lost, the index lists all three');
-  assert.equal(report.conflicts.length, 1);
-  assert.match(report.conflicts[0].key, /credentials\/mail$/);
-  bucket.resolve(m, report.conflicts[0], 'from');
-  assert.equal((await v(m).list()).find((r) => r.serviceId === 'mail').encrypted, 'sealed-1-web');
+  assert.deepEqual(report.conflicts, []);
+  assert.equal((await v(m).list()).find((r) => r.serviceId === 'mail').encrypted, 'sealed-1-web', 'the later edit wins');
 });
 
-test('Guest Book: contacts by id - new ones added, one changed on both sides is a conflict the person picks, applied inside the blob', async () => {
+test('Guest Book: contacts by id - new ones added from both copies, one changed on both sides taken from the later copy, inside the blob', async () => {
+  let t = 0;
+  const now = () => `2026-10-25T00:01:${String(t++).padStart(2, '0')}.000Z`;
   const phone = bucket.create({ owner: 'k1' });
-  const gb = (b) => createGuestBook({ storage: bucket.kv(b, 'guestbook'), randomBytes: rnd });
+  const gb = (b) => createGuestBook({ storage: bucket.kv(b, 'guestbook', { now }), randomBytes: rnd });
   await gb(phone).save([{ id: 'c1', name: 'Ann' }]);
   const web = copy(phone);
   await gb(phone).save([{ id: 'c1', name: 'Ann B' }, { id: 'c2', name: 'Bob' }]);
-  await gb(web).save([{ id: 'c1', name: 'Annie' }, { id: 'c3', name: 'Cy' }]);
+  await gb(web).save([{ id: 'c1', name: 'Annie' }, { id: 'c3', name: 'Cy' }]); /* later */
 
-  const { bucket: m, report } = bucket.merge(phone, web, { rules: { guestbook: bucket.rules.guestbook() } });
-  let { contacts } = await gb(m).load();
-  assert.deepEqual(contacts.map((c) => c.id).sort(), ['c1', 'c2', 'c3']);
-  assert.equal(contacts.find((c) => c.id === 'c1').name, 'Ann B', 'this copy stays until the pick');
-  assert.equal(report.conflicts.length, 1);
-  bucket.resolve(m, report.conflicts[0], 'from');
-  ({ contacts } = await gb(m).load());
-  assert.equal(contacts.find((c) => c.id === 'c1').name, 'Annie');
-  assert.equal(contacts.length, 3, 'the pick replaced one contact, nothing else');
+  const rules = { guestbook: bucket.rules.guestbook() };
+  const { bucket: m, report } = bucket.merge(phone, web, { rules });
+  const { contacts } = await gb(m).load();
+  assert.deepEqual(contacts.map((c) => c.id).sort(), ['c1', 'c2', 'c3'], 'an entry added on one device is never lost');
+  assert.equal(contacts.find((c) => c.id === 'c1').name, 'Annie', 'the later edit of the same contact wins');
+  assert.deepEqual(report.conflicts, []);
+  const back = bucket.merge(web, phone, { rules }).bucket;
+  assert.deepEqual((await gb(back).load()).contacts.map((c) => [c.id, c.name]).sort(), contacts.map((c) => [c.id, c.name]).sort());
 });
 
-test('Settings: the generic rule - a setting both changed comes back with both values and dates', () => {
+test('Settings: the generic rule - a setting both changed takes the later value, nothing asked', () => {
   const a = bucket.create({ owner: 'k1' });
   bucket.kv(a, 'settings', { now: () => '2026-10-20T10:00:00.000Z' }).setItem('lock', '5m');
   const b = copy(a);
   bucket.kv(a, 'settings', { now: () => '2026-10-21T09:00:00.000Z' }).setItem('lock', '1m');
   bucket.kv(b, 'settings', { now: () => '2026-10-21T11:00:00.000Z' }).setItem('lock', '30m');
-  const { report } = bucket.merge(a, b, { rules: { settings: bucket.rules.settings } });
-  assert.deepEqual(report.conflicts.map((c) => [c.key, c.into.v, c.into.at, c.from.v, c.from.at]),
-    [['lock', '1m', '2026-10-21T09:00:00.000Z', '30m', '2026-10-21T11:00:00.000Z']]);
+  const { bucket: m, report } = bucket.merge(a, b, { rules: { settings: bucket.rules.settings } });
+  assert.deepEqual(report.conflicts, []);
+  assert.equal(bucket.kv(m, 'settings').getItem('lock'), '30m');
 });

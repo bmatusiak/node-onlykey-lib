@@ -40,6 +40,20 @@ export function kv(bucket: ReturnType<typeof create>, name: string, { now }?: {
     keys: () => string[];
 };
 /**
+ * Is `b` the newer of two records of one key? Later `at` wins; the same `at` is decided the same way
+ * on every device (an archived record over a live one, then the larger value), so two copies merged
+ * in either order agree.
+ */
+export function newer(a: any, b: any): boolean;
+/**
+ * Drop archived records changed before `before` (an ISO date) - when a bucket gets too big (Brad: "archived can be
+ * purged later"). A purged key is gone here; a copy that still holds it archived keeps it archived.
+ * @returns {number} how many were dropped
+ */
+export function purgeArchived(bucket: any, { before }: {
+    before: any;
+}): number;
+/**
  * The bucket as text (unsealed).
  * @param {ReturnType<typeof create>} bucket
  * @returns {string}
@@ -99,42 +113,36 @@ export function openWithKey(text: string, { decrypt, owner }: {
     sealed: true;
 }>;
 /**
- * The generic merge for one store: key by key. A key only one side has is taken; the same value is
- * kept; two different values (a removal counts as a value) are a CONFLICT - both kept in the report
- * with their dates, `into`'s value stays until the person picks (resolve()).
- * @param {Object<string, {v: string|null, at: string}>} into
- * @param {Object<string, {v: string|null, at: string}>} from
- * @returns {{store: Object<string, {v: string|null, at: string}>, taken: number, conflicts: Array<{key: string, into: {v: string|null, at: string}, from: {v: string|null, at: string}}>}}
+ * The generic merge for one store, key by key: a key only one side has is taken; where both have it the
+ * NEWER record is kept (newer(): later `at`, the same tie-break on every device) - an archived record
+ * included, so a removal travels and stays a removal. Nothing is asked: `conflicts` stays empty (a
+ * feature's own rule may still report what it can never decide, as an Edge copy's fork).
+ * @param {Object<string, {v: string|null, at: string, archived?: true}>} into
+ * @param {Object<string, {v: string|null, at: string, archived?: true}>} from
+ * @returns {{store: Object<string, {v: string|null, at: string, archived?: true}>, taken: number, conflicts: Array}}
  */
 export function mergeKeys(into?: {
     [x: string]: {
         v: string | null;
         at: string;
+        archived?: true;
     };
 }, from?: {
     [x: string]: {
         v: string | null;
         at: string;
+        archived?: true;
     };
 }): {
     store: {
         [x: string]: {
             v: string | null;
             at: string;
+            archived?: true;
         };
     };
     taken: number;
-    conflicts: Array<{
-        key: string;
-        into: {
-            v: string | null;
-            at: string;
-        };
-        from: {
-            v: string | null;
-            at: string;
-        };
-    }>;
+    conflicts: any[];
 };
 /**
  * Import one bucket into another. Each store merges by its own rule (rules[name]), or key by key;
