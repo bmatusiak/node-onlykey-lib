@@ -208,4 +208,53 @@ function edgeBlocks(bucket, copyfile, { net, store = 'edge.copies' }) {
     });
 }
 
-module.exports = { settings, keychain, passwords, guestbook, edgeCopies, edgeBlocks };
+/**
+ * The Cryptobox (cryptobox/src/store.js): one key holding `{v, messages}`. Messages join by id from both sides - a
+ * message written on one device is never lost to a message written on the other - and a message removed on either side
+ * stays removed (removal is an archived flag, never a drop). The joined list is in one order (when written, then id),
+ * so both devices end with the same value byte for byte and their bucket states match (replicate.js stateOf). Not
+ * made from the Cryptobox module: the blob's shape is all it reads.
+ * @param {{key?: string}} [opts]
+ */
+function cryptobox({ key = 'cryptobox:v1' } = {}) {
+  const parse = (rec) => {
+    try {
+      const j = JSON.parse(rec.v);
+      return j && Array.isArray(j.messages) ? j : null;
+    } catch {
+      return null;
+    }
+  };
+  return withOthers(key, (into = {}, from = {}) => {
+    const store = { ...into };
+    const a = into[key];
+    const b = from[key];
+    if (!b) return { store, taken: 0, conflicts: [] };
+    const pa = live(a) ? parse(a) : null;
+    const pb = live(b) ? parse(b) : null;
+    /* one side has no readable list: the newer record of the key wins */
+    if (!pa || !pb) {
+      if (!newer(a, b)) return { store, taken: 0, conflicts: [] };
+      store[key] = { ...b };
+      return { store, taken: 1, conflicts: [] };
+    }
+    const [lo, hi] = ordered(a, b).map((r) => (r === a ? pa : pb));
+    const byId = new Map(lo.messages.map((m) => [m.id, m]));
+    for (const m of hi.messages) {
+      const old = byId.get(m.id);
+      if (!old) { byId.set(m.id, m); continue; }
+      /* the same message: the newer list's copy (a thread moved), archived if either side removed it */
+      const gone = old.archived || m.archived;
+      byId.set(m.id, gone ? { ...m, archived: true, archivedAt: m.archivedAt || old.archivedAt || '' } : m);
+    }
+    const messages = [...byId.values()].sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+    const v = JSON.stringify({ v: hi.v || 1, messages });
+    if (v === a.v) return { store, taken: 0, conflicts: [] };
+    store[key] = { v, at: later(a.at, b.at) };
+    const had = new Set(pa.messages.filter((m) => !m.archived).map((m) => m.id));
+    const changed = messages.filter((m) => !had.has(m.id) || m.archived).length;
+    return { store, taken: Math.max(1, changed), conflicts: [] };
+  });
+}
+
+module.exports = { settings, keychain, passwords, guestbook, edgeCopies, edgeBlocks, cryptobox };

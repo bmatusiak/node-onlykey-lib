@@ -80,3 +80,20 @@ test('Settings: the generic rule - a setting both changed takes the later value,
   assert.deepEqual(report.conflicts, []);
   assert.equal(bucket.kv(m, 'settings').getItem('lock'), '30m');
 });
+
+/*
+ * The Cryptobox: messages written on two devices join; one removed on either side stays removed; both sides end with
+ * the same value, whichever merges (the bucket states match).
+ */
+test('cryptobox: messages join by id, a removal stays, both sides end the same', () => {
+  const blob = (messages) => JSON.stringify({ v: 1, messages });
+  const msg = (id, at, extra = {}) => ({ id, contact: 'me', dir: 'out', armored: '-----BEGIN PGP MESSAGE-----\nx\n-----END PGP MESSAGE-----', kind: 'encrypted', signed: false, at, ...extra });
+  const phone = { 'cryptobox:v1': { v: blob([msg('a', '2026-10-25T01:00:00Z'), msg('p', '2026-10-25T03:00:00Z')]), at: '2026-10-25T03:00:00.000Z' } };
+  const desk = { 'cryptobox:v1': { v: blob([msg('a', '2026-10-25T01:00:00Z', { archived: true, archivedAt: '2026-10-25T02:30:00Z' }), msg('d', '2026-10-25T02:00:00Z')]), at: '2026-10-25T02:30:00.000Z' } };
+  const rule = bucket.rules.cryptobox();
+  const onPhone = rule(phone, desk).store['cryptobox:v1'];
+  const onDesk = rule(desk, phone).store['cryptobox:v1'];
+  assert.equal(onPhone.v, onDesk.v, 'the same value on both');
+  const ids = JSON.parse(onPhone.v).messages.map((m) => `${m.id}${m.archived ? '-' : ''}`);
+  assert.deepEqual(ids, ['a-', 'd', 'p']);
+});

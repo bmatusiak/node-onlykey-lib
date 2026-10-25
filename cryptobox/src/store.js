@@ -49,7 +49,7 @@ function kindOf(armored) {
   throw new Error('Cryptobox stores only encrypted or signed PGP messages - never a decrypted or unsigned text.');
 }
 
-/** @typedef {{id: string, contact: string, dir: 'out'|'in', armored: string, kind: 'encrypted'|'signed', signed: boolean, at: string}} BoxMessage */
+/** @typedef {{id: string, contact: string, dir: 'out'|'in', armored: string, kind: 'encrypted'|'signed', signed: boolean, at: string, archived?: true, archivedAt?: string}} BoxMessage */
 
 function shapeMessage(m) {
   if (!m || typeof m !== 'object') throw new Error('not a message');
@@ -67,6 +67,8 @@ function shapeMessage(m) {
     /* a signed-in-the-clear message is signed by what it is; an encrypted one says whether it carried a signature */
     signed: kind === 'signed' ? true : !!m.signed,
     at: String(m.at || ''),
+    /* removed: kept, archived - a removal syncs as one, and a sync never brings the message back (bucket rules) */
+    ...(m.archived ? { archived: true, archivedAt: String(m.archivedAt || '') } : {}),
   };
 }
 
@@ -78,27 +80,45 @@ function createCryptobox({ storage, randomBytes, now = () => new Date(), key = K
   const stamp = () => now().toISOString();
   const newId = () => toHex(randomBytes(16));
 
-  /** @returns {Promise<{messages: BoxMessage[], recovered: boolean, reason?: string}>} */
-  async function load() {
+  /*
+   * EVERY MESSAGE, REMOVED ONES TOO (Brad, 2026-10-25: "stuff never gets deleted, just flagged as archived"). The list
+   * syncs between devices (the bucket's cryptobox rule joins both sides' messages by id): a message dropped here would
+   * come back from the other side, so a removal is a flag the other side takes in too.
+   */
+  async function readAll() {
     const raw = await storage.getItem(key);
-    if (!raw) return { messages: [], recovered: false };
+    if (!raw) return { all: [], recovered: false };
     try {
       const blob = JSON.parse(raw);
       if (!blob || blob.v !== VERSION || !Array.isArray(blob.messages)) throw new Error('not a cryptobox v1 blob');
-      return { messages: blob.messages.map(shapeMessage), recovered: false };
+      return { all: blob.messages.map(shapeMessage), recovered: false };
     } catch (e) {
       await storage.setItem(`${key}:damaged:${stamp()}`, raw);
       await storage.setItem(key, JSON.stringify({ v: VERSION, messages: [] }));
-      return { messages: [], recovered: true, reason: String(e.message || e) };
+      return { all: [], recovered: true, reason: String(e.message || e) };
     }
   }
 
-  async function save(messages) {
-    const shaped = messages.map(shapeMessage);
-    if (shaped.length > MESSAGES_MAX) throw new Error(`Cryptobox keeps up to ${MESSAGES_MAX} messages; delete some first.`);
+  async function writeAll(all) {
+    const shaped = all.map(shapeMessage);
+    if (shaped.filter((m) => !m.archived).length > MESSAGES_MAX) throw new Error(`Cryptobox keeps up to ${MESSAGES_MAX} messages; delete some first.`);
     refusePrivate(shaped, 'messages', HOLDER);
     await storage.setItem(key, JSON.stringify({ v: VERSION, messages: shaped }));
     return shaped;
+  }
+
+  /** The messages (removed ones are not among them). @returns {Promise<{messages: BoxMessage[], recovered: boolean, reason?: string}>} */
+  async function load() {
+    const { all, recovered, reason } = await readAll();
+    return { messages: all.filter((m) => !m.archived), recovered, ...(reason ? { reason } : {}) };
+  }
+
+  /** Write the messages as given; the removed ones already kept stay kept. */
+  async function save(messages) {
+    const { all } = await readAll();
+    const given = new Set(messages.map((m) => m.id));
+    const shaped = await writeAll([...messages, ...all.filter((m) => m.archived && !given.has(m.id))]);
+    return shaped.filter((m) => !m.archived);
   }
 
   /**
@@ -108,25 +128,28 @@ function createCryptobox({ storage, randomBytes, now = () => new Date(), key = K
    */
   async function add(m) {
     const msg = shapeMessage({ ...m, id: newId(), at: stamp() });
-    const { messages } = await load();
-    await save([...messages, msg]);
+    const { all } = await readAll();
+    await writeAll([...all, msg]);
     return msg;
   }
 
+  const live = (all) => all.filter((m) => !m.archived);
+
+  /* removed: archived, kept (readAll) */
   async function remove(id) {
-    const { messages } = await load();
-    return save(messages.filter((m) => m.id !== id));
+    const { all } = await readAll();
+    return live(await writeAll(all.map((m) => (m.id === id && !m.archived ? { ...m, archived: true, archivedAt: stamp() } : m))));
   }
 
   async function removeThread(contact) {
-    const { messages } = await load();
-    return save(messages.filter((m) => m.contact !== contact));
+    const { all } = await readAll();
+    return live(await writeAll(all.map((m) => (m.contact === contact && !m.archived ? { ...m, archived: true, archivedAt: stamp() } : m))));
   }
 
   /** Move a thread's messages to another contact id (a contact merged or re-made in Guest Book). */
   async function moveThread(from, to) {
-    const { messages } = await load();
-    return save(messages.map((m) => (m.contact === from ? { ...m, contact: to } : m)));
+    const { all } = await readAll();
+    return live(await writeAll(all.map((m) => (m.contact === from ? { ...m, contact: to } : m))));
   }
 
   return { KEY: key, load, save, add, remove, removeThread, moveThread };

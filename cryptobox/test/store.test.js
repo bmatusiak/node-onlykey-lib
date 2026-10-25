@@ -72,3 +72,18 @@ test('a damaged blob is kept aside and the box starts empty', async () => {
   assert.deepStrictEqual(r.messages, []);
   assert.ok([...storage.map.keys()].some((k) => k.startsWith(`${store.KEY}:damaged:`)));
 });
+
+test('a removed message is kept, archived - hidden from the list, there for a sync to carry the removal', async () => {
+  const s = memoryStorage();
+  const b = box(s);
+  const m = await b.add({ contact: 'alice', dir: 'out', armored: ENC });
+  await b.add({ contact: 'alice', dir: 'out', armored: ENC });
+  await b.remove(m.id);
+  assert.strictEqual((await b.load()).messages.length, 1, 'the list shows one');
+  const raw = JSON.parse(await s.getItem(store.KEY)).messages;
+  assert.strictEqual(raw.length, 2, 'the removed one is kept');
+  assert.ok(raw.find((x) => x.id === m.id).archived);
+  /* a save of the list as shown keeps the archived one too */
+  await b.save((await b.load()).messages);
+  assert.strictEqual(JSON.parse(await s.getItem(store.KEY)).messages.length, 2);
+});

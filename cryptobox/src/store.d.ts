@@ -6,6 +6,8 @@ export type BoxMessage = {
     kind: "encrypted" | "signed";
     signed: boolean;
     at: string;
+    archived?: true;
+    archivedAt?: string;
 };
 export const KEY: "cryptobox:v1";
 export const VERSION: 1;
@@ -18,8 +20,10 @@ export const MESSAGES_MAX: 5000;
  * @returns {'encrypted'|'signed'}
  */
 export function kindOf(armored: string): "encrypted" | "signed";
-/** @typedef {{id: string, contact: string, dir: 'out'|'in', armored: string, kind: 'encrypted'|'signed', signed: boolean, at: string}} BoxMessage */
+/** @typedef {{id: string, contact: string, dir: 'out'|'in', armored: string, kind: 'encrypted'|'signed', signed: boolean, at: string, archived?: true, archivedAt?: string}} BoxMessage */
 export function shapeMessage(m: any): {
+    archived?: boolean | undefined;
+    archivedAt?: string | undefined;
     id: string;
     contact: string;
     dir: any;

@@ -93,4 +93,19 @@ export function edgeBlocks(bucket: {
     net: string;
     store?: string;
 }): any[];
+/**
+ * The Cryptobox (cryptobox/src/store.js): one key holding `{v, messages}`. Messages join by id from both sides - a
+ * message written on one device is never lost to a message written on the other - and a message removed on either side
+ * stays removed (removal is an archived flag, never a drop). The joined list is in one order (when written, then id),
+ * so both devices end with the same value byte for byte and their bucket states match (replicate.js stateOf). Not
+ * made from the Cryptobox module: the blob's shape is all it reads.
+ * @param {{key?: string}} [opts]
+ */
+export function cryptobox({ key }?: {
+    key?: string;
+}): (into?: {}, from?: {}) => {
+    store: any;
+    taken: any;
+    conflicts: any[];
+};
 import { mergeKeys } from "./bucket";

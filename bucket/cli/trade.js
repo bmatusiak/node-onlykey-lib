@@ -43,6 +43,8 @@ function storeRules() {
   out.guestbook = rules.guestbook();
   out['guestbook-test'] = rules.guestbook();
   out.passwords = rules.passwords();
+  out.cryptobox = rules.cryptobox();
+  out['cryptobox-test'] = rules.cryptobox();
   return out;
 }
 
