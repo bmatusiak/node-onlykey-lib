@@ -1,5 +1,7 @@
 export const FORMAT: "onlykey-bucket";
 export const SEALED_FORMAT: "onlykey-bucket-sealed";
+export const AGE_FORMAT: "onlykey-bucket-age";
+export const AGE_LABEL: "onlykey-bucket";
 export const VERSION: 1;
 /**
  * A new, empty bucket.
@@ -73,6 +75,29 @@ export function open(text: string, { key, allowUnsealed }?: {
     bucket: ReturnType<typeof create>;
     sealed: boolean;
 };
+/**
+ * Seal a bucket to the key's X-Wing recipient - no device involved.
+ * @param {ReturnType<typeof create>} bucket
+ * @param {Uint8Array|string} recipient okcrypto.deviceAge.identity(AGE_LABEL).recipient
+ * @param {(plaintext: Uint8Array, recipient: Uint8Array|string) => Uint8Array} encrypt okcrypto.deviceAge.encrypt
+ * @returns {string}
+ */
+export function sealToKey(bucket: ReturnType<typeof create>, recipient: Uint8Array | string, encrypt: (plaintext: Uint8Array, recipient: Uint8Array | string) => Uint8Array): string;
+/**
+ * Open a bucket sealed to the key: the key decapsulates (a press on 3.1.0). A bucket of another identity is
+ * refused before the key is asked; one that does not open is never read some other way.
+ * @param {string} text
+ * @param {{decrypt: (age: Uint8Array, label: string) => Promise<Uint8Array>, owner?: string|null}} o
+ *   decrypt: okcrypto.deviceAge.decrypt (with the caller's confirm); owner: the identity id expected
+ * @returns {Promise<{bucket: ReturnType<typeof create>, sealed: true}>}
+ */
+export function openWithKey(text: string, { decrypt, owner }: {
+    decrypt: (age: Uint8Array, label: string) => Promise<Uint8Array>;
+    owner?: string | null;
+}): Promise<{
+    bucket: ReturnType<typeof create>;
+    sealed: true;
+}>;
 /**
  * The generic merge for one store: key by key. A key only one side has is taken; the same value is
  * kept; two different values (a removal counts as a value) are a CONFLICT - both kept in the report
