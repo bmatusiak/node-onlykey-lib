@@ -237,3 +237,25 @@ test('a transport missing a contract method fails at build, naming the gap', asy
     /write|request|on/,
   );
 });
+
+/*
+ * A SHARED KEY'S LEFTOVER IS NOT THE CONNECT ANSWER (box, 2026-10-24): through the desktop app a
+ * CLI's connect took "0 0 0 0..." - the tail of the app's own read - for the key's status.
+ */
+test('OKCONNECT skips a leftover text report and takes the real connect reply', async () => {
+  const { app, session, transport } = await startWithSession();
+  try {
+    const write = transport.write.bind(transport);
+    transport.write = async (iface, data) => {
+      const n = await write(iface, data);
+      const tail = new Uint8Array(64);
+      tail.set(Buffer.from('0 0 0 0 0 0 0 0'));
+      transport.inject(iface, tail);
+      return n;
+    };
+    const result = await session.connect();
+    assert.equal(result.status, memoryTransport.DEFAULT_STATUS, 'the status, not the leftover');
+  } finally {
+    await app.destroy();
+  }
+});

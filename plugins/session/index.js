@@ -90,10 +90,25 @@ function setup(imports, register) {
         when: opts.when || host.now(),
       });
 
+      /*
+       * ONLY A CONNECT REPLY IS THE ANSWER (box, 2026-10-24: through the desktop app a CLI's connect read
+       * "0 0 0 0..." - the tail of the app's own Edge read that the key was still sending - and refused
+       * the key as "not an unlocked key"). A connect is answered by a key exchange or by one of the
+       * firmware's status strings; any other report arriving meanwhile is not this conversation's.
+       */
+      const isConnectReply = (data) => {
+        try {
+          const p = transit.parseConnectReply(data, null);
+          return p.kind !== 'status' || version.parseStatus(p.status).state !== 'unknown';
+        } catch (_) {
+          return false;
+        }
+      };
       const reply = await transport.request({
         iface: IFACE.VENDOR,
         data: payload,
         timeoutMs: opts.timeoutMs,
+        match: isConnectReply,
       });
 
       /*

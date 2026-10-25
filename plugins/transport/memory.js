@@ -161,6 +161,11 @@ function setup(imports, register) {
       return () => events.removeListener(event, listener);
     },
 
+    /* tests: a report that answers nothing of the caller's - the tail of another conversation on a shared key */
+    inject(iface, data) {
+      events.emit('report', { iface, data: Uint8Array.from(data) });
+    },
+
     /* ---- test controls, not part of the transport contract ------------- */
 
     /** Change what the device reports, e.g. to simulate an unlock. */
