@@ -16,7 +16,8 @@
  * are, and nothing more. Sealing the bucket to the key when it travels ("decrypting with the key protects
  * the privacy of those labels") is what keeps even the labels to the person. A new store follows this, or
  * it does not belong in the bucket. (A PGP SIGNED message is the one readable text a store keeps: it was
- * never encrypted - cryptobox/src/store.js.)
+ * never encrypted - cryptobox/src/store.js. Kept on purpose - Brad, 2026-10-25: "as long as the bucket is
+ * encrypted during transit, this should be fine to keep".)
  *
  * One bucket, many stores. Each store is what one feature already keeps through the storage seam
  * every lib store takes - {getItem, setItem, removeItem} (vault_store, edge's pointer store, the
