@@ -68,15 +68,20 @@ const netOf = (store) => (store === 'keychain-test' ? 'test' : 'live');
 
 function inIdentity(id, store) {
   const net = netOf(store);
-  if (!bucketHome.hasIdentityBucket(id, net)) {
-    /* the first identity kept on this computer takes the list it kept before identities (the phone's rule too) */
-    const before = bucketHome.kv(bucketHome.at(store));
-    const old = before.getItem('list');
-    const b = bucketLib.create({ owner: id });
-    if (old !== null) bucketLib.kv(b, store).setItem('list', old);
-    if (bucketHome.keepIdentityBucket(id, net, b) && old !== null) before.removeItem('list');
-  }
+  if (!bucketHome.hasIdentityBucket(id, net)) bucketHome.keepIdentityBucket(id, net, bucketLib.create({ owner: id }));
   const at = bucketHome.identityAt(id, net, store);
+  /*
+   * The list this computer kept before identities moves into the first identity's bucket used here - whoever made
+   * that bucket (the desktop's identity check, or this) - merged with what it holds (entries by id, twins joined,
+   * nothing dropped), stored first, then removed from bucket.json (the phone's rule too).
+   */
+  const before = bucketHome.kv(bucketHome.at(store));
+  const old = before.getItem('list');
+  if (old !== null) {
+    const now = bucketHome.kv(at).getItem('list');
+    bucketHome.kv(at).setItem('list', now === null ? old : list.serialize(list.merge(list.parse(now), list.parse(old)).entries));
+    before.removeItem('list');
+  }
   return { ...at, toString: () => `${at.file} (${store})` };
 }
 

@@ -79,3 +79,15 @@ test('a key with no Edge identity keeps the computer\'s list (bucket.json); the 
   assert.equal(listOf(ID, 'keychain-test').length, 1);
   assert.deepEqual(home.keptIdentities('live'), [], 'the live net keeps no identity from a testnet derive');
 });
+
+test('the desktop kept the identity first, with a list of its own: the computer\'s old list is merged in, nothing dropped', async () => {
+  scratch();
+  const entry = (label, fill) => list.createEntry({ kind: 'derived', scheme: 'ssh', label, type: 'ed25519', publicKey: new Uint8Array(32).fill(fill), firstSeen: 'x', lastSeen: 'x', tools: [] });
+  rec.save([entry('old@host', 1)]);
+  /* the desktop's identity check kept the bucket, and recorded one key into it */
+  const b = require('../../bucket/src/bucket').create({ owner: ID });
+  require('../../bucket/src/bucket').kv(b, 'keychain').setItem('list', list.serialize([entry('desktop@host', 2)]));
+  home.keepIdentityBucket(ID, 'live', b);
+  assert.deepEqual(rec.load().map((e) => e.label).sort(), ['desktop@host', 'old@host']);
+  assert.equal(home.kv(home.at('keychain')).getItem('list'), null);
+});
