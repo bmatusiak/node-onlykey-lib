@@ -692,7 +692,9 @@ module.exports = function register(COMMANDS, h) {
            * each phone this computer is cli-paired with, for trade messages only. The key is asked for the bucket key once
            * (bucket/cli/trade.js makeMe, the same backup's key); later trades use the remembered identity and need none.
            */
-          const pairedPhones = () => require('../../cli/clipair-store').list().filter((p) => p.address);
+          const pairStore = require('../../cli/clipair-store');
+          /* the phones switched on (the Sync tab's Paired devices toggle; off: left alone) */
+          const pairedPhones = () => pairStore.list().filter((p) => p.address && !p.off);
           const links = new Map();
           const linkTo = async (address) => {
             if (links.has(address)) return links.get(address);
@@ -727,7 +729,9 @@ module.exports = function register(COMMANDS, h) {
                   try {
                     const l = await linkTo(p.address);
                     l.used = Date.now();
-                    results.push({ name, ...await tradeOver(l.channel) });
+                    const r = await tradeOver(l.channel);
+                    if (r.traded) pairStore.markUsed(p.address);
+                    results.push({ name, ...r });
                   } catch (e) {
                     results.push({ name, traded: false, why: e.message });
                   }

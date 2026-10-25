@@ -90,7 +90,31 @@ function savePairing(address, record, home, phoneName) {
   const data = read(home);
   const old = (data.pairings || {})[phoneKey(address)] || {};
   const name = phoneName !== undefined ? phoneName : old.phoneName;
-  data.pairings = { ...(data.pairings || {}), [phoneKey(address)]: { ...record, address: String(address), ...(name ? { phoneName: name } : {}) } };
+  /* this computer's own facts about the phone (switched off, last used) outlive a renewal */
+  const kept = { ...(old.off ? { off: true } : {}), ...(old.lastUsed ? { lastUsed: old.lastUsed } : {}) };
+  data.pairings = { ...(data.pairings || {}), [phoneKey(address)]: { ...kept, ...record, address: String(address), ...(name ? { phoneName: name } : {}) } };
+  write(home, data);
+}
+
+/*
+ * ON OR OFF, AND LAST USED - the phone's Paired devices card has both per computer, so this computer has both per phone
+ * (Brad, 2026-10-25: "each device in desktop should have a toggle"; one card, both sides). Off: the sync service leaves
+ * that phone alone until it is on again.
+ */
+function setOn(address, on, home) {
+  const data = read(home);
+  const k = phoneKey(address);
+  const r = (data.pairings || {})[k];
+  if (!r) return false;
+  if (on) delete r.off; else r.off = true;
+  write(home, data);
+  return true;
+}
+function markUsed(address, at = Date.now(), home) {
+  const data = read(home);
+  const r = (data.pairings || {})[phoneKey(address)];
+  if (!r) return;
+  r.lastUsed = at;
   write(home, data);
 }
 
@@ -144,4 +168,4 @@ async function pairOverPipe(pipe, { home, name = computerName(), out = () => {},
   return { record, code: c.code, phone };
 }
 
-module.exports = { fileOf, computerName, phoneKey, identity, pairingFor, savePairing, removePairing, list, pairOverPipe };
+module.exports = { fileOf, computerName, phoneKey, identity, pairingFor, savePairing, setOn, markUsed, removePairing, list, pairOverPipe };

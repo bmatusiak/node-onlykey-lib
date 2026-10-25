@@ -24,6 +24,7 @@ const home = require('./home');
 const bucketLib = require('../src/bucket');
 const rules = require('../src/rules');
 const trade = require('../src/trade');
+const replicate = require('../src/replicate');
 const bid = require('../src/bucket-identity');
 const { toHex, fromHex } = require('../../src/bytes');
 
@@ -118,6 +119,22 @@ function rememberIdentity(net, id) {
 }
 
 const count = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+
+/*
+ * EACH FEATURE AFTER A TRADE (Brad, 2026-10-25: "a panel that shows the status of each feature, and last sync
+ * timestamps"): per store, its items (a split store's entries, contacts or messages; another store's records) and
+ * whether it now matches the other device. One line, said after every trade - an app's Sync tab reads it.
+ */
+function storesLine(bucket, rules, differs) {
+  const out = {};
+  for (const [name, units] of Object.entries(replicate.summarize(bucket, { rules }))) {
+    const keys = Object.keys(units);
+    const items = keys.filter((k) => !k.endsWith('\u0001')).length;
+    if (!items) continue;
+    out[name] = { items, same: differs ? !differs.includes(name) : null };
+  }
+  return `sync: stores ${JSON.stringify(out)}`;
+}
 const addTo = (sum, o) => { for (const [k, v] of Object.entries(o || {})) sum[k] = (sum[k] || 0) + v; return sum; };
 
 async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts = {} }) {
@@ -147,11 +164,12 @@ async function tradeAs({ send, okcrypto, net, say, keyOpts, id: knownId }) {
   let step = c.compare(await send(m2));
   if (!step) return { traded: false, why: 'the device did not say its state' };
   rememberIdentity(net, id);
-  if (step.same) return { traded: true, same: true, settled: true, taken: {}, gave: {} };
+  if (step.same) { say(storesLine(copy, r, [])); return { traded: true, same: true, settled: true, taken: {}, gave: {} }; }
   say(`sync: trading - ${step.differs.join(', ') || 'the bucket'} differ`);
   const taken = {};
   const gave = {};
   let settled = false;
+  let stillDiffer = step.differs;
   for (;;) {
     const g = c.give(await send(step.message));
     if (!g) { say('sync: the device did not answer its HAVE'); break; }
@@ -165,7 +183,8 @@ async function tradeAs({ send, okcrypto, net, say, keyOpts, id: knownId }) {
     /* what it took is the device's own count; an answer without one is said, never read as "took nothing" */
     if (!s) { say(`sync: the device did not confirm what it took (${answer ? JSON.stringify(answer).slice(0, 160) : 'no answer'})`); break; }
     addTo(gave, s.taken);
-    if (s.same) { settled = true; break; }
+    if (s.same) { settled = true; stillDiffer = []; break; }
+    stillDiffer = s.differs;
     if (!s.message) { say(`sync: not settled - ${s.differs.join(', ')} still differ after every round`); break; }
     say(`sync: another round - ${s.differs.join(', ')} still differ`);
     step = s;
@@ -180,6 +199,7 @@ async function tradeAs({ send, okcrypto, net, say, keyOpts, id: knownId }) {
     b.stores = merged.stores;
     b.clock = merged.clock;
   });
+  say(storesLine(copy, r, stillDiffer));
   return { traded: true, settled, taken, gave };
 }
 
