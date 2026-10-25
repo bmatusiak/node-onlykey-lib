@@ -103,7 +103,9 @@ function keychain(list, { key = 'list' } = {}) {
     const v = list.serialize(r.entries);
     if (v === a.v) return { store, taken: 0, conflicts: [] };
     store[key] = { v, at: later(a.at, b.at) };
-    return { store, taken: Math.max(1, r.added + r.paired), conflicts: [] };
+    /* counted against this side's list - the other copy may be just the entries that differed (listParts) */
+    const had = new Set(list.parse(a.v).map((e) => e.id));
+    return { store, taken: Math.max(1, r.entries.filter((e) => !had.has(e.id)).length), conflicts: [] };
   }), listParts(key, 'entries'));
 }
 
