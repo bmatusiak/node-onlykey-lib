@@ -590,3 +590,20 @@ test('win32: a stale Windows cache - the quick discovery never answers, the retr
   await pipe.write(IFACE.VENDOR, report(MSG.OKCONNECT, [0x66, 0, 0, 0]));
   await pipe.stop();
 });
+
+/*
+ * Linux: a bonded phone whose cached UUIDs show neither the vendor nor the FIDO service is still found when this
+ * computer is cli-paired with it - the cli pair's address picks it (the box, 2026-10-25).
+ */
+test('pickBluezDevice: a cli-paired phone is found by its address when BlueZ cached none of its services', () => {
+  const { pickBluezDevice } = require('../cli/transport-ble');
+  const objects = {
+    '/org/bluez/hci0/dev_24_29_34_86_EA_AF': { 'org.bluez.Device1': { Address: '24:29:34:86:EA:AF', Name: 'Pixel 6a', Paired: true, UUIDs: ['00001124-0000-1000-8000-00805f9b34fb'] } },
+    '/org/bluez/hci0/dev_11_22_33_44_55_66': { 'org.bluez.Device1': { Address: '11:22:33:44:55:66', Name: 'Headphones', Paired: true, UUIDs: [] } },
+  };
+  assert.throws(() => pickBluezDevice(objects, null), /No paired phone/);
+  assert.equal(pickBluezDevice(objects, null, ['24:29:34:86:ea:af']).Name, 'Pixel 6a');
+  /* an unpaired device at that address is not picked */
+  objects['/org/bluez/hci0/dev_24_29_34_86_EA_AF']['org.bluez.Device1'].Paired = false;
+  assert.throws(() => pickBluezDevice(objects, null, ['24:29:34:86:EA:AF']), /No paired phone/);
+});

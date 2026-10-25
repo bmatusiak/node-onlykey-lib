@@ -616,7 +616,7 @@ function unwrap(managed) {
  * Only PAIRED devices: the request characteristic is encrypted, so an
  * unbonded device could be found and connected and then refuse every write.
  */
-function pickBluezDevice(objects, target) {
+function pickBluezDevice(objects, target, cliPaired = []) {
   const devices = Object.entries(objects)
     .filter(([, i]) => i[I_DEVICE])
     .map(([path, i]) => ({ path, ...i[I_DEVICE] }));
@@ -634,6 +634,16 @@ function pickBluezDevice(objects, target) {
     const uuids = (d) => (d.UUIDs || []).map((u) => String(u).toLowerCase());
     matches = paired.filter((d) => uuids(d).includes(SERVICE_UUID));
     if (!matches.length) matches = paired.filter((d) => uuids(d).includes(FIDO_UUID));
+    /*
+     * And the phones this computer is CLI-PAIRED with (cli/clipair-store.js; Brad, 2026-10-25: "the CLI pair is our
+     * hook - those are the pre-set-up trusted devices"). BlueZ lists a phone's services only from what it last cached,
+     * and a phone it has not read since (the box, 2026-10-25: the Pixel bonded, its UUIDs without either service) was
+     * not found, though `--address` reached it at once. The cli pair knows the address it was made with.
+     */
+    if (!matches.length && cliPaired.length) {
+      const known = new Set(cliPaired.map(addrKey));
+      matches = paired.filter((d) => known.has(addrKey(d.Address)));
+    }
   }
   /*
    * One phone, one entry: BlueZ can hold the same bonded phone under two
@@ -761,7 +771,10 @@ async function openBluezLink({ dbus, target, onData, onDisconnect, timeouts, log
         + `Run: ${FIX} --fix`);
     }
 
-    const device = pickBluezDevice(objects, target);
+    const cliPaired = (() => {
+      try { return require('./clipair-store').list().map((p) => p.address).filter(Boolean); } catch { return []; }
+    })();
+    const device = pickBluezDevice(objects, target, cliPaired);
     const name = device.Name || device.Alias || device.Address;
     let vendor = findVendor(objects, device);
 
