@@ -298,7 +298,7 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
        * key, made once); later rounds are quick.
        */
       let round = 0;
-      const send = (m) => channel.send(m, { timeoutMs: round++ === 0 ? 60000 : 30000 }).catch((e) => { say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
+      const send = (m) => channel.send(m, { timeoutMs: require('../../bucket/cli/trade').tradeTimeoutMs(m, round++ === 0) }).catch((e) => { say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
       const t = await require('../../bucket/cli/trade').tradeWith({ send, okcrypto, net: NET, say })
         .catch((e) => ({ traded: false, why: e.message }));
       const n = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
@@ -666,14 +666,14 @@ module.exports = function register(COMMANDS, h) {
            * service reaches - when they change (the desktop app writes the same files), on a slow timer, and once now.
            */
           const bucketSvc = opts.ble ? (() => {
-            const { tradeWith } = require('../../bucket/cli/trade');
+            const { tradeWith, tradeTimeoutMs } = require('../../bucket/cli/trade');
             const bucketDir = path.join(require('../../bucket/cli/home').root(), 'buckets', NET === 'test' ? 'test' : 'live');
             const svcBucket = require('../../bucket/cli/service').startBucketService({
               dir: bucketDir,
               say: st.say,
               tradeOnce: () => {
                 let round = 0;
-                const send = (m) => st.channel.send(m, { timeoutMs: round++ === 0 ? 60000 : 30000 }).catch((e) => { st.say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
+                const send = (m) => st.channel.send(m, { timeoutMs: tradeTimeoutMs(m, round++ === 0) }).catch((e) => { st.say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
                 return tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say });
               },
             });

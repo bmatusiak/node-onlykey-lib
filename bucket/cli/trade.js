@@ -83,6 +83,17 @@ async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
  *   talks to (for the bucket identity, and the bucket key the first time); keyOpts: the presses' confirm/onKeepAlive
  * @returns {Promise<{traded: boolean, why?: string, taken?: object, gave?: object}>}
  */
+/*
+ * HOW LONG ONE TRADE MESSAGE MAY TAKE (the box, 2026-10-25): over Bluetooth a message crosses at about 2.6 KB/s (469-byte
+ * writes, ~180 ms each), and a store kept as one value goes whole - the Key Chain list was 139 KB, about 55 s - so a
+ * fixed 30 s wait cut every such GIVE off and the phone's answer was lost. The wait grows with the message: the first
+ * round's minute (the phone may ask for presses), then 30 s plus a second for every 1.5 KB.
+ */
+function tradeTimeoutMs(message, first) {
+  const size = JSON.stringify(message || {}).length;
+  return Math.max(first ? 60000 : 30000, 30000 + Math.ceil(size / 1.5));
+}
+
 async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts = {} }) {
   const { id, publicKey } = await bid.readIdentity(okcrypto);
   const file = home.identityFile(id, net);
@@ -113,4 +124,4 @@ async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts
   return { traded: true, taken: g.taken, gave: done ? done.taken : {} };
 }
 
-module.exports = { tradeWith, storeRules, keyFile };
+module.exports = { tradeWith, tradeTimeoutMs, storeRules, keyFile };
