@@ -189,3 +189,29 @@ test('desktop: onClient is told when a CLI is accepted and when it goes - not fo
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/* a report the app's own read left behind, arriving just after a CLI connects, is not that CLI's answer */
+test('desktop: a newly connected CLI gets the key\'s reports only from its own first write on', async () => {
+  const root = tmp();
+  const key = fakeKeyPipe();
+  const server = createDesktopServer({ pipe: key, root, hostFor: () => ({ send: async () => null }) });
+  const rec = await server.start();
+  try {
+    const cli = createDesktopPipe({ record: rec });
+    const seen = [];
+    cli.on('stream', (ev) => { if (ev.dir === DIR.OUT) seen.push(ev.bytes[0]); });
+    await cli.start();
+    const stale = new Uint8Array(64); stale[0] = 0x55;
+    key.emit({ iface: 2, dir: DIR.OUT, bytes: stale });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(seen, [], 'the app\'s leftover reply is not relayed');
+    const mine = new Uint8Array(64); mine[0] = 7;
+    await cli.write(2, mine);
+    await until(() => seen.length === 1);
+    assert.deepEqual(seen, [8], 'its own answer is');
+    await cli.stop();
+  } finally {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

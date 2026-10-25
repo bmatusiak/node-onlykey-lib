@@ -55,13 +55,20 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
   let record = null;
   let client = null; /* the one CLI connected and accepted */
   let muted = false;
+  /*
+   * THE CLI GETS ONLY ITS OWN CONVERSATION (box, 2026-10-24: a ship's budget step read 'answered ""' 29 ms
+   * after connecting). The app's page reads the key too, between CLI conversations; the reply to its last
+   * read can arrive just after a new CLI is accepted, and the CLI took it for the answer to its connect.
+   * So a CLI is sent the key's reports only from its own first write on.
+   */
+  let spoke = false;
   let hostQueue = Promise.resolve();
   const asm = { current: wire.createAssembler() };
   const ensureKey = openKey || (async () => { if (!pipe.isRunning()) await pipe.start(); });
 
   /* the key's reports to the CLI - the key's own (dir OUT), never the echo of a write */
   const offStream = pipe.on('stream', (ev) => {
-    if (!client || muted || ev.dir !== DIR.OUT) return;
+    if (!client || muted || !spoke || ev.dir !== DIR.OUT) return;
     send(client, { t: 'report', iface: ev.iface, b64: toB64(ev.bytes) });
   });
   const offClose = pipe.on('close', (err) => {
@@ -117,6 +124,7 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
         accepted = true;
         clearTimeout(helloTimer);
         client = sock;
+        spoke = false;
         onClient(true);
         asm.current = wire.createAssembler();
         const d = pipe.device || null;
@@ -135,6 +143,7 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
         return;
       }
       try {
+        spoke = true;
         await pipe.write(m.iface, bytes);
       } catch (e) {
         send(sock, { t: 'error', why: (e && e.message) || String(e) });
