@@ -22,7 +22,7 @@
  * makes from the names and the text. A request carrying hashes of its own
  * (reasonHash, label, labels ...) is not read for them: nothing here looks.
  *
- * WHO ASKS is the Bluetooth pairing (Brad, 2026-10-08: "so the claude key thing is overkill";
+ * WHO ASKS is the cli pair (Brad, 2026-10-08: "so the claude key thing is overkill";
  * "lets cut it out"): the phone takes a request only inside the encrypted session of a computer
  * paired with its 6-digit code, and names that computer on the sheet. No agent key, no signature,
  * no registration - the pairing already proves which computer it is, and Revoke cuts it off.
@@ -67,7 +67,7 @@ async function build({ reason, scopes, lifetime, continueOf = null, nonce = rand
 /*
  * A P-256 signer from a 32-byte secret - this computer's own sync key (<edge home>/peer.key):
  * it signs every sync message, so the phone can tell which computer sent a log. No list
- * of peers since 2026-10-08 (Brad: peers dropped) - the Bluetooth pairing is the gate.
+ * of peers since 2026-10-08 (Brad: peers dropped) - the cli pair is the gate.
  */
 function peerSignerFromSecret(secret) {
   return {

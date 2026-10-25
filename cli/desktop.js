@@ -53,11 +53,11 @@ function startDesktop({ pipe, path, loadHid, ble = false, desktop = false, addre
    * wrong key's business), and a USB run must not load a Bluetooth stack.
    *
    * Part T: over Bluetooth, when THIS user is paired with that phone, the pipe
-   * opens an encrypted session first (cli/btpair-store.js); a renewal on day 6
+   * opens an encrypted session first (cli/clipair-store.js); a renewal on day 6
    * of 7 is saved back to the same owner-only file.
    */
   const makeBlePipe = () => {
-    const store = require('./btpair-store');
+    const store = require('./clipair-store');
     /*
      * ok-rn answers only paired computers (Part T) and refuses everything else
      * with silence - so without a pairing, say so before a request times out

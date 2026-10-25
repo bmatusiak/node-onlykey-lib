@@ -9,7 +9,7 @@
  * with the key and `bucket import` opens a sealed one with the key. So an everyday command needs no
  * derive and no press to read its own state.
  *
- * WHAT IS NOT HERE: machine files stay files - bt-pairing.json (each computer pairs: Brad,
+ * WHAT IS NOT HERE: machine files stay files - cli-pairing.json (each computer pairs: Brad,
  * 2026-10-21), the Edge homes' control.key, peer.key and agent.key (private keys), agent-gpg.asc
  * and the GnuPG home.
  *

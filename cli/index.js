@@ -1237,12 +1237,12 @@ function parseExpires(text) {
 }
 
 /*
- * PART T (onlykey-edge features/BLUETOOTH-PAIRING-SPEC.md): pair THIS computer
+ * PART T (onlykey-edge features/CLI-PAIR-SPEC.md): pair THIS computer
  * user with ok-rn over Bluetooth. Brad opens "Pair a computer" in ok-rn's
  * Bluetooth tab (a ~2-minute window); both sides show the same 6-digit code; he
  * checks it and approves on the phone. Commit-then-reveal: this side commits to
- * its key before it sees the phone's (src/btpair). The pairing is kept in this
- * user's owner-only ~/.onlykey-js/bt-pairing.json - another account on this
+ * its key before it sees the phone's (src/clipair). The pairing is kept in this
+ * user's owner-only ~/.onlykey-js/cli-pairing.json - another account on this
  * computer has none and gets silence until it pairs on its own.
  */
 COMMANDS.pair = {
@@ -1259,7 +1259,7 @@ COMMANDS.pair = {
    * now the hostname, always: what `pair` records is what every command sends.
    */
   async run(io, opts, args = []) {
-    const store = require('./btpair-store');
+    const store = require('./clipair-store');
     /* pair list | pair forget (CLI.md §2, 2026-10-06 - was `pairing [--forget]`) */
     if (args[0] === 'list') {
       const all = store.list();

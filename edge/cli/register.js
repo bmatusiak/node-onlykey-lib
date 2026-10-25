@@ -9,7 +9,7 @@
  *                                         name the agent's own identities, once (no phone). No
  *                                         registration with the phone since 2026-10-08 (Brad: "so
  *                                         the claude key thing is overkill"): the phone trusts this
- *                                         computer by its Bluetooth pairing (onlykey-js pair)
+ *                                         computer by its cli pair (onlykey-js pair)
  *   onlykey-js edge agent [--wait s]      the OPTIONAL service (CLI.md §4): keeps the Bluetooth
  *                                         link open between commands - for speed only
  *   onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync
@@ -54,7 +54,7 @@ const USAGE = [
 const opt = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 
 /*
- * The budgets this computer asked for (no agent key since 2026-10-08: the Bluetooth pairing says
+ * The budgets this computer asked for (no agent key since 2026-10-08: the cli pair says
  * who asks): the home's `budgets` store in the CLI's bucket (bucket/cli/home.js), one key per
  * budget, its JSON.
  */
@@ -386,7 +386,7 @@ module.exports = function register(COMMANDS, h) {
        * that cannot be reached is reported and the run goes on with the others.
        */
       if (sub === 'sync' && rest.includes('--all')) {
-        const phones = require('../../cli/btpair-store').list().map((p) => ({ address: p.address, name: p.name })).filter((p) => p.address);
+        const phones = require('../../cli/clipair-store').list().map((p) => ({ address: p.address, name: p.name })).filter((p) => p.address);
         if (!phones.length) throw h.usage('no phone is paired with this computer - onlykey-js --ble pair');
         const { spawnSync } = require('child_process');
         const cli = path.join(__dirname, '..', '..', 'cli', 'index.js');

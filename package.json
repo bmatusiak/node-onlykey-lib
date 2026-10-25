@@ -21,7 +21,7 @@
     "./guestbook": "./guestbook/src/index.js",
     "./cryptobox": "./cryptobox/src/index.js",
     "./bucket": "./bucket/src/index.js",
-    "./btpair": "./src/btpair/index.js",
+    "./clipair": "./src/clipair/index.js",
     "./config": "./src/config/ini.js",
     "./device/press": "./src/device/press.js",
     "./device/version": "./src/device/version.js",

@@ -3,7 +3,7 @@
 /*
  * B7 stage 2: EDGE_NOTE - from the paired computer, unsigned, changes nothing, dropped when malformed or replayed.
  * No agent key since 2026-10-08 (Brad: "so the claude key thing is overkill" / "lets cut it out"): the
- * Bluetooth pairing says which computer sent it, so a note carries no signature to check.
+ * cli pair says which computer sent it, so a note carries no signature to check.
  */
 const test = require('node:test');
 const assert = require('node:assert');

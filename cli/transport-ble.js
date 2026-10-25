@@ -86,7 +86,7 @@ const FIDO_UUID = '0000fffd-0000-1000-8000-00805f9b34fb';
 
 const CMD_REPORT = 0x83;
 /*
- * PART T (onlykey-edge features/BLUETOOTH-PAIRING-SPEC.md): once this computer USER
+ * PART T (onlykey-edge features/CLI-PAIR-SPEC.md): once this computer USER
  * is paired with the phone, every report travels sealed (0x84) after a handshake
  * (0x85, also used to pair). Bluetooth's own encryption is per DEVICE - any user or
  * app on a bonded computer can use it - so the phone answers only a paired user.
@@ -1040,7 +1040,7 @@ function armSignals() {
  * already know it. onPairingRenewed(record, address) gets the same address.
  */
 function createBlePipe({ address, platform = process.platform, loadNoble: ln, loadDbus: ld, timeouts = {}, log, pairing = null, pairingFor = null, computerName = null, onPairingRenewed = null, now = () => Date.now(), reconnect = true, onLink = null } = {}) {
-  const btpair = require('../src/btpair');
+  const clipair = require('../src/clipair');
   /* Part T: the session (null = plaintext, until this user is paired with this phone) and waiters for 0x85 answers */
   let session = null;
   /* the phone said it reads KIND_REPORTS (CTRL_BATCH) - this session only */
@@ -1095,7 +1095,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
 
   function onSealed(message) {
     let plain;
-    try { plain = btpair.open(session, Uint8Array.from(message)); } catch (e) {
+    try { plain = clipair.open(session, Uint8Array.from(message)); } catch (e) {
       trace(`dropped a sealed frame: ${e.code || e.message}`);
       return;
     }
@@ -1154,9 +1154,9 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
       trace(`the phone reads several reports per write: ${phoneBatch}`);
       return;
     }
-    if (payload[0] !== btpair.T.RENEW_OFFER || !pairing || renewing) return;
+    if (payload[0] !== clipair.T.RENEW_OFFER || !pairing || renewing) return;
     renewing = (async () => {
-      const acc = btpair.cliRenewAccept(pairing, payload, now());
+      const acc = clipair.cliRenewAccept(pairing, payload, now());
       /*
        * Saved BEFORE answering, and TWO-PHASE: the record keeps the current
        * secret with the renewed one beside it (`next`). Whether the answer
@@ -1165,7 +1165,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
        */
       if (onPairingRenewed) await onPairingRenewed(acc.record, link && link.address);
       pairing = acc.record;
-      await sendRaw(CMD_SEALED, btpair.seal(session, concat2(Uint8Array.of(KIND_CONTROL), acc.payload)));
+      await sendRaw(CMD_SEALED, clipair.seal(session, concat2(Uint8Array.of(KIND_CONTROL), acc.payload)));
       trace(`pairing renewal sent (epoch ${acc.record.next.epoch} takes over on the next connection)`);
     })().catch((e) => trace(`renewal failed: ${e.message}`)).finally(() => { renewing = null; });
   }
@@ -1278,14 +1278,14 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
          */
         const name = computerName || pairing.name;
         const hello = async (rec) => {
-          const h = btpair.cliHello(rec, { name });
+          const h = clipair.cliHello(rec, { name });
           const answer = await pairExchange(h.msg, limits.helloMs || 8000);
-          return answer ? btpair.cliOnHelloOk(h.state, answer) : null;
+          return answer ? clipair.cliOnHelloOk(h.state, answer) : null;
         };
-        /* a renewal still settling: the renewed secret first, then the current one (two-phase, btpair phoneOnHello) */
+        /* a renewal still settling: the renewed secret first, then the current one (two-phase, clipair phoneOnHello) */
         if (pairing.next) {
-          session = await hello(btpair.cliUseNext(pairing));
-          const settled = session ? btpair.cliUseNext(pairing) : btpair.cliDropNext(pairing);
+          session = await hello(clipair.cliUseNext(pairing));
+          const settled = session ? clipair.cliUseNext(pairing) : clipair.cliDropNext(pairing);
           if (!session) session = await hello(settled);
           if (session) {
             pairing = settled;
@@ -1378,9 +1378,9 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
         }
       }
       const pieces = [];
-      if (packs.length) for (const p of packs) pieces.push(...fragment(btpair.seal(session, p), size, CMD_SEALED));
+      if (packs.length) for (const p of packs) pieces.push(...fragment(clipair.seal(session, p), size, CMD_SEALED));
       else for (const frame of frames) pieces.push(...(session
-        ? fragment(btpair.seal(session, concat2(Uint8Array.of(KIND_REPORT), frame)), size, CMD_SEALED)
+        ? fragment(clipair.seal(session, concat2(Uint8Array.of(KIND_REPORT), frame)), size, CMD_SEALED)
         : fragment(frame, size)));
       if (packs.length) trace(`${frames.length} reports in ${pieces.length} write(s) at mtu ${link.mtu}`);
       if (!wrote) trace(`first write: ${pieces.length} fragment(s) of <= ${size} bytes at mtu ${link.mtu}`);
@@ -1458,7 +1458,7 @@ function createBlePipe({ address, platform = process.platform, loadNoble: ln, lo
   async function goodbye() {
     if (!session || !link) return;
     await Promise.race([
-      sendRaw(CMD_SEALED, btpair.seal(session, Uint8Array.of(KIND_CONTROL, CTRL_BYE))).catch(() => {}),
+      sendRaw(CMD_SEALED, clipair.seal(session, Uint8Array.of(KIND_CONTROL, CTRL_BYE))).catch(() => {}),
       new Promise((r) => setTimeout(r, 1500)),
     ]);
   }

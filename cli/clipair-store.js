@@ -1,10 +1,10 @@
 'use strict';
 /*
- * PART T: THIS COMPUTER USER'S BLUETOOTH PAIRINGS (onlykey-edge
- * features/BLUETOOTH-PAIRING-SPEC.md, rule 1: "a pairing belongs to one user
+ * PART T: THIS COMPUTER USER'S CLI PAIRS (onlykey-edge
+ * features/CLI-PAIR-SPEC.md, rule 1: "a pairing belongs to one user
  * account on one computer").
  *
- *   ~/.onlykey-js/bt-pairing.json   {identity: {secretKey, publicKey}, pairings: {<phone>: record}}
+ *   ~/.onlykey-js/cli-pairing.json   {identity: {secretKey, publicKey}, pairings: {<phone>: record}}
  *
  * OWNER-ONLY, which is the whole point: another account on this computer must not
  * be able to read it, or it could talk to ok-rn as this user. On Linux/mac the file
@@ -20,13 +20,23 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const btpair = require('../src/btpair');
+const clipair = require('../src/clipair');
 
 const toHex = (b) => Buffer.from(b).toString('hex');
 const fromHex = (h) => new Uint8Array(Buffer.from(h, 'hex'));
 
 function fileOf(home = os.homedir()) {
-  return path.join(home, '.onlykey-js', 'bt-pairing.json');
+  const file = path.join(home, '.onlykey-js', 'cli-pairing.json');
+  /*
+   * ONE NAME PER THING (Brad, 2026-10-25: "we can't call 2 different things the same thing, this is how bugs
+   * happen"): these are cli pairs, not Bluetooth's own pairings, and the file was named bt-pairing.json before.
+   * A computer paired then keeps its pairings: the old file is renamed once, the first time it is looked for.
+   */
+  const old = path.join(home, '.onlykey-js', 'bt-pairing.json');
+  if (!fs.existsSync(file) && fs.existsSync(old)) {
+    try { fs.renameSync(old, file); } catch { /* another onlykey-js moved it first */ }
+  }
+  return file;
 }
 
 /*
@@ -57,7 +67,7 @@ function write(home, data) {
 function identity(home) {
   const data = read(home);
   if (!data.identity) {
-    const id = btpair.generateIdentity();
+    const id = clipair.generateIdentity();
     data.identity = { secretKey: toHex(id.secretKey), publicKey: toHex(id.publicKey) };
     data.pairings = data.pairings || {};
     write(home, data);
@@ -118,17 +128,17 @@ async function pairOverPipe(pipe, { home, name = computerName(), out = () => {},
   const phone = pipe.phone;
   if (!phone) throw Object.assign(new Error('the Bluetooth link did not say which phone it reached - not pairing'), { code: 'EBTPAIR_NOPHONE' });
   const id = identity(home);
-  const a = btpair.cliPairStart({ identity: id, name });
+  const a = clipair.cliPairStart({ identity: id, name });
   let keys = null;
   for (const until = Date.now() + windowWaitMs; !keys && Date.now() < until;) keys = await pipe.pairExchange(a.msg, askEveryMs);
   if (!keys) throw Object.assign(new Error('no answer: "Pair a computer" was not open on the phone (or Bluetooth API is off there)'), { code: 'EBTPAIR_SILENT' });
-  const c = btpair.cliPairOnKeys(a.state, keys);
+  const c = clipair.cliPairOnKeys(a.state, keys);
   out(`code  ${c.code}  - check the phone shows the same code, then approve there`);
   const done = await pipe.pairExchange(c.msg, approveWaitMs);
   if (!done) throw Object.assign(new Error('not approved on the phone (declined, or its window closed)'), { code: 'EBTPAIR_DECLINED' });
-  const f = btpair.cliPairOnDone(c.state, done, Date.now());
+  const f = clipair.cliPairOnDone(c.state, done, Date.now());
   const ack = await pipe.pairExchange(f.msg, 8000);
-  if (!ack || !btpair.cliPairOnAck(f.record, ack)) throw Object.assign(new Error('the phone did not confirm it stored the pairing - pair again'), { code: 'EBTPAIR_NOACK' });
+  if (!ack || !clipair.cliPairOnAck(f.record, ack)) throw Object.assign(new Error('the phone did not confirm it stored the pairing - pair again'), { code: 'EBTPAIR_NOACK' });
   const record = { ...f.record, name };
   savePairing(phone.address, record, home, phone.name);
   return { record, code: c.code, phone };

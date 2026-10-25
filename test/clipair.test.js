@@ -1,11 +1,11 @@
 'use strict';
 /*
- * Part T, T1 (onlykey-edge features/BLUETOOTH-PAIRING-SPEC.md): the pairing and
+ * Part T, T1 (onlykey-edge features/CLI-PAIR-SPEC.md): the pairing and
  * transit crypto between the CLI and ok-rn, with fake CLI users and a fake phone.
  */
 const test = require('node:test');
 const assert = require('node:assert');
-const bt = require('../src/btpair');
+const bt = require('../src/clipair');
 
 const DAY = 24 * 60 * 60 * 1000;
 const t0 = Date.UTC(2026, 9, 4, 20, 0, 0);

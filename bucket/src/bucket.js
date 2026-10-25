@@ -3,7 +3,7 @@
 /**
  * THE BUCKET (PROPOSAL-one-gui.md; Brad, 2026-10-21): one portable file that holds everything a
  * front end keeps for its person - the Key Chain list, the Guest Book, password entries, the Edge
- * copy, the computer's Bluetooth pairings, settings - and moves between the phone, the desktop app,
+ * copy, the computer's cli pairs, settings - and moves between the phone, the desktop app,
  * the web page and the CLI. "the web will ask for a bucket, from the computer we upload the backup
  * with drag and drop, and download bucket ... so the bucket is transferable."
  *

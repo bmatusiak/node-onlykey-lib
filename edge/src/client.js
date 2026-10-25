@@ -13,7 +13,7 @@
  *
  * - The request goes through `channel` (send(EDGE_REQUEST) -> the app's
  *   answer: Bluetooth to ok-rn first, the Worker mailbox later). Who asks is the
- *   Bluetooth pairing - no agent key (Brad, 2026-10-08: "so the claude key thing is
+ *   cli pair - no agent key (Brad, 2026-10-08: "so the claude key thing is
  *   overkill"). The answer is NOT taken on its word:
  *   the budget's opening is read back from the key and checked
  *   (grants.verifyBudgetOpening) against the scopes, reason and lifetime this

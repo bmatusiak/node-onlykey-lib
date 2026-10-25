@@ -2,7 +2,7 @@
 /*
  * `pair` takes no computer name. Every other command introduces this computer
  * by its hostname, and the phone revokes a pairing used under a different
- * name than it was made with (test/btpair.test.js, reason 'name'). So a name
+ * name than it was made with (test/clipair.test.js, reason 'name'). So a name
  * chosen at pair time could only ever make a pairing that breaks on first
  * use - which `pair --name zbox` did on the ZBOX, 2026-10-20. Refused here,
  * before anything reaches a phone.
@@ -11,7 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const os = require('os');
 const { main } = require('../cli/index');
-const store = require('../cli/btpair-store');
+const store = require('../cli/clipair-store');
 
 async function run(argv) {
   const out = [];

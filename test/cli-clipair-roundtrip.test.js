@@ -2,7 +2,7 @@
 /*
  * Audit F1-F4 (2026-10-20): what `pair` writes must be what every later
  * command finds. The pairing round trip itself runs over the Windows fake in
- * test/cli-btpair-pipe.test.js; here: the address each platform's link
+ * test/cli-clipair-pipe.test.js; here: the address each platform's link
  * reports (the key a pairing is filed under), and pair forget / pair list.
  */
 const test = require('node:test');
@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const store = require('../cli/btpair-store');
+const store = require('../cli/clipair-store');
 const { createBlePipe } = require('../cli/transport-ble');
 const { fakeNoble, fakeDbus, piTree } = require('./helpers/fake-ble');
 const { fakeFirmware } = require('./helpers/fake-firmware');
@@ -18,7 +18,7 @@ const { fakeFirmware } = require('./helpers/fake-firmware');
 const FAST = { scanMs: 300, connectMs: 300, discoverMs: 300, subscribeMs: 300, helloMs: 400 };
 const quiet = () => {};
 const PHONE = '24:29:34:86:EA:AF';
-const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okt-btpair-rt-'));
+const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okt-clipair-rt-'));
 const rec = (over = {}) => ({ id: 'aa', phoneId: 'bbccdd00', epoch: 0, renewedAt: 0, name: os.hostname(), ...over });
 
 test('windows: the link reports the phone it reached, whatever --address said', async () => {

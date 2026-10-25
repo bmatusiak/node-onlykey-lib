@@ -12,7 +12,7 @@ const assert = require('node:assert');
 const nodeCrypto = require('crypto');
 
 const { ml_kem768_x25519: xwing } = require('../../src/vendor/exports/@noble/post-quantum/hybrid.js');
-const btpair = require('../../src/btpair');
+const clipair = require('../../src/clipair');
 const { invite: inv, swap } = require('../src');
 
 const randomBytes = (n) => new Uint8Array(nodeCrypto.randomBytes(n));
@@ -105,7 +105,7 @@ test('cards: a tampered, replayed or private one is refused', async () => {
   const privateText = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----';
   assert.throws(() => swap.sealCard(a.session, { name: 'x', keys: [{ format: 'ssh', text: privateText }] }));
   /* a sender that skips sealCard's check: the receiver refuses it too */
-  const raw = btpair.seal(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [{ format: 'ssh', text: privateText }] })));
+  const raw = clipair.seal(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [{ format: 'ssh', text: privateText }] })));
   const frame = new Uint8Array(2 + raw.length);
   frame.set([swap.T.CARD, swap.VERSION], 0);
   frame.set(raw, 2);
@@ -182,7 +182,7 @@ test('ROTATING QR: the token turns over every 15 s; this window\'s and the last 
 test('a swap is a trade: an empty card is refused when sealed and when opened', async () => {
   const { a, b } = await handshake();
   assert.throws(() => swap.sealCard(a.session, { name: 'x', keys: [] }), /at least one key/);
-  const raw = btpair.seal(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [] })));
+  const raw = clipair.seal(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [] })));
   const frame = new Uint8Array(2 + raw.length);
   frame.set([swap.T.CARD, swap.VERSION], 0);
   frame.set(raw, 2);

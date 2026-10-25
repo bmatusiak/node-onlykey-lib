@@ -1,7 +1,7 @@
 'use strict';
 /*
- * PART T: BLUETOOTH PAIRING BETWEEN THE CLI AND ok-rn
- * (onlykey-edge features/BLUETOOTH-PAIRING-SPEC.md, decided 2026-10-04).
+ * PART T: THE CLI PAIR BETWEEN THE CLI AND ok-rn - the cli-pair 6-digit flow, NOT Bluetooth's own pairing
+ * (onlykey-edge features/CLI-PAIR-SPEC.md, decided 2026-10-04).
  *
  * WHY. Bluetooth's encryption protects the link between two DEVICES. On a
  * bonded computer every user account and every app can use that link, so ok-rn
@@ -82,7 +82,7 @@ const normMac = (a) => { const s = String(a || '').toUpperCase().replace(/[^0-9A
 const fromHex = (h) => Uint8Array.from(h.match(/../g) || [], (x) => parseInt(x, 16));
 
 function fail(code, message) {
-  return Object.assign(new Error(`btpair: ${message}`), { code });
+  return Object.assign(new Error(`clipair: ${message}`), { code });
 }
 function header(type) { return Uint8Array.of(type, VERSION); }
 function parse(msg, type, size) {

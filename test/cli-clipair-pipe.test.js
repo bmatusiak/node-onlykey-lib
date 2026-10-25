@@ -1,15 +1,15 @@
 'use strict';
 /*
  * Part T, T2: the CLI's Bluetooth pipe with a pairing - against a fake ok-rn gate
- * (the phone side of src/btpair, over the fake BLE stack) and the fake key behind it.
+ * (the phone side of src/clipair, over the fake BLE stack) and the fake key behind it.
  */
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const bt = require('../src/btpair');
-const store = require('../cli/btpair-store');
+const bt = require('../src/clipair');
+const store = require('../cli/clipair-store');
 const { createBlePipe } = require('../cli/transport-ble');
 const { fakeNoble } = require('./helpers/fake-ble');
 const { fakeFirmware } = require('./helpers/fake-firmware');
@@ -21,7 +21,7 @@ const FAST = { scanMs: 300, connectMs: 300, discoverMs: 300, subscribeMs: 300, h
 const quiet = () => {};
 const cat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
 const report = (msg, payload = []) => { const r = new Uint8Array(64); r.set([0xff, 0xff, 0xff, 0xff, msg, ...payload]); return r; };
-const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okt-btpair-'));
+const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okt-clipair-'));
 /* the fake phone's address (test/helpers/fake-ble.js): where `pair` files the pairing, whatever --address said */
 const PHONE = '24:29:34:86:EA:AF';
 

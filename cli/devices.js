@@ -177,7 +177,7 @@ if (require.main === module) {
       start,
       /* the parent's --seconds, else SCAN_SECONDS */
       scan: () => require('./transport-ble').scanPhones({ seconds: Number(process.argv[3]) || SCAN_SECONDS }),
-      pairingFor: (key) => require('./btpair-store').pairingFor(key),
+      pairingFor: (key) => require('./clipair-store').pairingFor(key),
       onRow: (row) => say({ row }),
       onNote: (note) => say({ note }),
     });

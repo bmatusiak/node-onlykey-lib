@@ -33,7 +33,7 @@ test('the one-time move: each old file into its store, renamed .moved, never rea
   /* machine files and the dead agent.json stay as they are */
   write(path.join(dir, 'edge', 'control.key'), 'c0ffee');
   write(path.join(dir, 'edge', 'agent.json'), { v: 1 });
-  write(path.join(dir, 'bt-pairing.json'), {});
+  write(path.join(dir, 'cli-pairing.json'), {});
 
   const b = home.read();
   const get = (store, key) => bucket.kv(b, store).getItem(key);
@@ -48,7 +48,7 @@ test('the one-time move: each old file into its store, renamed .moved, never rea
     assert.ok(!fs.existsSync(path.join(dir, f)), `${f} is still there`);
     assert.ok(fs.existsSync(path.join(dir, `${f}.moved`)), `${f}.moved is missing`);
   }
-  for (const f of ['edge/control.key', 'edge/agent.json', 'bt-pairing.json']) assert.ok(fs.existsSync(path.join(dir, f)), `${f} was moved`);
+  for (const f of ['edge/control.key', 'edge/agent.json', 'cli-pairing.json']) assert.ok(fs.existsSync(path.join(dir, f)), `${f} was moved`);
 
   /* never read again: a file put back is not taken a second time */
   write(path.join(dir, 'keychain.json'), '{"format":"put back"}');
