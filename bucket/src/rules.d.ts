@@ -18,9 +18,9 @@ export function keychain(list: {
 }, { key }?: {
     key?: string;
 }): (into?: {}, from?: {}) => {
-    store: {};
-    taken: number;
-    conflicts: never[];
+    store: any;
+    taken: any;
+    conflicts: any[];
 };
 /**
  * Password entries (passwords/ over src/crypto/vault_store.js): each credential is its own key and
@@ -49,9 +49,9 @@ export function passwords(): (into?: {}, from?: {}) => {
 export function guestbook({ key }?: {
     key?: string;
 }): (into?: {}, from?: {}) => {
-    store: {};
+    store: any;
     taken: any;
-    conflicts: never[];
+    conflicts: any[];
 };
 /**
  * The Edge copies (edge/src/copyfile.js): one key per device, its copy's JSON. Two copies of one

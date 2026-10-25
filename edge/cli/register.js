@@ -291,6 +291,18 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
       if (r.error) { say(`logs: not swapped with the phone this time (${r.error.message})`); return; }
       const given = (r.offered || []).filter((o) => o.held).map((o) => `"${o.nametag}"`);
       say(`logs: swapped with the phone${given.length ? ` - it now has ${given.join(', ')}` : ''}`);
+      /*
+       * AND THE BUCKET, TRADED (bucket/cli/trade.js; Brad, 2026-10-25: "the CLI pair is our hook to try and sync with -
+       * those are the pre-set-up trusted devices"): this paired phone and this computer prove their bucket identity to
+       * each other, then each takes the other's changes. The first hello may wait on the phone's presses (its bucket
+       * key, made once); later rounds are quick.
+       */
+      let round = 0;
+      const send = (m) => channel.send(m, { timeoutMs: round++ === 0 ? 60000 : 30000 }).catch(() => null);
+      const t = await require('../../bucket/cli/trade').tradeWith({ send, okcrypto, net: NET, say })
+        .catch((e) => ({ traded: false, why: e.message }));
+      const n = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+      say(t.traded ? `bucket: traded with the phone - took ${n(t.taken)}, gave ${n(t.gave)}` : `bucket: not traded this time (${t.why})`);
     };
     return { app, transport, svc, identity, home, close: async () => { await shareLogs(); await svc.close(); await pickUp(); await app.destroy(); } };
   } catch (e) {

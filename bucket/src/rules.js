@@ -24,6 +24,21 @@ const ordered = (a, b) => (newer(a, b) ? [a, b] : [b, a]);
 
 const later = (a, b) => (a && b ? (a > b ? a : b) : a || b);
 
+/*
+ * A STORE KEPT AS ONE VALUE HAS OTHER KEYS TOO (a trade test, 2026-10-25: Guest Book's your-name and offered keys were
+ * never merged - the rule saw only its contacts blob). The rule joins its own key per entry; every other key in the
+ * store takes the generic newer-wins.
+ */
+function withOthers(key, rule) {
+  const omit = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => k !== key));
+  const pick = (s) => (s[key] ? { [key]: s[key] } : {});
+  return (into = {}, from = {}) => {
+    const others = mergeKeys(omit(into), omit(from));
+    const own = rule(pick(into), pick(from));
+    return { store: { ...others.store, ...own.store }, taken: others.taken + own.taken, conflicts: [...others.conflicts, ...own.conflicts] };
+  };
+}
+
 /** Settings: key by key, the newer value wins (bucket.mergeKeys). */
 const settings = mergeKeys;
 
@@ -35,7 +50,7 @@ const settings = mergeKeys;
  * @param {{key?: string}} [opts]
  */
 function keychain(list, { key = 'list' } = {}) {
-  return (into = {}, from = {}) => {
+  return withOthers(key, (into = {}, from = {}) => {
     const store = { ...into };
     const a = into[key];
     const b = from[key];
@@ -52,7 +67,7 @@ function keychain(list, { key = 'list' } = {}) {
     if (v === a.v) return { store, taken: 0, conflicts: [] };
     store[key] = { v, at: later(a.at, b.at) };
     return { store, taken: Math.max(1, r.added + r.paired), conflicts: [] };
-  };
+  });
 }
 
 /**
@@ -95,7 +110,7 @@ function passwords() {
 function guestbook({ key = 'guestbook:v1' } = {}) {
   /* when a contact last changed: its newest key's updatedAt, else the blob's date */
   const changedAt = (c, blobAt) => (c.keys || []).map((k) => String(k.updatedAt || '')).filter(Boolean).sort().pop() || blobAt;
-  return (into = {}, from = {}) => {
+  return withOthers(key, (into = {}, from = {}) => {
     const store = { ...into };
     const a = into[key];
     const b = from[key];
@@ -131,7 +146,7 @@ function guestbook({ key = 'guestbook:v1' } = {}) {
     if (!taken) return { store, taken: 0, conflicts: [] };
     store[key] = { v: JSON.stringify(mine), at: later(a.at, b.at) };
     return { store, taken, conflicts: [] };
-  };
+  });
 }
 
 /**
