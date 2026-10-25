@@ -242,9 +242,10 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
   try {
     const identity = await askIdentity(channel);
     if (!identity) {
-      throw h.usage(channel.local
+      /* coded: a long-lived service runs its sync without an agent (the agent branch below) */
+      throw Object.assign(h.usage(channel.local
         ? `this computer keeps no agent identity for this key yet - set it once: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`
-        : `the phone keeps no agent identity yet - set it once, from any paired computer: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`);
+        : `${opts.ble ? 'the phone' : 'the desktop app'} keeps no agent identity yet - set it once, from any paired computer: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`), { code: 'ENOAGENTID' });
     }
     recordCert(io, identity, serve ? 'onlykey-js edge agent' : 'onlykey-js edge');
     const { deviceId } = await edge.publicKey();
@@ -647,19 +648,38 @@ module.exports = function register(COMMANDS, h) {
       if (sub === 'agent') {
         /* the optional service: one link kept open between commands; nothing it can do that a command can't */
         if (Object.keys(parseSetup(rest, h)).length) throw h.usage(`the identity is set with ${edgeCmd('setup')} (the phone keeps it); edge agent takes no identity flags`);
-        const st = await openStack(io, opts, h, { serve: true, dev, wait });
+        /*
+         * ONE SERVICE, THE SYNC EVEN WITHOUT AN AGENT: a key with no agent identity yet (a fresh soft key, the desktop
+         * app's) cannot run the Edge agent, but its bucket still syncs - the device is opened for the sync alone, and
+         * the reason the agent is not here is said.
+         */
+        let st;
+        let agentOff = null;
+        try {
+          st = await openStack(io, opts, h, { serve: true, dev, wait });
+        } catch (e) {
+          if (e.code !== 'ENOAGENTID') throw e;
+          agentOff = e.message;
+          const d = await openDevice(io, opts, h, { dev, wait });
+          st = { ...d, close: () => Promise.resolve(d.app.destroy()).catch(() => undefined) };
+        }
         try {
           const { svc, transport } = st;
-          io.out(h.row('ssh key', svc.sshLine));
-          if (svc.fingerprint) io.out(h.row('gpg key', svc.fingerprint));
-          if (svc.certArmored) {
-            /* a key this computer has not kept anything for yet has no identity home until now (the box's testnet, 2026-10-25) */
-            fs.mkdirSync(st.home, { recursive: true, mode: 0o700 });
-            fs.writeFileSync(path.join(st.home, 'agent-gpg.asc'), svc.certArmored);
-            io.out(h.row('gpg cert', path.join(st.home, 'agent-gpg.asc')));
+          if (agentOff) {
+            io.out(`no Edge agent here: ${agentOff}`);
+            io.out('ready - the sync service runs; Ctrl-C to stop');
+          } else {
+            io.out(h.row('ssh key', svc.sshLine));
+            if (svc.fingerprint) io.out(h.row('gpg key', svc.fingerprint));
+            if (svc.certArmored) {
+              /* a key this computer has not kept anything for yet has no identity home until now (the box's testnet, 2026-10-25) */
+              fs.mkdirSync(st.home, { recursive: true, mode: 0o700 });
+              fs.writeFileSync(path.join(st.home, 'agent-gpg.asc'), svc.certArmored);
+              io.out(h.row('gpg cert', path.join(st.home, 'agent-gpg.asc')));
+            }
+            io.out(h.row('control', svc.controlPath));
+            io.out(`ready - ${edgeCmd('budget / exec / receipt')} use this service; Ctrl-C to stop`);
           }
-          io.out(h.row('control', svc.controlPath));
-          io.out(`ready - ${edgeCmd('budget / exec / receipt')} use this service; Ctrl-C to stop`);
           /*
            * AND THE SYNC SERVICE (bucket/cli/service.js; Brad, 2026-10-25: "--service will be our long-lived"; "the
            * service can do bluetooth stuff"): this computer's kept buckets watched, and traded with the paired phone this
