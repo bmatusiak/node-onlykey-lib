@@ -5,7 +5,7 @@
  * preview it, and ship it in ONE budget (Brad, 2026-10-23: the workspace's edge skill, "so this
  * skill comes with the cli", its info "with its other home files").
  *
- *   onlykey-js [--ble [--address <phone>]] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...
+ *   onlykey-js [--ble [--address <phone>]] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...
  *   onlykey-js … edge … control preview          everything pending: commits to sign, pushes, the request
  *   onlykey-js … edge … control ship [<repo>...] [--plan] [--reason "..."] [--head <h>]
  *   onlykey-js … edge … control status
@@ -47,7 +47,7 @@ const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8'))
 class Stop extends Error {}
 
 const USAGE = [
-  'onlykey-js [--ble [--address <phone>]] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...',
+  'onlykey-js [--ble [--address <phone>]] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...',
   'onlykey-js … edge … control preview',
   'onlykey-js … edge … control ship [<repo>...] [--plan] [--reason "..."] [--head <h>]',
   'onlykey-js … edge … control status | settings',
@@ -80,7 +80,9 @@ async function run({ io, opts, argv, net, home }) {
   const USB = !opts.ble;
   /* the key on USB, hosted by the ok-edge desktop app when it runs (cli deviceOpts: --desktop, or plain with a live app) */
   const VIA_APP = USB && (opts.desktop || (!opts.path && Boolean(require('../../desktop/trust').liveTrust())));
-  const keyArgs = opts.ble ? ['--ble', ...(opts.address ? ['--address', opts.address] : [])] : (opts.path ? ['--path', opts.path] : []);
+  /* --gui-prompt: the budget's y/N in a desktop dialog, so whoever runs this (an agent's shell) never answers it */
+  const GUI = Boolean(opts['gui-prompt']);
+  const keyArgs = [...(opts.ble ? ['--ble', ...(opts.address ? ['--address', opts.address] : [])] : (opts.path ? ['--path', opts.path] : [])), ...(GUI ? ['--gui-prompt'] : [])];
   const netArgs = net === 'test' ? ['--test-mode'] : [];
   const where = USB ? 'the key on USB' : `the phone${opts.address ? ` (${opts.address})` : ''}`;
 
@@ -143,12 +145,14 @@ async function run({ io, opts, argv, net, home }) {
     : `push: ${REPOS.map((r) => r.name).join(', ')}`);
   function sheet({ gpg, ssh }) {
     say(VIA_APP ? '>>> In the ok-edge desktop app\'s window, a budget request for the key on USB:'
-      : USB ? '>>> On this terminal, a budget request for the key on USB:' : `>>> On ${where}, a budget request:`);
+      : USB && GUI ? '>>> In a window on this desktop, a budget request for the key on USB:'
+        : USB ? '>>> On this terminal, a budget request for the key on USB:' : `>>> On ${where}, a budget request:`);
     say(`>>>   reason: "${reasonText(gpg)}"`);
     say(`>>>   ${gpg} signature(s), ${ssh} push(es), valid ${TTL} min${net === 'test' ? ' - TESTNET' : ''}`);
     say(`>>>   ${HOOKS.watch ? 'answered by the watch hook'
       : VIA_APP ? 'Approve it in the window, then PRESS the key within 20 s (it pulses); nothing else is asked until the batch is done'
-      : USB ?'answer y, then PRESS the key within 20 s of "PRESS the key now" (it pulses); nothing else is asked until the batch is done'
+      : USB && GUI ? 'answer Yes in the window, then PRESS the key within 20 s (it pulses); nothing else is asked until the batch is done'
+      : USB ? 'answer y, then PRESS the key within 20 s of "PRESS the key now" (it pulses); nothing else is asked until the batch is done'
         : 'APPROVE it and PRESS the key; nothing else is asked until the batch is done'}`);
   }
 
@@ -170,7 +174,7 @@ async function run({ io, opts, argv, net, home }) {
   function openBudget(t) {
     sheet(t);
     const r = cli(['budget', '--reason', reasonText(t.gpg), '--gpg', String(t.gpg), '--ssh', String(t.ssh), '--ttl', TTL],
-      HOOKS.watch ? 180000 : 600000, USB ? { stdio: ['inherit', 'pipe', 'inherit'] } : {});
+      HOOKS.watch ? 180000 : 600000, USB && !GUI ? { stdio: ['inherit', 'pipe', 'inherit'] } : {});
     HEAD = (r.out.match(/head = ([0-9a-f]{64})/) || [])[1];
     if (!HEAD) stop(`no budget: ${r.out.trim().split('\n').pop() || 'refused (see above)'}`);
     say(`budget open, head ${HEAD.slice(0, 12)}`);
@@ -337,6 +341,7 @@ Which key is chosen by the CLI's own flags; add \`--test-mode\` after \`edge\` f
 | Key | Command prefix |
 |---|---|
 | a hard key on USB (y/N here, then the press - it pulses) | \`${c} edge control\` |
+| a hard key on USB, the y/N in a desktop dialog (an agent's shell runs it, the person answers) | \`${c} --gui-prompt edge control\` |
 | a phone (ok-edge mobile) over Bluetooth | \`${c} --ble --address "<phone>" edge control\` |
 
 \`\`\`

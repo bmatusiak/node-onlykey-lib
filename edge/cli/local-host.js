@@ -62,7 +62,8 @@ const opWord = (op) => (op === codes.OP.SIGN ? 'sign' : op === codes.OP.DECRYPT 
  * @param {object} o
  * @param {object} o.edge the key's Edge service (edge/plugin)
  * @param {string} o.home this net's Edge home (control.edgeHome())
- * @param {(question: string) => Promise<boolean>} o.confirm the person's y/N
+ * @param {(question: string, o?: {details?: string, title?: string}) => Promise<boolean>} o.confirm the person's y/N:
+ *   terminalConfirm, or cli/gui-prompt guiConfirm (--gui-prompt), which shows `details` in its dialog
  * @param {(line: string) => void} [o.say] what the phone's sheet would show
  */
 function createLocalHost({ edge, home, confirm, say = () => {} }) {
@@ -116,10 +117,15 @@ function createLocalHost({ edge, home, confirm, say = () => {} }) {
         /* R27 before the question, as the phone greys out Approve: a copy that does not verify is refused unasked */
         const pre = await verifyCopy();
         if (!pre.ok) return 'copy_unverified';
-        say(`budget request${view.continues !== null ? ` (continues budget ${view.continues})` : ''}: "${view.reason}"`);
-        say(`  ${view.uses} use${view.uses === 1 ? '' : 's'}, for ${view.lifetime} minute${view.lifetime === 1 ? '' : 's'}`);
-        for (const s of view.scopes) say(`  ${s.op} on ${s.identity ? `${s.identity} (slot ${s.slot})` : `slot ${s.slot}`}: up to ${s.cap}`);
-        return (await confirm('approve this budget? [y/N] ')) ? 'approve' : 'decline';
+        const lines = [
+          `budget request${view.continues !== null ? ` (continues budget ${view.continues})` : ''}: "${view.reason}"`,
+          `  ${view.uses} use${view.uses === 1 ? '' : 's'}, for ${view.lifetime} minute${view.lifetime === 1 ? '' : 's'}`,
+          ...view.scopes.map((s) => `  ${s.op} on ${s.identity ? `${s.identity} (slot ${s.slot})` : `slot ${s.slot}`}: up to ${s.cap}`),
+        ];
+        for (const l of lines) say(l);
+        /* the same lines for a dialog (--gui-prompt); the terminal has them printed already */
+        const details = `${lines.join('\n')}\n\nAfter Yes, PRESS the key within 20 s (it pulses) - the budget opens with the press.`;
+        return (await confirm('approve this budget? [y/N] ', { details, title: 'OnlyKey Edge: a budget request' })) ? 'approve' : 'decline';
       },
       verifyCopy,
       budgetOf: () => was,
@@ -139,9 +145,9 @@ function createLocalHost({ edge, home, confirm, say = () => {} }) {
     seen.add(String(msg.nonce).toLowerCase());
     if (msg.type === identityLib.GET_TYPE) return { ok: true, record: loadIdentity() };
     const record = identityLib.clean(msg.record);
-    say('the agent identity this computer keeps for this key:');
-    for (const [k, v] of identityLib.rows(record)) say(`  ${k}: ${v}`);
-    if (!(await confirm('keep this agent identity? [y/N] '))) return { ok: false, refusal: 'declined' };
+    const lines = ['the agent identity this computer keeps for this key:', ...identityLib.rows(record).map(([k, v]) => `  ${k}: ${v}`)];
+    for (const l of lines) say(l);
+    if (!(await confirm('keep this agent identity? [y/N] ', { details: lines.join('\n'), title: 'OnlyKey Edge: the agent identity' }))) return { ok: false, refusal: 'declined' };
     kv.setItem('record', JSON.stringify(record));
     return { ok: true };
   }

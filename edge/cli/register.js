@@ -131,6 +131,11 @@ function recordCert(io, record, tool) {
 }
 
 /* what a budget request waits on, in words: the phone over Bluetooth, the desktop app's window, or this terminal for a hard key on USB (local-host.js) */
+/* the person's y/N for a hard key's host: on this terminal, or in a desktop dialog with --gui-prompt (cli/gui-prompt.js) */
+function personConfirm(opts) {
+  return opts && opts['gui-prompt'] ? require('../../cli/gui-prompt').guiConfirm : require('./local-host').terminalConfirm;
+}
+
 function waitingLine(opts, h) {
   if (opts.ble) return 'Waiting for the phone - read the request there, then press…';
   if (h && h.deviceOpts(opts).desktop) return 'Waiting for the desktop app - answer the request in its window, then press the key…';
@@ -213,7 +218,7 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
       net: NET,
     })
     : require('./local-host').createLocalHost({
-      edge, home, say, confirm: require('./local-host').terminalConfirm,
+      edge, home, say, confirm: personConfirm(opts),
     });
   /* timing logs are a dev-build switch only (edge/cli/dev; CLI.md §5) */
   const timed = dev && dev.timed ? dev.timed({ edge, wired, okcrypto, say }) : { channel: wired, okcrypto };
@@ -538,7 +543,7 @@ module.exports = function register(COMMANDS, h) {
           if (head.seq === null || to > head.seq) throw h.usage(`the key's head is #${head.seq}: a loss cannot reach past it`);
           io.out(`#${from}-#${to} would be accepted as LOST: the key links a LOSS for them (it pays no debt, it is on the chain for good),`);
           io.out('and this computer\'s copy then verifies past the gap. Only for links that are gone - from the key\'s ring and from every copy.');
-          const yes = await require('./local-host').terminalConfirm(`accept #${from}-#${to} as lost? [y/N] `);
+          const yes = await personConfirm(opts)(`accept #${from}-#${to} as lost? [y/N] `, { details: `#${from}-#${to} would be accepted as LOST: the key links a LOSS for them, for good.`, title: 'OnlyKey Edge: accept a loss' });
           if (!yes) { io.out('nothing written'); return 1; }
           const r = await d.edge.loss({ from, to, onPress: () => d.say('PRESS the key now - the loss is linked with the press') });
           io.out(`loss linked at #${r.seq}`);

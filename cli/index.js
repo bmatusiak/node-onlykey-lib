@@ -2367,6 +2367,8 @@ async function main(argv, io = {}) {
     mcp: { type: 'boolean' },
     address: { type: 'string' },
     yes: { type: 'boolean' },
+    /* a hard key's host asks its y/N in a desktop dialog, not on this terminal (cli/gui-prompt.js) */
+    'gui-prompt': { type: 'boolean' },
   };
   /*
    * A RAW COMMAND (edge - `exec … -- <command>` must reach it as typed): only the
@@ -2378,7 +2380,7 @@ async function main(argv, io = {}) {
     while (i < argv.length) {
       const t = argv[i];
       if (t === '--path' || t === '--address') { i += 2; continue; }
-      if (t === '--ble' || t === '--desktop' || t === '--mcp' || t === '--yes' || t === '--help' || t === '-h' || t.startsWith('--path=') || t.startsWith('--address=')) { i += 1; continue; }
+      if (t === '--ble' || t === '--desktop' || t === '--mcp' || t === '--yes' || t === '--gui-prompt' || t === '--help' || t === '-h' || t.startsWith('--path=') || t.startsWith('--address=')) { i += 1; continue; }
       break;
     }
     const t = argv[i];
