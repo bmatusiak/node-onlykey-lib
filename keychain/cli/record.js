@@ -187,7 +187,7 @@ function identityName(identity) {
  * @param {(opts: object) => Promise<object>} start
  * @param {{tool: string, err?: (line: string) => void, recordFn?: typeof record}} o
  */
-function recordingStart(start, { tool, err = () => {}, recordFn = record }) {
+function recordingStart(start, { tool, err = () => {}, recordFn = record, learnIdentity = true }) {
   let warned = false;
   const note = (fields) => {
     try {
@@ -212,7 +212,13 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record }) {
     const learn = () => {
       if (!learned) {
         learned = (async () => {
-          if (identity || !derive) return;
+          /*
+           * NOT INSIDE AN EDGE COMMAND (a live ship, 2026-10-25: `edge exec … git push` timed out "waiting for
+           * confirmation" on key 1): an exec arms the key for the one signature its budget pays, and these extra
+           * questions to the key (the Edge probe, the identities) land between the arming and the signature. There the
+           * record goes where the list already is (the one bucket identity kept here, else bucket.json).
+           */
+          if (identity || !derive || !learnIdentity) return;
           const bucketId = (await require('../../bucket/src/bucket-identity').readIdentity({ agent: { publicKey: derive } })).id;
           try {
             if (app.edge && typeof app.edge.identityId === 'function'

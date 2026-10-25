@@ -492,7 +492,7 @@ function setup(imports, register) {
     /* whatever records through this run tells the listeners (the commands use full.keychainRecord too) */
     const told = (...a) => { const r = recordFn(...a); events.emit('recorded', a[0]); return r; };
     full.keychainRecord = told;
-    return rec.recordingStart(start, { tool: `${NAME} ${name}`, err: full.err, recordFn: told });
+    return rec.recordingStart(start, { tool: `${NAME} ${name}`, err: full.err, recordFn: told, learnIdentity: name !== 'edge' });
   });
 
   /*
