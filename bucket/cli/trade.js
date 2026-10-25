@@ -96,8 +96,13 @@ async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts
   const g = c.give(await send(m2));
   if (!g) return { traded: false, why: 'the device did not answer the trade' };
   const done = c.finish(await send(g.message));
-  /* what the trade changed, into the kept file as it is NOW (the newer wins either way round) */
-  home.update(file, (b) => {
+  /*
+   * what the trade changed, into the kept file as it is NOW (the newer wins either way round) - and only when it took
+   * something: a rewrite that changes nothing still wakes the sync service's watcher, which then traded again, and again
+   * (the box, 2026-10-25: "traded - took 0, gave 0", then "trading (changed meanwhile)", without end)
+   */
+  const took = Object.values(g.taken || {}).reduce((a, b) => a + b, 0);
+  if (took) home.update(file, (b) => {
     const merged = bucketLib.merge(b, copy, { rules: r }).bucket;
     b.stores = merged.stores;
     b.clock = merged.clock;

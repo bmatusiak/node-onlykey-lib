@@ -56,3 +56,21 @@ test('a trade asked while one runs runs once more after it - never two at once',
   assert.equal(count, 2, 'the asks during the first trade became one more trade');
   svc.stop();
 });
+
+test('the trade\'s own write, seen while the trade still runs, is not traded again (no loop)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'okbucket-svc-'));
+  const file = path.join(dir, 'ab.json');
+  fs.writeFileSync(file, '{"v":1}');
+  let fire = null;
+  const watch = (d, cb) => { fire = cb; return { close() {} }; };
+  let count = 0;
+  const svc = startBucketService({
+    dir, watch, debounceMs: 10, intervalMs: 60000,
+    /* a slow trade that writes the folder early and the watcher sees it mid-trade (the box, 2026-10-25) */
+    tradeOnce: async () => { count++; fs.writeFileSync(file, `{"v":"traded ${count}"}`); fire(); await wait(80); return { traded: true, taken: {}, gave: {} }; },
+  });
+  await svc.trade('start');
+  await wait(200);
+  assert.equal(count, 1, 'one trade, not a loop of them');
+  svc.stop();
+});

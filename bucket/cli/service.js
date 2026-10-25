@@ -75,11 +75,17 @@ function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOU
     watcher = watch(dir, () => {
       if (stopped) return;
       clearTimeout(timer);
-      timer = setTimeout(() => {
+      const settled = () => {
+        /*
+         * a trade running now is writing this folder itself: look again once it ends, against what it left - never
+         * queue another trade for its own write
+         */
+        if (running) { void running.then(settled); return; }
         /* this computer's own trade wrote it, or a write that changed nothing: nothing to trade */
         if (contentsOf(dir) === synced) return;
         void trade('this computer\'s bucket changed');
-      }, debounceMs);
+      };
+      timer = setTimeout(settled, debounceMs);
     });
   } catch (e) {
     say(`sync: cannot watch ${dir} (${e.message}) - trading on the timer only`);
