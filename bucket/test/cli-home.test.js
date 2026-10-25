@@ -131,3 +131,25 @@ test('clear: the stores empty, each key a dated removal - a merge with an older 
   const merged = bucket.merge(now, older).bucket;
   assert.equal(bucket.kv(merged, 'keychain-test').getItem('list'), null);
 });
+
+test('identity buckets: one file per identity per net, kept once, read and written per store; only an identity id names one', () => {
+  const dir = scratch();
+  const { ID_HEX } = require('../../edge/src/identity-id');
+  const id = 'ab'.repeat(ID_HEX / 2);
+  assert.equal(home.hasIdentityBucket(id, 'live'), false);
+  const b = bucket.create({ owner: id });
+  bucket.kv(b, 'keychain').setItem('list', 'opened by the key');
+  assert.equal(home.keepIdentityBucket(id, 'live', b), true);
+  /* a second keep (another process kept it first) does not replace it */
+  assert.equal(home.keepIdentityBucket(id, 'live', bucket.create({ owner: id })), false);
+  assert.equal(home.hasIdentityBucket(id.toUpperCase(), 'live'), true);
+  assert.equal(home.hasIdentityBucket(id, 'test'), false);
+  const kv = home.kv(home.identityAt(id, 'live', 'keychain'));
+  assert.equal(kv.getItem('list'), 'opened by the key');
+  kv.setItem('list', 'changed by the CLI');
+  assert.equal(home.kv(home.identityAt(id, 'live', 'keychain')).getItem('list'), 'changed by the CLI');
+  assert.equal(home.identityFile(id, 'test'), path.join(dir, 'buckets', 'test', `${id}.json`));
+  assert.throws(() => home.identityFile('../../etc/passwd', 'live'), /identity id/);
+  /* the plain Edge records are not touched by it */
+  assert.equal(fs.existsSync(path.join(dir, home.FILE)), false);
+});

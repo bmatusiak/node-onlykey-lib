@@ -106,9 +106,13 @@ function readFile(file) {
 }
 
 function writeFile(file, b) {
+  writeText(file, `${bucket.serialize(b)}\n`);
+}
+
+function writeText(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${bucket.serialize(b)}\n`, { mode: 0o600 });
+  fs.writeFileSync(tmp, text, { mode: 0o600 });
   /* Windows: a reader holding the old file open makes the rename fail for a moment */
   for (let i = 0; ; i++) {
     try { fs.renameSync(tmp, file); return; } catch (e) {
@@ -150,6 +154,51 @@ function kv(where) {
     removeItem: (k) => update(where.file, (b) => bucket.kv(b, where.store).removeItem(k)),
     keys: () => bucket.kv(read(where.file), where.store).keys(),
   };
+}
+
+/*
+ * THE IDENTITY BUCKETS (ok-edge plan S2; Brad, 2026-10-24: "cli and desktop decrypt once, share same bucket stored in
+ * filesystem"; "the webapp has no way to save decrypted stuff, the desktop cli share the same file system"). The
+ * user's own data - the Key Chain list, Guest Book, the crypto box, passwords - is one bucket per identity. It
+ * travels sealed to the key (bucket.sealToKey; the web app only ever holds it sealed), and the identity check on
+ * the desktop opens it ONCE with the key's press and keeps it here, opened, for the desktop and the CLI alike:
+ * buckets/<live|test>/<identity id>.json, read and written as bucket.json is (kv, update: one writer at a time).
+ * What it holds is public keys and blocks that are encrypted on their own (crypto box messages, password entries
+ * under the vault's key), so this disk sees which keys and sites there are, never a secret.
+ * The Edge records above (copies, budgets, pointers) are public, signed chain data and stay in bucket.json.
+ */
+function identityFile(identity, net = 'live') {
+  const { isIdentityId } = require('../../edge/src/identity-id');
+  const id = String(identity).toLowerCase();
+  /* a name that is not an identity id never becomes a path (the desktop page hands it over IPC) */
+  if (!isIdentityId(id)) throw new Error('an identity bucket is named by an identity id');
+  return path.join(root(), 'buckets', net === 'test' ? 'test' : 'live', `${id}.json`);
+}
+
+/** One store of an identity's bucket, for kv(). */
+function identityAt(identity, net, store) {
+  return { file: identityFile(identity, net), store };
+}
+
+/** Whether this computer already keeps the identity's bucket opened (decrypted once, by the key). */
+function hasIdentityBucket(identity, net) {
+  return fs.existsSync(identityFile(identity, net));
+}
+
+/**
+ * Keep an identity's bucket, just opened by the key (or new), as this computer's. One already kept is not replaced
+ * (another process kept it first): -> whether this one was kept.
+ */
+function keepIdentityBucket(identity, net, b) {
+  const file = identityFile(identity, net);
+  const unlock = lock(file);
+  try {
+    if (fs.existsSync(file)) return false;
+    writeFile(file, b);
+    return true;
+  } finally {
+    unlock();
+  }
 }
 
 /** Empty stores, keeping a dated removal for every key so a later merge does not bring them back. */
@@ -229,4 +278,4 @@ function moveHomeFiles(home) {
   moveInto(path.join(home, FILE), (b, done) => moveNet(b, home, 'edge', done));
 }
 
-module.exports = { FILE, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles };
+module.exports = { FILE, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, hasIdentityBucket, keepIdentityBucket };
