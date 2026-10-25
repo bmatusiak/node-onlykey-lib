@@ -73,7 +73,7 @@ function startDesktop({ pipe, path, loadHid, ble = false, desktop = false, softK
       const rec = store.pairingFor(reached, pairingHome);
       if (!rec) {
         process.stderr.write(`onlykey-js: this computer user is not paired with ${reached || address || 'the phone'} - ok-rn answers only paired computers. `
-          + `Pair first: onlykey-js --ble${address ? ` --address ${address}` : ''} pair (and ok-rn > Bluetooth > Pair a computer).\n`);
+          + `Pair first: onlykey-js --ble${address ? ` --address ${address}` : ''} pair (and on the phone: Sync > Pair a computer - in ok-rn, Bluetooth > Pair a computer).\n`);
       }
       return rec;
     };

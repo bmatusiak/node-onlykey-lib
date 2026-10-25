@@ -1309,7 +1309,7 @@ COMMANDS.pair = {
     await pipe.start();
     try {
       const name = store.computerName();
-      io.out(`pairing ${name}: on the phone open ok-rn > Bluetooth > Pair a computer (it stays open about 2 minutes)`);
+      io.out(`pairing ${name}: on the phone open Sync > Pair a computer - in ok-rn, Bluetooth > Pair a computer (it stays open about 2 minutes)`);
       let result;
       try {
         result = await store.pairOverPipe(pipe, { name, out: (l) => io.out(l) });
