@@ -52,6 +52,8 @@
     "./cli/transport-ble": "./cli/transport-ble.js",
     "./cli/edge-agent": "./edge/cli/agent.js",
     "./cli/bt-radio": "./cli/bt-radio.js",
+    "./cli/clipair-store": "./cli/clipair-store.js",
+    "./cli/index": "./cli/index.js",
     "./cli/edge-control": "./edge/cli/control.js",
     "./cli/keychain-record": "./keychain/cli/record.js",
     "./edge/cli/commands": "./edge/cli/commands.js",
