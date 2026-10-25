@@ -109,6 +109,14 @@ async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts
   /* what goes, per store - counts and size only, never a key or value - so a store that never settles shows */
   const giving = Object.fromEntries(Object.entries(g.message.give || {}).map(([s, recs]) => [s, Object.keys(recs).length]));
   if (Object.keys(g.taken || {}).length) say(`sync: took ${JSON.stringify(g.taken)}`);
+  /* each record given: both sides' dates - a store whose record goes every time shows which side keeps it different */
+  for (const [s, recs] of Object.entries(g.message.give || {})) {
+    for (const k of Object.keys(recs).slice(0, 3)) {
+      const m = (g.mine[s] || {})[k];
+      const t = (g.theirs[s] || {})[k];
+      say(`sync:   ${s}/${k.length > 24 ? `${k.slice(0, 8)}…${k.slice(-12)}` : k} here ${m ? m.at : '-'}, there ${t ? t.at : '-'}`);
+    }
+  }
   if (Object.keys(giving).length) say(`sync: giving ${JSON.stringify(giving)} (${Math.round(JSON.stringify(g.message).length / 1024)} KB)`);
   const answer = await send(g.message);
   const done = c.finish(answer);

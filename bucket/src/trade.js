@@ -94,7 +94,7 @@ function computerSide({ bucket, me, randomBytes, rules = {} }) {
       theirs = answer.have;
       const out = rep.give(bucket, mine, theirs);
       const taken = rep.take(bucket, answer.give, { rules });
-      return { message: { type: TYPES.GIVE, v: 1, identity: me.id, give: out }, taken: taken.taken };
+      return { message: { type: TYPES.GIVE, v: 1, identity: me.id, give: out }, taken: taken.taken, mine, theirs };
     },
     finish: (answer) => (answer && answer.ok ? { taken: answer.taken || {} } : null),
   };
