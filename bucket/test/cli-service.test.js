@@ -74,3 +74,25 @@ test('the trade\'s own write, seen while the trade still runs, is not traded aga
   assert.equal(count, 1, 'one trade, not a loop of them');
   svc.stop();
 });
+
+test('one sync service per computer: a second one sees the live holder, does not trade, says who does', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'okbucket-svc-'));
+  const lockFile = path.join(dir, '..', `sync-${path.basename(dir)}.json`);
+  /* the holder: another live process (a pid the check calls alive) */
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 424242, who: 'the desktop app' }));
+  const said = [];
+  let traded = 0;
+  const second = startBucketService({ dir, lockFile, alive: (pid) => pid === 424242, watch: () => ({ close() {} }), intervalMs: 60000, say: (l) => said.push(l), tradeOnce: async () => { traded++; return { traded: true, same: true }; } });
+  assert.deepEqual(second.heldBy, { pid: 424242, who: 'the desktop app' });
+  await second.trade('asked');
+  assert.equal(traded, 0, 'no trade while another holds the lock');
+  assert.match(said.join('\n'), /runs in pid 424242 \(the desktop app\)/);
+  /* the holder died: the next one takes the lock, trades, and gives it back on stop */
+  const third = startBucketService({ dir, lockFile, alive: () => false, watch: () => ({ close() {} }), intervalMs: 60000, tradeOnce: async () => { traded++; return { traded: true, same: true }; } });
+  assert.equal(third.heldBy, undefined);
+  await third.trade('asked');
+  assert.equal(traded, 1);
+  assert.equal(JSON.parse(fs.readFileSync(lockFile, 'utf8')).pid, process.pid);
+  third.stop();
+  assert.equal(fs.existsSync(lockFile), false, 'the lock is given back');
+});

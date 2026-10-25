@@ -665,21 +665,75 @@ module.exports = function register(COMMANDS, h) {
            * service can do bluetooth stuff"): this computer's kept buckets watched, and traded with the paired phone this
            * service reaches - when they change (the desktop app writes the same files), on a slow timer, and once now.
            */
-          const bucketSvc = opts.ble ? (() => {
+          /*
+           * WHATEVER KEY THIS SERVICE USES (Brad, 2026-10-25: "cli without desktop == --service, and --soft-key also runs
+           * the service while it's alive"): over Bluetooth the phone is this service's own device and its channel carries
+           * the trade; with a key on USB, the soft key or the desktop app, the sync service opens its own Bluetooth link to
+           * each phone this computer is cli-paired with, for trade messages only. The key is asked for the bucket key once
+           * (bucket/cli/trade.js makeMe, the same backup's key); later trades use the remembered identity and need none.
+           */
+          const pairedPhones = () => require('../../cli/clipair-store').list().filter((p) => p.address);
+          const links = new Map();
+          const linkTo = async (address) => {
+            if (links.has(address)) return links.get(address);
+            const { wire } = require('../src');
+            const a = await io.start({ ble: true, address });
+            const tr = a.services.transport;
+            const l = { app: a, transport: tr, used: Date.now(), channel: wire.createWireChannel(tr, { timeoutMs: 60000, device: () => (typeof tr.deviceId === 'function' ? tr.deviceId() : null), log: st.say, net: NET }) };
+            links.set(address, l);
+            return l;
+          };
+          const bucketSvc = (opts.ble || pairedPhones().length) ? (() => {
             const { tradeWith, tradeTimeoutMs } = require('../../bucket/cli/trade');
-            const bucketDir = path.join(require('../../bucket/cli/home').root(), 'buckets', NET === 'test' ? 'test' : 'live');
+            const bucketHome = require('../../bucket/cli/home');
+            const bucketDir = path.join(bucketHome.root(), 'buckets', NET === 'test' ? 'test' : 'live');
+            const tradeOver = (channel) => {
+              let round = 0;
+              const send = (m) => channel.send(m, { timeoutMs: tradeTimeoutMs(m, round++ === 0) }).catch((e) => { st.say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
+              return tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say });
+            };
+            const n = (o) => Object.values(o || {}).reduce((x, y) => x + y, 0);
             const svcBucket = require('../../bucket/cli/service').startBucketService({
               dir: bucketDir,
               say: st.say,
-              tradeOnce: () => {
-                let round = 0;
-                const send = (m) => st.channel.send(m, { timeoutMs: tradeTimeoutMs(m, round++ === 0) }).catch((e) => { st.say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
-                return tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say });
+              lockFile: path.join(bucketHome.root(), 'sync.json'),
+              who: process.env.OKEDGE_SYNC_WHO || `onlykey-js --service (pid ${process.pid})`,
+              tradeOnce: async () => {
+                if (opts.ble) return tradeOver(st.channel);
+                /* each paired phone in turn, over its own link; the result says them all */
+                const results = [];
+                for (const p of pairedPhones()) {
+                  const name = p.phoneName || p.address;
+                  try {
+                    const l = await linkTo(p.address);
+                    l.used = Date.now();
+                    results.push({ name, ...await tradeOver(l.channel) });
+                  } catch (e) {
+                    results.push({ name, traded: false, why: e.message });
+                  }
+                }
+                if (!results.length) return { traded: false, why: 'no phone is cli-paired with this computer' };
+                const ok = results.filter((r) => r.traded);
+                if (!ok.length) return { traded: false, why: results.map((r) => `${r.name}: ${r.why}`).join('; ') };
+                return {
+                  traded: true,
+                  same: ok.every((r) => r.same),
+                  settled: ok.every((r) => r.settled !== false),
+                  taken: { all: ok.reduce((x, r) => x + n(r.taken), 0) },
+                  gave: { all: ok.reduce((x, r) => x + n(r.gave), 0) },
+                };
               },
             });
             void svcBucket.trade('the service started');
             return svcBucket;
           })() : null;
+          /* its own links let go when idle (60 s, as the --ble link below); the 30 s check usually keeps them up */
+          const linkTick = setInterval(() => {
+            for (const l of links.values()) {
+              if (Date.now() - l.used >= 60000 && typeof l.transport.isOpen === 'function' && l.transport.isOpen()) void l.transport.release('idle').catch(() => {});
+            }
+          }, 5000);
+          if (linkTick.unref) linkTick.unref();
 
           /*
            * RELEASE WHEN IDLE (Brad, 2026-10-06): the link is let go once the key's
@@ -699,7 +753,9 @@ module.exports = function register(COMMANDS, h) {
             process.once('SIGTERM', resolve);
           }));
           if (idleTick) clearInterval(idleTick);
+          clearInterval(linkTick);
           if (bucketSvc) bucketSvc.stop();
+          for (const l of links.values()) await Promise.resolve(l.app.destroy()).catch(() => undefined);
           return 0;
         } finally {
           await st.close();

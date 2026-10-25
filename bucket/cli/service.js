@@ -38,13 +38,43 @@ function contentsOf(dir) {
   return h.digest('hex');
 }
 
+/*
+ * ONE SYNC SERVICE PER COMPUTER. The desktop app runs one while it is open (ok-edge electron/desktop/sync.js), a terminal
+ * `onlykey-js --service` runs one, `--soft-key` runs one - two at once would both reach the same phone, and a phone
+ * answers only the computer that connected last. The first to start holds a lock (lockFile: its pid and who it is,
+ * owner-only); a later one sees a live holder and does not trade - it says who does. A holder that died leaves a lock
+ * whose pid no longer runs: the next one takes it. The liveness check is desktop/trust.js's.
+ */
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+function holderOf(lockFile, alive) {
+  try {
+    const j = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+    return j && j.pid !== process.pid && alive(j.pid) ? j : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Start watching and trading.
  * @param {{dir: string, tradeOnce: () => Promise<{traded: boolean, why?: string, taken?: object, gave?: object}>, say?: (l: string) => void, debounceMs?: number, intervalMs?: number, watch?: typeof fs.watch}} o
  *   dir: the folder of this net's kept buckets (bucket/cli/home.js); tradeOnce: one trade with the paired device
- * @returns {{trade: (why: string) => Promise<void>, stop: () => void}}
+ *   lockFile: this computer's one sync lock (omitted: no lock - tests); who: how the holder is named to the next one
+ * @returns {{trade: (why: string) => Promise<void>, stop: () => void, heldBy?: {pid: number, who: string}}}
  */
-function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOUNCE_MS, intervalMs = INTERVAL_MS, watch = fs.watch }) {
+function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOUNCE_MS, intervalMs = INTERVAL_MS, watch = fs.watch, lockFile = null, who = `onlykey-js --service (pid ${process.pid})`, alive = pidAlive }) {
+  if (lockFile) {
+    const held = holderOf(lockFile, alive);
+    if (held) {
+      say(`sync: runs in pid ${held.pid} (${held.who}) - not here`);
+      return { trade: async () => {}, stop() {}, heldBy: { pid: held.pid, who: held.who } };
+    }
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(lockFile, `${JSON.stringify({ pid: process.pid, who, at: new Date().toISOString() })}\n`, { mode: 0o600 });
+  }
   let synced = contentsOf(dir);
   let running = null;
   let again = false;
@@ -106,6 +136,10 @@ function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOU
       clearTimeout(timer);
       clearInterval(tick);
       if (watcher) watcher.close();
+      /* the lock goes only if it is still ours (a later holder that took over a dead one's keeps it) */
+      if (lockFile) {
+        try { if (JSON.parse(fs.readFileSync(lockFile, 'utf8')).pid === process.pid) fs.unlinkSync(lockFile); } catch { /* gone already */ }
+      }
     },
   };
 }
