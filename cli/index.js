@@ -2384,6 +2384,28 @@ async function main(argv, io = {}) {
    * A RAW COMMAND (edge - `exec … -- <command>` must reach it as typed): only the
    * global options before its name are parsed here; everything after is its own.
    */
+  /*
+   * --service: THIS COMPUTER'S ONE LONG-LIVED PROCESS (Brad, 2026-10-25: "for normal cli --service will be our
+   * long-lived"; one service, not two): the Edge agent (edge agent) with the bucket service in it, which watches this
+   * computer's buckets and trades them with the paired devices it reaches. `onlykey-js [--ble] --service [--test-mode]`
+   * is `onlykey-js [--ble] edge [--test-mode] agent`.
+   */
+  {
+    const at = argv.indexOf('--service');
+    const firstCmd = argv.findIndex((a) => Object.prototype.hasOwnProperty.call(COMMANDS, a));
+    if (at >= 0 && (firstCmd < 0 || at < firstCmd)) {
+      const rest = argv.filter((_, i) => i !== at);
+      const globals = [];
+      const others = [];
+      for (let i = 0; i < rest.length; i++) {
+        const a = rest[i];
+        if (a === '--path' || a === '--address') { globals.push(a, rest[i + 1]); i += 1; }
+        else if (['--ble', '--desktop', '--yes', '--gui-prompt', '--soft-key'].includes(a) || a.startsWith('--path=') || a.startsWith('--address=')) globals.push(a);
+        else others.push(a);
+      }
+      argv = [...globals, 'edge', ...others, 'agent'];
+    }
+  }
   let rawCmd = null;
   {
     let i = 0;

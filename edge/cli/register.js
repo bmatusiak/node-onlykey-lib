@@ -304,7 +304,7 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
       const n = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
       say(t.traded ? `bucket: traded with the phone - took ${n(t.taken)}, gave ${n(t.gave)}` : `bucket: not traded this time (${t.why})`);
     };
-    return { app, transport, svc, identity, home, close: async () => { await shareLogs(); await svc.close(); await pickUp(); await app.destroy(); } };
+    return { app, transport, svc, identity, home, channel, okcrypto, say, close: async () => { await shareLogs(); await svc.close(); await pickUp(); await app.destroy(); } };
   } catch (e) {
     await app.destroy().catch(() => undefined);
     throw e;
@@ -659,6 +659,27 @@ module.exports = function register(COMMANDS, h) {
           io.out(h.row('control', svc.controlPath));
           io.out(`ready - ${edgeCmd('budget / exec / receipt')} use this service; Ctrl-C to stop`);
           /*
+           * AND THE BUCKET SERVICE (bucket/cli/service.js; Brad, 2026-10-25: "--service will be our long-lived"; "the
+           * service can do bluetooth stuff"): this computer's kept buckets watched, and traded with the paired phone this
+           * service reaches - when they change (the desktop app writes the same files), on a slow timer, and once now.
+           */
+          const bucketSvc = opts.ble ? (() => {
+            const { tradeWith } = require('../../bucket/cli/trade');
+            const bucketDir = path.join(require('../../bucket/cli/home').root(), 'buckets', NET === 'test' ? 'test' : 'live');
+            const svcBucket = require('../../bucket/cli/service').startBucketService({
+              dir: bucketDir,
+              say: st.say,
+              tradeOnce: () => {
+                let round = 0;
+                const send = (m) => st.channel.send(m, { timeoutMs: round++ === 0 ? 60000 : 30000 }).catch(() => null);
+                return tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say });
+              },
+            });
+            void svcBucket.trade('the service started');
+            return svcBucket;
+          })() : null;
+
+          /*
            * RELEASE WHEN IDLE (Brad, 2026-10-06): the link is let go once the key's
            * lane has been quiet 60 s - nothing running, nothing waiting. The phone
            * goes back to advertising; the next request connects fresh, hello first.
@@ -676,6 +697,7 @@ module.exports = function register(COMMANDS, h) {
             process.once('SIGTERM', resolve);
           }));
           if (idleTick) clearInterval(idleTick);
+          if (bucketSvc) bucketSvc.stop();
           return 0;
         } finally {
           await st.close();
