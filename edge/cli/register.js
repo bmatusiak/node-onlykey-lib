@@ -653,6 +653,8 @@ module.exports = function register(COMMANDS, h) {
           io.out(h.row('ssh key', svc.sshLine));
           if (svc.fingerprint) io.out(h.row('gpg key', svc.fingerprint));
           if (svc.certArmored) {
+            /* a key this computer has not kept anything for yet has no identity home until now (the box's testnet, 2026-10-25) */
+            fs.mkdirSync(st.home, { recursive: true, mode: 0o700 });
             fs.writeFileSync(path.join(st.home, 'agent-gpg.asc'), svc.certArmored);
             io.out(h.row('gpg cert', path.join(st.home, 'agent-gpg.asc')));
           }
