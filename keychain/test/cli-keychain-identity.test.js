@@ -1,8 +1,9 @@
 /*
- * The CLI's Key Chain list in the identity's bucket (ok-edge plan S2; Brad, 2026-10-24: "cli and desktop decrypt
- * once, share same bucket stored in filesystem"): a derive is recorded into the bucket of the key's identity that
- * this computer keeps - the file the desktop app reads too; the first identity kept takes the list from before;
- * a key with no Edge identity keeps the computer's list. Every test runs in a scratch root.
+ * The CLI's Key Chain list in the bucket of the key's BUCKET IDENTITY (ok-edge plan S2/S3; Brad, 2026-10-24: "cli and
+ * desktop decrypt once, share same bucket stored in filesystem"; 2026-10-25: the "" agent key is the key's identity,
+ * "nothing to do with edge"): a derive is recorded into the bucket this computer keeps for that identity - the file
+ * the desktop app reads too; the first one kept takes the list from before; a bucket kept under the key's Edge
+ * identity id moves to the bucket identity id once. Every test runs in a scratch root.
  */
 'use strict';
 
@@ -11,12 +12,13 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
+const { ed25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 const home = require('../../bucket/cli/home');
+const bucketLib = require('../../bucket/src/bucket');
+const bid = require('../../bucket/src/bucket-identity');
 const rec = require('../cli/record');
 const list = require('../src/list');
-
-const ID = '0a87b456efdaa086a2523475e745443b';
-const OTHER = '797110eb49a3' + '0'.repeat(20);
 
 function scratch() {
   delete process.env.ONLYKEY_KEYCHAIN;
@@ -25,69 +27,64 @@ function scratch() {
 }
 test.afterEach(() => { home.setRoot(null); rec.setFile(null); });
 
-/* a started app as the CLI's start returns it: okcrypto's agent derive, and the Edge plugin (or none) */
-const fakeStart = ({ edge }) => async () => ({
+/* a key's agent: one key per (backup, identity hash) - so "" gives the backup's bucket identity */
+const hashOfIdentity = (identity) => (identity instanceof Uint8Array ? identity : sha256(new TextEncoder().encode(JSON.stringify(identity))));
+const agentKey = (seed, identity) => ed25519.getPublicKey(sha256(new Uint8Array([...new TextEncoder().encode(seed), ...hashOfIdentity(identity)])));
+const fakeStart = (seed, edge) => async () => ({
   edge,
-  services: { okcrypto: { agent: { publicKey: async () => new Uint8Array(32).fill(7) } } },
+  services: { okcrypto: { agent: { publicKey: async (identity) => agentKey(seed, identity) } } },
 });
+const idOf = (seed) => bid.identityIdOf(agentKey(seed, sha256(new Uint8Array(0))));
 const derive = async (app) => app.services.okcrypto.agent.publicKey({ ssh: { user: 'me', host: 'host' } }, { keyType: 1 });
 const listOf = (id, store = 'keychain') => {
   const text = home.kv(home.identityAt(id, store === 'keychain-test' ? 'test' : 'live', store)).getItem('list');
   return text ? list.parse(text) : [];
 };
+const entry = (label, fill) => list.createEntry({ kind: 'derived', scheme: 'ssh', label, type: 'ed25519', publicKey: new Uint8Array(32).fill(fill), firstSeen: 'x', lastSeen: 'x', tools: [] });
 
-test('a derive on a key with an Edge identity is recorded in that identity\'s kept bucket; the old list moves in once', async () => {
+test('a derive is recorded in the kept bucket of the key\'s bucket identity - any key, no Edge needed; the old list moves in', async () => {
   scratch();
-  /* the list this computer kept before identities */
-  rec.save([list.createEntry({ kind: 'derived', scheme: 'ssh', label: 'old@host', type: 'ed25519', publicKey: new Uint8Array(32).fill(1), firstSeen: 'x', lastSeen: 'x', tools: [] })]);
-  const edge = { probe: async () => 'edge', identityId: async () => ID };
-  const app = await rec.recordingStart(fakeStart({ edge }), { tool: 'test' })({});
+  rec.save([entry('old@host', 1)]);
+  const app = await rec.recordingStart(fakeStart('backup-1', undefined), { tool: 'test' })({});
   await derive(app);
+  const ID = idOf('backup-1');
   assert.deepEqual(home.keptIdentities('live'), [ID]);
-  assert.deepEqual(listOf(ID).map((e) => e.label).sort(), ['me@host', 'old@host'], 'the old list moved in, the derive beside it');
-  assert.equal(home.kv(home.at('keychain')).getItem('list'), null, 'the computer\'s old list is gone from bucket.json');
-  /* no key now: keychain list reads the one identity kept */
+  assert.deepEqual(listOf(ID).map((e) => e.label).sort(), ['me@host', 'old@host']);
+  assert.equal(home.kv(home.at('keychain')).getItem('list'), null);
+  assert.ok(!listOf(ID).some((e) => e.scheme === 'hash'), 'reading the bucket identity is not recorded as a derive');
   rec.setFile(null);
-  assert.equal(rec.load().length, 2);
-  assert.match(String(rec.keychainFile()), new RegExp(`${ID}\\.json`));
+  assert.equal(rec.load().length, 2, 'no key now: the one bucket identity kept');
 });
 
-test('two identities kept: a list with no key asks which; --identity takes an id\'s first characters', async () => {
+test('two bucket identities kept: a list with no key asks which; --identity takes an id\'s first characters', async () => {
   scratch();
-  for (const id of [ID, OTHER]) {
-    const app = await rec.recordingStart(fakeStart({ edge: { probe: async () => 'edge', identityId: async () => id } }), { tool: 'test' })({});
-    await derive(app);
+  for (const seed of ['backup-1', 'backup-2']) {
+    await derive(await rec.recordingStart(fakeStart(seed, undefined), { tool: 'test' })({}));
     rec.setFile(null);
   }
   assert.throws(() => rec.load(), /more than one identity/);
-  rec.setIdentity(ID.slice(0, 12));
+  rec.setIdentity(idOf('backup-1').slice(0, 12));
   assert.equal(rec.load().length, 1);
-  rec.setIdentity('ffff');
-  assert.throws(() => rec.load(), /no identity ffff/);
 });
 
-test('a key with no Edge identity keeps the computer\'s list (bucket.json); the testnet\'s is its own', async () => {
+test('a bucket kept under the key\'s Edge identity id moves to its bucket identity id once, owner rewritten', async () => {
   scratch();
-  const app = await rec.recordingStart(fakeStart({ edge: { probe: async () => 'none', identityId: async () => ID } }), { tool: 'test' })({});
-  await derive(app);
-  assert.deepEqual(home.keptIdentities('live'), []);
-  assert.equal(list.parse(home.kv(home.at('keychain')).getItem('list')).length, 1);
+  const EDGE_ID = 'cd'.repeat(16);
+  const old = bucketLib.create({ owner: EDGE_ID });
+  bucketLib.kv(old, 'keychain').setItem('list', list.serialize([entry('desktop@host', 2)]));
+  home.keepIdentityBucket(EDGE_ID, 'live', old);
+  const edge = { probe: async () => 'edge', identityId: async () => EDGE_ID };
+  await derive(await rec.recordingStart(fakeStart('backup-1', edge), { tool: 'test' })({}));
+  const ID = idOf('backup-1');
+  assert.deepEqual(home.keptIdentities('live'), [ID], 'the Edge-named file is gone');
+  assert.deepEqual(listOf(ID).map((e) => e.label).sort(), ['desktop@host', 'me@host']);
+  assert.equal(home.read(home.identityFile(ID, 'live')).owner, ID);
+});
+
+test('the testnet\'s list is its own', async () => {
+  scratch();
   rec.setFile(rec.testFile());
-  const t = await rec.recordingStart(fakeStart({ edge: { probe: async () => 'edge', identityId: async () => ID } }), { tool: 'test' })({});
-  await derive(t);
-  assert.deepEqual(home.keptIdentities('test'), [ID]);
-  assert.equal(listOf(ID, 'keychain-test').length, 1);
-  assert.deepEqual(home.keptIdentities('live'), [], 'the live net keeps no identity from a testnet derive');
-});
-
-test('the desktop kept the identity first, with a list of its own: the computer\'s old list is merged in, nothing dropped', async () => {
-  scratch();
-  const entry = (label, fill) => list.createEntry({ kind: 'derived', scheme: 'ssh', label, type: 'ed25519', publicKey: new Uint8Array(32).fill(fill), firstSeen: 'x', lastSeen: 'x', tools: [] });
-  rec.save([entry('old@host', 1)]);
-  /* the desktop's identity check kept the bucket, and recorded one key into it */
-  const b = require('../../bucket/src/bucket').create({ owner: ID });
-  require('../../bucket/src/bucket').kv(b, 'keychain').setItem('list', list.serialize([entry('desktop@host', 2)]));
-  home.keepIdentityBucket(ID, 'live', b);
-  assert.deepEqual(rec.load().map((e) => e.label).sort(), ['desktop@host', 'old@host']);
-  assert.equal(home.kv(home.at('keychain')).getItem('list'), null);
+  await derive(await rec.recordingStart(fakeStart('backup-1', undefined), { tool: 'test' })({}));
+  assert.deepEqual(home.keptIdentities('test'), [idOf('backup-1')]);
+  assert.deepEqual(home.keptIdentities('live'), []);
 });

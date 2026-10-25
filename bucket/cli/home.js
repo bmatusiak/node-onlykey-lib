@@ -159,19 +159,20 @@ function kv(where) {
 /*
  * THE IDENTITY BUCKETS (ok-edge plan S2; Brad, 2026-10-24: "cli and desktop decrypt once, share same bucket stored in
  * filesystem"; "the webapp has no way to save decrypted stuff, the desktop cli share the same file system"). The
- * user's own data - the Key Chain list, Guest Book, the crypto box, passwords - is one bucket per identity. It
+ * user's own data - the Key Chain list, Guest Book, the crypto box, passwords - is one bucket per BUCKET IDENTITY (the
+ * key's "" agent key, bucket/src/bucket-identity.js - not Edge's identity, a different thing). It
  * travels sealed to the key (bucket.sealToKey; the web app only ever holds it sealed), and the identity check on
  * the desktop opens it ONCE with the key's press and keeps it here, opened, for the desktop and the CLI alike:
- * buckets/<live|test>/<identity id>.json, read and written as bucket.json is (kv, update: one writer at a time).
+ * buckets/<live|test>/<bucket identity id>.json, read and written as bucket.json is (kv, update: one writer at a time).
  * What it holds is public keys and blocks that are encrypted on their own (crypto box messages, password entries
  * under the vault's key), so this disk sees which keys and sites there are, never a secret.
  * The Edge records above (copies, budgets, pointers) are public, signed chain data and stay in bucket.json.
  */
 function identityFile(identity, net = 'live') {
-  const { isIdentityId } = require('../../edge/src/identity-id');
+  const { isBucketIdentityId } = require('../src/bucket-identity');
   const id = String(identity).toLowerCase();
-  /* a name that is not an identity id never becomes a path (the desktop page hands it over IPC) */
-  if (!isIdentityId(id)) throw new Error('an identity bucket is named by an identity id');
+  /* a name that is not a bucket identity id never becomes a path (the desktop page hands it over IPC) */
+  if (!isBucketIdentityId(id)) throw new Error('an identity bucket is named by a bucket identity id');
   return path.join(root(), 'buckets', net === 'test' ? 'test' : 'live', `${id}.json`);
 }
 
@@ -182,15 +183,37 @@ function identityAt(identity, net, store) {
 
 /** The identities whose bucket this computer keeps on a net. */
 function keptIdentities(net = 'live') {
-  const { isIdentityId } = require('../../edge/src/identity-id');
+  const { isBucketIdentityId } = require('../src/bucket-identity');
   const dir = path.join(root(), 'buckets', net === 'test' ? 'test' : 'live');
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => f.endsWith('.json') && isIdentityId(f.slice(0, -5))).map((f) => f.slice(0, -5)).sort();
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.json') && isBucketIdentityId(f.slice(0, -5))).map((f) => f.slice(0, -5)).sort();
 }
 
 /** Whether this computer already keeps the identity's bucket opened (decrypted once, by the key). */
 function hasIdentityBucket(identity, net) {
   return fs.existsSync(identityFile(identity, net));
+}
+
+/**
+ * THE OWNER CHANGED ONCE (Brad, 2026-10-25: the bucket identity - the key's "" agent key - owns the bucket, "nothing
+ * to do with edge"): a bucket this computer kept under the key's Edge identity id moves to its bucket identity id,
+ * its owner rewritten, the old file removed - only when the new one does not exist yet. -> whether it moved.
+ */
+function moveIdentityBucket(fromId, toId, net) {
+  const from = identityFile(fromId, net);
+  const to = identityFile(toId, net);
+  if (from === to || !fs.existsSync(from)) return false;
+  const unlock = lock(to);
+  try {
+    if (fs.existsSync(to)) return false;
+    const b = readFile(from);
+    b.owner = String(toId).toLowerCase();
+    writeFile(to, b);
+    fs.unlinkSync(from);
+    return true;
+  } finally {
+    unlock();
+  }
 }
 
 /**
@@ -286,4 +309,4 @@ function moveHomeFiles(home) {
   moveInto(path.join(home, FILE), (b, done) => moveNet(b, home, 'edge', done));
 }
 
-module.exports = { FILE, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, keptIdentities, hasIdentityBucket, keepIdentityBucket };
+module.exports = { FILE, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, keptIdentities, hasIdentityBucket, keepIdentityBucket, moveIdentityBucket };

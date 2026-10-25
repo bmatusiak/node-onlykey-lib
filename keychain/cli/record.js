@@ -54,11 +54,11 @@ function setFile(file) {
 
 /*
  * IN THE IDENTITY'S BUCKET (ok-edge plan S2; Brad, 2026-10-24: "cli and desktop decrypt once, share same bucket
- * stored in filesystem"). The list is the user's own data, kept in the bucket of the key's identity that this
- * computer keeps opened (bucket/cli/home.js identityFile) - the same file the desktop app reads and writes.
- * Which identity: the key a device command talks to (recordingStart reads it from the key), or the one picked with
- * keychain --identity; with neither, the one identity this computer keeps on that net. A key with no Edge identity
- * (stock v3.0.4) - or a computer that keeps no identity yet - keeps the list in bucket.json, as before.
+ * stored in filesystem"). The list is the user's own data, kept in the bucket of the key's BUCKET IDENTITY (its ""
+ * agent key, bucket/src/bucket-identity.js - not Edge's identity) that this computer keeps opened (bucket/cli/home.js
+ * identityFile) - the same file the desktop app reads and writes. Which one: the key a device command talks to
+ * (recordingStart reads it from the key), or the one picked with keychain --identity; with neither, the one bucket
+ * identity this computer keeps on that net. A computer that keeps none yet keeps the list in bucket.json, as before.
  */
 let identity = null;
 /** The identity this run's list belongs to (an id, or its first characters as keychain --identity takes them). */
@@ -200,24 +200,33 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record }) {
   return async (opts) => {
     const app = await start(opts);
     const okc = app && app.services && app.services.okcrypto;
+    /* the agent's own derive, before it is wrapped below: reading the bucket identity is not a derive to record */
+    const derive = okc && okc.agent && typeof okc.agent.publicKey === 'function' ? okc.agent.publicKey.bind(okc.agent) : null;
     /*
-     * WHOSE LIST: the key's identity, read once per run, the first time something is recorded (after the derive,
-     * so a command's own exchange is never interrupted). A key with no Edge identity answers 'none' and its
-     * derives stay in this computer's list.
+     * WHOSE LIST: the key's BUCKET IDENTITY (its "" agent key, bucket/src/bucket-identity.js - every OnlyKey since
+     * 2.1.0, Edge or not), read once per run, the first time something is recorded (after the derive, so a command's
+     * own exchange is never interrupted). The owner moved once from the Edge identity (Brad, 2026-10-25): a bucket
+     * this computer kept under the key's Edge identity id moves to the bucket identity id here.
      */
     let learned = null;
     const learn = () => {
       if (!learned) {
         learned = (async () => {
-          if (identity || !app || !app.edge || typeof app.edge.identityId !== 'function') return;
-          if (typeof app.edge.probe === 'function' && (await app.edge.probe({ timeoutMs: 4000 })) !== 'edge') return;
-          setIdentity(await app.edge.identityId());
+          if (identity || !derive) return;
+          const bucketId = (await require('../../bucket/src/bucket-identity').readIdentity({ agent: { publicKey: derive } })).id;
+          try {
+            if (app.edge && typeof app.edge.identityId === 'function'
+              && (typeof app.edge.probe !== 'function' || (await app.edge.probe({ timeoutMs: 4000 })) === 'edge')) {
+              const edgeId = await app.edge.identityId();
+              for (const net of ['live', 'test']) bucketHome.moveIdentityBucket(edgeId, bucketId, net);
+            }
+          } catch { /* no Edge to move from */ }
+          setIdentity(bucketId);
         })().catch(() => {});
       }
       return learned;
     };
-    if (okc && okc.agent && typeof okc.agent.publicKey === 'function') {
-      const derive = okc.agent.publicKey.bind(okc.agent);
+    if (derive) {
       okc.agent.publicKey = async (identity, o = {}) => {
         const raw = await derive(identity, o);
         const name = identityName(identity);

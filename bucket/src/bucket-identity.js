@@ -52,6 +52,9 @@ const concat = (...parts) => {
 const H = (domain, ...parts) => sha256(concat(utf8(domain), ...parts.map((p) => Uint8Array.from(p))));
 const labelHash = (label) => sha256(utf8(label));
 
+/** Is this a bucket identity id (32 lowercase hex)? */
+const isBucketIdentityId = (s) => typeof s === 'string' && /^[0-9a-f]{32}$/.test(s);
+
 /** The id a bucket identity's public key goes by: 32 hex characters (the bucket's owner, its file name). */
 function identityIdOf(identityPublicKey) {
   return toHex(H('OKBUCKET-ID-v1', identityPublicKey)).slice(0, 32);
@@ -134,4 +137,4 @@ function verify({ identityPublicKey, bucketPublicKey, certificate, purpose, byte
   }
 }
 
-module.exports = { IDENTITY_LABEL, KEY_LABEL, identityIdOf, readIdentity, deriveBucketKey, certify, verifyCertificate, sign, verify };
+module.exports = { IDENTITY_LABEL, KEY_LABEL, isBucketIdentityId, identityIdOf, readIdentity, deriveBucketKey, certify, verifyCertificate, sign, verify };

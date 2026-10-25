@@ -1,5 +1,7 @@
 export const IDENTITY_LABEL: "";
 export const KEY_LABEL: "onlykey-bucket/key";
+/** Is this a bucket identity id (32 lowercase hex)? */
+export function isBucketIdentityId(s: any): boolean;
 /** The id a bucket identity's public key goes by: 32 hex characters (the bucket's owner, its file name). */
 export function identityIdOf(identityPublicKey: any): string;
 /**

@@ -149,7 +149,7 @@ test('identity buckets: one file per identity per net, kept once, read and writt
   kv.setItem('list', 'changed by the CLI');
   assert.equal(home.kv(home.identityAt(id, 'live', 'keychain')).getItem('list'), 'changed by the CLI');
   assert.equal(home.identityFile(id, 'test'), path.join(dir, 'buckets', 'test', `${id}.json`));
-  assert.throws(() => home.identityFile('../../etc/passwd', 'live'), /identity id/);
+  assert.throws(() => home.identityFile('../../etc/passwd', 'live'), /bucket identity id/);
   /* the plain Edge records are not touched by it */
   assert.equal(fs.existsSync(path.join(dir, home.FILE)), false);
 });
