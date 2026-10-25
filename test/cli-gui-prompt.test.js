@@ -30,7 +30,7 @@ test('Windows: a MessageBox; the request text reaches it through the environment
   assert.ok(!calls[0].args.join(' ').includes('Remove-Item'), 'the reason is not on the command line');
   assert.ok(calls[0].env.OKJS_GUI_TEXT.includes(HOSTILE));
   assert.ok(calls[0].env.OKJS_GUI_TEXT.endsWith('Approve this budget?'), 'the [y/N] is dropped');
-  assert.ok(PS_SCRIPT.includes("'Button2'"), 'No is the default button');
+  assert.ok(PS_SCRIPT.includes('TabStop = $false') && !PS_SCRIPT.includes('AcceptButton') && PS_SCRIPT.includes('Interval = 1500'), 'no key reaches Yes or No, and both wait 1.5 s');
 });
 
 test('Linux: zenity with markup off and Cancel as the default; no zenity, kdialog; neither, No', async () => {

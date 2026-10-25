@@ -20,12 +20,32 @@ const { execFile } = require('child_process');
 
 const TIMEOUT_MS = 120000;
 
-/* the Windows script: the text and title come from the environment, never from the command line */
+/*
+ * THE WINDOWS DIALOG: the text and title come from the environment, never from the command line.
+ *
+ * NO KEYSTROKE ANSWERS IT (Brad, 2026-10-25: the test window came up while he was typing - "i could have hit no with
+ * spacebar"). A MessageBox takes the focus and its buttons take Space and Enter, so whatever the person was typing
+ * elsewhere could answer a budget. So it is a form of its own: the request in a read-only text box that holds the
+ * focus (typing lands there and does nothing), Yes and No as buttons with no tab stop and no Accept/Cancel role (no
+ * key reaches them), both dead for the first 1.5 s (a click already on its way does not land), and closing = No.
+ */
 const PS_SCRIPT = [
   'Add-Type -AssemblyName System.Windows.Forms',
-  '$owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true}',
-  "$r = [System.Windows.Forms.MessageBox]::Show($owner, $env:OKJS_GUI_TEXT, $env:OKJS_GUI_TITLE, 'YesNo', 'Question', 'Button2')",
-  "if ($r -eq 'Yes') { exit 0 } else { exit 1 }",
+  '$f = New-Object System.Windows.Forms.Form',
+  '$f.Text = $env:OKJS_GUI_TITLE; $f.TopMost = $true; $f.Width = 560; $f.Height = 360',
+  "$f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.StartPosition = 'CenterScreen'",
+  '$t = New-Object System.Windows.Forms.TextBox',
+  '$t.Multiline = $true; $t.ReadOnly = $true; $t.ScrollBars = \'Vertical\'; $t.Left = 12; $t.Top = 12; $t.Width = 520; $t.Height = 250',
+  "$t.Text = ($env:OKJS_GUI_TEXT -replace \"`r?`n\", \"`r`n\")",
+  "$yes = New-Object System.Windows.Forms.Button; $yes.Text = 'Yes'; $yes.Left = 352; $yes.Top = 275; $yes.Width = 85; $yes.TabStop = $false; $yes.Enabled = $false",
+  "$no = New-Object System.Windows.Forms.Button; $no.Text = 'No'; $no.Left = 447; $no.Top = 275; $no.Width = 85; $no.TabStop = $false; $no.Enabled = $false",
+  '$script:answer = 1',
+  '$yes.Add_Click({ $script:answer = 0; $f.Close() }); $no.Add_Click({ $script:answer = 1; $f.Close() })',
+  '$timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 1500',
+  '$timer.Add_Tick({ $timer.Stop(); $yes.Enabled = $true; $no.Enabled = $true; $t.Focus() | Out-Null })',
+  '$f.Controls.AddRange(@($t, $yes, $no)); $f.ActiveControl = $t',
+  '$f.Add_Shown({ $t.Focus() | Out-Null; $t.SelectionLength = 0; $timer.Start() })',
+  '[void]$f.ShowDialog(); exit $script:answer',
 ].join('; ');
 
 /**
