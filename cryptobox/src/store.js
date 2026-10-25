@@ -100,7 +100,11 @@ function createCryptobox({ storage, randomBytes, now = () => new Date(), key = K
   }
 
   async function writeAll(all) {
-    const shaped = all.map(shapeMessage);
+    /*
+     * in one order - when written, then id - the order the bucket's cryptobox rule joins two devices' lists in: a list
+     * kept in the order things were added read differently from the joined one, so a sync sent the whole box back
+     */
+    const shaped = all.map(shapeMessage).sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
     if (shaped.filter((m) => !m.archived).length > MESSAGES_MAX) throw new Error(`Cryptobox keeps up to ${MESSAGES_MAX} messages; delete some first.`);
     refusePrivate(shaped, 'messages', HOLDER);
     await storage.setItem(key, JSON.stringify({ v: VERSION, messages: shaped }));
