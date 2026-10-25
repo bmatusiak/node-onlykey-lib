@@ -63,13 +63,15 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
    * So a CLI is sent the key's reports only from its own first write on.
    */
   let spoke = false;
+  /* a CLI write is waiting for the app to hand the key over: nothing that arrives meanwhile answers it */
+  let handing = false;
   let hostQueue = Promise.resolve();
   const asm = { current: wire.createAssembler() };
   const ensureKey = openKey || (async () => { if (!pipe.isRunning()) await pipe.start(); });
 
   /* the key's reports to the CLI - the key's own (dir OUT), never the echo of a write */
   const offStream = pipe.on('stream', (ev) => {
-    if (!client || muted || !spoke || ev.dir !== DIR.OUT) return;
+    if (!client || muted || !spoke || handing || ev.dir !== DIR.OUT) return;
     send(client, { t: 'report', iface: ev.iface, b64: toB64(ev.bytes) });
   });
   const offClose = pipe.on('close', (err) => {
@@ -145,7 +147,10 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
       }
       try {
         /* the app hands the key over first (pipe.beforeWrite: its own reads finished, the key quiet) - what arrives meanwhile is not this CLI's */
-        if (typeof pipe.beforeWrite === 'function') await pipe.beforeWrite();
+        if (typeof pipe.beforeWrite === 'function') {
+          handing = true;
+          try { await pipe.beforeWrite(); } finally { handing = false; }
+        }
         spoke = true;
         await pipe.write(m.iface, bytes);
       } catch (e) {

@@ -240,3 +240,32 @@ test('desktop: a report arriving while the app hands the key over is not relayed
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/* every write's handover, not only the first: a later write's wait relays nothing either */
+test('desktop: during any CLI write\'s handover, reports are not relayed - not just before the first', async () => {
+  const root = tmp();
+  const key = fakeKeyPipe();
+  const stale = new Uint8Array(64); stale[0] = 0x55;
+  let n = 0;
+  key.beforeWrite = async () => { n += 1; if (n === 2) { key.emit({ iface: 2, dir: DIR.OUT, bytes: stale }); await new Promise((r) => setTimeout(r, 30)); } };
+  const server = createDesktopServer({ pipe: key, root, hostFor: () => ({ send: async () => null }) });
+  const rec = await server.start();
+  try {
+    const cli = createDesktopPipe({ record: rec });
+    const seen = [];
+    cli.on('stream', (ev) => { if (ev.dir === DIR.OUT) seen.push(ev.bytes[0]); });
+    await cli.start();
+    const a = new Uint8Array(64); a[0] = 7;
+    await cli.write(2, a);
+    await until(() => seen.length === 1);
+    const b = new Uint8Array(64); b[0] = 9;
+    await cli.write(2, b);
+    await until(() => seen.length >= 2);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(seen, [8, 10], 'the answers only - the report from during the second handover is dropped');
+    await cli.stop();
+  } finally {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
