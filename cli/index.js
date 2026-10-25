@@ -127,10 +127,17 @@ const classicSlotName = (n) => (n <= 6 ? `${n}a` : `${n - 6}b`);
  * command goes through it - the key is the app's, and so are the person's approvals. --desktop
  * insists on the app; --path names a USB key and opens it here, app or not.
  */
+/*
+ * WHICH KEY (Brad, 2026-10-25: "the CLI will try to do the work if no desktop app is found, and then it tries to use
+ * hardkey by default, unless --ble or --soft-key is used"): the desktop app when it runs - it does the work with the key
+ * it has open; else --ble the phone, --soft-key the desktop app's own soft key booted here (cli/transport-softkey.js,
+ * the testnet's with --test-mode), or a hard key on USB.
+ */
 function deviceOpts(opts) {
   if (opts.ble) return { ble: true, address: opts.address };
   if (opts.desktop) return { desktop: true };
   if (!opts.path && require('../desktop/trust').liveTrust()) return { desktop: true, auto: true };
+  if (opts['soft-key']) return { softKey: true, softKeyNet: process.argv.includes('--test-mode') ? 'test' : 'live' };
   return { path: opts.path };
 }
 
@@ -138,6 +145,7 @@ function deviceOpts(opts) {
 function deviceArgs(opts) {
   if (opts.ble) return ['--ble', ...(opts.address ? ['--address', opts.address] : [])];
   if (opts.desktop) return ['--desktop'];
+  if (opts['soft-key']) return ['--soft-key'];
   return opts.path ? ['--path', opts.path] : [];
 }
 
@@ -2369,6 +2377,8 @@ async function main(argv, io = {}) {
     yes: { type: 'boolean' },
     /* a hard key's host asks its y/N in a desktop dialog, not on this terminal (cli/gui-prompt.js) */
     'gui-prompt': { type: 'boolean' },
+    /* the desktop app's soft key, booted here when the app is not running - interactive over stdio (cli/transport-softkey.js) */
+    'soft-key': { type: 'boolean' },
   };
   /*
    * A RAW COMMAND (edge - `exec … -- <command>` must reach it as typed): only the
@@ -2380,7 +2390,7 @@ async function main(argv, io = {}) {
     while (i < argv.length) {
       const t = argv[i];
       if (t === '--path' || t === '--address') { i += 2; continue; }
-      if (t === '--ble' || t === '--desktop' || t === '--mcp' || t === '--yes' || t === '--gui-prompt' || t === '--help' || t === '-h' || t.startsWith('--path=') || t.startsWith('--address=')) { i += 1; continue; }
+      if (t === '--ble' || t === '--desktop' || t === '--mcp' || t === '--yes' || t === '--gui-prompt' || t === '--soft-key' || t === '--help' || t === '-h' || t.startsWith('--path=') || t.startsWith('--address=')) { i += 1; continue; }
       break;
     }
     const t = argv[i];
