@@ -7,6 +7,17 @@
  * the web page and the CLI. "the web will ask for a bucket, from the computer we upload the backup
  * with drag and drop, and download bucket ... so the bucket is transferable."
  *
+ * WHAT A BUCKET MAY HOLD (Brad, 2026-10-25: "the buckets should not carry actual secrets or decrypted
+ * messages - those take a press on their own; it does keep the labels for those secrets, for their
+ * encrypted form, so they can be identified by the user"). A store keeps public things (keys, contacts)
+ * and LABELS beside the encrypted form of each secret - a password entry's site beside its sealed blob, an
+ * armored PGP message - never the secret or a decrypted text: opening one is its own press, every time. So
+ * an opened bucket on a computer (bucket/cli/home.js identity buckets) shows which keys and sites there
+ * are, and nothing more. Sealing the bucket to the key when it travels ("decrypting with the key protects
+ * the privacy of those labels") is what keeps even the labels to the person. A new store follows this, or
+ * it does not belong in the bucket. (A PGP SIGNED message is the one readable text a store keeps: it was
+ * never encrypted - cryptobox/src/store.js.)
+ *
  * One bucket, many stores. Each store is what one feature already keeps through the storage seam
  * every lib store takes - {getItem, setItem, removeItem} (vault_store, edge's pointer store, the
  * Guest Book, Cryptobox, Passwords) - so a feature does not know it lives in a bucket. kv() hands a
