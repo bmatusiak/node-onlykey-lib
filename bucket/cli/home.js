@@ -180,6 +180,14 @@ function identityAt(identity, net, store) {
   return { file: identityFile(identity, net), store };
 }
 
+/** The identities whose bucket this computer keeps on a net. */
+function keptIdentities(net = 'live') {
+  const { isIdentityId } = require('../../edge/src/identity-id');
+  const dir = path.join(root(), 'buckets', net === 'test' ? 'test' : 'live');
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.json') && isIdentityId(f.slice(0, -5))).map((f) => f.slice(0, -5)).sort();
+}
+
 /** Whether this computer already keeps the identity's bucket opened (decrypted once, by the key). */
 function hasIdentityBucket(identity, net) {
   return fs.existsSync(identityFile(identity, net));
@@ -278,4 +286,4 @@ function moveHomeFiles(home) {
   moveInto(path.join(home, FILE), (b, done) => moveNet(b, home, 'edge', done));
 }
 
-module.exports = { FILE, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, hasIdentityBucket, keepIdentityBucket };
+module.exports = { FILE, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, keptIdentities, hasIdentityBucket, keepIdentityBucket };

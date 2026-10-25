@@ -116,6 +116,8 @@ function setup(imports, register) {
       'user-id': { type: 'string' },
       v1: { type: 'boolean' },
       'test-mode': { type: 'boolean' },
+      /* whose list, when this computer keeps more than one identity's bucket (record.js inBucket) */
+      identity: { type: 'string' },
       v2: { type: 'boolean' },
       type: { type: 'string' },
       json: { type: 'boolean' },
@@ -131,7 +133,7 @@ function setup(imports, register) {
       const keychain = require('../src');
       const [sub, ...rest] = args;
       /* --test-mode: the testnet's list (keychain-test.json), the one edge --test-mode records into */
-      { const rec = require('./record'); rec.setFile(opts['test-mode'] ? rec.testFile() : null); }
+      { const rec = require('./record'); rec.setFile(opts['test-mode'] ? rec.testFile() : null); rec.setIdentity(opts.identity || null); }
 
       /*
        * list / show: the host's Key Chain list (~/.onlykey-js/keychain.json) -

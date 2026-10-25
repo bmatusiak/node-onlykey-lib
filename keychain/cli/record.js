@@ -29,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const list = require('../src/list');
 const bucketHome = require('../../bucket/cli/home');
+const bucketLib = require('../../bucket/src/bucket');
 const { toHex } = require('../../src/bytes');
 
 /* okcrypto.agent keyType -> the list's type */
@@ -46,15 +47,61 @@ const LABEL_TYPE_OF_KEYTYPE = { 1: 'p256', 2: 'secp256k1', 3: 'x25519' };
  * so messages that name where the list is stay readable.
  */
 let fileOverride = null;
-function setFile(file) { fileOverride = !file ? null : typeof file === 'string' ? path.resolve(file) : file; }
+function setFile(file) {
+  fileOverride = !file ? null : typeof file === 'string' ? path.resolve(file) : file;
+  identity = null;
+}
+
+/*
+ * IN THE IDENTITY'S BUCKET (ok-edge plan S2; Brad, 2026-10-24: "cli and desktop decrypt once, share same bucket
+ * stored in filesystem"). The list is the user's own data, kept in the bucket of the key's identity that this
+ * computer keeps opened (bucket/cli/home.js identityFile) - the same file the desktop app reads and writes.
+ * Which identity: the key a device command talks to (recordingStart reads it from the key), or the one picked with
+ * keychain --identity; with neither, the one identity this computer keeps on that net. A key with no Edge identity
+ * (stock v3.0.4) - or a computer that keeps no identity yet - keeps the list in bucket.json, as before.
+ */
+let identity = null;
+/** The identity this run's list belongs to (an id, or its first characters as keychain --identity takes them). */
+function setIdentity(id) { identity = id ? String(id).toLowerCase() : null; }
+
+const netOf = (store) => (store === 'keychain-test' ? 'test' : 'live');
+
+function inIdentity(id, store) {
+  const net = netOf(store);
+  if (!bucketHome.hasIdentityBucket(id, net)) {
+    /* the first identity kept on this computer takes the list it kept before identities (the phone's rule too) */
+    const before = bucketHome.kv(bucketHome.at(store));
+    const old = before.getItem('list');
+    const b = bucketLib.create({ owner: id });
+    if (old !== null) bucketLib.kv(b, store).setItem('list', old);
+    if (bucketHome.keepIdentityBucket(id, net, b) && old !== null) before.removeItem('list');
+  }
+  const at = bucketHome.identityAt(id, net, store);
+  return { ...at, toString: () => `${at.file} (${store})` };
+}
+
 function inBucket(store) {
+  const kept = bucketHome.keptIdentities(netOf(store));
+  if (identity) {
+    /* keychain --identity takes an id's first characters, as the lists print it */
+    const picked = kept.filter((k) => k.startsWith(identity));
+    if (identity.length < 32 && picked.length !== 1) {
+      throw new Error(picked.length ? `--identity ${identity} matches more than one kept identity` : `no identity ${identity} is kept on this computer`);
+    }
+    return inIdentity(identity.length < 32 ? picked[0] : identity, store);
+  }
+  if (kept.length === 1) return inIdentity(kept[0], store);
+  if (kept.length > 1) {
+    throw new Error(`more than one identity keeps its bucket on this computer (${kept.map((k) => k.slice(0, 12)).join(', ')}) - pick one with --identity <id>`);
+  }
   const at = bucketHome.at(store);
   return { ...at, toString: () => `${at.file} (${store})` };
 }
-/** The testnet's Key Chain: edge --test-mode records here, keychain --test-mode reads it. */
-function testFile() { return inBucket('keychain-test'); }
+/** The testnet's Key Chain: edge --test-mode records here, keychain --test-mode reads it. Resolved when used. */
+function testFile() { return { store: 'keychain-test' }; }
 
 function keychainFile() {
+  if (fileOverride && fileOverride.store && !fileOverride.file) return inBucket(fileOverride.store);
   if (fileOverride) return fileOverride;
   return process.env.ONLYKEY_KEYCHAIN ? path.resolve(process.env.ONLYKEY_KEYCHAIN) : inBucket('keychain');
 }
@@ -148,13 +195,29 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record }) {
   return async (opts) => {
     const app = await start(opts);
     const okc = app && app.services && app.services.okcrypto;
+    /*
+     * WHOSE LIST: the key's identity, read once per run, the first time something is recorded (after the derive,
+     * so a command's own exchange is never interrupted). A key with no Edge identity answers 'none' and its
+     * derives stay in this computer's list.
+     */
+    let learned = null;
+    const learn = () => {
+      if (!learned) {
+        learned = (async () => {
+          if (identity || !app || !app.edge || typeof app.edge.identityId !== 'function') return;
+          if (typeof app.edge.probe === 'function' && (await app.edge.probe({ timeoutMs: 4000 })) !== 'edge') return;
+          setIdentity(await app.edge.identityId());
+        })().catch(() => {});
+      }
+      return learned;
+    };
     if (okc && okc.agent && typeof okc.agent.publicKey === 'function') {
       const derive = okc.agent.publicKey.bind(okc.agent);
       okc.agent.publicKey = async (identity, o = {}) => {
         const raw = await derive(identity, o);
         const name = identityName(identity);
         const type = TYPE_OF_KEYTYPE[o.keyType || 1];
-        if (name && type) note({ ...name, type, publicKey: raw, code: (o.version === 2 ? 232 : 132) });
+        if (name && type) { await learn(); note({ ...name, type, publicKey: raw, code: (o.version === 2 ? 232 : 132) }); }
         return raw;
       };
     }
@@ -166,7 +229,7 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record }) {
         const type = LABEL_TYPE_OF_KEYTYPE[o.keytype];
         let pub = r && r.publicKey ? Uint8Array.from(r.publicKey) : null;
         if (pub && pub.length === 65 && (type === 'p256' || type === 'secp256k1')) pub = pub.slice(1); /* X||Y, as the slots */
-        if (pub && type && typeof label === 'string') note({ scheme: 'label', label, type, publicKey: pub, code: o.keytype });
+        if (pub && type && typeof label === 'string') { await learn(); note({ scheme: 'label', label, type, publicKey: pub, code: o.keytype }); }
         return r;
       };
     }
@@ -174,4 +237,4 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record }) {
   };
 }
 
-module.exports = { keychainFile, setFile, testFile, load, save, record, recordingStart, identityName };
+module.exports = { keychainFile, setFile, setIdentity, testFile, load, save, record, recordingStart, identityName };
