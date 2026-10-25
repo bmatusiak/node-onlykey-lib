@@ -95,7 +95,10 @@ async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts
   if (!m2) return { traded: false, why: 'the device did not prove this bucket identity, or does not trade yet' };
   const g = c.give(await send(m2));
   if (!g) return { traded: false, why: 'the device did not answer the trade' };
-  const done = c.finish(await send(g.message));
+  const answer = await send(g.message);
+  const done = c.finish(answer);
+  /* what it took is the phone's own count; an answer without one is said, never read as "took nothing" */
+  if (!done) say(`sync: the phone did not confirm what it took (${answer ? JSON.stringify(answer).slice(0, 160) : 'no answer'})`);
   /*
    * what the trade changed, into the kept file as it is NOW (the newer wins either way round) - and only when it took
    * something: a rewrite that changes nothing still wakes the sync service's watcher, which then traded again, and again

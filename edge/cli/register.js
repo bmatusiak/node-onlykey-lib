@@ -298,7 +298,7 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
        * key, made once); later rounds are quick.
        */
       let round = 0;
-      const send = (m) => channel.send(m, { timeoutMs: round++ === 0 ? 60000 : 30000 }).catch(() => null);
+      const send = (m) => channel.send(m, { timeoutMs: round++ === 0 ? 60000 : 30000 }).catch((e) => { say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
       const t = await require('../../bucket/cli/trade').tradeWith({ send, okcrypto, net: NET, say })
         .catch((e) => ({ traded: false, why: e.message }));
       const n = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
@@ -673,7 +673,7 @@ module.exports = function register(COMMANDS, h) {
               say: st.say,
               tradeOnce: () => {
                 let round = 0;
-                const send = (m) => st.channel.send(m, { timeoutMs: round++ === 0 ? 60000 : 30000 }).catch(() => null);
+                const send = (m) => st.channel.send(m, { timeoutMs: round++ === 0 ? 60000 : 30000 }).catch((e) => { st.say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
                 return tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say });
               },
             });
