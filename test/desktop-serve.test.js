@@ -215,3 +215,28 @@ test('desktop: a newly connected CLI gets the key\'s reports only from its own f
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/* the app's handover (beforeWrite) runs before the CLI counts as speaking: a report during it is not the CLI's */
+test('desktop: a report arriving while the app hands the key over is not relayed to the CLI', async () => {
+  const root = tmp();
+  const key = fakeKeyPipe();
+  const stale = new Uint8Array(64); stale[0] = 0x55;
+  key.beforeWrite = async () => { key.emit({ iface: 2, dir: DIR.OUT, bytes: stale }); await new Promise((r) => setTimeout(r, 30)); };
+  const server = createDesktopServer({ pipe: key, root, hostFor: () => ({ send: async () => null }) });
+  const rec = await server.start();
+  try {
+    const cli = createDesktopPipe({ record: rec });
+    const seen = [];
+    cli.on('stream', (ev) => { if (ev.dir === DIR.OUT) seen.push(ev.bytes[0]); });
+    await cli.start();
+    const mine = new Uint8Array(64); mine[0] = 7;
+    await cli.write(2, mine);
+    await until(() => seen.length >= 1);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(seen, [8], 'only its own answer, never the leftover from during the handover');
+    await cli.stop();
+  } finally {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

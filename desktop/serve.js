@@ -40,7 +40,8 @@ const { HELLO_MS, send, readLines, toB64, fromB64 } = require('./protocol');
 
 /**
  * @param {object} o
- * @param {object} o.pipe the hard key's pipe (cli/transport-hid's contract), shared with the app's page
+ * @param {object} o.pipe the hard key's pipe (cli/transport-hid's contract), shared with the app's page;
+ *   its optional beforeWrite() resolves when the app has handed the key over for a CLI write
  * @param {() => Promise<void>} [o.openKey] makes sure the pipe is open (default: pipe.start() if not running)
  * @param {(net: 'live'|'test') => {send: Function}} o.hostFor the host for a net (local-host.js)
  * @param {string} [o.root] the shared home (default ~/.onlykey-js)
@@ -143,6 +144,8 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
         return;
       }
       try {
+        /* the app hands the key over first (pipe.beforeWrite: its own reads finished, the key quiet) - what arrives meanwhile is not this CLI's */
+        if (typeof pipe.beforeWrite === 'function') await pipe.beforeWrite();
         spoke = true;
         await pipe.write(m.iface, bytes);
       } catch (e) {
