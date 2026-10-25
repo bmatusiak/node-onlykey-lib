@@ -17,11 +17,7 @@ export function keychain(list: {
     };
 }, { key }?: {
     key?: string;
-}): (into?: {}, from?: {}) => {
-    store: any;
-    taken: any;
-    conflicts: any[];
-};
+}): any;
 /**
  * Password entries (passwords/ over src/crypto/vault_store.js): each credential is its own key and
  * merges key by key - the same entry changed on both sides is a conflict, never overwritten. The
@@ -48,11 +44,7 @@ export function passwords(): (into?: {}, from?: {}) => {
  */
 export function guestbook({ key }?: {
     key?: string;
-}): (into?: {}, from?: {}) => {
-    store: any;
-    taken: any;
-    conflicts: any[];
-};
+}): any;
 /**
  * The Edge copies (edge/src/copyfile.js): one key per device, its copy's JSON. Two copies of one
  * device merge by the copy's own rules; a FORK - the copies disagree at a seq both hold, or name
@@ -103,9 +95,5 @@ export function edgeBlocks(bucket: {
  */
 export function cryptobox({ key }?: {
     key?: string;
-}): (into?: {}, from?: {}) => {
-    store: any;
-    taken: any;
-    conflicts: any[];
-};
+}): any;
 import { mergeKeys } from "./bucket";

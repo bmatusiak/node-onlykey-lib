@@ -14,7 +14,7 @@ const crypto = require('crypto');
 const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { ed25519, x25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 const home = require('../cli/home');
-const { tradeWith, keyFile } = require('../cli/trade');
+const { tradeWith, keyFile, storeRules } = require('../cli/trade');
 const bucketLib = require('../src/bucket');
 const bid = require('../src/bucket-identity');
 const trade = require('../src/trade');
@@ -36,7 +36,7 @@ async function phoneOf(seed) {
   const certificate = await bid.certify(key, publicKey, bucketKey.publicKey);
   const me = { id, identityPublicKey: publicKey, bucketKey, certificate };
   const bucket = bucketLib.create({ owner: id });
-  const answer = trade.peerSide({ bucket: () => bucket, me: () => me, randomBytes: (n) => new Uint8Array(crypto.randomBytes(n)) });
+  const answer = trade.peerSide({ bucket: () => bucket, me: () => me, randomBytes: (n) => new Uint8Array(crypto.randomBytes(n)), rules: storeRules() });
   return { id, bucket, send: async (m) => answer(m, 'this computer') };
 }
 

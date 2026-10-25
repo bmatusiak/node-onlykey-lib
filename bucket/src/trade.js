@@ -91,7 +91,7 @@ function computerSide({ bucket, me, randomBytes, rules = {} }) {
   let rounds = 0;
   const haveMessage = () => {
     rounds += 1;
-    mine = rep.summarize(bucket);
+    mine = rep.summarize(bucket, { rules });
     return { type: TYPES.HAVE, v: 1, identity: me.id, have: mine };
   };
   return {
@@ -100,19 +100,19 @@ function computerSide({ bucket, me, randomBytes, rules = {} }) {
     prove(answer) {
       if (!answer || !answer.ok || !answer.proof || !checks(answer.proof, nonce, 'peer', me.id)) return null;
       peerProven = true;
-      return { type: TYPES.PROVE, v: 1, identity: me.id, proof: prove(me, dec(answer.nonce), 'computer'), state: rep.stateOf(bucket) };
+      return { type: TYPES.PROVE, v: 1, identity: me.id, proof: prove(me, dec(answer.nonce), 'computer'), state: rep.stateOf(bucket, { rules }) };
     },
     /* the peer's state: the same as ours - in sync, nothing to send; different - our HAVE */
     compare(answer) {
       if (!peerProven || !answer || !answer.ok || !answer.state) return null;
-      if (answer.state.hash === rep.stateOf(bucket).hash) return { same: true };
-      return { same: false, differs: rep.differs(rep.stateOf(bucket), answer.state), message: haveMessage() };
+      if (answer.state.hash === rep.stateOf(bucket, { rules }).hash) return { same: true };
+      return { same: false, differs: rep.differs(rep.stateOf(bucket, { rules }), answer.state), message: haveMessage() };
     },
     /* the peer's HAVE and GIVE: take its GIVE, then give what it lacks */
     give(answer) {
       if (!peerProven || !mine || !answer || !answer.ok || !answer.have || !answer.give) return null;
       const theirs = answer.have;
-      const out = rep.give(bucket, mine, theirs);
+      const out = rep.give(bucket, mine, theirs, { rules });
       const taken = rep.take(bucket, answer.give, { rules });
       return { message: { type: TYPES.GIVE, v: 1, identity: me.id, give: out }, taken: taken.taken, mine, theirs };
     },
@@ -122,7 +122,7 @@ function computerSide({ bucket, me, randomBytes, rules = {} }) {
      */
     settle(answer) {
       if (!answer || !answer.ok || !answer.state) return null;
-      const now = rep.stateOf(bucket);
+      const now = rep.stateOf(bucket, { rules });
       const taken = answer.taken || {};
       if (answer.state.hash === now.hash) return { same: true, taken };
       const differs = rep.differs(now, answer.state);
@@ -160,20 +160,20 @@ function peerSide({ bucket, me, randomBytes, rules = {}, seen = new Set() }) {
         return REFUSED;
       }
       t.proven = true;
-      return { ok: true, state: rep.stateOf(b) };
+      return { ok: true, state: rep.stateOf(b, { rules }) };
     }
     /* HAVE: only after this computer's proof, a few rounds at most */
     if (message.type === TYPES.HAVE) {
       if (!t || !t.proven || !message.have || t.rounds >= ROUNDS) { trades.delete(from); return REFUSED; }
       t.rounds += 1;
-      t.mine = rep.summarize(b);
-      return { ok: true, have: t.mine, give: rep.give(b, t.mine, message.have) };
+      t.mine = rep.summarize(b, { rules });
+      return { ok: true, have: t.mine, give: rep.give(b, t.mine, message.have, { rules }) };
     }
     /* GIVE: after this round's HAVE, once per round - then the state after it, for the computer to compare */
     if (!t || !t.proven || !t.mine || !message.give) { trades.delete(from); return REFUSED; }
     t.mine = null;
     const r = rep.take(b, message.give, { rules });
-    return { ok: true, taken: r.taken, state: rep.stateOf(b) };
+    return { ok: true, taken: r.taken, state: rep.stateOf(b, { rules }) };
   };
 }
 

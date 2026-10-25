@@ -72,6 +72,7 @@ export function computerSide({ bucket, me, randomBytes, rules }: {
                         v: string | null;
                         at: string;
                         archived?: true;
+                        part?: true;
                     };
                 };
             };

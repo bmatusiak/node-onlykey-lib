@@ -39,6 +39,43 @@ function withOthers(key, rule) {
   };
 }
 
+/*
+ * A STORE KEPT AS ONE VALUE GOES OVER IN PIECES (Brad, 2026-10-25: "this should be easy to separate and chunk"). The
+ * Key Chain list, the Guest Book and the Cryptobox are each one value holding a list of items with ids - 140, 29 and
+ * 110 KB on the test key - and a sync sent the whole value whenever any item changed. Their rules say how the value
+ * splits: one part per item (`#<id>`, the item with its keys in one order) and one part for everything else (``).
+ * replicate.js compares and gives parts, not the value: one changed item moves alone. The parts given are joined back
+ * into a value holding just them, and the store's own rule merges that in as it merges any other copy (items join by
+ * id, the newer wins, archived stays archived) - so a value need not arrive whole to merge whole.
+ */
+function canonical(v) {
+  if (Array.isArray(v)) return v.map(canonical);
+  if (v && typeof v === 'object') return Object.keys(v).sort().reduce((o, k) => { o[k] = canonical(v[k]); return o; }, {});
+  return v;
+}
+function listParts(key, field) {
+  return {
+    key,
+    /** @param {string} v the value @returns {Object<string, string>} part id -> its text */
+    split(v) {
+      const j = JSON.parse(v);
+      if (!j || typeof j !== 'object' || !Array.isArray(j[field])) throw new Error(`not a list of ${field}`);
+      const { [field]: items, ...rest } = j;
+      const out = { '': JSON.stringify(canonical(rest)) };
+      for (const it of items) if (it && it.id !== undefined) out[`#${it.id}`] = JSON.stringify(canonical(it));
+      return out;
+    },
+    /** @param {Object<string, string>} parts @returns {string} a value holding just these parts */
+    join(parts) {
+      const rest = parts[''] ? JSON.parse(parts['']) : {};
+      const items = Object.keys(parts).filter((p) => p !== '').sort().map((p) => JSON.parse(parts[p]));
+      return JSON.stringify({ ...rest, [field]: items });
+    },
+  };
+}
+/* a rule with its parts: replicate.js finds them on the rule */
+const withParts = (rule, parts) => Object.assign(rule, { parts });
+
 /** Settings: key by key, the newer value wins (bucket.mergeKeys). */
 const settings = mergeKeys;
 
@@ -50,7 +87,7 @@ const settings = mergeKeys;
  * @param {{key?: string}} [opts]
  */
 function keychain(list, { key = 'list' } = {}) {
-  return withOthers(key, (into = {}, from = {}) => {
+  return withParts(withOthers(key, (into = {}, from = {}) => {
     const store = { ...into };
     const a = into[key];
     const b = from[key];
@@ -67,7 +104,7 @@ function keychain(list, { key = 'list' } = {}) {
     if (v === a.v) return { store, taken: 0, conflicts: [] };
     store[key] = { v, at: later(a.at, b.at) };
     return { store, taken: Math.max(1, r.added + r.paired), conflicts: [] };
-  });
+  }), listParts(key, 'entries'));
 }
 
 /**
@@ -110,7 +147,7 @@ function passwords() {
 function guestbook({ key = 'guestbook:v1' } = {}) {
   /* when a contact last changed: its newest key's updatedAt, else the blob's date */
   const changedAt = (c, blobAt) => (c.keys || []).map((k) => String(k.updatedAt || '')).filter(Boolean).sort().pop() || blobAt;
-  return withOthers(key, (into = {}, from = {}) => {
+  return withParts(withOthers(key, (into = {}, from = {}) => {
     const store = { ...into };
     const a = into[key];
     const b = from[key];
@@ -146,7 +183,7 @@ function guestbook({ key = 'guestbook:v1' } = {}) {
     if (!taken) return { store, taken: 0, conflicts: [] };
     store[key] = { v: JSON.stringify(mine), at: later(a.at, b.at) };
     return { store, taken, conflicts: [] };
-  });
+  }), listParts(key, 'contacts'));
 }
 
 /**
@@ -225,7 +262,7 @@ function cryptobox({ key = 'cryptobox:v1' } = {}) {
       return null;
     }
   };
-  return withOthers(key, (into = {}, from = {}) => {
+  return withParts(withOthers(key, (into = {}, from = {}) => {
     const store = { ...into };
     const a = into[key];
     const b = from[key];
@@ -254,7 +291,7 @@ function cryptobox({ key = 'cryptobox:v1' } = {}) {
     const had = new Set(pa.messages.filter((m) => !m.archived).map((m) => m.id));
     const changed = messages.filter((m) => !had.has(m.id) || m.archived).length;
     return { store, taken: Math.max(1, changed), conflicts: [] };
-  });
+  }), listParts(key, 'messages'));
 }
 
 module.exports = { settings, keychain, passwords, guestbook, edgeCopies, edgeBlocks, cryptobox };

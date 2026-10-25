@@ -134,3 +134,31 @@ test('another identity, a replayed hello, a GIVE out of turn, a closed bucket: t
   assert.deepEqual(closed(same.hello(), 'x'), { ok: false, refusal: 'no' }, 'bucket not open');
   assert.equal(answer({ type: 'okedge.request' }, 'x'), null, 'not a trade: not answered here');
 });
+
+/*
+ * A store kept as one value goes over in pieces (rules.js listParts): one contact added on the phone - of 200 - is the
+ * only thing given, and both sides end with one state.
+ */
+test('one changed item of a big list is all that is given - and the states match after', async () => {
+  const me = await device('backup-1');
+  const rules = { guestbook: require('../src/rules').guestbook() };
+  const contacts = Array.from({ length: 200 }, (_, i) => ({ id: `c${i}`, name: `contact ${i}`, keys: [{ id: `k${i}`, kind: 'ssh', value: 'x'.repeat(100), updatedAt: '2026-10-25T01:00:00.000Z' }] }));
+  const desktop = { me: { ...me }, bucket: bucketLib.create({ owner: me.id }) };
+  kv(desktop.bucket, 'guestbook').setItem('guestbook:v1', JSON.stringify({ v: 1, contacts }));
+  const phone = { me: { ...me }, bucket: JSON.parse(JSON.stringify(desktop.bucket)), seen: new Set() };
+  kv(phone.bucket, 'guestbook').setItem('guestbook:v1', JSON.stringify({ v: 1, contacts: [...contacts, { id: 'new', name: 'met on the go', keys: [{ id: 'kn', kind: 'ssh', value: 'y', updatedAt: '2026-10-25T02:00:00.000Z' }] }] }));
+  const c = trade.computerSide({ bucket: desktop.bucket, me: desktop.me, randomBytes: rnd, rules });
+  const answer = trade.peerSide({ bucket: () => phone.bucket, me: () => phone.me, randomBytes: rnd, seen: phone.seen, rules });
+  const step = c.compare(answer(c.prove(answer(c.hello(), 'd')), 'd'));
+  assert.ok(!step.same);
+  const haveAnswer = answer(step.message, 'd');
+  const given = haveAnswer.give.guestbook || {};
+  assert.deepEqual(Object.keys(given), ['guestbook:v1\u0001#new'], 'the phone gives the one new contact, not the list');
+  assert.ok(JSON.stringify(haveAnswer.give).length < 1000, 'a few hundred bytes, not the whole list');
+  const g = c.give(haveAnswer);
+  const s = c.settle(answer(g.message, 'd'));
+  assert.ok(s.same, 'the states match');
+  const names = JSON.parse(kv(desktop.bucket, 'guestbook').getItem('guestbook:v1')).contacts.map((x) => x.id);
+  assert.equal(names.length, 201);
+  assert.ok(names.includes('new'));
+});
