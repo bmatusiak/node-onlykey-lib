@@ -114,3 +114,44 @@ test('a store can bring its own merge rule; buckets of two keys do not merge', (
   assert.deepEqual(bucket.kv(m, 'log').keys().sort(), ['1', '2']);
   assert.throws(() => bucket.merge(a, bucket.create({ owner: 'k2' })), { code: 'EBUCKET_OWNER' });
 });
+
+/*
+ * SEALED TO THE KEY (sealToKey / openWithKey): deviceAge's encrypt and decrypt are handed in - stand-ins here
+ * (the X-Wing paths are okcrypto's, tested there). The key is asked only for a bucket of THIS identity.
+ */
+const fakeAge = () => {
+  const asked = [];
+  const encrypt = (plain, recipient) => Uint8Array.from([...Buffer.from(String(recipient)), 0, ...plain]);
+  const decrypt = async (age, label) => {
+    asked.push(label);
+    const i = age.indexOf(0);
+    if (Buffer.from(age.subarray(0, i)).toString() !== 'R1') throw new Error('not this key');
+    return age.subarray(i + 1);
+  };
+  return { encrypt, decrypt, asked };
+};
+
+test('bucket: sealed to the key opens with the key, owner and stores intact', async () => {
+  const b = bucket.create({ owner: '51fcbaf7' });
+  bucket.kv(b, 'keychain').setItem('list', '[1,2]');
+  const { encrypt, decrypt, asked } = fakeAge();
+  const text = bucket.sealToKey(b, 'R1', encrypt);
+  assert.equal(JSON.parse(text).format, bucket.AGE_FORMAT);
+  assert.ok(!text.includes('[1,2]'), 'the stores are not readable in the file');
+  const { bucket: back } = await bucket.openWithKey(text, { decrypt, owner: '51fcbaf7' });
+  assert.equal(bucket.kv(back, 'keychain').getItem('list'), '[1,2]');
+  assert.deepEqual(asked, [bucket.AGE_LABEL]);
+});
+
+test('bucket: another identity\'s bucket is refused before the key is asked (no press)', async () => {
+  const { encrypt, decrypt, asked } = fakeAge();
+  const text = bucket.sealToKey(bucket.create({ owner: '0a87b456' }), 'R1', encrypt);
+  await assert.rejects(bucket.openWithKey(text, { decrypt, owner: '51fcbaf7' }), (e) => e.code === 'EBUCKET_NOT_YOURS');
+  assert.deepEqual(asked, [], 'the key was never asked');
+});
+
+test('bucket: one the key does not open is refused, never read another way', async () => {
+  const { encrypt, decrypt } = fakeAge();
+  const text = bucket.sealToKey(bucket.create({ owner: '51fcbaf7' }), 'R2', encrypt);
+  await assert.rejects(bucket.openWithKey(text, { decrypt, owner: '51fcbaf7' }), (e) => e.code === 'EBUCKET_NOT_OPENED');
+});

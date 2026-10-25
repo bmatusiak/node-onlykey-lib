@@ -136,6 +136,62 @@ function seal(bucket, key, randomBytes) {
   return canonical({ format: SEALED_FORMAT, v: VERSION, owner: bucket.owner ?? null, blob: vault.seal(key, serialize(bucket), randomBytes) });
 }
 
+/*
+ * SEALED TO THE KEY ITSELF (Brad, 2026-10-24: "the bucket encrypted ... that the hardkey can only decrypt"; "a
+ * button press here is needed to decrypt the container"). The bucket becomes an age file to the key's own
+ * X-Wing recipient for one label (okcrypto.deviceAge.identity(AGE_LABEL)): the same recipient on every device
+ * restored from one backup, public - so any device can seal to it with no key at all - while only the key can
+ * open it: it does the X-Wing decapsulation itself, and on 3.1.0 it asks for a press to do it.
+ *
+ * Kept free of the device: the caller hands in deviceAge's encrypt and decrypt. `owner` is the identity id
+ * (the owner key's, edge identityId) - written outside for a refusal before any press, and inside, where it
+ * counts.
+ */
+const AGE_FORMAT = 'onlykey-bucket-age';
+const AGE_LABEL = 'onlykey-bucket';
+const { toBase64: toB64, fromBase64: fromB64 } = require('../../src/bytes');
+
+
+/**
+ * Seal a bucket to the key's X-Wing recipient - no device involved.
+ * @param {ReturnType<typeof create>} bucket
+ * @param {Uint8Array|string} recipient okcrypto.deviceAge.identity(AGE_LABEL).recipient
+ * @param {(plaintext: Uint8Array, recipient: Uint8Array|string) => Uint8Array} encrypt okcrypto.deviceAge.encrypt
+ * @returns {string}
+ */
+function sealToKey(bucket, recipient, encrypt) {
+  const plain = new TextEncoder().encode(serialize(bucket));
+  return canonical({ format: AGE_FORMAT, v: VERSION, owner: bucket.owner ?? null, label: AGE_LABEL, age: toB64(encrypt(plain, recipient)) });
+}
+
+/**
+ * Open a bucket sealed to the key: the key decapsulates (a press on 3.1.0). A bucket of another identity is
+ * refused before the key is asked; one that does not open is never read some other way.
+ * @param {string} text
+ * @param {{decrypt: (age: Uint8Array, label: string) => Promise<Uint8Array>, owner?: string|null}} o
+ *   decrypt: okcrypto.deviceAge.decrypt (with the caller's confirm); owner: the identity id expected
+ * @returns {Promise<{bucket: ReturnType<typeof create>, sealed: true}>}
+ */
+async function openWithKey(text, { decrypt, owner = null }) {
+  let outer;
+  try {
+    outer = JSON.parse(String(text));
+  } catch (e) {
+    throw err('EBUCKET_FORMAT', `not a bucket: ${e.message}`);
+  }
+  if (!outer || outer.format !== AGE_FORMAT) throw err('EBUCKET_FORMAT', 'not a bucket sealed to a key');
+  if (owner !== null && (outer.owner ?? null) !== owner) throw err('EBUCKET_NOT_YOURS', 'this bucket belongs to another identity - its key is not this one');
+  let inner;
+  try {
+    inner = new TextDecoder().decode(await decrypt(fromB64(outer.age), outer.label || AGE_LABEL));
+  } catch (e) {
+    throw Object.assign(err('EBUCKET_NOT_OPENED', `the key did not open this bucket: ${e && e.message}`), { cause: e });
+  }
+  const bucket = parse(inner);
+  if ((outer.owner ?? null) !== (bucket.owner ?? null)) throw err('EBUCKET_FORMAT', 'the owner outside the seal does not match the one inside');
+  return { bucket, sealed: true };
+}
+
 /**
  * Open a bucket file, sealed or not.
  *
@@ -240,4 +296,4 @@ function resolve(bucket, conflict, side) {
   bucket.stores[conflict.store][conflict.key] = { ...conflict[side] };
 }
 
-module.exports = { FORMAT, SEALED_FORMAT, VERSION, create, kv, serialize, parse, seal, open, mergeKeys, merge, resolve };
+module.exports = { FORMAT, SEALED_FORMAT, AGE_FORMAT, AGE_LABEL, VERSION, create, kv, serialize, parse, seal, open, sealToKey, openWithKey, mergeKeys, merge, resolve };
