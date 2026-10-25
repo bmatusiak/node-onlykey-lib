@@ -106,6 +106,10 @@ async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts
   if (!m2) return { traded: false, why: 'the device did not prove this bucket identity, or does not trade yet' };
   const g = c.give(await send(m2));
   if (!g) return { traded: false, why: 'the device did not answer the trade' };
+  /* what goes, per store - counts and size only, never a key or value - so a store that never settles shows */
+  const giving = Object.fromEntries(Object.entries(g.message.give || {}).map(([s, recs]) => [s, Object.keys(recs).length]));
+  if (Object.keys(g.taken || {}).length) say(`sync: took ${JSON.stringify(g.taken)}`);
+  if (Object.keys(giving).length) say(`sync: giving ${JSON.stringify(giving)} (${Math.round(JSON.stringify(g.message).length / 1024)} KB)`);
   const answer = await send(g.message);
   const done = c.finish(answer);
   /* what it took is the phone's own count; an answer without one is said, never read as "took nothing" */
