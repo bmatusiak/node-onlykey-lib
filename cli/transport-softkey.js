@@ -26,6 +26,15 @@ const readline = require('readline');
 const { PRESS_TICKS } = require('../src/device/press');
 
 const DIR = { out: 0, in: 1 };
+
+/* a condition polled until it holds, or the reason */
+async function until(test, timeoutMs, why) {
+  const end = Date.now() + timeoutMs;
+  while (!test()) {
+    if (Date.now() > end) throw new Error(why);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
 const VENDOR = 2;
 const POLL_MS = 400;
 
@@ -115,7 +124,14 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
       const pin = await askPin();
       if (pin) {
         if (!/^[1-6]{7,10}$/.test(pin)) throw new Error('a PIN is 7 to 10 of the digits 1-6');
+        /*
+         * PRESSED ONCE THE FIRMWARE RUNS (box, 2026-10-25: a PIN pressed right after start was lost - the key answered
+         * "locked"): wait for its sense loop to turn, hand it the digits, wait until it has taken every one, then let
+         * the PIN settle before the first question.
+         */
+        await until(() => emu.rounds() > 20, 10000, 'the soft key\'s firmware did not start running');
         press(pin);
+        await until(() => emu.pressPending() === 0, 10000, 'the soft key did not take the PIN\'s presses');
         await new Promise((res) => setTimeout(res, 1500));
       }
       listen();

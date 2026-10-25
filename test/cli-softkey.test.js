@@ -25,6 +25,8 @@ function fakeEmu() {
   e.writeHid = (buf, iface) => e.writes.push(['plain', iface, buf.length]);
   e.writeHidTaken = async (buf, iface) => e.writes.push(['taken', iface, buf.length]);
   e.confirmState = () => -1;
+  e.rounds = () => 100;
+  e.pressPending = () => 0;
   return e;
 }
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
