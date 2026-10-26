@@ -1360,6 +1360,8 @@ function setup(imports, register, config) {
       expectBytes = 0,
       /* Each poll is a whole ceremony; the firmware-side pacing is chunk.js's. */
       pollIntervalMs = chunk.POLL_INTERVAL_MS,
+      /* a read that asks for no press (an agent public key): no challenge event for a sheet to show */
+      quiet = false,
     } = opts;
 
     const payload = Uint8Array.from(data);
@@ -1426,7 +1428,7 @@ function setup(imports, register, config) {
         if (result) first = result;
       },
     });
-    events.emit('challenge', { slot, digits, subject });
+    if (!quiet) events.emit('challenge', { slot, digits, subject });
 
     /*
      * confirm() runs ALONGSIDE the polls, not before them. Over the vendor
@@ -1611,6 +1613,16 @@ function setup(imports, register, config) {
       async publicKey(identity, { keyType = agentProto.KEY_TYPE.ED25519, version = 1, ...opts } = {}) {
         const code = agentProto.publicKeyCode(version, keyType);
         agentAvailable(version);
+        /*
+         * A BROWSER HOST (a supplied ctap, no vendor interface) reads it through the WebAuthn tunnel: a soft key with
+         * the ctap_bridge firmware plugin forwards OKGETPUBKEY for the agent codes. The tunnel's byte 6 is its own
+         * last-packet length, so the key type rides as the payload's first byte (the plugin moves it into place).
+         */
+        if (suppliedCtap) {
+          const out = await tunnelOperation(MSG.OKGETPUBKEY, code,
+            concat([Uint8Array.of(keyType), agentProto.identityHash(identity)]), { ...opts, quiet: true });
+          return out.slice(0, agentProto.publicKeyLength(keyType));
+        }
         const report = await device.getPublicKey(code, {
           ...opts, keyType, payload: agentProto.identityHash(identity),
         });
