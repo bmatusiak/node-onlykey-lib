@@ -106,3 +106,30 @@ export function seen(entries: object[], key: {
     pgpFingerprint: string;
     name?: string;
 }, slot: number, when?: string): object[];
+/**
+ * A composite certificate's facts, or null when the text is not a composite (+PQC) public key.
+ * @param {object} openpgp the vendored PQC openpgp.js
+ * @param {string} pgp armored public key
+ * @returns {Promise<{pgpFingerprint: string, name: string, eccPublicKey: Uint8Array}|null>}
+ */
+export function certificate(openpgp: object, pgp: string): Promise<{
+    pgpFingerprint: string;
+    name: string;
+    eccPublicKey: Uint8Array;
+} | null>;
+/**
+ * Prove that `slot` holds the private half of this certificate, and return its Key Chain entry. One press.
+ * @param {{composite_sign: Function}} okcrypto
+ * @param {object} openpgp
+ * @param {{slot: number, pgp: string, randomBytes: (n: number) => Uint8Array, opts?: object, when?: string}} args
+ * @returns {Promise<object>} the entry (merge it into the list)
+ */
+export function adopt(okcrypto: {
+    composite_sign: Function;
+}, openpgp: object, { slot, pgp, randomBytes, opts, when }: {
+    slot: number;
+    pgp: string;
+    randomBytes: (n: number) => Uint8Array;
+    opts?: object;
+    when?: string;
+}): Promise<object>;

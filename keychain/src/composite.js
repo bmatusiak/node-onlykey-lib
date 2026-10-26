@@ -201,4 +201,54 @@ function seen(entries, key, slot, when = new Date().toISOString()) {
   return list.merge(entries, [made]).entries;
 }
 
-module.exports = { make, discard, load, entry, RSA_SLOTS, readRsaSlots, locate, reconcile, seen };
+/* ------------------------------------------------------------------ adopting a key already on the key */
+/*
+ * THE USER DECIDES (Brad, 2026-10-26: "they may want to adopt or create a new one, there choice"). A composite key can
+ * be on the OnlyKey with no certificate in the Key Chain - loaded by another tool, made on another device, or its
+ * entry lost. Make a new one (make + load) or ADOPT this one: a certificate the user picks (from Guest Book, an old
+ * Key Chain entry, a paste) becomes the slot's entry once the slot proves it holds that key's private half - one press,
+ * an Ed25519 signature over a fresh random challenge that must verify against the certificate's own Ed25519 key
+ * (okpqc_sign signs exactly the bytes after the selector). Nothing is written to the key.
+ */
+const { ed25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
+
+/**
+ * A composite certificate's facts, or null when the text is not a composite (+PQC) public key.
+ * @param {object} openpgp the vendored PQC openpgp.js
+ * @param {string} pgp armored public key
+ * @returns {Promise<{pgpFingerprint: string, name: string, eccPublicKey: Uint8Array}|null>}
+ */
+async function certificate(openpgp, pgp) {
+  let key;
+  try { key = await openpgp.readKey({ armoredKey: pgp }); } catch { return null; }
+  const packet = key.keyPacket;
+  const composite = openpgp.enums.publicKey.pqc_mldsa_ed25519;
+  if (!packet || packet.algorithm !== composite || !packet.publicParams || !packet.publicParams.eccPublicKey) return null;
+  if (key.isPrivate()) throw new Error('that is a PRIVATE key - Key Chain keeps public certificates only');
+  return {
+    pgpFingerprint: key.getFingerprint().toUpperCase(),
+    name: key.getUserIDs()[0] || 'composite key',
+    eccPublicKey: Uint8Array.from(packet.publicParams.eccPublicKey),
+  };
+}
+
+/**
+ * Prove that `slot` holds the private half of this certificate, and return its Key Chain entry. One press.
+ * @param {{composite_sign: Function}} okcrypto
+ * @param {object} openpgp
+ * @param {{slot: number, pgp: string, randomBytes: (n: number) => Uint8Array, opts?: object, when?: string}} args
+ * @returns {Promise<object>} the entry (merge it into the list)
+ */
+async function adopt(okcrypto, openpgp, { slot, pgp, randomBytes, opts = {}, when = new Date().toISOString() }) {
+  if (!RSA_SLOTS.includes(slot)) throw new Error(`a composite key is in an RSA slot (1-4); got ${slot}`);
+  const cert = await certificate(openpgp, pgp);
+  if (!cert) throw new Error('that is not a composite (+PQC) public key');
+  const challenge = randomBytes(32);
+  const signature = await okcrypto.composite_sign(slot, compositePgp.HALF_ECC, challenge, opts);
+  if (!ed25519.verify(signature, challenge, cert.eccPublicKey)) {
+    throw Object.assign(new Error(`RSA${slot} holds a different composite key than ${cert.name}`), { code: 'EWRONGSLOT', slot });
+  }
+  return entry({ slot, pgp, pgpFingerprint: cert.pgpFingerprint, name: cert.name, firstSeen: when, lastSeen: when });
+}
+
+module.exports = { make, discard, load, entry, RSA_SLOTS, readRsaSlots, locate, reconcile, seen, certificate, adopt };

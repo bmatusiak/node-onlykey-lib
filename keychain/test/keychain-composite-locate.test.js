@@ -63,6 +63,40 @@ test('seen: a proven slot gets the key, last seen now - the old entry stays, sti
   assert.strictEqual(composite.locate(next, mine, probe({ 1: 'empty', 2: 'empty', 3: 'composite', 4: 'rsa' })).slot, 3);
 });
 
+test('adopt: the slot proves the certificate by one Ed25519 signature; another key is refused, nothing listed', async () => {
+  const crypto = require('crypto');
+  const openpgp = require('../../src/vendor/openpgp/openpgp.js');
+  const compositePgp = require('../../src/crypto/composite_pgp');
+  const { ed25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
+  const onKey = await composite.make(openpgp, { name: 'Qtwo' });
+  const other = await composite.make(openpgp, { name: 'Elsewhere' });
+  const secret = compositePgp.unpackBlob(onKey.blob).ed25519Sk;
+  const asked = [];
+  const okcrypto = {
+    async composite_sign(slot, half, digest) {
+      asked.push({ slot, half, len: digest.length });
+      return ed25519.sign(digest, secret);
+    },
+  };
+  const rnd = (n) => new Uint8Array(crypto.randomBytes(n));
+  const cert = await composite.certificate(openpgp, onKey.pgp);
+  assert.strictEqual(cert.pgpFingerprint, onKey.pgpFingerprint.toUpperCase());
+  assert.strictEqual(await composite.certificate(openpgp, 'not a key'), null);
+
+  const e = await composite.adopt(okcrypto, openpgp, { slot: 3, pgp: onKey.pgp, randomBytes: rnd, when: T1 });
+  assert.deepStrictEqual(asked, [{ slot: 3, half: compositePgp.HALF_ECC, len: 32 }], 'one press: the Ed25519 half');
+  assert.strictEqual(e.type, 'composite');
+  assert.deepStrictEqual(e.slots, [3]);
+  assert.strictEqual(e.lastSeen, T1);
+
+  await assert.rejects(
+    composite.adopt(okcrypto, openpgp, { slot: 3, pgp: other.pgp, randomBytes: rnd }),
+    (err) => err.code === 'EWRONGSLOT' && /RSA3 holds a different composite key/.test(err.message),
+  );
+  composite.discard(onKey);
+  composite.discard(other);
+});
+
 test('merge: gone and lastSeen both go to the later time, so two devices end with one answer', () => {
   const here = composite.reconcile([at(mine, 4)], probe({ 4: 'rsa' }), T1);
   const there = [at(mine, 4)];
