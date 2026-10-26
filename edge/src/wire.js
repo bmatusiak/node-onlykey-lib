@@ -56,6 +56,8 @@ const OKEDGE_REQUEST = 0xf7;
 const KIND = Object.freeze({ REQUEST: 1, ANSWER: 2 });
 const PIECE = 54;
 const MAX_PIECES = 0xffff;
+/* the longest quiet gap inside one answer before it counts as lost */
+const PIECE_GAP_MS = 10000;
 const HEADER = 10; /* FF FF FF FF, 0xF7, kind, index u16 LE, last, length */
 
 /** a whole message -> its 64-byte reports */
@@ -156,12 +158,28 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
           return;
         }
         const asm = createAssembler();
+        /* what arrived while waiting, for the timeout's line: no pieces at all, or an answer cut short */
+        const heard = { pieces: 0, last: -1 };
         let timer = null;
+        /*
+         * AN ANSWER STILL ARRIVING IS NOT LATE (Windows desktop + A13, 2026-10-25): the wait is sized by what is SENT,
+         * and a 1.6 KB HAVE drew a GIVE of over 100 KB - 1854 pieces had come at 3 KB/s when the 31 s ran out. So each
+         * answer piece moves the deadline to at least PIECE_GAP_MS ahead; the first wait is still waitMs.
+         */
+        let deadline = Date.now() + waitMs;
         let off = () => {};
         off = transport.on('report', (event) => {
           if (event.iface !== iface) return;
           if (times.firstIn === undefined) times.firstIn = Date.now();
-          const got = asm.push(event.data instanceof Uint8Array ? event.data : Uint8Array.from(event.data));
+          const data = event.data instanceof Uint8Array ? event.data : Uint8Array.from(event.data);
+          if (isEdgeRequestFrame(data)) {
+            heard.pieces += 1;
+            heard.last = data[6] | (data[7] << 8);
+            deadline = Math.max(deadline, Date.now() + PIECE_GAP_MS);
+          }
+          const got = asm.push(data);
+          /* a dropped answer is said, not silent: otherwise it reads as "no answer" once the timer runs out */
+          if (got && got.error) log(`edge wire: dropped an answer being gathered (${got.error} at piece ${data[6] | (data[7] << 8)})`);
           if (!got || got.error || got.kind !== KIND.ANSWER) return;
           const re = got.message && got.message.wire && got.message.wire.re;
           if (re && (re.id !== id || re.dev !== dev)) {
@@ -178,7 +196,14 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
           }
           resolve(got.message);
         });
-        timer = setTimeout(() => { off(); resolve(null); }, waitMs);
+        const expire = () => {
+          const left = deadline - Date.now();
+          if (left > 0) { timer = setTimeout(expire, left); if (typeof timer.unref === 'function') timer.unref(); return; }
+          off();
+          log(`edge wire: no whole answer to ${message.type} after ${Math.round((Date.now() - times.lane) / 1000)} s (${heard.pieces ? `${heard.pieces} piece(s) came, the last index ${heard.last}` : 'no piece came'})`);
+          resolve(null);
+        };
+        timer = setTimeout(expire, waitMs);
         /*
          * A wait nobody is still awaiting must not keep the process alive: a receipt's
          * note gives up after 4 s (client sendNote), and `onlykey-js edge receipt` then
