@@ -1749,8 +1749,15 @@ const BACKUP_REFUSALS = [
 
     /* ---- slots --------------------------------------------------------- */
 
+    /*
+     * IN THE KEY'S LANE, as every other conversation (src/transport/lane.js). Read beside it, a label request reached
+     * the key while a sign waited for its press and its reply was taken as the signature: the sign "answered" with no
+     * press and the real press then went nowhere (box soft key, composite sign, 2026-10-26 - the app's Key Chain and
+     * Edge reads land in the middle of a Cryptobox signature the same way). Callers here (unlock, enterConfigMode,
+     * configModeReady) are not in the lane themselves; the lane is not re-entrant.
+     */
     readLabels(opts = {}) {
-      return slots.readLabels(transport, { deviceType: currentType(), ...opts });
+      return inLane(transport, () => slots.readLabels(transport, { deviceType: currentType(), ...opts }));
     },
 
     /**
@@ -1770,7 +1777,7 @@ const BACKUP_REFUSALS = [
      * the other (see wipeKey).
      */
     readKeyLabels(opts = {}) {
-      return slots.readKeyLabels(transport, opts);
+      return inLane(transport, () => slots.readKeyLabels(transport, opts));
     },
 
     slotNumber(slotId) { return slots.slotNumber(slotId, currentType()); },

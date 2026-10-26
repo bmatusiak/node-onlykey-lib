@@ -42,6 +42,34 @@ function start(plugins, pipe = fakeFirmware()) {
 
 const FULL = () => [hostPlugin, embedded, sessionPlugin, devicePlugin, okcryptoPlugin];
 
+/*
+ * A label read waits for the conversation in progress (src/transport/lane.js). Read beside it, a key-label request
+ * reached the soft key while a composite sign waited for its press, and its reply was taken as the signature
+ * (box, 2026-10-26).
+ */
+test('device label reads wait in the key\'s lane: nothing is written while another conversation holds it', async () => {
+  const { inLane } = require('../src/transport/lane');
+  const pipe = fakeFirmware();
+  const write = pipe.write.bind(pipe);
+  let writes = 0;
+  pipe.write = (...a) => { writes += 1; return write(...a); };
+  const app = await start(FULL(), pipe);
+  const { transport, device } = app.services;
+  for (const read of [() => device.readKeyLabels({ timeoutMs: 300 }), () => device.readLabels({ timeoutMs: 300 })]) {
+    let release;
+    const held = inLane(transport, () => new Promise((r) => { release = r; }));
+    const before = writes;
+    const reading = read().catch(() => null);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(writes, before, 'a label read wrote while another conversation held the key');
+    release();
+    await held;
+    await reading;
+    assert.ok(writes > before, 'the label read ran once the key was free');
+  }
+  await app.destroy();
+});
+
 /* ------------------------------------------------------------ composition */
 
 test('device and okcrypto coexist as separate authorised consumers', async () => {
