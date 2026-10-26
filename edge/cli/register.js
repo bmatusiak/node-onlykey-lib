@@ -660,7 +660,20 @@ module.exports = function register(COMMANDS, h) {
         } catch (e) {
           if (e.code !== 'ENOAGENTID') throw e;
           agentOff = e.message;
-          const d = await openDevice(io, opts, h, { dev, wait });
+          /*
+           * the stack's own connection was just closed (openStack's catch), but through the desktop app its close can
+           * reach the app after this new hello - which the app then refuses "busy" (the Windows desktop, 2026-10-25):
+           * a few tries, a moment apart
+           */
+          let d = null;
+          for (let n = 0; !d; n++) {
+            try {
+              d = await openDevice(io, opts, h, { dev, wait });
+            } catch (e2) {
+              if (n >= 4 || !/busy/.test(String(e2 && e2.message))) throw e2;
+              await new Promise((r) => setTimeout(r, 700));
+            }
+          }
           st = { ...d, close: () => Promise.resolve(d.app.destroy()).catch(() => undefined) };
         }
         try {
