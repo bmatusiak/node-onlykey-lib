@@ -20,6 +20,9 @@
 //   [32:64]  ML-DSA-65 seed       (sign, pqc half)
 //   [64:96]  X25519 secret        (decrypt, ecc half)
 //   [96:160] ML-KEM-768 seed      (decrypt, pqc half)
+// The signature hook checks the device's Ed25519 half with it (registerCompositeHooks).
+const { ed25519 } = require('../vendor/exports/@noble/curves/ed25519.js');
+
 const OFF_ED25519 = 0;
 const OFF_MLDSA_SEED = 32;
 const OFF_X25519 = 64;
@@ -171,9 +174,21 @@ function registerCompositeHooks(openpgp, ok, slot) {
         // This means composite signing needs the challenge PIN confirmed
         // TWICE on-device (once per half) - a real device-side property,
         // not a bug in this wiring.
-        signer: async function(algo, hashAlgo, hashed) {
+        //
+        // THE SLOT IS CHECKED BY ITS ANSWER: the Ed25519 half must verify
+        // against the certificate's own Ed25519 key (publicKeyParams, as
+        // openpgp.js verify$3 checks it) before the second press is asked.
+        // A slot holding another composite key - the user may have loaded
+        // any key into it since (keychain composite.locate) - fails here
+        // with what happened, instead of a message whose signature no one
+        // can verify.
+        signer: async function(algo, hashAlgo, hashed, publicKeyParams) {
             if (algo !== openpgp.enums.publicKey.pqc_mldsa_ed25519) return null;
             const eccSignature = await ok.composite_sign(slot, HALF_ECC, hashed);
+            const eccPublicKey = publicKeyParams && publicKeyParams.eccPublicKey;
+            if (eccPublicKey && !ed25519.verify(eccSignature, hashed, eccPublicKey)) {
+                throw Object.assign(new Error(`RSA slot ${slot} holds a different composite key than this certificate`), { code: 'EWRONGSLOT', slot });
+            }
             const mldsaSignature = await ok.composite_sign(slot, HALF_PQC, hashed);
             return { eccSignature, mldsaSignature };
         },

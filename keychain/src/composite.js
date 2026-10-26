@@ -92,4 +92,112 @@ function entry({ slot, pgp, pgpFingerprint, name, ...rest }) {
   });
 }
 
-module.exports = { make, discard, load, entry };
+/* ------------------------------------------------------------------ where a key is, now */
+/*
+ * KEY MANAGEMENT IS DYNAMIC (Brad, 2026-10-25: "i want the key management to be dymanic, its possible the user may
+ * already be using the slot"). A composite key is loaded into an RSA slot once, in config mode - an advanced step,
+ * and one the user may take with any tool. So no feature keeps a slot number as the truth: the Key Chain list says
+ * where the key was, the key says what each slot holds now, and the slot used is worked out from both, every time.
+ * Found by the Windows desktop and the A13 (testnet): the list said slot 4, a test had since put an RSA key there and
+ * the composite key was in slot 3 - Cryptobox asked RSA slot 4 for a composite signature and the firmware refused.
+ *
+ * Nothing here writes to the key: reading the slots is OKGETLABELS and OKGETPUBKEY, out of config mode, no press.
+ */
+const tag = require('./tag');
+
+const RSA_SLOTS = [1, 2, 3, 4];
+const fpOf = (x) => String((x && x.pgpFingerprint) || '').toUpperCase();
+const slotsOf = (e) => (Array.isArray(e.slots) && e.slots.length ? e.slots : [e.slot]).filter((n) => Number.isInteger(n));
+
+/**
+ * What RSA slots 1-4 hold, with their labels: probeKeySlot's answer per slot (empty / composite / rsa).
+ * @param {{probeKeySlot: Function, readKeyLabels?: Function}} device the lib's device service
+ * @returns {Promise<Array<{slot: number, kind: string, label: string}>>}
+ */
+async function readRsaSlots(device) {
+  const labels = new Map();
+  try {
+    const { keys } = await device.readKeyLabels();
+    for (const k of keys) labels.set(k.slot, k.label || '');
+  } catch {
+    /* labels only order the guesses; the probe is the answer */
+  }
+  const out = [];
+  for (const slot of RSA_SLOTS) out.push({ ...(await device.probeKeySlot(slot)), label: labels.get(slot) || '' });
+  return out;
+}
+
+/**
+ * The slot to ask for this composite key, from the list and what the slots hold now. In order: a composite slot the
+ * list has this key in; a composite slot labelled with its name; any other composite slot. A composite slot the list
+ * gives to ANOTHER key is never chosen - the user is using it. The choice is a guess until the key answers: the
+ * signature hook checks the answer against the certificate (composite_pgp registerCompositeHooks).
+ * @param {object[]} entries the Key Chain list
+ * @param {{pgpFingerprint: string, name?: string}} key the certificate's fingerprint and name
+ * @param {Array<{slot: number, kind: string, label?: string}>} slots readRsaSlots()
+ * @returns {{slot: number|null, candidates: number[], why: string|null}}
+ */
+function locate(entries, key, slots) {
+  const fp = fpOf(key);
+  const composites = slots.filter((p) => p.kind === 'composite').map((p) => p.slot);
+  const here = (e) => e.type === 'composite' && list.present(e);
+  const listed = new Set(entries.filter((e) => here(e) && fpOf(e) === fp).flatMap(slotsOf));
+  const others = new Set(entries.filter((e) => here(e) && fpOf(e) !== fp).flatMap(slotsOf));
+  const name = String(key.name || '');
+  const labelled = (n) => {
+    const t = tag.parseTag((slots.find((p) => p.slot === n) || {}).label);
+    return Boolean(t && t.kind === 'pqc' && name && (name === t.name || name.startsWith(t.name)));
+  };
+  const free = composites.filter((n) => !others.has(n) || listed.has(n));
+  const candidates = [
+    ...free.filter((n) => listed.has(n)),
+    ...free.filter((n) => !listed.has(n) && labelled(n)),
+    ...free.filter((n) => !listed.has(n) && !labelled(n)),
+  ];
+  if (candidates.length) return { slot: candidates[0], candidates, why: null };
+  const why = composites.length
+    ? `every composite key on this OnlyKey (${composites.map((n) => `RSA${n}`).join(', ')}) is another key in your Key Chain`
+    : 'this OnlyKey holds no composite key in RSA slots 1-4';
+  return { slot: null, candidates, why };
+}
+
+/**
+ * The list after a slot read: an entry whose slot now holds a different kind of key (or none) is marked gone - never
+ * dropped (list.present). Returns null when nothing changed.
+ * @param {object[]} entries
+ * @param {Array<{slot: number, kind: string}>} slots probes of some slots (only those are judged)
+ * @param {string} [when] ISO time
+ * @returns {object[]|null}
+ */
+function reconcile(entries, slots, when = new Date().toISOString()) {
+  const kindAt = new Map(slots.map((p) => [p.slot, p.kind]));
+  let changed = false;
+  const next = entries.map((e) => {
+    if (e.kind !== 'slot' || !list.present(e)) return e;
+    const judged = slotsOf(e).filter((n) => kindAt.has(n));
+    if (!judged.length || judged.some((n) => kindAt.get(n) === e.type)) return e;
+    changed = true;
+    return { ...e, gone: when };
+  });
+  return changed ? next : null;
+}
+
+/**
+ * The list after the key PROVED this composite key is in `slot` (a signature that checked against the certificate,
+ * a message it decrypted): an entry for the key at that slot, last seen now - made from the certificate the list
+ * already holds when the key was listed elsewhere.
+ * @param {object[]} entries
+ * @param {{pgp: string, pgpFingerprint: string, name?: string}} key
+ * @param {number} slot
+ * @param {string} [when]
+ * @returns {object[]}
+ */
+function seen(entries, key, slot, when = new Date().toISOString()) {
+  const fp = fpOf(key);
+  const at = entries.find((e) => e.type === 'composite' && fpOf(e) === fp && slotsOf(e).includes(slot));
+  if (at) return entries.map((e) => (e === at ? { ...e, lastSeen: when } : e));
+  const made = entry({ slot, pgp: key.pgp, pgpFingerprint: key.pgpFingerprint, name: key.name, firstSeen: when, lastSeen: when });
+  return list.merge(entries, [made]).entries;
+}
+
+module.exports = { make, discard, load, entry, RSA_SLOTS, readRsaSlots, locate, reconcile, seen };

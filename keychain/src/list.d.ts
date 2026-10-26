@@ -34,3 +34,4 @@ export function findTwin(entries: any, e: any): any;
 export function combine(a: any, b: any): object;
 /** A short fingerprint to show beside an entry. */
 export function fingerprint(publicKey: any): string;
+export function present(e: any): boolean;

@@ -192,7 +192,11 @@ function combine(a, b) {
   if (hashOf) one.labelHash = hashOf;
   const times = (k, pick) => [a[k], b[k]].filter(Boolean).sort()[pick === 'min' ? 0 : 1] || a[k] || b[k];
   if (a.firstSeen || b.firstSeen) one.firstSeen = times('firstSeen', 'min');
+  /* each device stamps its own copy when it is made: the earlier one, whichever side merges, or two lists never match */
+  if (a.created || b.created) one.created = times('created', 'min');
   if (a.lastSeen || b.lastSeen) one.lastSeen = [a.lastSeen, b.lastSeen].filter(Boolean).sort().pop();
+  /* when its slot was last seen holding something else: the later time wins, as lastSeen's does (present) */
+  if (a.gone || b.gone) one.gone = [a.gone, b.gone].filter(Boolean).sort().pop();
   const tools = [...new Set([...(a.tools || []), ...(b.tools || [])])];
   /* no tools on either side: none here either - an empty list would read as a change */
   if (tools.length) one.tools = tools; else delete one.tools;
@@ -205,4 +209,15 @@ function combine(a, b) {
 /** A short fingerprint to show beside an entry. */
 const fingerprint = (publicKey) => toHex(sha256(publicKey)).slice(0, 16).match(/.{4}/g).join(' ');
 
-module.exports = { FORMAT, VERSION, KINDS, TYPES, createEntry, serialize, parse, merge, findTwin, combine, fingerprint };
+/*
+ * IS THIS ENTRY'S KEY STILL WHERE IT SAYS (Brad, 2026-10-25: "keychain should also fix itself"). A slot can be given
+ * another key at any time - the user's own, another app's, a test's - and an entry is never dropped for it: merge keeps
+ * everything either side knew, so a removed entry would come back from the next device. Instead the entry carries
+ * `gone`, the time its slot was seen holding something else, beside `lastSeen`, the time the key was last seen there;
+ * both merge to the later time, so every device ends with the same answer. The key is there while lastSeen is later.
+ */
+function present(e) {
+  return !e.gone || Boolean(e.lastSeen && e.lastSeen > e.gone);
+}
+
+module.exports = { FORMAT, VERSION, KINDS, TYPES, createEntry, serialize, parse, merge, findTwin, combine, fingerprint, present };

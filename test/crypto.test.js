@@ -219,6 +219,39 @@ test('composite_pgp is device-free', () => {
   assert.equal(typeof composite.registerCompositeHooks, 'function');
 });
 
+test('the composite signer checks the Ed25519 half against the certificate before the second press', async () => {
+  // A slot holding ANOTHER composite key (the user may have loaded any key
+  // into it - keychain composite.locate only guesses) must fail with what
+  // happened, and must not ask the second, ML-DSA press.
+  const { ed25519 } = require('../src/vendor/exports/@noble/curves/ed25519.js');
+  const right = ed25519.utils.randomSecretKey();
+  const wrong = ed25519.utils.randomSecretKey();
+  const hashed = new Uint8Array(32).fill(7);
+  const ALGO = 99;
+  let hooks = null;
+  const fakeOpenpgp = { enums: { publicKey: { pqc_mldsa_ed25519: ALGO } }, setHardwareHooks(h) { hooks = h; } };
+  const run = async (secret) => {
+    const halves = [];
+    const ok = {
+      async composite_sign(slot, half, digest) {
+        halves.push(half);
+        return half === composite.HALF_ECC ? ed25519.sign(digest, secret) : new Uint8Array(3309);
+      },
+    };
+    composite.registerCompositeHooks(fakeOpenpgp, ok, 3);
+    const params = { eccPublicKey: ed25519.getPublicKey(right), mldsaPublicKey: new Uint8Array(1952) };
+    const out = await hooks.signer(ALGO, 8, hashed, params).catch((e) => e);
+    return { out, halves };
+  };
+  const good = await run(right);
+  assert.deepEqual(good.halves, [composite.HALF_ECC, composite.HALF_PQC]);
+  assert.equal(good.out.eccSignature.length, 64);
+  const bad = await run(wrong);
+  assert.equal(bad.out.code, 'EWRONGSLOT');
+  assert.match(bad.out.message, /RSA slot 3 holds a different composite key/);
+  assert.deepEqual(bad.halves, [composite.HALF_ECC], 'no second press for a slot already proven wrong');
+});
+
 /* ------------------------------------------- slot age identities */
 
 /*
