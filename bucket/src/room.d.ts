@@ -70,3 +70,20 @@ export function deviceOf(d: any): {
     name: any;
     kind: any;
 } | null;
+/** The frame key of a room: the bucket key's secret, through HKDF, bound to the room. */
+export function frameKey(bucketKey: any, roomId: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+/**
+ * Seal one frame body for the server to pass on.
+ * @param {Uint8Array} key frameKey()
+ * @param {{room: string, from: string, to: string}} who
+ * @param {object} payload anything JSON
+ * @param {(n: number) => Uint8Array} randomBytes
+ * @returns {string} hex of nonce | ciphertext
+ */
+export function sealFrame(key: Uint8Array, who: {
+    room: string;
+    from: string;
+    to: string;
+}, payload: object, randomBytes: (n: number) => Uint8Array): string;
+/** Open a frame body, or null when it is not one sealed for this room, from that sender, to this receiver. */
+export function openFrame(key: any, who: any, body: any): any;

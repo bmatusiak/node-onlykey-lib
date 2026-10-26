@@ -25,6 +25,9 @@
 
 const bid = require('./bucket-identity');
 const { toHex, fromHex } = require('../../src/bytes');
+const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
+const { hkdf } = require('../../src/vendor/exports/@noble/hashes/hkdf.js');
+const { xchacha20poly1305 } = require('../../src/vendor/exports/@noble/ciphers/chacha.js');
 
 const NONCE = 32;
 const KINDS = new Set(['webapp', 'desktop', 'android', 'cli', 'agent']);
@@ -93,4 +96,48 @@ function checkJoin(room, msg, asked) {
   }
 }
 
-module.exports = { NONCE, KINDS, challenge, join, checkJoin, deviceOf };
+/*
+ * FRAMES BETWEEN THE ROOM'S DEVICES ARE SEALED (ok-edge plan: "the server sees ciphertext"). Every device of one bucket
+ * identity derives the same BUCKET KEY (the same backup gives the same key - bucket-identity.js), so a frame key
+ * derived from it is shared by exactly the devices that could join the room, and by nothing else - the server
+ * included. XChaCha20-Poly1305 with a random 24-byte nonce; the associated data names the room, the sender and the
+ * receiver, so the server can neither read a frame nor hand one device's frame to another as if it came from a third.
+ * Replays are the protocol's own business above this (the trade's fresh nonces refuse them).
+ */
+const FRAME_NONCE = 24;
+const utf8bytes = (s) => new TextEncoder().encode(s);
+
+/** The frame key of a room: the bucket key's secret, through HKDF, bound to the room. */
+function frameKey(bucketKey, roomId) {
+  return hkdf(sha256, Uint8Array.from(bucketKey.secretKey), utf8bytes('OKSERVER-FRAME-v1'), utf8bytes(String(roomId)), 32);
+}
+
+const frameAad = (roomId, from, to) => utf8bytes(`okroom|${roomId}|${from}|${to}`);
+
+/**
+ * Seal one frame body for the server to pass on.
+ * @param {Uint8Array} key frameKey()
+ * @param {{room: string, from: string, to: string}} who
+ * @param {object} payload anything JSON
+ * @param {(n: number) => Uint8Array} randomBytes
+ * @returns {string} hex of nonce | ciphertext
+ */
+function sealFrame(key, who, payload, randomBytes) {
+  const nonce = Uint8Array.from(randomBytes(FRAME_NONCE));
+  const ct = xchacha20poly1305(key, nonce, frameAad(who.room, who.from, who.to)).encrypt(utf8bytes(JSON.stringify(payload)));
+  return toHex(nonce) + toHex(ct);
+}
+
+/** Open a frame body, or null when it is not one sealed for this room, from that sender, to this receiver. */
+function openFrame(key, who, body) {
+  try {
+    if (typeof body !== 'string' || !/^[0-9a-f]+$/.test(body) || body.length < (FRAME_NONCE + 16) * 2) return null;
+    const bytes = fromHex(body);
+    const pt = xchacha20poly1305(key, bytes.subarray(0, FRAME_NONCE), frameAad(who.room, who.from, who.to)).decrypt(bytes.subarray(FRAME_NONCE));
+    return JSON.parse(new TextDecoder().decode(pt));
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { NONCE, KINDS, challenge, join, checkJoin, deviceOf, frameKey, sealFrame, openFrame };
