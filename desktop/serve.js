@@ -116,6 +116,8 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
           sock.end();
           return;
         }
+        /* a client whose connection is gone is no client (its close came while it was being accepted - below) */
+        if (client && client.destroyed) { client = null; asm.current = wire.createAssembler(); onClient(false); }
         if (client) { send(sock, { t: 'refused', why: 'busy: another onlykey-js is talking to the key through the desktop app' }); sock.end(); return; }
         try {
           await ensureKey();
@@ -124,6 +126,12 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
           sock.end();
           return;
         }
+        /*
+         * GONE WHILE THE KEY WAS MADE READY (the Windows desktop, 2026-10-25: the key restarting after a restore, the CLI
+         * gave up meanwhile; its close found no client to clear, then it was made the client - and every later CLI was
+         * refused "busy" until the app restarted)
+         */
+        if (sock.destroyed) return;
         accepted = true;
         clearTimeout(helloTimer);
         client = sock;
