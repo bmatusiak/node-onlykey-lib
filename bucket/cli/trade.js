@@ -178,7 +178,27 @@ function storesLine(bucket, rules, differs) {
 }
 const addTo = (sum, o) => { for (const [k, v] of Object.entries(o || {})) sum[k] = (sum[k] || 0) + v; return sum; };
 
-async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts = {} }) {
+/*
+ * THIS COMPUTER'S PROOF MATERIAL for a bucket identity, as the trade uses it: {id, identityPublicKey, bucketKey,
+ * certificate} - kept beside the bucket, made once through the key (two presses on production). Asked of the key
+ * itself (`id` null: read the identity, no press), or for a known id. Joining a room on the user's server
+ * (bucket sync --server) needs it before any trade.
+ */
+async function meFor({ okcrypto, net = 'live', say = () => {}, keyOpts = {}, id = null }) {
+  const kept = id ? loadMe(id, net) : null;
+  if (kept) return kept;
+  const opened = typeof okcrypto === 'function' ? await okcrypto() : { okcrypto, close: async () => {} };
+  try {
+    const read = await bid.readIdentity(opened.okcrypto);
+    return loadMe(read.id, net) || await makeMe(opened.okcrypto, read.id, read.publicKey, net, say, keyOpts);
+  } finally {
+    await opened.close();
+  }
+}
+
+async function tradeWith({ send, okcrypto, net = 'live', say = () => {}, keyOpts = {}, id = null }) {
+  /* the identity already settled (meFor: the room joined with it) - trade as that one, nothing to guess */
+  if (id) return tradeAs({ send, okcrypto, net, say, keyOpts, id });
   const remembered = rememberedIdentity(net);
   const first = await tradeAs({ send, okcrypto, net, say, keyOpts, id: remembered });
   /* the remembered identity is not the one this device proves: ask the key, once */
@@ -256,4 +276,4 @@ async function tradeAs({ send, okcrypto, net, say, keyOpts, id: knownId }) {
   return { traded: true, settled, taken, gave };
 }
 
-module.exports = { tradeWith, tradeTimeoutMs, storeRules, keyFile };
+module.exports = { tradeWith, meFor, tradeTimeoutMs, storeRules, keyFile };

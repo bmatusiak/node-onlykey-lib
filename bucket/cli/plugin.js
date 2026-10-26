@@ -39,10 +39,22 @@ function setup(imports, register) {
   const file = () => path.join(home.root(), home.FILE);
   const bucketKey = async (okcrypto) => okcrypto.deviceVault.key('bucket');
   const randomBytes = (n) => new Uint8Array(require('crypto').randomBytes(n));
+  /* how this computer shows in a room: one id for good (kept beside the bucket), the machine's name */
+  const thisDevice = () => {
+    const f = path.join(home.root(), 'device.json');
+    let id = null;
+    try { id = JSON.parse(fs.readFileSync(f, 'utf8')).id; } catch { /* first time */ }
+    if (!/^[0-9a-f]{16}$/.test(String(id))) {
+      id = require('crypto').randomBytes(8).toString('hex');
+      fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(f, `${JSON.stringify({ id })}\n`, { mode: 0o600 });
+    }
+    return { id, name: require('os').hostname().slice(0, 64) || 'computer', kind: 'cli' };
+  };
 
   const BUCKET = {
     mirrors: '(new)',
-    usage: 'show | export <file> | import <file> | dump [--test-mode]',
+    usage: 'show | export <file> | import <file> | dump [--test-mode] | sync --server <url> [--test-mode]',
     summary: 'the bucket: what this computer keeps about its keys, as one file - export it sealed, import one, dump the Edge chain',
     device: false,
     async run(io, opts, [sub, arg]) {
@@ -99,6 +111,47 @@ function setup(imports, register) {
             : (c.reason || 'both changed')));
         }
         return 0;
+      }
+
+      /*
+       * SYNC OVER THE USER'S SERVER (ok-edge plan M2): join this bucket identity's room on the server the user runs
+       * (ok-edge mcp-server/ - the key's proof, no code), then trade with every device of the identity online there,
+       * one after another, as the cli pair's trade does side by side. Frames are sealed between the devices
+       * (room.js); the server passes ciphertext.
+       */
+      if (sub === 'sync') {
+        const url = opts.server;
+        if (!url || url === true) throw usage('bucket sync --server <url> [--test-mode]');
+        if (typeof globalThis.WebSocket !== 'function') throw new CliError('this Node has no WebSocket - Node 22 or later');
+        const net = opts['test-mode'] ? 'test' : 'live';
+        const { tradeWith, meFor, tradeTimeoutMs } = require('./trade');
+        const { connectRoom } = require('../src/room-client');
+        const say = (l) => io.out(l);
+        return withDevice(io, opts, async ({ okcrypto }) => {
+          const me = await meFor({ okcrypto, net, say });
+          const room = await connectRoom({ url, me, device: thisDevice(), WebSocket: globalThis.WebSocket, randomBytes });
+          try {
+            const host = new URL(url).host;
+            const peers = room.peers();
+            if (!peers.length) { io.out(`sync: ${host}: no other device of this identity is online`); return 0; }
+            let failed = 0;
+            for (const p of peers) {
+              io.out(`sync: ${host}: with ${p.name} (${p.kind})`);
+              let first = true;
+              const send = (m) => { const t = tradeTimeoutMs(m, first); first = false; return room.request(p.id, m, { timeoutMs: t }); };
+              try {
+                const r = await tradeWith({ send, okcrypto, net, say, id: me.id });
+                if (!r.traded) { failed++; io.out(`sync: not traded with ${p.name}: ${r.why || 'no reason given'}`); }
+              } catch (e) {
+                failed++;
+                io.out(`sync: not traded with ${p.name}: ${e.message}`);
+              }
+            }
+            return failed ? 1 : 0;
+          } finally {
+            room.close();
+          }
+        });
       }
 
       throw usage(`unknown bucket command "${sub}" - onlykey-js bucket help`);
