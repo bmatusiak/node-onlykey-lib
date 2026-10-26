@@ -87,25 +87,25 @@
     {
       "name": "release-libraries",
       "repo": "trustcrypto/libraries",
-      "branch": "release-3.1.0",
-      "head": "37aa531",
+      "branch": "master",
+      "head": "fe9e293",
       "paths": [
         "fido2",
         "onlykey"
       ],
       "since": "2026-10-19",
-      "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #33."
+      "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #33, merged; since 2026-10-26 master, which carries the maintainer's security review fixes (fe9e293)."
     },
     {
       "name": "release-firmware",
       "repo": "trustcrypto/OnlyKey-Firmware",
-      "branch": "release-3.1.0",
-      "head": "9fceea1",
+      "branch": "master",
+      "head": "80e3ba0",
       "paths": [
         "OnlyKey"
       ],
       "since": "2026-09-30",
-      "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #183."
+      "why": "The 3.1.0 release set: a PR branch that is RE-SQUASHED in place, so its head SHA is watched - a moved head means realign (bm-ok masters, the versions table) and check which of our findings landed. PR #183, merged to master (80e3ba0, the same files as 9fceea1) 2026-10-23."
     },
     {
       "name": "release-python",

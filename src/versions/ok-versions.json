@@ -1,7 +1,7 @@
 {
   "v3.1.0": {
-    "libraries": "37aa531",
-    "OnlyKey-Firmware": "9fceea1",
+    "libraries": "fe9e293",
+    "OnlyKey-Firmware": "80e3ba0",
     "compatibility": {
       "status": "UNLOCKEDv3.1.0-prodc",
       "unreleased": false,
