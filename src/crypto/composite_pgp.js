@@ -187,7 +187,7 @@ function registerCompositeHooks(openpgp, ok, slot) {
             const eccSignature = await ok.composite_sign(slot, HALF_ECC, hashed);
             const eccPublicKey = publicKeyParams && publicKeyParams.eccPublicKey;
             if (eccPublicKey && !ed25519.verify(eccSignature, hashed, eccPublicKey)) {
-                throw Object.assign(new Error(`RSA slot ${slot} holds a different composite key than this certificate`), { code: 'EWRONGSLOT', slot });
+                throw Object.assign(new Error(`RSA slot ${slot} holds a different composite key than this certificate - in Key Chain, adopt the key in that slot or make a new one`), { code: 'EWRONGSLOT', slot });
             }
             const mldsaSignature = await ok.composite_sign(slot, HALF_PQC, hashed);
             return { eccSignature, mldsaSignature };
