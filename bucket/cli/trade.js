@@ -126,6 +126,14 @@ async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
  * fixed 30 s wait cut every such GIVE off and the phone's answer was lost. The wait grows with the message: the first
  * round's minute (the phone may ask for presses), then 30 s plus a second for every 1.5 KB.
  */
+/* an answer that was not the one expected, described by its shape only (keys, a refusal word) */
+function answerShape(answer) {
+  if (!answer) return 'no answer';
+  if (typeof answer !== 'object') return `a ${typeof answer}`;
+  if (answer.ok === false) return `refused${answer.refusal ? `: ${answer.refusal}` : ''}${answer.detail ? ` - ${String(answer.detail).slice(0, 160)}` : ''}`;
+  return `fields: ${Object.keys(answer).join(', ') || 'none'}`;
+}
+
 function tradeTimeoutMs(message, first) {
   const size = JSON.stringify(message || {}).length;
   return Math.max(first ? 60000 : 30000, 30000 + Math.ceil(size / 1.5));
@@ -214,8 +222,10 @@ async function tradeAs({ send, okcrypto, net, say, keyOpts, id: knownId }) {
   let settled = false;
   let stillDiffer = step.differs;
   for (;;) {
-    const g = c.give(await send(step.message));
-    if (!g) { say('sync: the device did not answer its HAVE'); break; }
+    const haveAnswer = await send(step.message);
+    const g = c.give(haveAnswer);
+    /* what came back instead, in words: a refusal and its reason, or which fields were missing - never the contents */
+    if (!g) { say(`sync: the device did not answer its HAVE (${answerShape(haveAnswer)})`); break; }
     addTo(taken, g.taken);
     /* what goes, per store - counts and size only, never a key or value */
     const giving = Object.fromEntries(Object.entries(g.message.give || {}).map(([s, recs]) => [s, Object.keys(recs).length]));

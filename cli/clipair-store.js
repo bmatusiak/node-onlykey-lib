@@ -56,10 +56,12 @@ function read(home) {
 
 function write(home, data) {
   const file = fileOf(home);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 1) + '\n', { mode: 0o600 });
-  fs.renameSync(tmp, file); /* never a half-written pairing file */
+  /*
+   * never a half-written pairing file; on Windows the rename waits out a reader holding the old file open (the
+   * bucket store's writer, bucket/cli/home.js). The desktop app reads this file while its sync service marks a phone
+   * used: EPERM, and a finished trade was reported "not traded" (Windows desktop + A13, 2026-10-25).
+   */
+  require('../bucket/cli/home').writeText(file, JSON.stringify(data, null, 1) + '\n');
   if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
 }
 

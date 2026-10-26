@@ -309,4 +309,4 @@ function moveHomeFiles(home) {
   moveInto(path.join(home, FILE), (b, done) => moveNet(b, home, 'edge', done));
 }
 
-module.exports = { FILE, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, keptIdentities, hasIdentityBucket, keepIdentityBucket, moveIdentityBucket };
+module.exports = { FILE, writeText, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, keptIdentities, hasIdentityBucket, keepIdentityBucket, moveIdentityBucket };
