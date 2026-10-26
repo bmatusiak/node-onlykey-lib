@@ -125,12 +125,18 @@ async function run({ io, opts, argv, net, home }) {
     if (fs.existsSync(during)) return fs.readFileSync(during, 'utf8').trim().replace(/^refs\/heads\//, '');
     return git(repo, 'branch', '--show-current').out.trim();
   }
-  /* <path>[:<base>[:<branch>]] - a drive letter's colon (C:\ or C:/) is not a separator */
+  /*
+   * <path>[:<base>[:<branch>[+<also>...]]] - a drive letter's colon (C:\ or C:/) is not a separator. Each +<also> is
+   * a remote branch moved to the same head in the same push (Brad, 2026-10-26: Cloudflare deploys ok-edge from a
+   * "cloudflare" branch): `ok-edge::main+cloudflare` pushes main and sets cloudflare to it - one push, one spend.
+   */
   function parseSpec(spec) {
-    const [repo, base, branch] = spec.split(/:(?![\\/])/);
+    const [repo, base, branchSpec] = spec.split(/:(?![\\/])/);
+    const [branch, ...also] = (branchSpec || '').split('+');
     const abs = path.resolve(repo);
     if (!fs.existsSync(path.join(abs, '.git'))) stop(`${repo} is not a git repository`);
-    return { spec: abs + (base ? `:${base}` : '') + (branch ? `:${branch}` : ''), repo: abs, name: path.basename(abs), base: base || '@{u}', branch: branch || currentBranch(abs) };
+    for (const b of also) if (!/^[\w./-]+$/.test(b)) stop(`${repo}: "${b}" is not a branch name`);
+    return { spec: abs + (base ? `:${base}` : '') + (branchSpec ? `:${branchSpec}` : ''), repo: abs, name: path.basename(abs), base: base || '@{u}', branch: branch || currentBranch(abs), also };
   }
   const rebasing = (r) => fs.existsSync(path.join(r.repo, '.git', 'rebase-merge'));
   function finishRebase(r) {
@@ -291,10 +297,11 @@ async function run({ io, opts, argv, net, home }) {
       if (unsigned(r).length) stop(`${r.name}: commits still unsigned`);
     }
     if (!ahead) return;
-    const out = spend(`push: ${r.name} ${r.branch}`, 'git', '-C', r.repo, 'push', 'origin', r.branch);
-    say(`  ${(out.match(/\S+\.\.\S+\s+\S+ -> \S+/) || ['pushed'])[0]}`);
+    const named = [r.branch, ...r.also].join(' + ');
+    const out = spend(`push: ${r.name} ${named}`, 'git', '-C', r.repo, 'push', 'origin', r.branch, ...r.also.map((b) => `${r.branch}:${b}`));
+    for (const line of out.match(/\S+(?:\.\.\.?\S+)?\s+\S+ -> \S+/g) || ['pushed']) say(`  ${line}`);
     pushCount += 1;
-    if (PROGRESS) PROGRESS.step(`pushed ${r.name} (${r.branch})`);
+    if (PROGRESS) PROGRESS.step(`pushed ${r.name} (${named})`);
   }
 
   /* ---------------------------------------------------------------- commands */
@@ -427,7 +434,7 @@ ${c} edge control status               # the budget status
 ${c} edge control settings             # where the batch and settings live (the Edge home)
 \`\`\`
 
-A repo is a path, optionally \`<path>:<base>:<branch>\` (defaults: the upstream \`@{u}\`, the current branch). Commits land unsigned (\`git -c commit.gpgsign=false commit …\`) and \`ship\` signs them.
+A repo is a path, optionally \`<path>:<base>:<branch>\` (defaults: the upstream \`@{u}\`, the current branch); \`<branch>+<other>\` also moves the remote branch \`<other>\` to the same head in the same push (\`ok-edge::main+cloudflare\`). Commits land unsigned (\`git -c commit.gpgsign=false commit …\`) and \`ship\` signs them.
 
 ## ship, step by step
 1. Counts the work: signatures = commits after the base that are not signed; pushes = repos with commits ahead.
