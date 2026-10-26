@@ -118,20 +118,25 @@ function guiConfirm(question, { details = '', title = 'OnlyKey', labels = LABELS
  * own format, so Linux pipes the file straight in). A FILE, NOT THE WINDOW'S stdin: the ship runs its git steps with
  * spawnSync, and a write to a child's pipe may not leave this process until the event loop turns again - after the
  * run. A file append lands at once. "# done..." or "# STOP..." ends the run: the window keeps the log and enables OK.
- * No Cancel: a ship always finishes its budget; closing the window only closes the window.
+ * ONE BUTTON, CANCEL (Brad, 2026-10-26: "cancel button is the only button it should have, and that should stop the work"):
+ * no title-bar close; Cancel leaves `<file>.cancel` and the command stops at its next step (cancelled()). Done closes the
+ * window by itself (2.5 s to read it); a STOP stays, with the reason, and the button reads Close. STARTED ATTACHED on Windows: a detached PowerShell
+ * (DETACHED_PROCESS, no console) left its form unshown and exited at once - measured, 0.2 s, never visible; attached it
+ * shows in ~1.3 s. Windows does not end a child when its parent exits, so the window still outlives the ship.
  */
 const PROGRESS_PS = String.raw`
 Add-Type -AssemblyName System.Windows.Forms
 $File = $env:OKJS_PROGRESS_FILE
 $f = New-Object System.Windows.Forms.Form
 $f.Text = $env:OKJS_GUI_TITLE; $f.TopMost = $true; $f.Width = 600; $f.Height = 420
-$f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.StartPosition = 'CenterScreen'
+$f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.ControlBox = $false; $f.StartPosition = 'CenterScreen'
 $step = New-Object System.Windows.Forms.Label; $step.Left = 12; $step.Top = 12; $step.Width = 560; $step.Height = 36; $step.Text = 'starting...'
 $bar = New-Object System.Windows.Forms.ProgressBar; $bar.Left = 12; $bar.Top = 52; $bar.Width = 560; $bar.Height = 22; $bar.Minimum = 0; $bar.Maximum = 100
 $count = New-Object System.Windows.Forms.Label; $count.Left = 12; $count.Top = 78; $count.Width = 560; $count.Height = 18; $count.Text = '0%'
 $log = New-Object System.Windows.Forms.TextBox; $log.Multiline = $true; $log.ReadOnly = $true; $log.ScrollBars = 'Vertical'; $log.Left = 12; $log.Top = 100; $log.Width = 560; $log.Height = 230
-$ok = New-Object System.Windows.Forms.Button; $ok.Text = 'OK'; $ok.Left = 487; $ok.Top = 340; $ok.Width = 85; $ok.TabStop = $false; $ok.Enabled = $false
-$ok.Add_Click({ $f.Close() })
+$ok = New-Object System.Windows.Forms.Button; $ok.Text = 'Cancel'; $ok.Left = 487; $ok.Top = 340; $ok.Width = 85; $ok.TabStop = $false
+$script:over = $false
+$ok.Add_Click({ if ($script:over) { $f.Close(); return }; Set-Content -LiteralPath ($File + '.cancel') -Value 'cancel'; $ok.Enabled = $false; $ok.Text = 'Cancelling'; $step.Text = 'cancelling - the work stops after the step in progress' })
 $f.Controls.AddRange(@($step, $bar, $count, $log, $ok)); $f.ActiveControl = $log
 $script:seen = 0
 $timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 300
@@ -143,7 +148,7 @@ $timer.Add_Tick({
     if ($l -match '^\s*(\d{1,3})\s*$') { $bar.Value = [Math]::Min(100, [int]$Matches[1]); $count.Text = "$($bar.Value)%"; continue }
     if ($l.StartsWith('# ')) {
       $t = $l.Substring(2); $step.Text = $t; $log.AppendText("$t" + [Environment]::NewLine)
-      if ($t.StartsWith('done') -or $t.StartsWith('STOP')) { $ok.Enabled = $true; $timer.Stop(); if ($t.StartsWith('STOP')) { $step.ForeColor = 'Firebrick' } }
+      if ($t.StartsWith('done') -or $t.StartsWith('STOP')) { $script:over = $true; $ok.Text = 'Close'; $ok.Enabled = $true; $timer.Stop(); if ($t.StartsWith('STOP')) { $step.ForeColor = 'Firebrick' } else { $close = New-Object System.Windows.Forms.Timer; $close.Interval = 2500; $close.Add_Tick({ $f.Close() }); $close.Start() } }
     }
   }
   $script:seen = $lines.Count
@@ -161,7 +166,7 @@ $f.Add_Shown({ $timer.Start() })
 function guiProgress({ title = 'OnlyKey', total, platform = process.platform, env = process.env, spawn = require('child_process').spawn, dir = require('os').tmpdir() } = {}) {
   const fs = require('fs');
   const path = require('path');
-  const none = { step() {}, note() {}, finish() {}, file: null };
+  const none = { step() {}, note() {}, finish() {}, cancelled: () => false, file: null };
   if (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY) return none;
   if (platform !== 'win32' && platform !== 'linux') return none;
   let file;
@@ -170,9 +175,9 @@ function guiProgress({ title = 'OnlyKey', total, platform = process.platform, en
     fs.writeFileSync(file, '0\n# starting\n');
     const wenv = { ...env, OKJS_PROGRESS_FILE: file, OKJS_GUI_TITLE: title, OKJS_PARENT_PID: String(process.pid) };
     const child = platform === 'win32'
-      ? (() => { const ps1 = path.join(path.dirname(file), 'progress.ps1'); fs.writeFileSync(ps1, PROGRESS_PS); return spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { env: wenv, detached: true, stdio: 'ignore', windowsHide: false }); })()
+      ? (() => { const ps1 = path.join(path.dirname(file), 'progress.ps1'); fs.writeFileSync(ps1, PROGRESS_PS); return spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { env: wenv, stdio: 'ignore', windowsHide: false }); })()
       /* the file and title as environment, never spliced into the shell line; tail ends with this process */
-      : spawn('sh', ['-c', 'tail -n +1 -F --pid="$OKJS_PARENT_PID" "$OKJS_PROGRESS_FILE" 2>/dev/null | zenity --progress --no-cancel --no-markup --title="$OKJS_GUI_TITLE" --text=starting --width=520'], { env: wenv, detached: true, stdio: 'ignore' });
+      : spawn('sh', ['-c', 'tail -n +1 -F --pid="$OKJS_PARENT_PID" "$OKJS_PROGRESS_FILE" 2>/dev/null | zenity --progress --auto-close --no-markup --title="$OKJS_GUI_TITLE" --text=starting --width=520 || touch "$OKJS_PROGRESS_FILE.cancel"'], { env: wenv, detached: true, stdio: 'ignore' });
     child.on('error', () => {});
     child.unref();
   } catch (_) {
@@ -186,6 +191,8 @@ function guiProgress({ title = 'OnlyKey', total, platform = process.platform, en
     step(text) { done += 1; put(text); },
     note(text) { put(text); },
     finish(text) { if (!String(text).startsWith('STOP')) done = total; put(text); },
+    /* the person pressed Cancel (Windows) or zenity's Cancel (Linux): the command stops its work */
+    cancelled() { try { return fs.existsSync(`${file}.cancel`); } catch (_) { return false; } },
   };
 }
 

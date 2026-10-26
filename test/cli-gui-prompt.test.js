@@ -98,10 +98,15 @@ test('gui-prompt: guiProgress starts one window and appends percent + step lines
   const lines = fs.readFileSync(p.file, 'utf8').trim().split('\n');
   assert.deepEqual(lines.slice(-8), ['25', '# signed 1', '50', '# signed 2', '75', '# pushed lib', '100', '# done: 2 signed, 1 pushed']);
   assert.equal(started.length, 1, 'never restarted');
+  assert.equal(p.cancelled(), false);
+  fs.writeFileSync(`${p.file}.cancel`, 'cancel');
+  assert.equal(p.cancelled(), true, 'Cancel in the window is seen by the command');
+  assert.match(require('../cli/gui-prompt').PROGRESS_PS, /ControlBox = \$false/, 'no title-bar close: Cancel is the one button');
   const zen = [];
   guiProgress({ total: 1, platform: 'linux', env: { DISPLAY: ':0' }, spawn: (f, a, o) => { zen.push({ f, a, o }); return { on() {}, unref() {} }; } });
   assert.equal(zen[0].f, 'sh');
-  assert.match(zen[0].a[1], /zenity --progress --no-cancel/);
+  assert.match(zen[0].a[1], /zenity --progress --auto-close/);
+  assert.match(zen[0].a[1], /|| touch ".cancel"/, "zenity's Cancel leaves the cancel mark");
   assert.doesNotMatch(zen[0].a[1], /okjs-progress-/, 'the file path is never spliced into the shell line');
   const quietP = guiProgress({ total: 1, platform: 'linux', env: {}, spawn: () => { throw new Error('no window without a desktop'); } });
   assert.equal(quietP.file, null);

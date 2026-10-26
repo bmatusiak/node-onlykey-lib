@@ -199,7 +199,26 @@ async function run({ io, opts, argv, net, home }) {
     }
     return false;
   };
+  /*
+   * CANCEL IN THE PROGRESS WINDOW STOPS THE WORK (Brad, 2026-10-26): checked before each use of the budget - nothing more
+   * goes to the key, the commits already signed stay on their branch (shipRepo keeps them on a Stop), and the budget is
+   * ended here, as every budget is (nothing is left open to resume).
+   */
+  const cancelIfAsked = () => {
+    if (!PROGRESS || !PROGRESS.cancelled()) return;
+    say(`CANCELLED in the progress window - ${signedCount} signed, ${pushCount} pushed`);
+    if (HEAD) {
+      const ended = cli(['end']).out.trim().split('\n').pop();
+      say(/not live|was ended/.test(ended) ? 'budget closed' : ended);
+      HEAD = null;
+    }
+    unwatch();
+    PROGRESS.finish(`STOP: cancelled - ${signedCount} signed, ${pushCount} pushed; the budget is ended`);
+    PROGRESS = null; /* nothing later writes over the cancel line */
+    throw new Stop('cancelled in the progress window');
+  };
   function spend(intent, ...command) {
+    cancelIfAsked();
     const r = cli(['exec', '--head', HEAD, '--intent', intent, '--', ...command]);
     const seq = (r.out.match(/receipt owed for #(\d+)/) || [])[1];
     if (!seq) {
@@ -329,13 +348,23 @@ async function run({ io, opts, argv, net, home }) {
       say(`plan: ${t.gpg} signature(s), ${t.ssh} push(es)`);
       if (PLAN) return 0;
       if (t.gpg + t.ssh === 0) { say('nothing to do'); return 0; }
-      ready();
-      if (HOOKS.watch) watch();
-      if (!HEAD) openBudget(t);
+      /*
+       * THE WINDOW OPENS BEFORE ANY WORK (Brad, 2026-10-26: "it should start the progress window before it start work,
+       * and automatically close when the job is done"): opened after the approval and press it came up when the ship was
+       * all but over. It says each wait - the key, the approval, the press - then each signature and push.
+       */
       if (GUI) {
         PROGRESS = require('../../cli/gui-prompt').guiProgress({ title: `OnlyKey - ship${net === 'test' ? ' (testnet)' : ''}`, total: t.gpg + t.ssh });
-        PROGRESS.note(`budget open - ${t.gpg} signature(s), ${t.ssh} push(es): ${REPOS.map((r) => r.name).join(', ')}`);
+        PROGRESS.note(`${t.gpg} signature(s), ${t.ssh} push(es): ${REPOS.map((r) => r.name).join(', ')} - checking the key`);
       }
+      ready();
+      if (HOOKS.watch) watch();
+      if (!HEAD) {
+        cancelIfAsked();
+        if (PROGRESS) PROGRESS.note('approve the budget in its window, then PRESS the key');
+        openBudget(t);
+      }
+      if (PROGRESS) PROGRESS.note('budget open - signing');
       for (const r of REPOS) shipRepo(r);
       const ended = cli(['end']).out.trim().split('\n').pop();
       say(/not live|was ended/.test(ended) ? 'budget closed (every use spent)' : ended);
