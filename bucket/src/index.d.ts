@@ -3,6 +3,7 @@ declare const _exports: {
     replicate: typeof import("./replicate");
     bucketIdentity: typeof import("./bucket-identity");
     trade: typeof import("./trade");
+    room: typeof import("./room");
     FORMAT: "onlykey-bucket";
     SEALED_FORMAT: "onlykey-bucket-sealed";
     AGE_FORMAT: "onlykey-bucket-age";

@@ -111,9 +111,11 @@ function verifyCertificate({ identityPublicKey, bucketPublicKey, certificate }) 
 
 /*
  * What the bucket key signs, each under its own domain so a signature for one is never one for another:
- * 'proof' (a fresh challenge), 'give' (a GIVE's bytes), 'accept' / 'revoke' (a peer's public key).
+ * 'proof' (a fresh challenge), 'give' (a GIVE's bytes), 'accept' / 'revoke' (a peer's public key), 'join' (a server's
+ * challenge to enter the identity's room, room.js - its own domain, so a server can never turn a device's join into a
+ * trade proof for a peer, nor a peer's trade challenge into a join).
  */
-const PURPOSES = new Set(['proof', 'give', 'accept', 'revoke']);
+const PURPOSES = new Set(['proof', 'give', 'accept', 'revoke', 'join']);
 const purposeDigest = (purpose, bytes) => {
   if (!PURPOSES.has(purpose)) throw new Error(`the bucket key signs ${[...PURPOSES].join(', ')} - not ${purpose}`);
   return H(`OKBUCKET-${purpose.toUpperCase()}-v1`, bytes);
