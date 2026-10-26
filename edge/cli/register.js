@@ -165,6 +165,28 @@ function keyAnswers(connected, h, what) {
 }
 
 /*
+ * A LOCKED KEY UNDER --gui-prompt (Brad, 2026-10-26: "if using --gui-prompt and the key is locked, create a prompt asking
+ * to unlock the key, with OK and Cancel; loop OK until key is unlocked or cancel to cancel the op"). The person enters
+ * the PIN on the key itself; the window only waits for them: OK reads the key again and asks again while it is still
+ * locked, Cancel ends the command. Without --gui-prompt a locked key stops at once with what to do (keyAnswers).
+ */
+async function untilUnlocked(app, opts, h) {
+  let connected = await app.services.device.connect();
+  if (!opts || !opts['gui-prompt']) return connected;
+  const { guiConfirm } = require('../../cli/gui-prompt');
+  while (connected && connected.identity && connected.identity.state === 'locked') {
+    const ok = await guiConfirm('The OnlyKey is locked. Enter your PIN on the key, then click OK.', {
+      title: 'OnlyKey - unlock the key',
+      labels: { yes: 'OK', no: 'Cancel' },
+      details: 'The command waits for the key: OK checks it again, Cancel stops the command.',
+    });
+    if (!ok) throw new h.CliError('cancelled: the OnlyKey stayed locked');
+    connected = await app.services.device.connect();
+  }
+  return connected;
+}
+
+/*
  * The phone and the key's Edge, with the wire to the app - what `edge setup` needs, and
  * what the stack below is built on.
  */
@@ -176,7 +198,7 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
   const dopts = h.deviceOpts(opts);
   const app = await openWithOneRetry(async () => {
     const a = await io.start(dopts);
-    try { keyAnswers(await a.services.device.connect(), h, 'edge'); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
+    try { keyAnswers(await untilUnlocked(a, opts, h), h, 'edge'); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
     return a;
   }, { log: say });
   const { transport, okcrypto } = app.services;

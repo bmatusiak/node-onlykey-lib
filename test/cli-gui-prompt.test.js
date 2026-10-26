@@ -57,3 +57,22 @@ test('no desktop session, no answer in time, or a platform with no dialog: No, a
   assert.equal(await guiConfirm('approve this budget? [y/N]', { say, platform: 'darwin', env: {}, run: f.run }), false);
   assert.match(said.pop(), /no dialog for darwin/);
 });
+
+/*
+ * A step the person does first says OK / Cancel (Brad, 2026-10-26: a locked key under --gui-prompt - "a prompt asking to
+ * unlock the key, with OK and Cancel"); an approval keeps Yes / No. The labels reach each dialog program as data.
+ */
+test('gui-prompt: button labels reach every dialog program; Yes / No unless asked otherwise', () => {
+  const { dialogsFor } = require('../cli/gui-prompt');
+  const ok = { yes: 'OK', no: 'Cancel' };
+  const [win] = dialogsFor({ title: 't', text: 'x', platform: 'win32', env: {}, labels: ok });
+  assert.equal(win.env.OKJS_GUI_YES, 'OK');
+  assert.equal(win.env.OKJS_GUI_NO, 'Cancel');
+  assert.match(PS_SCRIPT, /\$yes\.Text = \$env:OKJS_GUI_YES/);
+  const [zen, kde] = dialogsFor({ title: 't', text: 'x', platform: 'linux', env: {}, labels: ok });
+  assert.ok(zen.args.includes('--ok-label=OK') && zen.args.includes('--cancel-label=Cancel'));
+  assert.deepEqual(kde.args.slice(-4), ['--yes-label', 'OK', '--no-label', 'Cancel']);
+  const [plain] = dialogsFor({ title: 't', text: 'x', platform: 'win32', env: {} });
+  assert.equal(plain.env.OKJS_GUI_YES, 'Yes');
+  assert.equal(plain.env.OKJS_GUI_NO, 'No');
+});

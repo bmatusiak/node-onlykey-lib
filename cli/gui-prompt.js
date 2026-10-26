@@ -19,6 +19,8 @@
 const { execFile } = require('child_process');
 
 const TIMEOUT_MS = 120000;
+/* the two buttons: Yes / No for an approval; a step the person does first (unlock the key) says OK / Cancel */
+const LABELS = Object.freeze({ yes: 'Yes', no: 'No' });
 
 /*
  * THE WINDOWS DIALOG: the text and title come from the environment, never from the command line.
@@ -37,8 +39,8 @@ const PS_SCRIPT = [
   '$t = New-Object System.Windows.Forms.TextBox',
   '$t.Multiline = $true; $t.ReadOnly = $true; $t.ScrollBars = \'Vertical\'; $t.Left = 12; $t.Top = 12; $t.Width = 520; $t.Height = 250',
   "$t.Text = ($env:OKJS_GUI_TEXT -replace \"`r?`n\", \"`r`n\")",
-  "$yes = New-Object System.Windows.Forms.Button; $yes.Text = 'Yes'; $yes.Left = 352; $yes.Top = 275; $yes.Width = 85; $yes.TabStop = $false; $yes.Enabled = $false",
-  "$no = New-Object System.Windows.Forms.Button; $no.Text = 'No'; $no.Left = 447; $no.Top = 275; $no.Width = 85; $no.TabStop = $false; $no.Enabled = $false",
+  "$yes = New-Object System.Windows.Forms.Button; $yes.Text = $env:OKJS_GUI_YES; $yes.Left = 352; $yes.Top = 275; $yes.Width = 85; $yes.TabStop = $false; $yes.Enabled = $false",
+  "$no = New-Object System.Windows.Forms.Button; $no.Text = $env:OKJS_GUI_NO; $no.Left = 447; $no.Top = 275; $no.Width = 85; $no.TabStop = $false; $no.Enabled = $false",
   '$script:answer = 1',
   '$yes.Add_Click({ $script:answer = 0; $f.Close() }); $no.Add_Click({ $script:answer = 1; $f.Close() })',
   '$timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 1500',
@@ -52,18 +54,18 @@ const PS_SCRIPT = [
  * The dialog programs to try, in order, for this platform: [{file, args, env}].
  * @param {{title: string, text: string, platform?: string, env?: object}} o
  */
-function dialogsFor({ title, text, platform = process.platform, env = process.env }) {
+function dialogsFor({ title, text, platform = process.platform, env = process.env, labels = LABELS }) {
   if (platform === 'win32') {
     return [{
       file: 'powershell.exe',
       args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_SCRIPT],
-      env: { ...env, OKJS_GUI_TEXT: text, OKJS_GUI_TITLE: title },
+      env: { ...env, OKJS_GUI_TEXT: text, OKJS_GUI_TITLE: title, OKJS_GUI_YES: labels.yes, OKJS_GUI_NO: labels.no },
     }];
   }
   if (platform === 'linux') {
     return [
-      { file: 'zenity', args: ['--question', '--no-markup', '--default-cancel', `--title=${title}`, `--text=${text}`, '--width=520'], env },
-      { file: 'kdialog', args: ['--title', title, '--yesno', text], env },
+      { file: 'zenity', args: ['--question', '--no-markup', '--default-cancel', `--title=${title}`, `--text=${text}`, '--width=520', `--ok-label=${labels.yes}`, `--cancel-label=${labels.no}`], env },
+      { file: 'kdialog', args: ['--title', title, '--yesno', text, '--yes-label', labels.yes, '--no-label', labels.no], env },
     ];
   }
   return [];
@@ -72,18 +74,18 @@ function dialogsFor({ title, text, platform = process.platform, env = process.en
 /**
  * Ask Yes/No in a desktop dialog. Resolves true only for Yes.
  * @param {string} question the terminal's question ("approve this budget? [y/N] ") - its [y/N] is dropped
- * @param {{details?: string, title?: string, say?: (line: string) => void, platform?: string, env?: object, run?: typeof execFile, timeoutMs?: number}} [o]
+ * @param {{details?: string, title?: string, labels?: {yes: string, no: string}, say?: (line: string) => void, platform?: string, env?: object, run?: typeof execFile, timeoutMs?: number}} [o]
  *   details: what the person is approving (the request's view, as the terminal prints it); run: for tests
  * @returns {Promise<boolean>}
  */
-function guiConfirm(question, { details = '', title = 'OnlyKey', say = (l) => process.stderr.write(`${l}\n`), platform = process.platform, env = process.env, run = execFile, timeoutMs = TIMEOUT_MS } = {}) {
+function guiConfirm(question, { details = '', title = 'OnlyKey', labels = LABELS, say = (l) => process.stderr.write(`${l}\n`), platform = process.platform, env = process.env, run = execFile, timeoutMs = TIMEOUT_MS } = {}) {
   const ask = String(question).replace(/\s*\[y\/N\]\s*$/i, '').trim();
   const text = `${details ? `${details}\n\n` : ''}${ask.charAt(0).toUpperCase()}${ask.slice(1)}`;
   if (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY) {
     say('gui-prompt: no desktop session here (no DISPLAY / WAYLAND_DISPLAY) - answered No');
     return Promise.resolve(false);
   }
-  const dialogs = dialogsFor({ title, text, platform, env });
+  const dialogs = dialogsFor({ title, text, platform, env, labels });
   if (!dialogs.length) {
     say(`gui-prompt: no dialog for ${platform} - answered No`);
     return Promise.resolve(false);
@@ -98,9 +100,9 @@ function guiConfirm(question, { details = '', title = 'OnlyKey', say = (l) => pr
       }
       const d = dialogs[i];
       run(d.file, d.args, { env: d.env, timeout: timeoutMs, windowsHide: false }, (err) => {
-        if (!err) { say('gui-prompt: Yes'); resolve(true); return; }
+        if (!err) { say(`gui-prompt: ${labels.yes}`); resolve(true); return; }
         if (err.code === 'ENOENT') { next(i + 1); return; }
-        say(err.killed ? `gui-prompt: no answer in ${Math.round(timeoutMs / 1000)} s - answered No` : 'gui-prompt: No');
+        say(err.killed ? `gui-prompt: no answer in ${Math.round(timeoutMs / 1000)} s - answered ${labels.no}` : `gui-prompt: ${labels.no}`);
         resolve(false);
       });
     };
@@ -108,4 +110,4 @@ function guiConfirm(question, { details = '', title = 'OnlyKey', say = (l) => pr
   });
 }
 
-module.exports = { guiConfirm, dialogsFor, PS_SCRIPT };
+module.exports = { guiConfirm, dialogsFor, PS_SCRIPT, LABELS };
