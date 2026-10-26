@@ -69,3 +69,20 @@ test('a device that does not trade (or does not answer): said plainly, nothing c
   assert.equal(r.traded, false);
   assert.match(r.why, /does not trade yet/);
 });
+
+test('a kept bucket key whose certificate does not verify is not used: it is made again, and the trade goes on', async () => {
+  home.setRoot(fs.mkdtempSync(path.join(os.tmpdir(), 'okbucket-trade-')));
+  const phone = await phoneOf('backup-1');
+  const key = fakeKey('backup-1');
+  const first = await tradeWith({ send: phone.send, okcrypto: key, net: 'test' });
+  assert.equal(first.traded, true, first.why);
+  assert.deepEqual(key.calls, { ecdh: 1, sign: 1 });
+  /* the certificate turned into other bytes (as when a key's answers were crossed with someone else's) */
+  const f = keyFile(phone.id, 'test');
+  const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+  j.certificate = j.certificate.replace(/^../, j.certificate.startsWith('00') ? '01' : '00');
+  fs.writeFileSync(f, JSON.stringify(j));
+  const again = await tradeWith({ send: phone.send, okcrypto: key, net: 'test' });
+  assert.equal(again.traded, true, again.why);
+  assert.deepEqual(key.calls, { ecdh: 2, sign: 2 }, 'made again');
+});

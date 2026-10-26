@@ -52,15 +52,25 @@ function storeRules() {
 /* the bucket key and certificate of an identity, beside its bucket: buckets/<net>/<id>.key */
 const keyFile = (id, net) => home.identityFile(id, net).replace(/\.json$/, '.key');
 
+/*
+ * A BUCKET KEY IS KEPT ONLY IF ITS CERTIFICATE VERIFIES (the Windows desktop, 2026-10-25: through the desktop app the
+ * key's answers were crossed with the app's own, and a bucket key with a certificate from other bytes was kept - every
+ * proof from it was refused, for good). Checked when made and when read; one that does not verify is not used, and is
+ * made again.
+ */
+const certifies = (me) => bid.identityIdOf(me.identityPublicKey) === me.id
+  && bid.verifyCertificate({ identityPublicKey: me.identityPublicKey, bucketPublicKey: me.bucketKey.publicKey, certificate: me.certificate });
+
 function loadMe(id, net) {
   try {
     const j = JSON.parse(fs.readFileSync(keyFile(id, net), 'utf8'));
-    return {
+    const me = {
       id,
       identityPublicKey: fromHex(j.identityPublicKey),
       bucketKey: { secretKey: fromHex(j.bucketSecretKey), publicKey: fromHex(j.bucketPublicKey) },
       certificate: fromHex(j.certificate),
     };
+    return certifies(me) ? me : null;
   } catch {
     return null;
   }
@@ -90,6 +100,9 @@ async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
   say('sync: making this computer\'s bucket key, once - the key asks for two presses');
   const bucketKey = await whileBusy(say, 'bucket key', () => bid.deriveBucketKey(okcrypto, identityPublicKey, opts));
   const certificate = await whileBusy(say, 'certificate', () => bid.certify(okcrypto, identityPublicKey, bucketKey.publicKey, opts));
+  if (!certifies({ id, identityPublicKey, bucketKey, certificate })) {
+    throw new Error('the key\'s certificate for this computer\'s bucket key does not verify - not kept (the key\'s answers were not its own?)');
+  }
   const file = keyFile(id, net);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, `${JSON.stringify({
