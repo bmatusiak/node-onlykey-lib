@@ -104,9 +104,14 @@ async function run({ io, opts, argv, net, home }) {
     else try { process.kill(-watcher.pid); } catch (_) { /* gone */ }
     watcher = null;
   };
+  /* --gui-prompt: one progress window for the run (cli/gui-prompt guiProgress), opened with the budget */
+  let PROGRESS = null;
+  let signedCount = 0;
+  let pushCount = 0;
   const stop = (why) => {
     say(`STOP: ${why}`);
     if (HEAD) say(`  the budget is open - go on with the same ship command plus: --head ${HEAD}`);
+    if (PROGRESS) PROGRESS.finish(`STOP: ${why}${HEAD ? ` - the budget is open (head ${HEAD.slice(0, 12)})` : ''}`);
     unwatch();
     throw new Stop(why);
   };
@@ -180,15 +185,29 @@ async function run({ io, opts, argv, net, home }) {
     say(`budget open, head ${HEAD.slice(0, 12)}`);
   }
   /* one exec under the budget and its receipt; HEAD moves on */
+  /*
+   * A FAILED EXEC STILL MOVES THE CHAIN (2026-10-26: a signature timed out on its press, "note #885: FAILED"): the key
+   * numbered it, so its receipt is filed too - "FAILED: <intent>" - and HEAD follows the head that receipt prints.
+   * Stopping without it left HEAD at the budget's opening head, and the resume line it printed was refused ("--head is
+   * not the budget's head").
+   */
+  const fileReceipt = (seq, msg) => {
+    for (let t = 1; t <= 3; t++) {
+      const h = (cli(['receipt', seq, '--msg', msg]).out.match(/head = ([0-9a-f]{64})/) || [])[1];
+      if (h) { HEAD = h; return true; }
+      say(`  receipt #${seq}: no answer (try ${t}), again`);
+    }
+    return false;
+  };
   function spend(intent, ...command) {
     const r = cli(['exec', '--head', HEAD, '--intent', intent, '--', ...command]);
     const seq = (r.out.match(/receipt owed for #(\d+)/) || [])[1];
-    if (!seq) stop(`${intent}: ${r.out.trim().split('\n').slice(-2).join(' | ')}`);
-    for (let t = 1; t <= 3; t++) {
-      const h = (cli(['receipt', seq, '--msg', intent]).out.match(/head = ([0-9a-f]{64})/) || [])[1];
-      if (h) { HEAD = h; return r.out; }
-      say(`  receipt #${seq}: no answer (try ${t}), again`);
+    if (!seq) {
+      const failed = (r.out.match(/note #(\d+): FAILED/) || [])[1];
+      if (failed) fileReceipt(failed, `FAILED: ${intent}`.slice(0, 200));
+      stop(`${intent}: ${r.out.trim().split('\n').slice(-2).join(' | ')}`);
     }
+    if (fileReceipt(seq, intent)) return r.out;
     return stop(`receipt #${seq} would not file`);
   }
   function shipRepo(r) {
@@ -216,18 +235,37 @@ async function run({ io, opts, argv, net, home }) {
         const noEditor = { env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'sed -i s/^pick/edit/' } };
         runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '-q', '-i', `${todo[0].hash}^`], noEditor);
         if (!wtRebasing()) stop(`${r.name}: the rebase did not stop at ${todo[0].hash.slice(0, 7)}`);
-        while (wtRebasing()) {
-          const subject = git(wt, 'log', '-1', '--format=%h %s').out.trim().slice(0, 60);
-          spend(`sign: ${r.name} ${subject}`, 'git', '-C', wt, 'commit', '--amend', '--no-edit', '-S');
-          say(`  signed ${subject}`);
-          runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
+        /* the signed commits go on the branch - all of them, or as many as were signed before a stop */
+        const keep = () => {
+          const signed = git(wt, 'rev-parse', 'HEAD').out.trim();
+          if (git(r.repo, 'rev-parse', 'HEAD^{tree}').out.trim() !== git(wt, 'rev-parse', `${signed}^{tree}`).out.trim()) {
+            stop(`${r.name}: the signed commits do not carry the same files - the branch was not moved (signed head ${signed.slice(0, 12)})`);
+          }
+          const moved = git(r.repo, 'reset', '-q', '--soft', signed);
+          if (moved.code !== 0) stop(`${r.name}: could not move ${r.branch} to the signed commits: ${moved.out.trim()}`);
+        };
+        try {
+          while (wtRebasing()) {
+            const subject = git(wt, 'log', '-1', '--format=%h %s').out.trim().slice(0, 60);
+            spend(`sign: ${r.name} ${subject}`, 'git', '-C', wt, 'commit', '--amend', '--no-edit', '-S');
+            say(`  signed ${subject}`);
+            signedCount += 1;
+            if (PROGRESS) PROGRESS.step(`signed ${signedCount} - ${r.name}: ${subject}`);
+            runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
+          }
+        } catch (e) {
+          /*
+           * A STOP MID-REPO KEEPS WHAT WAS SIGNED (2026-10-26: four ok-edge signatures - four of the budget's uses - went
+           * with the worktree when the fifth timed out). The rest of the commits are replayed as they are, unsigned, the
+           * files are checked equal, and the branch moves: the next ship signs only what is left.
+           */
+          if (e instanceof Stop) {
+            for (let n = 0; wtRebasing() && n < 500; n++) runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
+            if (!wtRebasing()) { try { keep(); say(`  ${r.name}: the commits signed so far are kept on ${r.branch}`); } catch (_) { /* the stop below says why */ } }
+          }
+          throw e;
         }
-        const signed = git(wt, 'rev-parse', 'HEAD').out.trim();
-        if (git(r.repo, 'rev-parse', 'HEAD^{tree}').out.trim() !== git(wt, 'rev-parse', `${signed}^{tree}`).out.trim()) {
-          stop(`${r.name}: the signed commits do not carry the same files - the branch was not moved (signed head ${signed.slice(0, 12)})`);
-        }
-        const moved = git(r.repo, 'reset', '-q', '--soft', signed);
-        if (moved.code !== 0) stop(`${r.name}: could not move ${r.branch} to the signed commits: ${moved.out.trim()}`);
+        keep();
       } finally {
         git(r.repo, 'worktree', 'remove', '--force', wt);
       }
@@ -236,6 +274,8 @@ async function run({ io, opts, argv, net, home }) {
     if (!ahead) return;
     const out = spend(`push: ${r.name} ${r.branch}`, 'git', '-C', r.repo, 'push', 'origin', r.branch);
     say(`  ${(out.match(/\S+\.\.\S+\s+\S+ -> \S+/) || ['pushed'])[0]}`);
+    pushCount += 1;
+    if (PROGRESS) PROGRESS.step(`pushed ${r.name} (${r.branch})`);
   }
 
   /* ---------------------------------------------------------------- commands */
@@ -292,12 +332,17 @@ async function run({ io, opts, argv, net, home }) {
       ready();
       if (HOOKS.watch) watch();
       if (!HEAD) openBudget(t);
+      if (GUI) {
+        PROGRESS = require('../../cli/gui-prompt').guiProgress({ title: `OnlyKey - ship${net === 'test' ? ' (testnet)' : ''}`, total: t.gpg + t.ssh });
+        PROGRESS.note(`budget open - ${t.gpg} signature(s), ${t.ssh} push(es): ${REPOS.map((r) => r.name).join(', ')}`);
+      }
       for (const r of REPOS) shipRepo(r);
       const ended = cli(['end']).out.trim().split('\n').pop();
       say(/not live|was ended/.test(ended) ? 'budget closed (every use spent)' : ended);
       unwatch();
       if (fromBatch) writeBatch([]);
       say('DONE');
+      if (PROGRESS) PROGRESS.finish(`done: ${signedCount} signed, ${pushCount} pushed - budget closed`);
       return 0;
     }
     for (const l of USAGE) io.err(l);

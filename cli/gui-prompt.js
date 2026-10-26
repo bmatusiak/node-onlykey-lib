@@ -110,4 +110,83 @@ function guiConfirm(question, { details = '', title = 'OnlyKey', labels = LABELS
   });
 }
 
-module.exports = { guiConfirm, dialogsFor, PS_SCRIPT, LABELS };
+/* ------------------------------------------------------------------ a progress window */
+/*
+ * ONE WINDOW FOR A WHOLE RUN (Brad, 2026-10-26: "a progress bar of the current control ship run, for example 30 commits
+ * showing a progress bar as each one gets signed and or pushed"). Started once, never restarted: the command appends
+ * lines to a file and the window follows it - a number is the percent, "# text" the current step (zenity --progress's
+ * own format, so Linux pipes the file straight in). A FILE, NOT THE WINDOW'S stdin: the ship runs its git steps with
+ * spawnSync, and a write to a child's pipe may not leave this process until the event loop turns again - after the
+ * run. A file append lands at once. "# done..." or "# STOP..." ends the run: the window keeps the log and enables OK.
+ * No Cancel: a ship always finishes its budget; closing the window only closes the window.
+ */
+const PROGRESS_PS = String.raw`
+Add-Type -AssemblyName System.Windows.Forms
+$File = $env:OKJS_PROGRESS_FILE
+$f = New-Object System.Windows.Forms.Form
+$f.Text = $env:OKJS_GUI_TITLE; $f.TopMost = $true; $f.Width = 600; $f.Height = 420
+$f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.StartPosition = 'CenterScreen'
+$step = New-Object System.Windows.Forms.Label; $step.Left = 12; $step.Top = 12; $step.Width = 560; $step.Height = 36; $step.Text = 'starting...'
+$bar = New-Object System.Windows.Forms.ProgressBar; $bar.Left = 12; $bar.Top = 52; $bar.Width = 560; $bar.Height = 22; $bar.Minimum = 0; $bar.Maximum = 100
+$count = New-Object System.Windows.Forms.Label; $count.Left = 12; $count.Top = 78; $count.Width = 560; $count.Height = 18; $count.Text = '0%'
+$log = New-Object System.Windows.Forms.TextBox; $log.Multiline = $true; $log.ReadOnly = $true; $log.ScrollBars = 'Vertical'; $log.Left = 12; $log.Top = 100; $log.Width = 560; $log.Height = 230
+$ok = New-Object System.Windows.Forms.Button; $ok.Text = 'OK'; $ok.Left = 487; $ok.Top = 340; $ok.Width = 85; $ok.TabStop = $false; $ok.Enabled = $false
+$ok.Add_Click({ $f.Close() })
+$f.Controls.AddRange(@($step, $bar, $count, $log, $ok)); $f.ActiveControl = $log
+$script:seen = 0
+$timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 300
+$timer.Add_Tick({
+  if (-not (Test-Path -LiteralPath $File)) { return }
+  $lines = @(Get-Content -LiteralPath $File -ErrorAction SilentlyContinue)
+  for ($i = $script:seen; $i -lt $lines.Count; $i++) {
+    $l = [string]$lines[$i]
+    if ($l -match '^\s*(\d{1,3})\s*$') { $bar.Value = [Math]::Min(100, [int]$Matches[1]); $count.Text = "$($bar.Value)%"; continue }
+    if ($l.StartsWith('# ')) {
+      $t = $l.Substring(2); $step.Text = $t; $log.AppendText("$t" + [Environment]::NewLine)
+      if ($t.StartsWith('done') -or $t.StartsWith('STOP')) { $ok.Enabled = $true; $timer.Stop(); if ($t.StartsWith('STOP')) { $step.ForeColor = 'Firebrick' } }
+    }
+  }
+  $script:seen = $lines.Count
+})
+$f.Add_Shown({ $timer.Start() })
+[void]$f.ShowDialog()
+`;
+
+/**
+ * Open a progress window for one run. Never throws: with no desktop it is a no-op (the terminal lines still say it).
+ * @param {{title?: string, total: number, platform?: string, env?: object, spawn?: Function, dir?: string}} o
+ * @returns {{step: (text: string) => void, note: (text: string) => void, finish: (text: string) => void, file: string|null}}
+ *   step: one unit done (a signature, a push) and what it was; note: a line without a unit; finish: "done..." or "STOP..."
+ */
+function guiProgress({ title = 'OnlyKey', total, platform = process.platform, env = process.env, spawn = require('child_process').spawn, dir = require('os').tmpdir() } = {}) {
+  const fs = require('fs');
+  const path = require('path');
+  const none = { step() {}, note() {}, finish() {}, file: null };
+  if (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY) return none;
+  if (platform !== 'win32' && platform !== 'linux') return none;
+  let file;
+  try {
+    file = path.join(fs.mkdtempSync(path.join(dir, 'okjs-progress-')), 'progress.txt');
+    fs.writeFileSync(file, '0\n# starting\n');
+    const wenv = { ...env, OKJS_PROGRESS_FILE: file, OKJS_GUI_TITLE: title, OKJS_PARENT_PID: String(process.pid) };
+    const child = platform === 'win32'
+      ? (() => { const ps1 = path.join(path.dirname(file), 'progress.ps1'); fs.writeFileSync(ps1, PROGRESS_PS); return spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { env: wenv, detached: true, stdio: 'ignore', windowsHide: false }); })()
+      /* the file and title as environment, never spliced into the shell line; tail ends with this process */
+      : spawn('sh', ['-c', 'tail -n +1 -F --pid="$OKJS_PARENT_PID" "$OKJS_PROGRESS_FILE" 2>/dev/null | zenity --progress --no-cancel --no-markup --title="$OKJS_GUI_TITLE" --text=starting --width=520'], { env: wenv, detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
+    child.unref();
+  } catch (_) {
+    return none;
+  }
+  let done = 0;
+  const pct = () => (total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0);
+  const put = (text) => { try { fs.appendFileSync(file, `${pct()}\n# ${String(text).replace(/[\r\n]+/g, ' ')}\n`); } catch (_) { /* the window is a convenience */ } };
+  return {
+    file,
+    step(text) { done += 1; put(text); },
+    note(text) { put(text); },
+    finish(text) { if (!String(text).startsWith('STOP')) done = total; put(text); },
+  };
+}
+
+module.exports = { guiConfirm, dialogsFor, PS_SCRIPT, LABELS, guiProgress, PROGRESS_PS };

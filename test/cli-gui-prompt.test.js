@@ -76,3 +76,33 @@ test('gui-prompt: button labels reach every dialog program; Yes / No unless aske
   assert.equal(plain.env.OKJS_GUI_YES, 'Yes');
   assert.equal(plain.env.OKJS_GUI_NO, 'No');
 });
+
+/*
+ * One progress window for a whole run (Brad, 2026-10-26): started once, it follows a file of zenity --progress lines -
+ * percent, then "# step". The command only appends; the window's own timer reads.
+ */
+test('gui-prompt: guiProgress starts one window and appends percent + step lines; no desktop = no-op', () => {
+  const fs = require('fs');
+  const { guiProgress } = require('../cli/gui-prompt');
+  const started = [];
+  const spawn = (file, args, o) => { started.push({ file, args, env: o.env }); return { on() {}, unref() {} }; };
+  const p = guiProgress({ title: 'OnlyKey - ship', total: 4, platform: 'win32', env: {}, spawn });
+  assert.equal(started.length, 1);
+  assert.equal(started[0].file, 'powershell.exe');
+  assert.equal(started[0].env.OKJS_PROGRESS_FILE, p.file, 'the file reaches the window as environment, not a command line');
+  p.note('budget open');
+  p.step('signed 1');
+  p.step('signed 2');
+  p.step('pushed lib');
+  p.finish('done: 2 signed, 1 pushed');
+  const lines = fs.readFileSync(p.file, 'utf8').trim().split('\n');
+  assert.deepEqual(lines.slice(-8), ['25', '# signed 1', '50', '# signed 2', '75', '# pushed lib', '100', '# done: 2 signed, 1 pushed']);
+  assert.equal(started.length, 1, 'never restarted');
+  const zen = [];
+  guiProgress({ total: 1, platform: 'linux', env: { DISPLAY: ':0' }, spawn: (f, a, o) => { zen.push({ f, a, o }); return { on() {}, unref() {} }; } });
+  assert.equal(zen[0].f, 'sh');
+  assert.match(zen[0].a[1], /zenity --progress --no-cancel/);
+  assert.doesNotMatch(zen[0].a[1], /okjs-progress-/, 'the file path is never spliced into the shell line');
+  const quietP = guiProgress({ total: 1, platform: 'linux', env: {}, spawn: () => { throw new Error('no window without a desktop'); } });
+  assert.equal(quietP.file, null);
+});
