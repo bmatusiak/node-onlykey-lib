@@ -65,7 +65,8 @@ export function readRsaSlots(device: {
  * @param {object[]} entries the Key Chain list
  * @param {{pgpFingerprint: string, name?: string}} key the certificate's fingerprint and name
  * @param {Array<{slot: number, kind: string, label?: string}>} slots readRsaSlots()
- * @returns {{slot: number|null, candidates: number[], why: string|null}}
+ * @returns {{slot: number|null, candidates: number[], why: string|null, reason: 'none'|'claimed'|null}} reason: no composite
+ *   key on the key at all (only making one helps), or every one is another listed key (adopt is still a choice)
  */
 export function locate(entries: object[], key: {
     pgpFingerprint: string;
@@ -78,6 +79,7 @@ export function locate(entries: object[], key: {
     slot: number | null;
     candidates: number[];
     why: string | null;
+    reason: "none" | "claimed" | null;
 };
 /**
  * The list after a slot read: an entry whose slot now holds a different kind of key (or none) is marked gone - never

@@ -135,7 +135,8 @@ async function readRsaSlots(device) {
  * @param {object[]} entries the Key Chain list
  * @param {{pgpFingerprint: string, name?: string}} key the certificate's fingerprint and name
  * @param {Array<{slot: number, kind: string, label?: string}>} slots readRsaSlots()
- * @returns {{slot: number|null, candidates: number[], why: string|null}}
+ * @returns {{slot: number|null, candidates: number[], why: string|null, reason: 'none'|'claimed'|null}} reason: no composite
+ *   key on the key at all (only making one helps), or every one is another listed key (adopt is still a choice)
  */
 function locate(entries, key, slots) {
   const fp = fpOf(key);
@@ -154,11 +155,11 @@ function locate(entries, key, slots) {
     ...free.filter((n) => !listed.has(n) && labelled(n)),
     ...free.filter((n) => !listed.has(n) && !labelled(n)),
   ];
-  if (candidates.length) return { slot: candidates[0], candidates, why: null };
+  if (candidates.length) return { slot: candidates[0], candidates, why: null, reason: null };
   const why = composites.length
     ? `every composite key on this OnlyKey (${composites.map((n) => `RSA${n}`).join(', ')}) is another key in your Key Chain`
     : 'this OnlyKey holds no composite key in RSA slots 1-4';
-  return { slot: null, candidates, why };
+  return { slot: null, candidates, why, reason: composites.length ? 'claimed' : 'none' };
 }
 
 /**

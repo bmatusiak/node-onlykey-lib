@@ -36,12 +36,14 @@ test('locate: a composite slot the list gives to another key is never chosen - t
   const r = composite.locate([at(mine, 4), at(theirs, 3)], mine, probe({ 1: 'empty', 2: 'empty', 3: 'composite', 4: 'rsa' }));
   assert.strictEqual(r.slot, null);
   assert.match(r.why, /another key in your Key Chain/);
+  assert.strictEqual(r.reason, 'claimed', 'adopting is still a choice');
 });
 
 test('locate: no composite key on this OnlyKey says so', () => {
   const r = composite.locate([at(mine, 4)], mine, probe({ 1: 'empty', 2: 'empty', 3: 'rsa', 4: 'rsa' }));
   assert.strictEqual(r.slot, null);
   assert.match(r.why, /no composite key/);
+  assert.strictEqual(r.reason, 'none', 'nothing to adopt: only making one helps');
 });
 
 test('reconcile: a slot holding another kind marks the entry gone; one still matching is left alone', () => {
