@@ -665,16 +665,36 @@ module.exports = function register(COMMANDS, h) {
            * reach the app after this new hello - which the app then refuses "busy" (the Windows desktop, 2026-10-25):
            * a few tries, a moment apart
            */
-          let d = null;
-          for (let n = 0; !d; n++) {
-            try {
-              d = await openDevice(io, opts, h, { dev, wait });
-            } catch (e2) {
-              if (n >= 4 || !/busy/.test(String(e2 && e2.message))) throw e2;
-              await new Promise((r) => setTimeout(r, 700));
+          const openOnce = async () => {
+            for (let n = 0; ; n++) {
+              try {
+                return await openDevice(io, opts, h, { dev, wait });
+              } catch (e2) {
+                if (n >= 4 || !/busy/.test(String(e2 && e2.message))) throw e2;
+                await new Promise((r) => setTimeout(r, 700));
+              }
             }
+          };
+          if (opts.ble) {
+            /* over Bluetooth the phone is the device AND the channel the trades go over: kept open */
+            const d = await openOnce();
+            st = { ...d, close: () => Promise.resolve(d.app.destroy()).catch(() => undefined) };
+          } else {
+            /*
+             * NOTHING HELD BETWEEN TRADES (the Windows desktop, 2026-10-25): through the desktop app one CLI at a time,
+             * and a service holding the key refused every other onlykey-js "busy" - a ship included. The sync needs the
+             * key only to make this computer's bucket key, once (bucket/cli/trade.js takes a function for it): the key is
+             * opened then, and let go.
+             */
+            const d = await openOnce();
+            const say = d.say;
+            await Promise.resolve(d.app.destroy()).catch(() => undefined);
+            const okcryptoBriefly = async () => {
+              const k = await openOnce();
+              return { okcrypto: k.okcrypto, close: () => Promise.resolve(k.app.destroy()).catch(() => undefined) };
+            };
+            st = { say, okcrypto: okcryptoBriefly, transport: {}, channel: null, home: d.home, close: async () => {} };
           }
-          st = { ...d, close: () => Promise.resolve(d.app.destroy()).catch(() => undefined) };
         }
         try {
           const { svc, transport } = st;

@@ -169,9 +169,19 @@ async function tradeAs({ send, okcrypto, net, say, keyOpts, id: knownId }) {
   let id = knownId;
   let me = id ? loadMe(id, net) : null;
   if (!me) {
-    const read = await bid.readIdentity(okcrypto);
-    id = read.id;
-    me = loadMe(id, net) || await makeMe(okcrypto, id, read.publicKey, net, say, keyOpts);
+    /*
+     * THE KEY, ONLY WHILE IT IS NEEDED: okcrypto may be a function that opens the key and gives {okcrypto, close} - a
+     * service with no Edge agent holds nothing between trades (through the desktop app, one CLI at a time: a held key
+     * refused every other onlykey-js "busy").
+     */
+    const opened = typeof okcrypto === 'function' ? await okcrypto() : { okcrypto, close: async () => {} };
+    try {
+      const read = await bid.readIdentity(opened.okcrypto);
+      id = read.id;
+      me = loadMe(id, net) || await makeMe(opened.okcrypto, id, read.publicKey, net, say, keyOpts);
+    } finally {
+      await opened.close();
+    }
   }
   const file = home.identityFile(id, net);
   if (!home.hasIdentityBucket(id, net)) home.keepIdentityBucket(id, net, bucketLib.create({ owner: id }));
