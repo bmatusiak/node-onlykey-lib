@@ -66,10 +66,30 @@ function loadMe(id, net) {
   }
 }
 
+/*
+ * THE KEY IS BUSY, NOT LOCKED (the Windows desktop, 2026-10-25): the firmware signs or derives only when no other crypto
+ * operation is in progress (okcore.cpp OKSIGN/OKDECRYPT: `!CRYPTO_AUTH`), and otherwise answers "Error device locked" -
+ * on an unlocked key. The bucket key's ECDH and its signature come back to back, and a derive's gate stays in progress
+ * up to its 19 s window, so the second was refused. Such an answer is waited out and asked again, up to BUSY_MS.
+ */
+const BUSY_MS = 25000;
+async function whileBusy(say, what, fn) {
+  const until = Date.now() + BUSY_MS;
+  for (let told = false; ;) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!/device locked/i.test(String(e && e.message)) || Date.now() >= until) throw e;
+      if (!told) { say(`sync: the key is busy with a previous request - asking again for the ${what}`); told = true; }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+}
+
 async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
   say('sync: making this computer\'s bucket key, once - the key asks for two presses');
-  const bucketKey = await bid.deriveBucketKey(okcrypto, identityPublicKey, opts);
-  const certificate = await bid.certify(okcrypto, identityPublicKey, bucketKey.publicKey, opts);
+  const bucketKey = await whileBusy(say, 'bucket key', () => bid.deriveBucketKey(okcrypto, identityPublicKey, opts));
+  const certificate = await whileBusy(say, 'certificate', () => bid.certify(okcrypto, identityPublicKey, bucketKey.publicKey, opts));
   const file = keyFile(id, net);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, `${JSON.stringify({
