@@ -70,6 +70,26 @@ test('Guest Book: contacts by id - new ones added from both copies, one changed 
   assert.deepEqual((await gb(back).load()).contacts.map((c) => [c.id, c.name]).sort(), contacts.map((c) => [c.id, c.name]).sort());
 });
 
+/*
+ * An edit that is not a key (a note, a name, a phone) changes no key's updatedAt - only the contact's history. The rule
+ * read keys alone: a note added on the Windows desktop lost to the A13's copy whenever the A13's blob was written later,
+ * and the store never settled (2026-10-25).
+ */
+test('Guest Book: a details edit (history only) wins over an older copy, on both sides, whatever the blob dates', () => {
+  const key = { id: 'k1', format: 'age', text: 'age1x', updatedAt: '2026-10-20T00:00:00.000Z' };
+  const base = { id: 'c1', name: 'Qtest', note: 'zz old', keys: [key], history: [{ at: '2026-10-20T00:00:00.000Z', what: 'added from paste' }] };
+  const edited = { ...base, note: 'retest', history: [{ at: '2026-10-25T23:42:00.000Z', what: 'details edited' }, ...base.history] };
+  const blob = (contacts) => JSON.stringify({ v: 1, contacts });
+  /* the phone's blob is the LATER one (written for another contact), the desk's holds the newer edit */
+  const phone = { 'guestbook:v1': { v: blob([base]), at: '2026-10-25T23:50:00.000Z' } };
+  const desk = { 'guestbook:v1': { v: blob([edited]), at: '2026-10-25T23:42:00.000Z' } };
+  const rule = bucket.rules.guestbook();
+  const onPhone = JSON.parse(rule(phone, desk).store['guestbook:v1'].v).contacts[0];
+  const onDesk = JSON.parse((rule(desk, phone).store['guestbook:v1'] || desk['guestbook:v1']).v).contacts[0];
+  assert.equal(onPhone.note, 'retest', 'the phone takes the edit');
+  assert.equal(onDesk.note, 'retest', 'the desk keeps it');
+});
+
 test('Settings: the generic rule - a setting both changed takes the later value, nothing asked', () => {
   const a = bucket.create({ owner: 'k1' });
   bucket.kv(a, 'settings', { now: () => '2026-10-20T10:00:00.000Z' }).setItem('lock', '5m');

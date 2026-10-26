@@ -147,8 +147,13 @@ function passwords() {
  * @param {{key?: string}} [opts] key: the blob's name ('guestbook:v1')
  */
 function guestbook({ key = 'guestbook:v1' } = {}) {
-  /* when a contact last changed: its newest key's updatedAt, else the blob's date */
-  const changedAt = (c, blobAt) => (c.keys || []).map((k) => String(k.updatedAt || '')).filter(Boolean).sort().pop() || blobAt;
+  /*
+   * when a contact last changed: the newest of its keys' updatedAt AND its history (every edit stamps one - details
+   * edited, renamed, key removed - guestbook/src/store.js), else the blob's date. Keys alone missed every edit that is
+   * not a key: a note added on the Windows desktop never won on the A13 and the store never settled (2026-10-25).
+   */
+  const changedAt = (c, blobAt) => [...(c.keys || []).map((k) => k.updatedAt), ...(c.history || []).map((h) => h && h.at)]
+    .map((t) => String(t || '')).filter(Boolean).sort().pop() || blobAt;
   return withParts(withOthers(key, (into = {}, from = {}) => {
     const store = { ...into };
     const a = into[key];
