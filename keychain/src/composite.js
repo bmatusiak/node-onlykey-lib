@@ -170,7 +170,8 @@ function locate(entries, key, slots) {
  * @returns {object[]|null}
  */
 function reconcile(entries, slots, when = new Date().toISOString()) {
-  const kindAt = new Map(slots.map((p) => [p.slot, p.kind]));
+  /* only an answer that is sure: a slot that is empty, or holds a known type - an 'unknown' reply judges nothing */
+  const kindAt = new Map(slots.filter((p) => p.kind === 'empty' || list.TYPES.includes(p.kind)).map((p) => [p.slot, p.kind]));
   let changed = false;
   const next = entries.map((e) => {
     if (e.kind !== 'slot' || !list.present(e)) return e;
