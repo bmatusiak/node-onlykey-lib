@@ -761,8 +761,15 @@ module.exports = function register(COMMANDS, h) {
                   const name = p.phoneName || p.address;
                   try {
                     const l = await linkTo(p.address);
-                    l.used = Date.now();
-                    const r = await tradeOver(l.channel);
+                    /*
+                     * IN USE FOR THE WHOLE TRADE (Windows desktop + A13, 2026-10-25: the first trade makes this computer's
+                     * bucket key - two presses - and with the idle clock started only before it, the link was let go
+                     * between HAVE and its answer; the phone answered into a closed link, "took 0, gave 0 - NOT settled").
+                     * The idle clock starts again when the trade ends.
+                     */
+                    l.trading = true;
+                    let r;
+                    try { r = await tradeOver(l.channel); } finally { l.trading = false; l.used = Date.now(); }
                     if (r.traded) pairStore.markUsed(p.address);
                     results.push({ name, ...r });
                   } catch (e) {
@@ -787,7 +794,7 @@ module.exports = function register(COMMANDS, h) {
           /* its own links let go when idle (60 s, as the --ble link below); the 30 s check usually keeps them up */
           const linkTick = setInterval(() => {
             for (const l of links.values()) {
-              if (Date.now() - l.used >= 60000 && typeof l.transport.isOpen === 'function' && l.transport.isOpen()) void l.transport.release('idle').catch(() => {});
+              if (!l.trading && Date.now() - l.used >= 60000 && typeof l.transport.isOpen === 'function' && l.transport.isOpen()) void l.transport.release('idle').catch(() => {});
             }
           }, 5000);
           if (linkTick.unref) linkTick.unref();
