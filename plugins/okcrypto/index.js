@@ -105,6 +105,8 @@ const { sha256: subjectHash } = require('../../src/vendor/exports/@noble/hashes/
  * slot-128 key (opt1 128, the slot the firmware lets through at the default webcrypt level); payload [mode][label hash].
  */
 const OKDERIVESECRET = 0xfc;
+/* the ctap_bridge plugin's request (TYPE_INIT | 0x7B): over the tunnel, only its report - the key's site */
+const OKCTAPBRIDGE = 0xfb;
 const DERIVE_SECRET_SLOT = 128;
 const DERIVE_SECRET_TOUCHLESS = 1;
 const DERIVE_SECRET_TOUCH = 2;
@@ -1659,6 +1661,23 @@ function setup(imports, register, config) {
         timeoutMs: 30000, ...opts, expectBytes: 32, quiet: !touch, confirmFirst: true, pressOnly: touch,
       });
       return out.slice(0, 32);
+    },
+
+    /**
+     * THE KEY'S SITE - THE SERVER IT BELONGS TO (Brad, 2026-10-27: the server is "our sync manager"; "read the
+     * configured rpid over ctap ... this will allow us to know what mcp server we are using in the app"). The
+     * ctap_bridge firmware plugin keeps one allowed site, set in config mode; the key trusts it as an rpId, and the
+     * person's server is served there. Read over the tunnel - its report, read only - so a browser, the phone, the
+     * desktop and the CLI all learn it the same way, from the key itself: no address to type on any device.
+     *
+     * @returns {Promise<{on: boolean, site: string|null}>} site null when none is set (or the plugin is off)
+     */
+    async keySite(opts = {}) {
+      const out = await tunnelOperation(OKCTAPBRIDGE, 0, Uint8Array.of(0), { timeoutMs: 30000, ...opts, quiet: true });
+      const text = new TextDecoder().decode(out).replace(/\0.*$/s, '').trim();
+      const m = /^ctap_bridge (on|off) site (\S+)$/.exec(text);
+      if (!m) throw new Error(`the key's ctap_bridge report is not readable: ${JSON.stringify(text.slice(0, 80))}`);
+      return { on: m[1] === 'on', site: m[2] === 'none' ? null : m[2] };
     },
 
     agent: {
