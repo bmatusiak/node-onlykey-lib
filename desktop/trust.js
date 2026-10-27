@@ -82,8 +82,8 @@ function alive(pid) {
 }
 
 /**
- * The app as the CLI sees it: the record when the file is there, its app is running and (off
- * Windows) its socket exists - else null. Synchronous and quick: plain `onlykey-js` asks this once
+ * The app as the CLI sees it: the record when the file is there, its app is running and its
+ * socket (a named pipe on Windows) exists - else null. Synchronous and quick: plain `onlykey-js` asks this once
  * to choose between the desktop app and the USB key.
  */
 function liveTrust(root, { platform = process.platform, isAlive = alive } = {}) {
@@ -91,7 +91,12 @@ function liveTrust(root, { platform = process.platform, isAlive = alive } = {}) 
   if (process.env.ONLYKEY_JS_DESKTOP === 'off' && !root) return null;
   const r = readTrust(root);
   if (!r || !isAlive(r.pid)) return null;
-  if (platform !== 'win32' && !fs.existsSync(r.socket)) return null;
+  /*
+   * its socket must be there on Windows too (2026-10-27: a desktop app gone without removing its file, and its pid
+   * answering EPERM - reused by a process this user may not signal - sent a ship to a pipe that no longer existed).
+   * existsSync sees a named pipe while it listens (checked on Windows 11).
+   */
+  if (!fs.existsSync(r.socket)) return null;
   return r;
 }
 

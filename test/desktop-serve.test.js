@@ -56,9 +56,13 @@ test('trust: written owner-only with a fresh token; live while its app runs; sta
     const rec = trust.writeTrust({ root, socket: path.join(root, 'x.sock') });
     assert.match(rec.token, /^[0-9a-f]{64}$/);
     assert.deepEqual(trust.readTrust(root), rec);
+    /* no socket (a named pipe on Windows) - the app is gone even if its pid answers: not live, on every platform */
+    assert.equal(trust.liveTrust(root, { platform: 'win32' }), null, 'no pipe: not live, whatever the pid says');
+    assert.equal(trust.liveTrust(root, { platform: 'linux' }), null, 'no socket file: not live');
+    fs.writeFileSync(path.join(root, 'x.sock'), '');
     assert.equal(trust.liveTrust(root, { platform: 'win32' }).token, rec.token);
     assert.equal(trust.liveTrust(root, { platform: 'win32', isAlive: () => false }), null, 'its app is gone: stale');
-    assert.equal(trust.liveTrust(root, { platform: 'linux' }), null, 'no socket file: not live');
+    fs.unlinkSync(path.join(root, 'x.sock'));
     assert.ok(trust.tokenMatches(rec, rec.token));
     assert.ok(!trust.tokenMatches(rec, 'f'.repeat(64)));
     trust.removeTrust({ token: 'a'.repeat(64) }, root);
