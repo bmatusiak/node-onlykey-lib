@@ -1637,8 +1637,8 @@ function setup(imports, register, config) {
      * asserts - a hash derivation, so post-quantum safe - answered in one request, sealed by the transit key.
      *
      * touch: the press or the 3-button code (`confirm`, as every confirmed operation takes it), shown before the
-     * request goes out because the key holds the request while it waits. touchless: answered while unlocked (unless
-     * the key-wide derive setting adds a press). The two modes give unrelated secrets for one label, and so does every
+     * request goes out because the key holds the request while it waits. touchless: answered while unlocked, never a
+     * press (whatever the key-wide derive setting says). The two modes give unrelated secrets for one label, and so does every
      * rpId - a site cannot derive another's.
      *
      * Over the tunnel always: a browser has nothing else, and a host with USB speaks it over CTAPHID.
