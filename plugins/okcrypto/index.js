@@ -1378,6 +1378,8 @@ function setup(imports, register, config) {
        * is shown, and confirm() started, BEFORE the request goes out - after it, nobody could ever see what to press.
        */
       confirmFirst = false,
+      /* the key asks for a plain press, not the 3-button code (deriveSecret touch): confirm and the event get no digits */
+      pressOnly = false,
     } = opts;
 
     const payload = Uint8Array.from(data);
@@ -1422,7 +1424,7 @@ function setup(imports, register, config) {
     });
     const framed = variable ? null : (v2 ? expectBytes + transit.OVERHEAD : expectBytes);
 
-    const digits = challengeDigits(payload, { duo, formula });
+    const digits = pressOnly ? null : challengeDigits(payload, { duo, formula });
     /* what the press is for, as the key sees it: SHA-256 of exactly these bytes - the same hash a soft key's press sheet shows, so a CLI can print it beside its prompt */
     const subject = toHex(subjectHash(payload));
 
@@ -1636,10 +1638,13 @@ function setup(imports, register, config) {
      * PROPOSAL-derived-keys.md). HKDF of the key's slot-128 secret, the label, the mode and the rpId this request
      * asserts - a hash derivation, so post-quantum safe - answered in one request, sealed by the transit key.
      *
-     * touch: the press or the 3-button code (`confirm`, as every confirmed operation takes it), shown before the
-     * request goes out because the key holds the request while it waits. touchless: answered while unlocked, never a
-     * press (whatever the key-wide derive setting says). The two modes give unrelated secrets for one label, and so does every
-     * rpId - a site cannot derive another's.
+     * Two keys, the same settings, and a flag in the request (Brad, 2026-10-27): the flag is in the derivation, so the
+     * modes are unrelated secrets for one label - and so is every rpId (a site cannot derive another's).
+     *   touch: always a press - `confirm({digits: null})` and the 'challenge' event say "press";
+     *   touchless: the key's own derive setting (field 30) decides, as for every derive - the 3-button code by
+     *     default, a press, or none: "protected until unprotected". `confirm` gets the code's digits; a key set to
+     *     none answers before anyone presses (isAnswered() says so).
+     * Either way confirm() starts BEFORE the request goes out: the key holds the request while it waits.
      *
      * Over the tunnel always: a browser has nothing else, and a host with USB speaks it over CTAPHID.
      *
@@ -1651,7 +1656,7 @@ function setup(imports, register, config) {
       if (typeof label !== 'string' || !label) throw new TypeError('deriveSecret needs a label');
       const payload = concat([Uint8Array.of(touch ? DERIVE_SECRET_TOUCH : DERIVE_SECRET_TOUCHLESS), subjectHash(utf8ToBytes(label))]);
       const out = await tunnelOperation(OKDERIVESECRET, DERIVE_SECRET_SLOT, payload, {
-        timeoutMs: 30000, ...opts, expectBytes: 32, quiet: !touch, confirmFirst: touch,
+        timeoutMs: 30000, ...opts, expectBytes: 32, quiet: !touch, confirmFirst: true, pressOnly: touch,
       });
       return out.slice(0, 32);
     },
