@@ -146,10 +146,11 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
     async start() {
       if (running) return { started: true, path: 'soft key' };
       const r = record || softKeyRecord(net);
-      /* running already in this process (a pipe started, then stopped, within the grace): the same key taken back */
+      /* running already in this process (another pipe holds it, or one let it go): the same key taken back */
       if (shared && shared.storageDir === r.storageDir) {
         clearTimeout(shared.stopTimer);
         shared.stopTimer = null;
+        if (shared.holders === 0 && typeof shared.emu.ref === 'function') shared.emu.ref();
         shared.holders += 1;
         emu = shared.emu;
         attach();
@@ -186,9 +187,10 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
       if (poll) clearInterval(poll);
       if (rl) rl.close();
       /*
-       * the firmware stops only if nothing opens the key again within the grace: the emulator holds the event loop
-       * while it runs, so it cannot simply be left on - a plain command would never exit - but a close followed by a
-       * reopen (the service on a key with no agent identity) must find it still running (see `shared`)
+       * THE FIRMWARE IS NOT STOPPED, ONLY LET GO (box, 2026-10-27: a stop under the service released the callbacks the
+       * still-running firmware thread calls - it aborted on its next LED update). It cannot be restarted in one process,
+       * so the last pipe to close unrefs it: the process may exit (the thread goes with it), and a reopen refs it again
+       * (see `shared`). An emulator without unref (older builds): stopped after the grace, as before.
        */
       if (emu && running) {
         if (onStream && typeof emu.removeListener === 'function') emu.removeListener('stream', onStream);
@@ -196,12 +198,16 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
         const s = shared;
         /* only when no other pipe still runs on it (the service's, while a command's own pipe comes and goes) */
         if (s && s.emu === emu && --s.holders <= 0) {
-          clearTimeout(s.stopTimer);
-          s.stopTimer = setTimeout(() => {
-            if (shared !== s || s.holders > 0) return;
-            shared = null;
-            try { s.emu.stop(); } catch { /* already stopped */ }
-          }, REOPEN_GRACE_MS);
+          if (typeof s.emu.unref === 'function') {
+            s.emu.unref();
+          } else {
+            clearTimeout(s.stopTimer);
+            s.stopTimer = setTimeout(() => {
+              if (shared !== s || s.holders > 0) return;
+              shared = null;
+              try { s.emu.stop(); } catch { /* already stopped */ }
+            }, REOPEN_GRACE_MS);
+          }
         }
       }
       running = false;

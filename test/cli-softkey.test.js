@@ -21,6 +21,9 @@ function fakeEmu() {
   e.started = null;
   e.start = ({ storageDir }) => { e.started = storageDir; };
   e.stop = () => { e.started = null; };
+  e.refd = true;
+  e.ref = () => { e.refd = true; };
+  e.unref = () => { e.refd = false; };
   e.pressQueue = (digits, ticks) => { e.presses.push([digits, ticks]); return digits.length; };
   e.writeHid = (buf, iface) => e.writes.push(['plain', iface, buf.length]);
   e.writeHidTaken = async (buf, iface) => e.writes.push(['taken', iface, buf.length]);
@@ -61,9 +64,9 @@ test('the recorded soft key is booted, its PIN asked and pressed, 1-6 + Enter pr
   assert.deepEqual(emu.writes, [['taken', 2, 64], ['plain', 1, 64]], 'a vendor write waits until the firmware took it');
   assert.equal(pipe.interfaces()[0].iface, 2);
   await pipe.stop();
-  /* stopped after the reopen grace (the next test): a close may be followed by a reopen in the same process */
-  await tick(3200);
-  assert.equal(emu.started, null);
+  /* let go, not stopped: it cannot restart in this process - the process may now exit (the next tests) */
+  assert.equal(emu.refd, false, 'unreffed: the process may exit');
+  assert.ok(emu.started, 'the firmware is not stopped under anything still calling it');
 });
 
 test('no soft key recorded, or not for this net: says to start it once in the desktop app', () => {
@@ -109,8 +112,7 @@ test('closed and opened again in one process (the service on a key with no agent
   assert.equal(seen.length, 1, 'the new pipe hears the key');
   assert.equal(emu.listenerCount('stream'), 1, 'the old pipe let go of it');
   await again.stop();
-  await tick(3200);
-  assert.equal(emu.started, null, 'stopped once the grace passed with no reopen');
+  assert.equal(emu.refd, false, 'let go once no pipe holds it');
 });
 
 test('two pipes on the running key at once (the service, and a command\'s own): one closing does not stop the other\'s firmware', async () => {
@@ -125,9 +127,24 @@ test('two pipes on the running key at once (the service, and a command\'s own): 
   const brief = createSoftKeyPipe({ net: 'test', input, output: new PassThrough(), loadEmulator: () => emu, record });
   await brief.start();
   await brief.stop();
-  await tick(3200);
-  assert.ok(emu.started, 'the service\'s key still runs');
+  assert.equal(emu.refd, true, 'the service\'s key is still held');
   await service.stop();
+  assert.equal(emu.refd, false, 'let go once the last pipe closed');
+  assert.ok(emu.started, 'never stopped');
+});
+
+test('an emulator without unref (older builds): stopped after the grace, as before', async () => {
+  const emu = fakeEmu();
+  delete emu.ref;
+  delete emu.unref;
+  const input = new PassThrough();
+  const pipe = createSoftKeyPipe({ net: 'test', input, output: new PassThrough(), loadEmulator: () => emu, record: { storageDir: '/tmp/okemu/z', emulator: '/x' } });
+  const s = pipe.start();
+  await tick(20);
+  input.write('\n');
+  await s;
+  await pipe.stop();
+  assert.ok(emu.started, 'kept for the grace');
   await tick(3200);
-  assert.equal(emu.started, null, 'stopped once the last pipe let go');
+  assert.equal(emu.started, null, 'stopped after it');
 });
