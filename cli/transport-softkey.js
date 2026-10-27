@@ -80,7 +80,7 @@ const REOPEN_GRACE_MS = 3000;
  * pipe of this process: a stop() lets its pipe go and keeps the firmware for the grace; a start() inside it - this
  * pipe or a new one, the same soft key - takes the running key back, unlocked as it was left.
  */
-let shared = null; /* {emu, storageDir, stopTimer} */
+let shared = null; /* {emu, storageDir, holders, stopTimer} - holders: the pipes running on it now */
 
 function createSoftKeyPipe({ net = 'live', input = process.stdin, output = process.stderr, loadEmulator, record } = {}) {
   const say = (line) => output.write(`onlykey-js soft key: ${line}\n`);
@@ -150,6 +150,7 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
       if (shared && shared.storageDir === r.storageDir) {
         clearTimeout(shared.stopTimer);
         shared.stopTimer = null;
+        shared.holders += 1;
         emu = shared.emu;
         attach();
         running = true;
@@ -160,7 +161,7 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
       emu = loadEmulator ? loadEmulator(r.emulator) : require(path.join(r.emulator, 'emulator'));
       attach();
       emu.start({ storageDir: r.storageDir });
-      shared = { emu, storageDir: r.storageDir, stopTimer: null };
+      shared = { emu, storageDir: r.storageDir, holders: 1, stopTimer: null };
       running = true;
       say(`booted the desktop app's ${net === 'test' ? 'testnet ' : ''}soft key (${r.storageDir})`);
       const pin = await askPin();
@@ -193,10 +194,11 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
         if (onStream && typeof emu.removeListener === 'function') emu.removeListener('stream', onStream);
         onStream = null;
         const s = shared;
-        if (s && s.emu === emu) {
+        /* only when no other pipe still runs on it (the service's, while a command's own pipe comes and goes) */
+        if (s && s.emu === emu && --s.holders <= 0) {
           clearTimeout(s.stopTimer);
           s.stopTimer = setTimeout(() => {
-            if (shared !== s) return;
+            if (shared !== s || s.holders > 0) return;
             shared = null;
             try { s.emu.stop(); } catch { /* already stopped */ }
           }, REOPEN_GRACE_MS);

@@ -112,3 +112,22 @@ test('closed and opened again in one process (the service on a key with no agent
   await tick(3200);
   assert.equal(emu.started, null, 'stopped once the grace passed with no reopen');
 });
+
+test('two pipes on the running key at once (the service, and a command\'s own): one closing does not stop the other\'s firmware', async () => {
+  const emu = fakeEmu();
+  const input = new PassThrough();
+  const record = { storageDir: '/tmp/okemu/y', emulator: '/x' };
+  const service = createSoftKeyPipe({ net: 'test', input, output: new PassThrough(), loadEmulator: () => emu, record });
+  const s = service.start();
+  await tick(20);
+  input.write('\n');
+  await s;
+  const brief = createSoftKeyPipe({ net: 'test', input, output: new PassThrough(), loadEmulator: () => emu, record });
+  await brief.start();
+  await brief.stop();
+  await tick(3200);
+  assert.ok(emu.started, 'the service\'s key still runs');
+  await service.stop();
+  await tick(3200);
+  assert.equal(emu.started, null, 'stopped once the last pipe let go');
+});
