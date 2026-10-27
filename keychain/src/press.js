@@ -39,8 +39,8 @@ function decodePress(rec) {
     slot: b[3],
     subject: toHex(b.subarray(5, 37)),
     label: b[4] === 1 ? toHex(b.subarray(37, 69)) : null,
-    /* a derive's record says which confirmation it waits for; others do not */
-    mode: b.length > PRESS_BYTES ? (b[PRESS_BYTES] === 1 ? 'press' : 'code') : null,
+    /* a derive's record says which confirmation it waits for (none: a 'silent' record - answered unasked); others do not */
+    mode: b.length > PRESS_BYTES ? (b[PRESS_BYTES] === 1 ? 'press' : b[PRESS_BYTES] === 2 ? 'none' : 'code') : null,
   };
 }
 
