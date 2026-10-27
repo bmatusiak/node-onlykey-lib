@@ -1638,7 +1638,12 @@ function setup(imports, register, config) {
         const code = agentProto.signCode(version, keyType);
         agentAvailable(version);
         const payload = concat([Uint8Array.from(message), agentProto.identityHash(identity)]);
-        const out = await deviceOperation(MSG.OKSIGN, code, payload, opts);
+        /*
+         * OVER THE TUNNEL TOO (storedOperation): a browser host (the web app's bucket key certificate) signs through
+         * WebAuthn - the ctap_bridge firmware plugin lets the agent sign codes past the tunnel's stored-key gate. The
+         * signature is 64 bytes either way, so the tunnel's poll knows when it has it all (the USB path is left as it was).
+         */
+        const out = await storedOperation(MSG.OKSIGN, code, payload, suppliedCtap ? { expectBytes: 64, ...opts } : opts);
         return out.slice(0, 64);
       },
 
@@ -1664,7 +1669,9 @@ function setup(imports, register, config) {
           assertPeerNotLowOrder(peer.subarray(peer.length - 32), 'the ECDH peer key');
         }
         const payload = concat([peer, agentProto.identityHash(identity)]);
-        const out = await deviceOperation(MSG.OKDECRYPT, code, payload, opts);
+        /* over the tunnel too, as sign above (the web app's bucket key is this ECDH); the secret's length is known */
+        const out = await storedOperation(MSG.OKDECRYPT, code, payload,
+          suppliedCtap ? { expectBytes: agentProto.sharedSecretLength(keyType), ...opts } : opts);
         const secret = out.slice(0, agentProto.sharedSecretLength(keyType));
         assertNonZeroSecret(secret, 'the ECDH secret the device returned');
         return secret;

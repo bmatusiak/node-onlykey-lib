@@ -69,11 +69,13 @@ test('a browser composes with no vendor interface, and the vendor side refuses b
   );
   /*
    * A vendor-only operation fails at its write, and leaves no timer behind.
-   * Agent derivation, not sign(): stored-key sign/decrypt now run over the
-   * tunnel too (the classic PGP pages), so they no longer prove this.
+   * The device's own public-key read, not sign() or agent derivation: stored-key
+   * sign/decrypt run over the tunnel (the classic PGP pages), and so do the agent
+   * public key, sign and ECDH (the web app's bucket identity and bucket key, through
+   * the ctap_bridge firmware plugin) - so none of those proves this any more.
    */
   await assert.rejects(
-    app.services.okcrypto.agent.sign(new Uint8Array(32), [1, 2, 3], { keyType: 1, timeoutMs: 60000 }),
+    app.services.device.getPublicKey(101, { timeoutMs: 60000 }),
     /no vendor interface/,
   );
   await app.destroy();
