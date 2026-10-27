@@ -70,10 +70,20 @@ function waitingFrom(packed) {
  * The soft key as a pipe.
  * @param {{net?: 'live'|'test', input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream, loadEmulator?: (dir: string) => object, record?: object}} [o]
  */
+/* how long a closed soft key keeps running for a reopen in the same process (stop) */
+const REOPEN_GRACE_MS = 3000;
+
 function createSoftKeyPipe({ net = 'live', input = process.stdin, output = process.stderr, loadEmulator, record } = {}) {
   const say = (line) => output.write(`onlykey-js soft key: ${line}\n`);
   let emu = null;
   let running = false;
+  /*
+   * THE FIRMWARE RUNS ONCE PER PROCESS (box, 2026-10-27: `--soft-key --service` on a key with no agent identity closes
+   * its device and opens it again for the sync alone; the second boot failed "cannot map flash: File exists" - the
+   * flash is mapped at a fixed address for the life of the process, and the firmware thread cannot be restarted in
+   * place). So stop() lets the pipe go and keeps the firmware; a later start() takes the same running key back.
+   */
+  let booted = false;
   let rl = null;
   let poll = null;
   let lastWait = '';
@@ -112,6 +122,12 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
     isRunning: () => running,
     async start() {
       if (running) return { started: true, path: 'soft key' };
+      /* booted already in this process (an earlier start, then stop): the same key, unlocked as it was left */
+      if (booted) {
+        running = true;
+        listen();
+        return { started: true, path: 'soft key' };
+      }
       const r = record || softKeyRecord(net);
       emu = loadEmulator ? loadEmulator(r.emulator) : require(path.join(r.emulator, 'emulator'));
       emu.on('stream', ({ buffer, iface, dir }) => {
@@ -120,6 +136,7 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
       });
       emu.start({ storageDir: r.storageDir });
       running = true;
+      booted = true;
       say(`booted the desktop app's ${net === 'test' ? 'testnet ' : ''}soft key (${r.storageDir})`);
       const pin = await askPin();
       if (pin) {
@@ -150,7 +167,19 @@ function createSoftKeyPipe({ net = 'live', input = process.stdin, output = proce
     async stop() {
       if (poll) clearInterval(poll);
       if (rl) rl.close();
-      if (emu && running) { try { emu.stop(); } catch { /* already stopped */ } }
+      /*
+       * the firmware stops only if nothing opens the key again within the grace: the emulator holds the event loop
+       * while it runs, so it cannot simply be left on - a plain command would never exit - but a close followed by a
+       * reopen (the service on a key with no agent identity) must find it still running (see `booted`)
+       */
+      if (emu && running) {
+        const was = emu;
+        setTimeout(() => {
+          if (running || !booted) return;
+          booted = false;
+          try { was.stop(); } catch { /* already stopped */ }
+        }, REOPEN_GRACE_MS);
+      }
       running = false;
       for (const l of closeL) l(null);
     },

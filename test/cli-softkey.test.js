@@ -61,6 +61,8 @@ test('the recorded soft key is booted, its PIN asked and pressed, 1-6 + Enter pr
   assert.deepEqual(emu.writes, [['taken', 2, 64], ['plain', 1, 64]], 'a vendor write waits until the firmware took it');
   assert.equal(pipe.interfaces()[0].iface, 2);
   await pipe.stop();
+  /* stopped after the reopen grace (the next test): a close may be followed by a reopen in the same process */
+  await tick(3200);
   assert.equal(emu.started, null);
 });
 
@@ -79,4 +81,26 @@ test('what the firmware waits for: a sign, an Edge approval; WebAuthn and nothin
   assert.deepEqual(waitingFrom(packed(1, 0xf8, 0)), { what: 'an Edge approval', code: false });
   assert.equal(waitingFrom(packed(1, 0xf6, 1)), null);
   assert.equal(waitingFrom(-1), null);
+});
+
+test('closed and opened again in one process (the service on a key with no agent identity): the same firmware, booted once; a close with no reopen stops it after the grace', async () => {
+  const emu = fakeEmu();
+  let boots = 0;
+  const start0 = emu.start;
+  emu.start = (o) => { boots += 1; start0(o); };
+  const input = new PassThrough();
+  const pipe = createSoftKeyPipe({ net: 'test', input, output: new PassThrough(), loadEmulator: () => emu, record: { storageDir: '/tmp/okemu/x', emulator: '/x' } });
+  const first = pipe.start();
+  await tick(20);
+  input.write('\n');
+  await first;
+  await pipe.stop();
+  assert.equal(pipe.isRunning(), false);
+  await pipe.start();
+  assert.equal(boots, 1, 'the firmware is not booted a second time - the flash cannot be mapped twice in one process');
+  assert.equal(pipe.isRunning(), true);
+  assert.ok(emu.started, 'still running');
+  await pipe.stop();
+  await tick(3200);
+  assert.equal(emu.started, null, 'stopped once the grace passed with no reopen');
 });
