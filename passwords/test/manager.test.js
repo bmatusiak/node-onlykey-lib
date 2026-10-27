@@ -41,15 +41,15 @@ test('the store key opens the list: labels back, nothing readable stored, no sec
   const raw = memoryStore();
   const key = fakeKey('A');
   const a = await m.openStore({ store: m.prefixedStore(raw, 'p/'), key: KEY_A, randomBytes });
-  const e = await a.put(await sealedLogin(key, { kind: 'login', title: 'GitHub', username: 'brad', password: 'p1', urls: ['https://github.com'] }));
+  const e = await a.put(await sealedLogin(key, { kind: 'login', title: 'GitHub-title-x', username: 'brad-user-x', password: 'password-one-x', urls: ['https://github.com'] }));
   assert.equal(e.id, e.inner.ref, 'a sealed entry is stored under its seal\'s ref');
   const again = await m.openStore({ store: m.prefixedStore(raw, 'p/'), key: KEY_A, randomBytes });
-  assert.deepEqual(again.list().map((x) => [x.title, x.username, x.password]), [['GitHub', 'brad', undefined]]);
+  assert.deepEqual(again.list().map((x) => [x.title, x.username, x.password]), [['GitHub-title-x', 'brad-user-x', undefined]]);
   const stored = [...raw._map.values()].join('\n');
-  for (const s of ['GitHub', 'brad', 'p1']) assert.equal(stored.includes(s), false, s);
+  for (const s of ['GitHub-title-x', 'brad-user-x', 'password-one-x']) assert.equal(stored.includes(s), false, s);
   key.presses.length = 0;
   const open = inner.openInner(again.get(e.id), await inner.entryKey(key, ID, e.id));
-  assert.equal(open.password, 'p1');
+  assert.equal(open.password, 'password-one-x');
   assert.deepEqual(key.presses, [inner.entryLabel(ID, e.id)], 'one press, for that entry');
 });
 
