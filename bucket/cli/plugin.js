@@ -57,6 +57,8 @@ function setup(imports, register) {
     usage: 'show | export <file> | import <file> | dump [--test-mode] | sync --server <url> [--test-mode]',
     summary: 'the bucket: what this computer keeps about its keys, as one file - export it sealed, import one, dump the Edge chain',
     device: false,
+    /* sync's server; dump's and sync's net (the soft key's net itself is read from argv by --soft-key) */
+    options: { server: { type: 'string' }, 'test-mode': { type: 'boolean' } },
     async run(io, opts, [sub, arg]) {
       if (!sub || sub === 'help') { io.out(`onlykey-js bucket ${BUCKET.usage}`); return sub ? 0 : 2; }
 
