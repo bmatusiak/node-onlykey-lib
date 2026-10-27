@@ -147,18 +147,24 @@ async function openStore({ store, key, randomBytes, now = () => new Date() }) {
       return [];
     }
   };
-  for (const id of await readIndex()) {
-    try {
-      const raw = await store.getItem(RECORD + id);
-      if (!raw) continue;
-      let e;
-      try { e = JSON.parse(vault.open(live(), raw)); } catch { refused.push({ id, reason: 'does-not-open' }); continue; }
-      if (!e || e.id !== id || (e.inner && e.inner.ref !== id)) { refused.push({ id, reason: 'id-mismatch' }); continue; }
-      entries.set(id, e);
-    } catch {
-      refused.push({ id, reason: 'damaged' });
+  /* every record the index names, opened again with the key held - at the open, and after a sync brought more */
+  const readAll = async () => {
+    entries.clear();
+    refused.length = 0;
+    for (const id of await readIndex()) {
+      try {
+        const raw = await store.getItem(RECORD + id);
+        if (!raw) continue;
+        let e;
+        try { e = JSON.parse(vault.open(live(), raw)); } catch { refused.push({ id, reason: 'does-not-open' }); continue; }
+        if (!e || e.id !== id || (e.inner && e.inner.ref !== id)) { refused.push({ id, reason: 'id-mismatch' }); continue; }
+        entries.set(id, e);
+      } catch {
+        refused.push({ id, reason: 'damaged' });
+      }
     }
-  }
+  };
+  await readAll();
 
   const keep = async (e) => {
     await store.setItem(RECORD + e.id, vault.seal(live(), JSON.stringify(e), randomBytes));
@@ -234,6 +240,11 @@ async function openStore({ store, key, randomBytes, now = () => new Date() }) {
     },
     /** records that did not open under this key (another key, moved onto another record, damaged) */
     refused: () => refused.slice(),
+    /** read the store again with the key it holds: entries a sync brought show, with no derive */
+    async reload() {
+      live();
+      await readAll();
+    },
     get size() { return entries.size; },
     get locked() { return !k; },
     /** forget the entries and wipe this copy of the store key */

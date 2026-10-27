@@ -56,6 +56,8 @@ export function openStore({ store, key, randomBytes, now }: {
     }>;
     /** records that did not open under this key (another key, moved onto another record, damaged) */
     refused: () => any[];
+    /** read the store again with the key it holds: entries a sync brought show, with no derive */
+    reload(): Promise<void>;
     readonly size: number;
     readonly locked: boolean;
     /** forget the entries and wipe this copy of the store key */

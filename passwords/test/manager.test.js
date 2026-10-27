@@ -97,6 +97,18 @@ test('a record moved onto another id, or a seal moved onto another entry, is ref
   assert.deepEqual(again.refused().map((r) => r.reason).sort(), ['id-mismatch', 'id-mismatch']);
 });
 
+test('reload: entries another copy wrote (a sync) show with the key already held', async () => {
+  const raw = memoryStore();
+  const here = await m.openStore({ store: raw, key: KEY_A, randomBytes });
+  const there = await m.openStore({ store: raw, key: KEY_A, randomBytes });
+  await there.put({ kind: 'login', title: 'From the phone', username: 'p' });
+  assert.equal(here.size, 0);
+  await here.reload();
+  assert.deepEqual(here.list().map((e) => e.title), ['From the phone']);
+  here.lock();
+  await assert.rejects(here.reload(), /locked/);
+});
+
 test('the wrong store key opens nothing: every record is refused, none listed', async () => {
   const raw = memoryStore();
   const a = await m.openStore({ store: raw, key: KEY_A, randomBytes });
