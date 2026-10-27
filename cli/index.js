@@ -2422,8 +2422,9 @@ async function main(argv, io = {}) {
   /*
    * --service: THIS COMPUTER'S ONE LONG-LIVED PROCESS (Brad, 2026-10-25: "for normal cli --service will be our
    * long-lived"; one service, not two): the Edge agent (edge agent) with the sync service in it, which watches this
-   * computer's buckets and trades them with the paired devices it reaches. `onlykey-js [--ble] --service [--test-mode]`
-   * is `onlykey-js [--ble] edge [--test-mode] agent`.
+   * computer's buckets and trades them with the paired devices it reaches - and, in the key's server room, with every
+   * device of its identity online there (Brad, 2026-10-27). `onlykey-js [--ble] --service [--test-mode]
+   * [--server <url> | --no-server]` is `onlykey-js [--ble] edge [--test-mode] agent [--server <url> | --no-server]`.
    */
   {
     const at = argv.indexOf('--service');
@@ -2432,13 +2433,17 @@ async function main(argv, io = {}) {
       const rest = argv.filter((_, i) => i !== at);
       const globals = [];
       const others = [];
+      /* the agent's own: the server it joins (default: the key's site) */
+      const agentArgs = [];
       for (let i = 0; i < rest.length; i++) {
         const a = rest[i];
         if (a === '--path' || a === '--address') { globals.push(a, rest[i + 1]); i += 1; }
+        else if (a === '--server' || a === '--no-server') { agentArgs.push(a); if (a === '--server') { agentArgs.push(rest[i + 1]); i += 1; } }
+        else if (a.startsWith('--server=')) agentArgs.push('--server', a.slice('--server='.length));
         else if (['--ble', '--desktop', '--yes', '--gui-prompt', '--soft-key'].includes(a) || a.startsWith('--path=') || a.startsWith('--address=')) globals.push(a);
         else others.push(a);
       }
-      argv = [...globals, 'edge', ...others, 'agent'];
+      argv = [...globals, 'edge', ...others, 'agent', ...agentArgs];
     }
   }
   let rawCmd = null;

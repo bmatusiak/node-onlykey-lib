@@ -39,18 +39,8 @@ function setup(imports, register) {
   const file = () => path.join(home.root(), home.FILE);
   const bucketKey = async (okcrypto) => okcrypto.deviceVault.key('bucket');
   const randomBytes = (n) => new Uint8Array(require('crypto').randomBytes(n));
-  /* how this computer shows in a room: one id for good (kept beside the bucket), the machine's name */
-  const thisDevice = () => {
-    const f = path.join(home.root(), 'device.json');
-    let id = null;
-    try { id = JSON.parse(fs.readFileSync(f, 'utf8')).id; } catch { /* first time */ }
-    if (!/^[0-9a-f]{16}$/.test(String(id))) {
-      id = require('crypto').randomBytes(8).toString('hex');
-      fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(f, `${JSON.stringify({ id })}\n`, { mode: 0o600 });
-    }
-    return { id, name: require('os').hostname().slice(0, 64) || 'computer', kind: 'cli' };
-  };
+  /* how this computer shows in a room (home.js thisDevice - the --service uses the same) */
+  const thisDevice = () => home.thisDevice();
 
   const BUCKET = {
     mirrors: '(new)',

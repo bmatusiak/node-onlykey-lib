@@ -668,6 +668,18 @@ module.exports = function register(COMMANDS, h) {
       }
 
       if (sub === 'agent') {
+        /*
+         * THE SERVER IT JOINS (Brad, 2026-10-27: --service joins the key's server): --server <url>, else the key's own
+         * site (ctap_bridge, okcrypto.keySite) - the same server the apps use; --no-server keeps it off the network.
+         */
+        let serverOpt = null;
+        let noServer = false;
+        {
+          const i = rest.indexOf('--server');
+          if (i >= 0) { serverOpt = rest[i + 1]; rest.splice(i, 2); if (!serverOpt || serverOpt.startsWith('--')) throw h.usage('edge agent --server <url>'); }
+          const j = rest.indexOf('--no-server');
+          if (j >= 0) { noServer = true; rest.splice(j, 1); }
+        }
         /* the optional service: one link kept open between commands; nothing it can do that a command can't */
         if (Object.keys(parseSetup(rest, h)).length) throw h.usage(`the identity is set with ${edgeCmd('setup')} (the phone keeps it); edge agent takes no identity flags`);
         /*
@@ -760,7 +772,7 @@ module.exports = function register(COMMANDS, h) {
             links.set(address, l);
             return l;
           };
-          const bucketSvc = (opts.ble || pairedPhones().length) ? (() => {
+          const bucketSvc = (opts.ble || pairedPhones().length || !noServer) ? (() => {
             const { tradeWith, tradeTimeoutMs } = require('../../bucket/cli/trade');
             const bucketHome = require('../../bucket/cli/home');
             const bucketDir = path.join(bucketHome.root(), 'buckets', NET === 'test' ? 'test' : 'live');
@@ -770,16 +782,66 @@ module.exports = function register(COMMANDS, h) {
               return tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say });
             };
             const n = (o) => Object.values(o || {}).reduce((x, y) => x + y, 0);
+            /*
+             * THE KEY'S SERVER ROOM (Brad, 2026-10-27: "--service" joins the key's server): this identity's room on the
+             * server the key names (its ctap_bridge site; --server for another, --no-server for none), held open while
+             * the service runs - the web app and the phones meet this computer there with no Bluetooth. Joined with the
+             * key's proof (room.js); every device of the identity online is traded with, as the paired phones are, and a
+             * device that comes online starts a trade at once. Lost: joined again at the next trade (the slow timer).
+             * This side starts the trades; a trade another device starts is not answered yet (room.serve unset).
+             */
+            let roomP = null;
+            const roomOpen = () => {
+              if (noServer) return Promise.resolve(null);
+              if (!roomP) {
+                roomP = (async () => {
+                  let url = serverOpt;
+                  if (!url) {
+                    const r = typeof st.okcrypto.keySite === 'function' ? await st.okcrypto.keySite().catch(() => null) : null;
+                    url = r && r.on && r.site ? `https://${r.site}` : null;
+                  }
+                  if (!url) return null;
+                  if (typeof globalThis.WebSocket !== 'function') throw new Error('this Node has no WebSocket - Node 22 or later');
+                  const host = new URL(url).host;
+                  const { meFor } = require('../../bucket/cli/trade');
+                  const { connectRoom } = require('../../bucket/src/room-client');
+                  const me = await meFor({ okcrypto: st.okcrypto, net: NET, say: st.say });
+                  const randomBytes = (k) => new Uint8Array(require('crypto').randomBytes(k));
+                  const room = await connectRoom({ url, me, device: bucketHome.thisDevice(), WebSocket: globalThis.WebSocket, randomBytes });
+                  room.on('peer', (e) => { if (e.up) void svcBucket.trade(`${e.up.name} came online on ${host}`); });
+                  room.on('close', () => { roomP = null; st.say(`sync: left the room on ${host} (joined again at the next trade)`); });
+                  st.say(`sync: in this identity's room on ${host}${room.peers().length ? ` - ${room.peers().map((p) => p.name).join(', ')} online` : ''}`);
+                  return { room, host, id: me.id };
+                })().catch((e) => { roomP = null; st.say(`sync: the server's room was not joined (${e.message})`); return null; });
+              }
+              return roomP;
+            };
+            /* each device online in the room, one after another - the room's request is the trade's send */
+            const tradeRoom = async () => {
+              const r = await roomOpen();
+              if (!r) return [];
+              const out = [];
+              for (const p of r.room.peers()) {
+                let first = true;
+                const send = (m) => { const t = tradeTimeoutMs(m, first); first = false; return r.room.request(p.id, m, { timeoutMs: t }); };
+                try {
+                  out.push({ name: `${p.name} on ${r.host}`, ...(await tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say, id: r.id })) });
+                } catch (e) {
+                  out.push({ name: `${p.name} on ${r.host}`, traded: false, why: e.message });
+                }
+              }
+              return out;
+            };
             const svcBucket = require('../../bucket/cli/service').startBucketService({
               dir: bucketDir,
               say: st.say,
               lockFile: path.join(bucketHome.root(), 'sync.json'),
               who: process.env.OKEDGE_SYNC_WHO || `onlykey-js --service (pid ${process.pid})`,
               tradeOnce: async () => {
-                if (opts.ble) return tradeOver(st.channel);
-                /* each paired phone in turn, over its own link; the result says them all */
+                /* the phone this service runs over (--ble), or each paired phone in turn over its own link; then the room */
                 const results = [];
-                for (const p of pairedPhones()) {
+                if (opts.ble) results.push({ name: 'the phone', ...(await tradeOver(st.channel)) });
+                for (const p of opts.ble ? [] : pairedPhones()) {
                   const name = p.phoneName || p.address;
                   try {
                     const l = await linkTo(p.address);
@@ -798,7 +860,8 @@ module.exports = function register(COMMANDS, h) {
                     results.push({ name, traded: false, why: e.message });
                   }
                 }
-                if (!results.length) return { traded: false, why: 'no phone is cli-paired with this computer' };
+                results.push(...(await tradeRoom()));
+                if (!results.length) return { traded: false, why: noServer ? 'no phone is cli-paired with this computer' : 'no phone is cli-paired with this computer, and no other device of this identity is in the server room' };
                 const ok = results.filter((r) => r.traded);
                 if (!ok.length) return { traded: false, why: results.map((r) => `${r.name}: ${r.why}`).join('; ') };
                 return {

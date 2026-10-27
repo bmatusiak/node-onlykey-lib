@@ -309,4 +309,20 @@ function moveHomeFiles(home) {
   moveInto(path.join(home, FILE), (b, done) => moveNet(b, home, 'edge', done));
 }
 
-module.exports = { FILE, writeText, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, keptIdentities, hasIdentityBucket, keepIdentityBucket, moveIdentityBucket };
+/**
+ * How this computer shows in a server room (bucket sync --server, the --service): one id for good, kept beside the
+ * buckets, and the machine's name.
+ */
+function thisDevice() {
+  const f = path.join(root(), 'device.json');
+  let id = null;
+  try { id = JSON.parse(fs.readFileSync(f, 'utf8')).id; } catch { /* first time */ }
+  if (!/^[0-9a-f]{16}$/.test(String(id))) {
+    id = require('crypto').randomBytes(8).toString('hex');
+    fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(f, `${JSON.stringify({ id })}\n`, { mode: 0o600 });
+  }
+  return { id, name: os.hostname().slice(0, 64) || 'computer', kind: 'cli' };
+}
+
+module.exports = { FILE, writeText, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, keptIdentities, hasIdentityBucket, keepIdentityBucket, moveIdentityBucket, thisDevice };
