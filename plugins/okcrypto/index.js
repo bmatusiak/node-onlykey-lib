@@ -1642,10 +1642,13 @@ function setup(imports, register, config) {
      *
      * Two keys, the same settings, and a flag in the request (Brad, 2026-10-27): the flag is in the derivation, so the
      * modes are unrelated secrets for one label - and so is every rpId (a site cannot derive another's).
-     *   touch: always a press - `confirm({digits: null})` and the 'challenge' event say "press";
      *   touchless: the key's own derive setting (field 30) decides, as for every derive - the 3-button code by
-     *     default, a press, or none: "protected until unprotected". `confirm` gets the code's digits; a key set to
-     *     none answers before anyone presses (isAnswered() says so).
+     *     default, a press, or none: "protected until unprotected". A key set to none answers before anyone presses
+     *     (isAnswered() says so).
+     *   touch: the same gate with a press as its floor - the code or a press as field 30 says, and a press when it
+     *     says none: never answered unpressed.
+     * `confirm` gets the code's digits either way (the payload carries the mode, so the two codes differ); a key set
+     * to ask one press takes any button instead.
      * Either way confirm() starts BEFORE the request goes out: the key holds the request while it waits.
      *
      * Over the tunnel always: a browser has nothing else, and a host with USB speaks it over CTAPHID.
@@ -1658,7 +1661,7 @@ function setup(imports, register, config) {
       if (typeof label !== 'string' || !label) throw new TypeError('deriveSecret needs a label');
       const payload = concat([Uint8Array.of(touch ? DERIVE_SECRET_TOUCH : DERIVE_SECRET_TOUCHLESS), subjectHash(utf8ToBytes(label))]);
       const out = await tunnelOperation(OKDERIVESECRET, DERIVE_SECRET_SLOT, payload, {
-        timeoutMs: 30000, ...opts, expectBytes: 32, quiet: !touch, confirmFirst: true, pressOnly: touch,
+        timeoutMs: 30000, ...opts, expectBytes: 32, quiet: !touch, confirmFirst: true,
       });
       return out.slice(0, 32);
     },
