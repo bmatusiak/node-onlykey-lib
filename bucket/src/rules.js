@@ -110,13 +110,13 @@ function keychain(list, { key = 'list' } = {}) {
 }
 
 /**
- * Password entries (passwords/ over src/crypto/vault_store.js): each credential is its own key and
- * merges key by key - the same entry changed on both sides is a conflict, never overwritten. The
- * index is not a value to choose between: it is the set of credentials, so it is rebuilt as the
- * union. Works for every vault in the store (each is a prefix: `<storeId>/onlyagent-vault/...`).
+ * Password entries (passwords/src/manager.js): each entry is its own key, sealed under the store
+ * key, and merges key by key without it - the same entry changed on both sides is a conflict, never
+ * overwritten. The index is not a value to choose between: it is the set of entries, so it is
+ * rebuilt as the union. Works for every store in it (each is a prefix: `<identity>/entries/...`).
  */
 function passwords() {
-  const INDEX = 'onlyagent-vault/index';
+  const INDEX = 'entries/index';
   return (into = {}, from = {}) => {
     const notIndex = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !k.endsWith(INDEX)));
     const r = mergeKeys(notIndex(into), notIndex(from));
@@ -130,7 +130,7 @@ function passwords() {
       /* an id whose record was removed on either side is not listed */
       const prefix = k.slice(0, -INDEX.length);
       const listed = [...ids].filter((id) => {
-        const rec = store[`${prefix}onlyagent-vault/credentials/${id}`];
+        const rec = store[`${prefix}entries/${id}`];
         return live(rec);
       }).sort();
       store[k] = { v: JSON.stringify(listed), at: later(into[k] && into[k].at, from[k] && from[k].at) };

@@ -11,7 +11,7 @@ const crypto = require('crypto');
 
 const bucket = require('../src');
 const list = require('../../keychain/src/list');
-const { createVaultStore } = require('../../src/crypto/vault_store');
+const { manager: pm } = require('../../passwords/src');
 const { createGuestBook } = require('../../guestbook/src/store');
 
 const rnd = (n) => new Uint8Array(crypto.randomBytes(n));
@@ -31,23 +31,26 @@ test('Key Chain: entries from both copies, by the list\'s own merge; no conflict
   assert.equal(report.conflicts.length, 0);
 });
 
-test('Passwords: credentials merge one by one - the same entry changed on both sides, the newer wins; the index is the union of the live ones', async () => {
+test('Passwords: entries merge one by one, sealed - the same entry changed on both sides, the newer wins; the index is the union of the live ones', async () => {
   let t = 0;
   const now = () => `2026-10-25T00:00:${String(t++).padStart(2, '0')}.000Z`;
+  const KEY = new Uint8Array(32).fill(7);
+  const rnd = (n) => new Uint8Array(crypto.randomBytes(n));
   const phone = bucket.create({ owner: 'k1' });
-  const v = (b) => createVaultStore({ store: bucket.kv(b, 'passwords', { now }) });
-  await v(phone).put({ serviceId: 'mail', encrypted: 'sealed-1' });
+  const v = (b) => pm.openStore({ store: pm.prefixedStore(bucket.kv(b, 'passwords', { now }), 's1/'), key: KEY, randomBytes: rnd });
+  const mail = await (await v(phone)).put({ kind: 'login', title: 'Mail', username: 'a' });
   const web = copy(phone);
-  await v(phone).put({ serviceId: 'bank', encrypted: 'sealed-2' });
-  await v(web).put({ serviceId: 'shop', encrypted: 'sealed-3' });
-  await v(phone).put({ serviceId: 'mail', encrypted: 'sealed-1-phone' });
-  await v(web).put({ serviceId: 'mail', encrypted: 'sealed-1-web' });
+  await (await v(phone)).put({ kind: 'login', title: 'Bank', username: 'b' });
+  await (await v(web)).put({ kind: 'login', title: 'Shop', username: 'c' });
+  await (await v(phone)).put({ ...mail, username: 'phone' });
+  await (await v(web)).put({ ...mail, username: 'web' });
 
   const { bucket: m, report } = bucket.merge(phone, web, { rules: { passwords: bucket.rules.passwords() } });
-  const ids = (await v(m).list()).map((r) => r.serviceId).sort();
-  assert.deepEqual(ids, ['bank', 'mail', 'shop'], 'nothing lost, the index lists all three');
+  const merged = await v(m);
+  assert.deepEqual(merged.list().map((e) => e.title), ['Bank', 'Mail', 'Shop'], 'nothing lost, the index lists all three');
   assert.deepEqual(report.conflicts, []);
-  assert.equal((await v(m).list()).find((r) => r.serviceId === 'mail').encrypted, 'sealed-1-web', 'the later edit wins');
+  assert.equal(merged.get(mail.id).username, 'web', 'the later edit wins');
+  assert.equal(merged.refused().length, 0);
 });
 
 test('Guest Book: contacts by id - new ones added from both copies, one changed on both sides taken from the later copy, inside the blob', async () => {

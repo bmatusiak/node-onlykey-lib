@@ -1,42 +1,36 @@
-export const ROUNDS: 600000;
+export const SEAL: "entry-touch";
+export const SECRET_FIELDS: string[];
 /**
- * The derive label of an entry's own key (deviceVault adds `vault:`). `ref` is the entry's own
- * random reference, kept in `inner.ref` - not the record id, so a new entry is sealed before the
- * store has given it one, and the label never changes.
+ * The derive label of an entry's key. `scope`: the store's owner (the bucket identity), so two
+ * identities on one key never share an entry key; `ref`: the entry's id.
  */
-export function entryLabel(ref: any): string;
-/** a new key-sealed entry's ref: 16 random bytes, hex */
+export function entryLabel(scope: any, ref: any): string;
+/**
+ * The entry's key from the OnlyKey: its touch derived secret - always a press.
+ * @param {{deriveSecret: (label: string, opts: object) => Promise<Uint8Array>}} okcrypto
+ * @param {string} scope
+ * @param {string} ref
+ * @param {object} [opts] passed to deriveSecret (confirm, timeoutMs); `touch` is always true
+ */
+export function entryKey(okcrypto: {
+    deriveSecret: (label: string, opts: object) => Promise<Uint8Array>;
+}, scope: string, ref: string, opts?: object): Promise<Uint8Array<ArrayBufferLike>>;
+/** Does this entry carry any secret field outside a seal? */
+export function hasPlainSecret(entry: any): boolean;
+/** a new entry's ref (and id): 16 random bytes, hex */
 export function newRef(randomBytes: any): string;
 /**
- * A passphrase entry's key: PBKDF2 (600k) of the passphrase, combined with the manager key by HKDF.
- * `pbkdf2(password, salt, rounds, dkLen)`: the host's own, when it has one - ok-rn passes OkSSL's
- * (NativeKdf), so the 600k rounds run in OpenSSL, not through WebCrypto or JS. Without it, the
- * lib's pbkdf2Sha256.
- *
- * @param {{passphrase: string, salt: Uint8Array, managerKey: Uint8Array,
- *   onProgress?: ((done: number) => void) | null,
- *   pbkdf2?: ((password: Uint8Array, salt: Uint8Array, rounds: number, dkLen: number) => Promise<Uint8Array>) | null}} o
- */
-export function passphraseKey({ passphrase, salt, managerKey, onProgress, pbkdf2 }: {
-    passphrase: string;
-    salt: Uint8Array;
-    managerKey: Uint8Array;
-    onProgress?: ((done: number) => void) | null;
-    pbkdf2?: ((password: Uint8Array, salt: Uint8Array, rounds: number, dkLen: number) => Promise<Uint8Array>) | null;
-}): Promise<Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>>;
-/**
- * The entry with its secret fields moved into `inner`, sealed under `innerKey`.
+ * The entry with its secret fields moved into `inner`, sealed under `innerKey` (entryKey of `ref`).
  * @param {object} entry
  * @param {Uint8Array} innerKey
  * @param {(n: number) => Uint8Array} randomBytes
- * @param {{seal: string, salt?: Uint8Array | null, ref?: string | null}} opts
+ * @param {{ref: string}} opts
  */
-export function sealInner(entry: object, innerKey: Uint8Array, randomBytes: (n: number) => Uint8Array, { seal, salt, ref }: {
-    seal: string;
-    salt?: Uint8Array | null;
-    ref?: string | null;
+export function sealInner(entry: object, innerKey: Uint8Array, randomBytes: (n: number) => Uint8Array, { ref }: {
+    ref: string;
 }): {};
-/** The entry with its secret fields back, opened with `innerKey`; throws when the key is wrong. */
+/**
+ * The entry with its secret fields back, opened with `innerKey`. Throws when the key is wrong, and
+ * when the seal is not this entry's (its ref, inside and out, must be the entry's id).
+ */
 export function openInner(entry: any, innerKey: any): any;
-/** the salt a passphrase entry was sealed with */
-export function saltOf(entry: any): Uint8Array<ArrayBuffer> | null;

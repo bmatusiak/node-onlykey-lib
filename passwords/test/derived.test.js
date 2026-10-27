@@ -61,7 +61,7 @@ test('bad settings are refused', () => {
 
 test('a derived entry stores only its recipe', async () => {
   const raw = memoryStore();
-  const a = await m.openManager({ store: m.prefixedStore(raw, 'p/'), key: new Uint8Array(32).fill(1), randomBytes: (n) => new Uint8Array(nodeCrypto.randomBytes(n)) });
+  const a = await m.openStore({ store: m.prefixedStore(raw, 'p/'), key: new Uint8Array(32).fill(1), randomBytes: (n) => new Uint8Array(nodeCrypto.randomBytes(n)) });
   const { password, recipe } = await d.derivePasswordFor({ okcrypto: fakeKey('A'), name: 'site', press: false });
   const e = await a.put({ kind: 'derived', title: 'Site', username: 'brad', urls: ['https://site.example'], recipe });
   assert.deepEqual(e.recipe, recipe);

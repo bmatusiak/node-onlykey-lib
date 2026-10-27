@@ -88,8 +88,8 @@ test('a trade is complete only when the states match - both sides end with one s
   const desktop = { me: { ...me }, bucket: bucketLib.create({ owner: me.id }) };
   const phone = { me: { ...me }, bucket: bucketLib.create({ owner: me.id }), seen: new Set() };
   kv(phone.bucket, 'guestbook').setItem('myname', 'Pixel Tester');
-  kv(desktop.bucket, 'passwords').setItem('s1/onlyagent-vault/credentials/aa', 'sealed-a');
-  kv(phone.bucket, 'passwords').setItem('s1/onlyagent-vault/credentials/bb', 'sealed-b');
+  kv(desktop.bucket, 'passwords').setItem('s1/entries/aa', 'sealed-a');
+  kv(phone.bucket, 'passwords').setItem('s1/entries/bb', 'sealed-b');
   const r = await run(desktop, phone);
   assert.ok(r.settled);
   const rep = require('../src/replicate');

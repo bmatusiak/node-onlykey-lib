@@ -19,10 +19,10 @@ export function keychain(list: {
     key?: string;
 }): any;
 /**
- * Password entries (passwords/ over src/crypto/vault_store.js): each credential is its own key and
- * merges key by key - the same entry changed on both sides is a conflict, never overwritten. The
- * index is not a value to choose between: it is the set of credentials, so it is rebuilt as the
- * union. Works for every vault in the store (each is a prefix: `<storeId>/onlyagent-vault/...`).
+ * Password entries (passwords/src/manager.js): each entry is its own key, sealed under the store
+ * key, and merges key by key without it - the same entry changed on both sides is a conflict, never
+ * overwritten. The index is not a value to choose between: it is the set of entries, so it is
+ * rebuilt as the union. Works for every store in it (each is a prefix: `<identity>/entries/...`).
  */
 export function passwords(): (into?: {}, from?: {}) => {
     store: {

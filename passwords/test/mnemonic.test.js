@@ -82,7 +82,7 @@ test('names: trimmed, printable, at most 64; a recipe is checked before use', ()
 
 test('a phrase entry stores only its recipe: no words, no secret', async () => {
   const raw = memoryStore();
-  const a = await m.openManager({ store: m.prefixedStore(raw, 'p/'), key: new Uint8Array(32).fill(1), randomBytes: (n) => new Uint8Array(nodeCrypto.randomBytes(n)) });
+  const a = await m.openStore({ store: m.prefixedStore(raw, 'p/'), key: new Uint8Array(32).fill(1), randomBytes: (n) => new Uint8Array(nodeCrypto.randomBytes(n)) });
   const { words, recipe } = await mn.deriveMnemonic({ okcrypto: fakeKey('A'), name: 'cold', press: false });
   const e = await a.put({ kind: 'mnemonic', title: 'Cold wallet', recipe });
   assert.deepEqual(e.recipe, recipe);

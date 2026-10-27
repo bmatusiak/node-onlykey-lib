@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const nodeCrypto = require('node:crypto');
-const { totp: t, manager: m } = require('../src');
+const { totp: t, manager: m, inner } = require('../src');
 const { memoryStore } = require('../../src/crypto/vault_store');
 
 const ascii = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
@@ -73,14 +73,18 @@ test('a bad setup key or setting is refused', () => {
 
 test('in the store: an authenticator entry, or a code attached to a login - sealed like a password', async () => {
   const raw = memoryStore();
-  const a = await m.openManager({ store: m.prefixedStore(raw, 'p/'), key: new Uint8Array(32).fill(1), randomBytes: (n) => new Uint8Array(nodeCrypto.randomBytes(n)) });
-  const own = await a.put({ kind: 'totp', title: 'GitHub 2FA', totp: { secret: SEED_B32 } });
-  assert.equal(own.totp.secret, SEED_B32);
-  const login = await a.put({ kind: 'login', title: 'GitHub', username: 'brad', password: 'p', totp: { secret: SEED_B32 } });
-  assert.equal(login.totp.period, 30);
+  const a = await m.openStore({ store: m.prefixedStore(raw, 'p/'), key: new Uint8Array(32).fill(1), randomBytes: (n) => new Uint8Array(nodeCrypto.randomBytes(n)) });
+  /* the setup key is a secret: inside the entry's seal (inner.js), never beside the labels */
+  const k = new Uint8Array(32).fill(4);
+  const ref = inner.newRef((n) => new Uint8Array(nodeCrypto.randomBytes(n)));
+  const sealed = inner.sealInner({ kind: 'totp', title: 'GitHub 2FA', totp: { secret: SEED_B32 } }, k, (n) => new Uint8Array(nodeCrypto.randomBytes(n)), { ref });
+  const own = await a.put(sealed);
+  assert.equal(own.totp, undefined);
+  assert.equal(inner.openInner(own, k).totp.period, 30);
   assert.equal([...raw._map.values()].join('').includes(SEED_B32), false, 'the setup key is stored in the clear');
-  await assert.rejects(a.put({ kind: 'totp', title: 'no key' }), /needs its setup key/);
-  await assert.rejects(a.put({ kind: 'note', title: 'n', totp: { secret: SEED_B32 } }), /login or an authenticator/);
+  await assert.rejects(a.put({ kind: 'totp', title: 'no key' }), /setup key is sealed/);
+  await assert.rejects(a.put({ kind: 'login', title: 'GitHub', totp: { secret: SEED_B32 } }), /only inside the entry's seal/);
+  assert.throws(() => inner.sealInner({ kind: 'totp', title: 'bad', totp: { secret: SEED_B32, period: 5 } }, k, () => new Uint8Array(12), { ref }), /period/);
 });
 
 test('Steam: the same codes as steam-totp computes them (its algorithm, done here with node:crypto)', () => {

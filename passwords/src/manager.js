@@ -1,50 +1,50 @@
 'use strict';
 
 /**
- * The Password Manager's core (onlykey-edge features/PASSWORD-MANAGER-SPEC.md): entries sealed
- * by the OnlyKey, stored as ciphertext only, opened with ONE manager key per session.
+ * The Password Manager's core (onlykey-edge features/PASSWORD-MANAGER-SPEC.md), in the derived-key
+ * format (PROPOSAL-derived-keys.md; Brad, 2026-10-27: "change Passwords vault format to use the new
+ * style"). This module never talks to a device.
  *
- * THE MANAGER KEY is the vault key of one fixed derive label (LABEL, `vault:ok-rn-manager`): the
- * caller gets it from the key (okcrypto.deviceVault.key, which also keeps it in its session
- * cache) and hands the 32 bytes in here. This module never talks to a device.
+ * A BUCKET IN THE BUCKET (Brad, 2026-10-27: "app bucket -> password bucket protected by derive key,
+ * password contains labels to derive the decryptions for the secret"). Three layers:
+ *   - the app's bucket (the identity's, sealed by the key's touchless derive) holds this store;
+ *   - THE STORE: every record sealed under the store key - the key's TOUCHLESS derive of
+ *     storeLabel(identity), asked once when the list opens (the derive setting, field 30, decides
+ *     whether that asks the code) and held until the key locks. So the labels are sealed even where
+ *     the app's bucket is kept opened (the desktop's CLI file);
+ *   - inside a record: the labels - kind, title, username, sites, folder, tags, a recipe - and the
+ *     entry's own seal of its SECRETS (a password, the earlier ones, notes, an authenticator's
+ *     setup key): inner.js, the TOUCH derive of the entry's id, a press each time. put() refuses an
+ *     entry with a secret outside that seal, so no host can keep one under the store key alone.
  *
- * THE STORE IS NAMED AFTER THE KEY (Brad, 2026-10-11: "password storage is encrypted to the keys
- * identity, so multiple keys can use the app at the same time"; "they should produce the same
- * store" for a key restored from the same backup). storeIdOf(public key of that derive) names
- * it - asking the public key needs no press - and prefixedStore() keeps each store under its own
- * prefix: two keys from one backup give one id and share one store; a key with other seeds never
- * sees another's entries.
- *
- * WHAT IS SEALED: each entry is JSON (kind, title, username, password, urls, notes, ...) sealed
- * AES-256-GCM under the manager key (lib src/crypto/vault.js), kept by src/crypto/vault_store.js
- * under a random record id, so the stored index names no site. AES-GCM here has no associated
- * data, so a blob would open under any record of the same key: every entry carries its own id,
- * and an entry whose id is not its record's is refused (a swapped blob).
+ * ONE RECORD PER ENTRY, under `entries/<id>`, with `entries/index` naming them (random ids: the
+ * index names no site) - so the bucket merges entry by entry without the key (bucket/src/rules.js
+ * passwords). AES-GCM here has no associated data, so a record would open under any id of the same
+ * key: every entry carries its id, and one whose id is not its record's is refused (a moved record).
  */
 
 const vault = require('../../src/crypto/vault');
-const { createVaultStore } = require('../../src/crypto/vault_store');
-const { sha256 } = require('../../src/crypto/provider');
 const { toHex } = require('../../src/bytes');
 const { shapeRecipe } = require('./mnemonic');
 const { shapeRecipe: shapePasswordRecipe } = require('./derived');
-const { shapeTotp } = require('./totp');
+const { SEAL, hasPlainSecret, entryLabel } = require('./inner');
 
-/** the derive label the manager key comes from (deviceVault adds `vault:`) */
-const LABEL = 'ok-rn-manager';
 /**
  * the entry kinds this release writes. A mnemonic or a derived entry is a RECIPE (mnemonic.js,
  * derived.js): the phrase or the password itself is never stored.
  */
 const KINDS = ['login', 'note', 'card', 'mnemonic', 'totp', 'derived'];
-const HISTORY = 5;
 const TEXT_MAX = 4096;
+const INDEX = 'entries/index';
+const RECORD = 'entries/';
+/* the export's version (exportJSON) */
+const EXPORT_V = 2;
 
-/** The store id: SHA-256 of the manager label's derive public key, hex. Public by design. */
-function storeIdOf(publicKey) {
-  if (!(publicKey instanceof Uint8Array) || publicKey.length < 32) throw new TypeError('passwords: storeIdOf needs the derive public key');
-  return toHex(sha256(publicKey));
-}
+/**
+ * The store key's derive label (touchless): one per identity. Not an entry's (an entry's ends in
+ * its 32-hex id), so the store key never opens a secret.
+ */
+const storeLabel = (scope) => entryLabel(scope, '0'.repeat(32)).replace(/[0-9a-f]{32}$/, 'list');
 
 /** A key/value store (getItem/setItem/removeItem) with every key under `prefix`. */
 function prefixedStore(store, prefix) {
@@ -72,13 +72,17 @@ const strings = (v, name) => {
   return v.map((x, i) => str(x, `${name}[${i}]`, { required: true }));
 };
 
-/** The entry's fields as stored, checked; unknown fields are dropped. */
+/** The entry's fields as stored, checked; unknown fields are dropped. A secret outside its seal is refused. */
 function shapeEntry(e) {
   if (!e || typeof e !== 'object') throw new TypeError('passwords: an entry is an object');
   if (!KINDS.includes(e.kind)) throw new TypeError(`passwords: kind must be one of ${KINDS.join(', ')}`);
-  const out = { v: 1, kind: e.kind, title: str(e.title, 'title', { required: true }).trim() };
+  if (hasPlainSecret(e)) {
+    if (e.kind === 'mnemonic' || e.kind === 'derived') throw new TypeError('passwords: a phrase or derived entry stores no secret, only its recipe');
+    throw new TypeError('passwords: a secret is stored only inside the entry\'s seal (a press opens it)');
+  }
+  const out = { v: 2, kind: e.kind, title: str(e.title, 'title', { required: true }).trim() };
   if (!out.title) throw new TypeError('passwords: title is required');
-  for (const f of ['username', 'password', 'notes', 'folder']) {
+  for (const f of ['username', 'folder']) {
     const x = str(e[f], f);
     if (x !== undefined) out[f] = x;
   }
@@ -101,66 +105,71 @@ function shapeEntry(e) {
     });
   }
   if (out.kind === 'mnemonic' || out.kind === 'derived') {
-    if (out.password !== undefined) throw new TypeError('passwords: a phrase or derived entry stores no secret, only its recipe');
+    if (e.inner !== undefined) throw new TypeError('passwords: a phrase or derived entry stores no secret, only its recipe');
     out.recipe = out.kind === 'mnemonic' ? shapeRecipe(e.recipe) : shapePasswordRecipe(e.recipe);
   } else if (e.recipe !== undefined) {
     throw new TypeError('passwords: only a phrase or a derived entry has a recipe');
   }
-  /* an authenticator: its own entry, or the code a login needs beside its password (GitHub) */
-  /* (sealed again with its own key, its setup key is inside `inner`, checked when opened) */
-  const codeSealed = e.inner !== undefined && e.totp === undefined;
-  if ((out.kind === 'totp' && !codeSealed) || e.totp !== undefined) {
-    if (out.kind !== 'totp' && out.kind !== 'login') throw new TypeError('passwords: a code belongs to a login or an authenticator entry');
-    out.totp = shapeTotp(e.totp ?? {});
-  }
+  /* an authenticator is its setup key: there is none without a seal */
+  if (out.kind === 'totp' && e.inner === undefined) throw new TypeError('passwords: an authenticator\'s setup key is sealed (inner)');
   if (e.inner !== undefined) {
     const i = e.inner;
-    if (!i || typeof i !== 'object' || !['entry-derive', 'entry-passphrase'].includes(i.seal) || typeof i.blob !== 'string') throw new TypeError('passwords: inner is {seal, blob, salt?}');
-    out.inner = {
-      seal: i.seal,
-      blob: i.blob,
-      ...(typeof i.salt === 'string' ? { salt: i.salt } : {}),
-      ...(typeof i.ref === 'string' ? { ref: i.ref } : {}),
-    };
+    if (!i || typeof i !== 'object' || i.seal !== SEAL || typeof i.blob !== 'string' || !/^[0-9a-f]{32}$/.test(String(i.ref))) {
+      throw new TypeError(`passwords: inner is {seal: '${SEAL}', ref, blob}`);
+    }
+    out.inner = { seal: SEAL, ref: i.ref, blob: i.blob };
   }
   return out;
 }
 
 /**
- * Open one store under its manager key. -> the manager: list / get / put / remove / exportJSON /
- * importJSON / lock. `store`: getItem/setItem/removeItem (already prefixed with prefixedStore);
- * `key`: the 32-byte manager key; `randomBytes(n)`: the host's CSPRNG.
+ * Open one store under its store key. -> list / get / put / remove / exportJSON / importJSON / lock.
+ * `store`: getItem/setItem/removeItem (already prefixed with prefixedStore); `key`: the 32-byte
+ * store key (the touchless derive of storeLabel); `randomBytes(n)`: the host's CSPRNG.
  *
  * Every record is opened here once; a record that does not open under this key, or whose entry
  * names another record, is NOT listed and is reported in `refused` - never shown as an entry.
  */
-async function openManager({ store, key, randomBytes, now = () => new Date() }) {
-  if (!(key instanceof Uint8Array) || key.length !== 32) throw new TypeError('passwords: the manager key is 32 bytes');
+async function openStore({ store, key, randomBytes, now = () => new Date() }) {
+  if (!store || typeof store.getItem !== 'function') throw new TypeError('passwords: a store is required');
+  if (!(key instanceof Uint8Array) || key.length !== 32) throw new TypeError('passwords: the store key is 32 bytes');
   if (typeof randomBytes !== 'function') throw new TypeError('passwords: randomBytes is required');
   let k = Uint8Array.from(key);
-  const vs = createVaultStore({ store });
+  const live = () => { if (!k) throw new Error('passwords: the store is locked'); return k; };
   const entries = new Map();
   const refused = [];
-  const live = () => { if (!k) throw new Error('passwords: the manager is locked'); return k; };
 
-  for (const rec of await vs.list()) {
+  const readIndex = async () => {
     try {
-      const e = JSON.parse(vault.open(live(), rec.encrypted));
-      if (!e || e.id !== rec.serviceId) { refused.push({ id: rec.serviceId, reason: 'id-mismatch' }); continue; }
-      entries.set(rec.serviceId, e);
+      const ids = JSON.parse((await store.getItem(INDEX)) || '[]');
+      return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
     } catch {
-      refused.push({ id: rec.serviceId, reason: 'does-not-open' });
+      return [];
+    }
+  };
+  for (const id of await readIndex()) {
+    try {
+      const raw = await store.getItem(RECORD + id);
+      if (!raw) continue;
+      let e;
+      try { e = JSON.parse(vault.open(live(), raw)); } catch { refused.push({ id, reason: 'does-not-open' }); continue; }
+      if (!e || e.id !== id || (e.inner && e.inner.ref !== id)) { refused.push({ id, reason: 'id-mismatch' }); continue; }
+      entries.set(id, e);
+    } catch {
+      refused.push({ id, reason: 'damaged' });
     }
   }
 
-  const sealAndKeep = async (e) => {
-    await vs.put({ serviceId: e.id, encrypted: vault.seal(live(), JSON.stringify(e), randomBytes) });
+  const keep = async (e) => {
+    await store.setItem(RECORD + e.id, vault.seal(live(), JSON.stringify(e), randomBytes));
+    const ids = await readIndex();
+    if (!ids.includes(e.id)) await store.setItem(INDEX, JSON.stringify([...ids, e.id]));
     entries.set(e.id, e);
     return e;
   };
 
   return {
-    /** entries, title order; with their secrets - the caller decides what is drawn */
+    /** entries, title order: labels, and each one's seal - the secrets need its press */
     list() {
       live();
       return [...entries.values()].sort((a, b) => a.title.localeCompare(b.title));
@@ -169,53 +178,65 @@ async function openManager({ store, key, randomBytes, now = () => new Date() }) 
       live();
       return entries.get(id) ?? null;
     },
-    /** new (no id) or an update; a changed password goes to the history (last 5) */
+    /**
+     * New (no id) or an update. A sealed entry's id is its seal's ref (inner.newRef, chosen before
+     * sealing): a new sealed entry brings it, as `inner.ref`; an entry without a seal gets a random one.
+     */
     async put(input) {
       live();
       const shaped = shapeEntry(input);
       const at = now().toISOString();
       const was = input.id ? entries.get(input.id) : null;
       if (input.id && !was) throw new Error('passwords: no entry with that id');
-      const id = was ? was.id : toHex(randomBytes(16));
-      /*
-       * A changed password goes to the history - unless the entry is sealed again (inner): then its
-       * history lives inside that seal (the caller keeps it there), and the plain one is dropped.
-       * Otherwise sealing a plain entry would leave its old password outside, in the clear.
-       */
-      const sealedNow = !!shaped.inner;
-      const history = was && !sealedNow ? [...(was.history || [])] : [];
-      if (!sealedNow && was && was.password && shaped.password !== was.password) history.unshift({ password: was.password, changedAt: at });
-      const e = { ...shaped, id, createdAt: was ? was.createdAt : at, updatedAt: at, ...(history.length ? { history: history.slice(0, HISTORY) } : {}) };
-      return sealAndKeep(e);
+      const id = was ? was.id : shaped.inner ? shaped.inner.ref : toHex(randomBytes(16));
+      if (entries.has(id) && !was) throw new Error('passwords: that seal is already another entry\'s');
+      if (shaped.inner && shaped.inner.ref !== id) throw new Error('passwords: an entry keeps its seal\'s ref as its id');
+      return keep({ ...shaped, id, createdAt: was ? was.createdAt : at, updatedAt: at });
     },
     async remove(id) {
       live();
-      await vs.remove(id);
+      await store.removeItem(RECORD + id);
+      await store.setItem(INDEX, JSON.stringify((await readIndex()).filter((x) => x !== id)));
       entries.delete(id);
     },
-    /** the sealed envelope (src/crypto/vault_store v1): every entry still sealed, ids random */
-    exportJSON: () => vs.exportJSON(),
-    /** a sealed envelope from this key; an entry that does not open under it is skipped and counted */
-    async importJSON(json, { force = false } = {}) {
-      live();
-      const env = typeof json === 'string' ? JSON.parse(json) : json;
-      const good = [];
-      let unreadable = 0;
-      for (const c of (env && env.credentials) || []) {
-        try {
-          const e = JSON.parse(vault.open(live(), c.encrypted));
-          if (e && e.id === c.serviceId) good.push({ c, e }); else unreadable += 1;
-        } catch { unreadable += 1; }
-      }
-      const r = await vs.importJSON(JSON.stringify({ ...env, credentials: good.map((g) => g.c) }), { force });
-      for (const g of good) if (force || !entries.has(g.e.id)) entries.set(g.e.id, g.e);
-      return { ...r, unreadable };
+    /**
+     * A copy to keep or move: the whole list sealed under the store key, each entry's secrets still
+     * in their own seal inside it - it opens only with this key (or one restored from its backup).
+     */
+    exportJSON() {
+      return JSON.stringify({ v: EXPORT_V, sealed: vault.seal(live(), JSON.stringify([...entries.values()]), randomBytes) });
     },
-    /** records that did not open under this key (wrong key, swapped, damaged) */
+    /** A copy from exportJSON, opened with this store's key: new entries added, the ones here kept. */
+    async importJSON(json) {
+      const env = typeof json === 'string' ? JSON.parse(json) : json;
+      if (!env || env.v !== EXPORT_V || typeof env.sealed !== 'string') throw new Error('passwords: not a sealed passwords file');
+      let list;
+      try {
+        list = JSON.parse(vault.open(live(), env.sealed));
+      } catch {
+        throw new Error('passwords: this key does not open that file');
+      }
+      let imported = 0;
+      let skipped = 0;
+      let unreadable = 0;
+      for (const e of Array.isArray(list) ? list : []) {
+        try {
+          if (entries.has(e.id)) { skipped += 1; continue; }
+          const shaped = shapeEntry(e);
+          if (shaped.inner && shaped.inner.ref !== e.id) { unreadable += 1; continue; }
+          await keep({ ...shaped, id: e.id, createdAt: e.createdAt, updatedAt: e.updatedAt });
+          imported += 1;
+        } catch {
+          unreadable += 1;
+        }
+      }
+      return { imported, skipped, unreadable };
+    },
+    /** records that did not open under this key (another key, moved onto another record, damaged) */
     refused: () => refused.slice(),
     get size() { return entries.size; },
     get locked() { return !k; },
-    /** forget the entries and wipe this copy of the key (the caller locks its session cache) */
+    /** forget the entries and wipe this copy of the store key */
     lock() {
       entries.clear();
       if (k) k.fill(0);
@@ -224,4 +245,4 @@ async function openManager({ store, key, randomBytes, now = () => new Date() }) 
   };
 }
 
-module.exports = { LABEL, KINDS, storeIdOf, prefixedStore, shapeEntry, openManager };
+module.exports = { KINDS, storeLabel, prefixedStore, shapeEntry, openStore };

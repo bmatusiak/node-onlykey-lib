@@ -1,101 +1,98 @@
 'use strict';
 
 /**
- * A PER-ENTRY KEY, when an entry wants one (PASSWORD-MANAGER-SPEC.md "One key for identity,
- * per-entry keys when wanted"; Brad). The manager key opens the list; an entry may seal its
- * secret fields (password, its history, notes) a second time, under:
+ * EVERY SECRET COSTS A PRESS (PROPOSAL-derived-keys.md, tier 2; Brad, 2026-10-27: "the secret in
+ * password do now need to require a press"; "no passphrase as an option to secure a password,
+ * press decrypt only"). An entry's secret fields - its password, the earlier ones, its notes, an
+ * authenticator's setup key - are never stored beside its labels: they are sealed under a key of
+ * their own, the OnlyKey's TOUCH derived secret (firmware plugin derive_secret, okcrypto.deriveSecret
+ * with touch) of one label per entry. The touch secret is another key than the touchless one for
+ * the same label, so no request without a press ever reaches it, whatever a host asks; a press
+ * opens one entry, once.
  *
- *  - entry-derive: the vault key of the entry's own derive label (`vault:entry:<id>`, the caller
- *    gets it from the key with entryLabel()) - one more touch each time that entry opens;
- *  - entry-passphrase: a key from a passphrase the person gives and nothing stores -
- *    PBKDF2-SHA-256, 600,000 rounds, then HKDF (info okrn-entry-v1) together with the manager key,
- *    so neither the OnlyKey nor the passphrase alone opens it.
+ * The labels (title, username, sites, folder, tags) stay outside, in the identity's sealed bucket,
+ * so the list shows with no press at all (memory: the bucket holds labels, not secrets).
+ *
+ * THE ENTRY'S REF IS ITS ID. The key comes from `okedge/passwords/v1/<scope>/<ref>`, so a seal
+ * opens only for its own ref; and an entry is stored under that same id, so a seal moved onto
+ * another entry (another title, another site) is refused - openInner checks the two agree.
+ * No passphrase seal and no plain one: there is one way to keep a secret.
  */
 
 const vault = require('../../src/crypto/vault');
-const { pbkdf2Sha256 } = require('../../src/crypto/pbkdf2');
-const { hkdf } = require('../../src/vendor/exports/@noble/hashes/hkdf.js');
-const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
-const { utf8ToBytes, toHex, fromHex } = require('../../src/bytes');
+const { toHex } = require('../../src/bytes');
+const { shapeTotp } = require('./totp');
 
-const ROUNDS = 600000;
-const INFO = utf8ToBytes('okrn-entry-v1');
+const SEAL = 'entry-touch';
 /* what moves inside: the secrets, an authenticator's setup key included (spec: password, TOTP secret, notes) */
 const SECRET_FIELDS = ['password', 'history', 'notes', 'totp'];
+const REF = /^[0-9a-f]{32}$/;
 
 /**
- * The derive label of an entry's own key (deviceVault adds `vault:`). `ref` is the entry's own
- * random reference, kept in `inner.ref` - not the record id, so a new entry is sealed before the
- * store has given it one, and the label never changes.
+ * The derive label of an entry's key. `scope`: the store's owner (the bucket identity), so two
+ * identities on one key never share an entry key; `ref`: the entry's id.
  */
-const entryLabel = (ref) => `entry:${ref}`;
-
-/**
- * A passphrase entry's key: PBKDF2 (600k) of the passphrase, combined with the manager key by HKDF.
- * `pbkdf2(password, salt, rounds, dkLen)`: the host's own, when it has one - ok-rn passes OkSSL's
- * (NativeKdf), so the 600k rounds run in OpenSSL, not through WebCrypto or JS. Without it, the
- * lib's pbkdf2Sha256.
- *
- * @param {{passphrase: string, salt: Uint8Array, managerKey: Uint8Array,
- *   onProgress?: ((done: number) => void) | null,
- *   pbkdf2?: ((password: Uint8Array, salt: Uint8Array, rounds: number, dkLen: number) => Promise<Uint8Array>) | null}} o
- */
-async function passphraseKey({ passphrase, salt, managerKey, onProgress = null, pbkdf2 = null }) {
-  if (typeof passphrase !== 'string' || !passphrase) throw new TypeError('passwords: a passphrase is required');
-  if (!(salt instanceof Uint8Array) || salt.length !== 16) throw new TypeError('passwords: the salt is 16 bytes');
-  if (!(managerKey instanceof Uint8Array) || managerKey.length !== 32) throw new TypeError('passwords: the manager key is 32 bytes');
-  const stretched = pbkdf2
-    ? await pbkdf2(utf8ToBytes(passphrase), salt, ROUNDS, 32)
-    : await pbkdf2Sha256(utf8ToBytes(passphrase), salt, ROUNDS, 32, { onProgress });
-  if (!(stretched instanceof Uint8Array) || stretched.length !== 32) throw new TypeError('passwords: pbkdf2 gave no 32-byte key');
-  const ikm = new Uint8Array(64);
-  ikm.set(stretched, 0);
-  ikm.set(managerKey, 32);
-  const key = hkdf(sha256, ikm, salt, INFO, 32);
-  stretched.fill(0);
-  ikm.fill(0);
-  return key;
+function entryLabel(scope, ref) {
+  if (typeof scope !== 'string' || !/^[0-9a-z]+$/i.test(scope)) throw new TypeError('passwords: the scope is the bucket identity');
+  if (!REF.test(String(ref))) throw new TypeError('passwords: an entry ref is 16 random bytes, hex');
+  return `okedge/passwords/v1/${scope.toLowerCase()}/${ref}`;
 }
 
 /**
- * The entry with its secret fields moved into `inner`, sealed under `innerKey`.
+ * The entry's key from the OnlyKey: its touch derived secret - always a press.
+ * @param {{deriveSecret: (label: string, opts: object) => Promise<Uint8Array>}} okcrypto
+ * @param {string} scope
+ * @param {string} ref
+ * @param {object} [opts] passed to deriveSecret (confirm, timeoutMs); `touch` is always true
+ */
+async function entryKey(okcrypto, scope, ref, opts = {}) {
+  const k = await okcrypto.deriveSecret(entryLabel(scope, ref), { ...opts, touch: true });
+  if (!(k instanceof Uint8Array) || k.length !== 32) throw new Error('passwords: the key gave no 32-byte entry key');
+  return k;
+}
+
+/** Does this entry carry any secret field outside a seal? */
+const hasPlainSecret = (entry) => SECRET_FIELDS.some((f) => entry && entry[f] !== undefined);
+
+/**
+ * The entry with its secret fields moved into `inner`, sealed under `innerKey` (entryKey of `ref`).
  * @param {object} entry
  * @param {Uint8Array} innerKey
  * @param {(n: number) => Uint8Array} randomBytes
- * @param {{seal: string, salt?: Uint8Array | null, ref?: string | null}} opts
+ * @param {{ref: string}} opts
  */
-function sealInner(entry, innerKey, randomBytes, { seal, salt = null, ref = null }) {
-  if (!['entry-derive', 'entry-passphrase'].includes(seal)) throw new TypeError('passwords: seal is entry-derive or entry-passphrase');
-  if (seal === 'entry-passphrase' && !(salt instanceof Uint8Array)) throw new TypeError('passwords: a passphrase entry keeps its salt');
-  if (seal === 'entry-derive' && !/^[0-9a-f]{32}$/.test(String(ref))) throw new TypeError('passwords: a key-sealed entry keeps its ref (16 random bytes, hex)');
-  const secrets = {};
+function sealInner(entry, innerKey, randomBytes, { ref }) {
+  if (!REF.test(String(ref))) throw new TypeError('passwords: a sealed entry keeps its ref (16 random bytes, hex)');
+  const secrets = { ref };
   const out = { ...entry };
   for (const f of SECRET_FIELDS) {
     if (out[f] !== undefined) secrets[f] = out[f];
     delete out[f];
   }
-  out.inner = {
-    seal,
-    blob: vault.seal(innerKey, JSON.stringify(secrets), randomBytes),
-    ...(salt ? { salt: toHex(salt) } : {}),
-    ...(seal === 'entry-derive' ? { ref } : {}),
-  };
+  /* checked before it goes where nothing can check it without a press */
+  for (const f of ['password', 'notes']) {
+    if (secrets[f] !== undefined && (typeof secrets[f] !== 'string' || secrets[f].length > 4096)) throw new TypeError('passwords: ' + f + ' must be text of at most 4096 characters');
+  }
+  if (secrets.history !== undefined && (!Array.isArray(secrets.history) || secrets.history.length > 5)) throw new TypeError('passwords: history is a list of at most 5');
+  if (secrets.totp !== undefined) secrets.totp = shapeTotp(secrets.totp);
+  out.inner = { seal: SEAL, ref, blob: vault.seal(innerKey, JSON.stringify(secrets), randomBytes) };
   return out;
 }
 
-/** The entry with its secret fields back, opened with `innerKey`; throws when the key is wrong. */
+/**
+ * The entry with its secret fields back, opened with `innerKey`. Throws when the key is wrong, and
+ * when the seal is not this entry's (its ref, inside and out, must be the entry's id).
+ */
 function openInner(entry, innerKey) {
   if (!entry || !entry.inner) return entry;
-  const secrets = JSON.parse(vault.open(innerKey, entry.inner.blob));
+  const { ref, ...secrets } = JSON.parse(vault.open(innerKey, entry.inner.blob));
+  if (ref !== entry.inner.ref || (entry.id !== undefined && entry.id !== ref)) throw new Error('passwords: this seal belongs to another entry');
   const out = { ...entry, ...secrets };
   delete out.inner;
   return out;
 }
 
-/** a new key-sealed entry's ref: 16 random bytes, hex */
+/** a new entry's ref (and id): 16 random bytes, hex */
 const newRef = (randomBytes) => toHex(randomBytes(16));
 
-/** the salt a passphrase entry was sealed with */
-const saltOf = (entry) => (entry && entry.inner && entry.inner.salt ? fromHex(entry.inner.salt) : null);
-
-module.exports = { ROUNDS, entryLabel, newRef, passphraseKey, sealInner, openInner, saltOf };
+module.exports = { SEAL, SECRET_FIELDS, entryLabel, entryKey, hasPlainSecret, newRef, sealInner, openInner };
