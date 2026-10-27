@@ -98,6 +98,16 @@ const agentProto = require('../../src/protocol/agent');
 const { challengeDigits } = require('../../src/protocol/challenge');
 const { toBase64Url, utf8ToBytes, concat, toHex } = require('../../src/bytes');
 const { sha256: subjectHash } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
+
+/*
+ * The derive_secret firmware plugin's request (emulator plugins/derive_secret): OKDERIVESECRET is TYPE_INIT | 0x7C, a
+ * plugin's own code beside OKEDGE 0x78 and OKCTAPBRIDGE 0x7B, so not in the base MSG table. It derives from the
+ * slot-128 key (opt1 128, the slot the firmware lets through at the default webcrypt level); payload [mode][label hash].
+ */
+const OKDERIVESECRET = 0xfc;
+const DERIVE_SECRET_SLOT = 128;
+const DERIVE_SECRET_TOUCHLESS = 1;
+const DERIVE_SECRET_TOUCH = 2;
 const { MSG } = require('../../src/protocol/msg');
 const { assertPeerNotLowOrder, assertNonZeroSecret } = require('../../src/crypto/x25519guard');
 const { IFACE } = require('../../src/transport/contract');
@@ -1362,6 +1372,12 @@ function setup(imports, register, config) {
       pollIntervalMs = chunk.POLL_INTERVAL_MS,
       /* a read that asks for no press (an agent public key): no challenge event for a sheet to show */
       quiet = false,
+      /*
+       * THE KEY ASKS INSIDE THE REQUEST (deriveSecret's touch mode): the firmware's derive gate holds the one request
+       * open while it waits for the press or code, so the request does not return until someone has pressed. The code
+       * is shown, and confirm() started, BEFORE the request goes out - after it, nobody could ever see what to press.
+       */
+      confirmFirst = false,
     } = opts;
 
     const payload = Uint8Array.from(data);
@@ -1414,6 +1430,20 @@ function setup(imports, register, config) {
     await settleStagedReply();
     chunk.reservePacketRun(sizes.length);
 
+    let answered = false;
+    let finished = false;
+    let confirmError = null;
+    const startConfirm = () => (confirm
+      ? Promise.resolve()
+        .then(() => confirm({ digits, slot, subject, isAnswered: () => answered || finished }))
+        .catch((err) => { confirmError = err; })
+      : Promise.resolve());
+    let confirming = null;
+    if (confirmFirst) {
+      if (!quiet) events.emit('challenge', { slot, digits, subject });
+      confirming = startConfirm();
+    }
+
     let first = null;
     await chunk.sendChunked({
       cmd: msg,
@@ -1428,8 +1458,6 @@ function setup(imports, register, config) {
         if (result) first = result;
       },
     });
-    if (!quiet) events.emit('challenge', { slot, digits, subject });
-
     /*
      * confirm() runs ALONGSIDE the polls, not before them. Over the vendor
      * interface the answer arrives on a listener while confirm() is still
@@ -1437,14 +1465,10 @@ function setup(imports, register, config) {
      * press on an unlocked key types a slot. Here the only way to learn the
      * device has answered is a poll, so the polls cannot wait for confirm().
      */
-    let answered = false;
-    let finished = false;
-    let confirmError = null;
-    const confirming = confirm
-      ? Promise.resolve()
-        .then(() => confirm({ digits, slot, subject, isAnswered: () => answered || finished }))
-        .catch((err) => { confirmError = err; })
-      : Promise.resolve();
+    if (!confirmFirst) {
+      if (!quiet) events.emit('challenge', { slot, digits, subject });
+      confirming = startConfirm();
+    }
 
     let collected;
     try {
@@ -1607,6 +1631,31 @@ function setup(imports, register, config) {
      * confirmation (field 21: challenge, press, or none) over the whole
      * payload, exactly as sign()/decrypt() above - same `confirm` contract.
      */
+    /**
+     * A 32-BYTE SECRET THE KEY DERIVES, for this host to encrypt with (firmware plugin derive_secret;
+     * PROPOSAL-derived-keys.md). HKDF of the key's slot-128 secret, the label, the mode and the rpId this request
+     * asserts - a hash derivation, so post-quantum safe - answered in one request, sealed by the transit key.
+     *
+     * touch: the press or the 3-button code (`confirm`, as every confirmed operation takes it), shown before the
+     * request goes out because the key holds the request while it waits. touchless: answered while unlocked (unless
+     * the key-wide derive setting adds a press). The two modes give unrelated secrets for one label, and so does every
+     * rpId - a site cannot derive another's.
+     *
+     * Over the tunnel always: a browser has nothing else, and a host with USB speaks it over CTAPHID.
+     *
+     * @param {string} label  what the secret is for, e.g. "okedge/bucket/v1/<identity>"
+     * @param {{touch?: boolean, confirm?: Function, timeoutMs?: number}} [opts]
+     * @returns {Promise<Uint8Array>} 32 bytes
+     */
+    async deriveSecret(label, { touch = false, ...opts } = {}) {
+      if (typeof label !== 'string' || !label) throw new TypeError('deriveSecret needs a label');
+      const payload = concat([Uint8Array.of(touch ? DERIVE_SECRET_TOUCH : DERIVE_SECRET_TOUCHLESS), subjectHash(utf8ToBytes(label))]);
+      const out = await tunnelOperation(OKDERIVESECRET, DERIVE_SECRET_SLOT, payload, {
+        timeoutMs: 30000, ...opts, expectBytes: 32, quiet: !touch, confirmFirst: touch,
+      });
+      return out.slice(0, 32);
+    },
+
     agent: {
       identityHash: agentProto.identityHash,
 
