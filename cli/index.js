@@ -1235,6 +1235,41 @@ COMMANDS.setbackuppassphrase = {
   },
 };
 
+/*
+ * SET A PIN ON A HARD KEY, THE PERSON PRESSING IT (2026-10-27: a developer key flashed without DEBUG is blank, and
+ * the kit sets a PIN only through the debug console). The OnlyKey App's wizard, step for step: this sends each
+ * message of device.pinStep and waits for the key's answer on the wire (a release build prints nothing on a
+ * console); the digits are pressed on the key's own buttons between the steps, never typed here - so no PIN passes
+ * through this computer. A blank key takes its primary PIN at once; a secondary or self-destruct PIN needs config
+ * mode on a set-up key.
+ */
+COMMANDS.setpin = {
+  mirrors: 'OnlyKey App setup wizard',
+  usage: '[--kind primary|secondary|selfDestruct]',
+  writes: true,
+  summary: 'set a PIN by pressing it on the key (the App\'s wizard: twice, 7-10 digits on the buttons)',
+  options: { kind: { type: 'string' } },
+  async run(io, opts, args) {
+    if (args.length) throw usage('setpin takes no arguments - the PIN is pressed on the key, never typed here');
+    const kind = opts.kind || 'primary';
+    if (!['primary', 'secondary', 'selfDestruct'].includes(kind)) throw usage('--kind is primary, secondary or selfDestruct');
+    return withDevice(io, opts, async ({ device }) => {
+      const step = (label, timeoutMs) => deviceWrite(() => device.pinStep(label, { kind, timeoutMs }));
+      await step('armed');
+      io.out(`Press your new ${kind} PIN on the key's buttons now: 7 to 10 presses.`);
+      await io.prompt('Then press Enter here: ');
+      await step('stored');
+      await step('confirming');
+      io.out('Press the same PIN on the key again.');
+      await io.prompt('Then press Enter here: ');
+      await step('matched');
+      await step('committed', 30000);
+      io.out(`The ${kind} PIN is set. Unplug the key and plug it back in: it starts locked, and the PIN unlocks it.`);
+      return 0;
+    });
+  },
+};
+
 /* --expires 1y | <n>d | never -> seconds (0 = never); edge-agent and keychain cert */
 function parseExpires(text) {
   const t = String(text).trim();
