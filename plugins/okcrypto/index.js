@@ -1669,9 +1669,13 @@ function setup(imports, register, config) {
           assertPeerNotLowOrder(peer.subarray(peer.length - 32), 'the ECDH peer key');
         }
         const payload = concat([peer, agentProto.identityHash(identity)]);
-        /* over the tunnel too, as sign above (the web app's bucket key is this ECDH); the secret's length is known */
-        const out = await storedOperation(MSG.OKDECRYPT, code, payload,
-          suppliedCtap ? { expectBytes: agentProto.sharedSecretLength(keyType), ...opts } : opts);
+        /*
+         * Over the tunnel too, as sign above (the web app's bucket key is this ECDH). The firmware answers EVERY agent
+         * ECDH with 64 bytes - an X25519 secret padded - and seals all 64 (the emulator's console, 2026-10-26: "transit
+         * seal len=64", 84 bytes on the wire); waiting for the secret's own 32 waited for a frame that never comes,
+         * until the key dropped its answer. So 64 here, and the secret is cut to its length below.
+         */
+        const out = await storedOperation(MSG.OKDECRYPT, code, payload, suppliedCtap ? { expectBytes: 64, ...opts } : opts);
         const secret = out.slice(0, agentProto.sharedSecretLength(keyType));
         assertNonZeroSecret(secret, 'the ECDH secret the device returned');
         return secret;
