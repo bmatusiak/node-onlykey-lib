@@ -28,7 +28,7 @@ export function createWebAuthnCtap({ credentials, rpId, timeoutMs, randomBytes, 
 }): {
     rpId: string | null;
     /**
-     * One tunnelled round trip.
+     * One tunnelled round trip, in its turn (see ONE CEREMONY AT A TIME).
      *
      * @param {Map} params  from ctap.assertionParams: 1 rpId, 2 clientDataHash,
      *   3 allowList

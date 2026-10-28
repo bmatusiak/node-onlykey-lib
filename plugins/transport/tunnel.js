@@ -27,6 +27,7 @@
 'use strict';
 
 const { assertTransport } = require('../../src/transport/contract');
+const { laneOf } = require('../../src/transport/lane');
 
 const WHY = 'this host has no vendor interface - it reaches the key only '
   + 'through the WebAuthn tunnel (plugins/transport/tunnel). Use okcrypto with a '
@@ -60,9 +61,19 @@ function setup(imports, register) {
     async requestNow({ iface } = {}) {
       throw refusal(`request on interface ${iface}`);
     },
-    /* the lane's shape (src/transport/lane.js); whatever runs in it meets the refusals above */
-    exclusive(fn) {
-      return Promise.resolve().then(fn);
+    /*
+     * A REAL LANE, not a stand-in (box, 2026-10-28). The vendor side is refused, but Edge and okcrypto run their
+     * tunnel conversations in this lane (inLane), and a conversation over the tunnel is several ceremonies: a request
+     * and its polls, an Edge answer and its SUB.MORE (the key keeps the ML-DSA half only until its next Edge request).
+     * The stand-in ran every caller at once: the web app's head poll landed between CHECKPOINT and MORE, the key
+     * answered MORE "unknown request", and a new copy could never verify ("unsigned"). The WebAuthn ctap's own lane
+     * keeps single ceremonies apart; this one keeps conversations apart.
+     */
+    exclusive(fn, opts) {
+      return laneOf(transport)(fn, opts);
+    },
+    urgentWaiting() {
+      return laneOf(transport).urgentWaiting();
     },
 
     /*

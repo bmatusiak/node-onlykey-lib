@@ -207,6 +207,14 @@ function createWebAuthnCtap({
 
     /**
      * One tunnelled round trip, in its turn (see ONE CEREMONY AT A TIME).
+     *
+     * @param {Map} params  from ctap.assertionParams: 1 rpId, 2 clientDataHash,
+     *   3 allowList
+     * @param {object} [opts]
+     * @param {number} [opts.timeoutMs]
+     * @param {AbortSignal} [opts.signal]  to cancel the ceremony
+     * @returns {Promise<Map>}  2 = authenticatorData, 3 = signature - the shape
+     *   ctap.decodeAssertion reads, the same one CtapHid returns
      */
     getAssertion(params, opts = {}) {
       const turn = lane.then(() => ceremony(params, opts));

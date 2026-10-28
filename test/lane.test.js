@@ -80,3 +80,28 @@ test('lane: two callers on one key each get their own answer, even when the firs
   assert.equal(viaRequest[1][0], 2);
   await destroy();
 });
+
+/*
+ * The web app's transport (box, 2026-10-28): its lane was a stand-in that ran every caller at once, so the web app's
+ * head poll landed between an Edge CHECKPOINT and its SUB.MORE and the key answered MORE "unknown request". Its
+ * conversations take turns like every other transport's.
+ */
+test('lane: the tunnel transport (the web app) keeps conversations apart too', async () => {
+  let transport;
+  require('../plugins/transport/tunnel')({}, (err, out) => { transport = out.transport; });
+  const log = [];
+  const talk = (name, ms) => inLane(transport, async () => {
+    log.push(`${name} start`);
+    await tick(ms);
+    log.push(`${name} end`);
+  });
+  await Promise.all([talk('checkpoint+more', 20), talk('head poll', 1)]);
+  assert.deepEqual(log, ['checkpoint+more start', 'checkpoint+more end', 'head poll start', 'head poll end']);
+  const order = [];
+  const busy = inLane(transport, () => tick(10));
+  const plain = inLane(transport, async () => order.push('plain'));
+  const urgent = inLane(transport, async () => order.push('urgent'), { urgent: true });
+  assert.equal(transport.urgentWaiting(), true);
+  await Promise.all([busy, plain, urgent]);
+  assert.deepEqual(order, ['urgent', 'plain'], 'a Hold or Revoke goes first');
+});
