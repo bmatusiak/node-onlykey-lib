@@ -358,10 +358,29 @@ function verifyCore(copy, key, prev, out) {
     return { ok: true, verifiedThrough: -1, head: h.head };
   }
 
+  /*
+   * A COPY THAT STARTS AT A CHECKPOINT (Brad, 2026-10-28: "long Edge history - there is where checkpoint should be
+   * fixing the issue"). copy.anchor = {seq, head}: a new device (the web app in a fresh browser) does not read the key's
+   * history over a slow link; it starts its copy at the key's head as a checkpoint signed it, and holds only what comes
+   * after. Nothing before the anchor is claimed or checked - the verdict is "verified from #seq".
+   *
+   * THE ANCHOR IS STORED, AND STILL SAFE: unlike opts.from below (a head this session verified, never one from storage),
+   * an anchor comes from the device's own storage, which anything on it can edit. It is never trusted on its own: the
+   * links after it must weld from its head up to the key's live head, and the key's checkpoint for that head must verify
+   * with both halves (below). The chain hash is one-way, so a forged anchor cannot weld to a head the key signed. What it
+   * gives up, it gives up strictly: a budget opened before the anchor has no opening here, so a spend of it after the
+   * anchor fails 'budget-opening-missing'; debts the key still owes from before it fail 'debts' until settled. The
+   * leniency a LOSS buys (a press the key recorded) is not extended to it.
+   */
+  const anchor = !prev && copy.anchor && Number.isInteger(copy.anchor.seq) && copy.anchor.head ? copy.anchor : null;
+  const base = anchor ? anchor.seq : -1;
+
   /* from a previous state: the chain only from the last verified link - anything short of clean goes back to the full check */
   const a = prev
     ? assess({ ...copy, links: entries }, key, { from: { seq: prev.lastSeq, head: prev.lastHead } })
-    : assess({ ...copy, links: entries }, key);
+    : anchor
+      ? assess({ ...copy, links: entries }, key, { from: { seq: anchor.seq, head: anchor.head } })
+      : assess({ ...copy, links: entries }, key);
   const v = a.chain;
   if (prev && (!v.ok || v.gaps.length || a.open.length || a.missing.length)) {
     out.why = !v.ok ? 'new part: ' + (v.reason || 'not ok') : v.gaps.length ? 'new part has a gap' : a.open.length ? 'new part has an open link' : 'new part has missing links';
@@ -392,6 +411,7 @@ function verifyCore(copy, key, prev, out) {
   const start = chain.chainStart(entries, deviceId);
   const memo = new Map([[start.fromSeq - 1, start.fromHead]]);
   if (prev) memo.set(prev.lastSeq, prev.lastHead);
+  if (anchor) memo.set(anchor.seq, anchor.head);
   const headAt = (seq) => {
     if (memo.has(seq)) return memo.get(seq);
     const e = bySeq.get(seq);
@@ -411,13 +431,13 @@ function verifyCore(copy, key, prev, out) {
   }
 
   /* budgets: each opening, then its self-presses in step order */
-  const fields = raw.map((l) => chain.decodeLink(l)).filter((f) => f.seq > (prev ? prev.lastSeq : lastGapEnd));
+  const fields = raw.map((l) => chain.decodeLink(l)).filter((f) => f.seq > (prev ? prev.lastSeq : Math.max(lastGapEnd, base)));
   /*
    * R3: every link is version 1 - the first release (Brad, 2026-10-08: "v0 turns to v1");
    * nothing older is read. Over every link the copy holds on a full check (a gap must not
-   * hide one), over the new ones from a kept state.
+   * hide one), over the new ones from a kept state - and from an anchor, those after it.
    */
-  for (const f of prev ? fields : raw.map((l) => chain.decodeLink(l))) {
+  for (const f of prev || anchor ? fields : raw.map((l) => chain.decodeLink(l))) {
     if (!f.versionKnown) return fail('version', { seq: f.seq, detail: { version: f.version } });
   }
   const openings = copy.openings || {};
@@ -521,7 +541,7 @@ function verifyCore(copy, key, prev, out) {
   }
 
   /* the debts the copy implies (from after the last covered gap), against the debts the key reports */
-  const d = keyDebts(raw.filter((l) => chain.decodeLink(l).seq > lastGapEnd));
+  const d = keyDebts(raw.filter((l) => chain.decodeLink(l).seq > Math.max(lastGapEnd, base)));
   /* a debt a CONTINUE carried counts too: the key owes it until a receipt or a settle on this chain (receipts.keyDebts) */
   if (d.owed.length + d.carried !== h.owed) {
     return fail('debts', { detail: { copy: { owed: d.owed, carried: d.carried }, key: { owed: h.owed } } });

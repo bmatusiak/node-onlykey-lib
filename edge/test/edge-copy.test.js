@@ -73,6 +73,44 @@ test('copy: a copy of the whole story verifies, through the live head', () => {
   assert.deepEqual(v, { ok: true, verifiedThrough: s.key.head.seq, head: s.key.head.head });
 });
 
+/* A COPY THAT STARTS AT A CHECKPOINT (2026-10-28): a new device anchors at the key's signed head, not its history */
+test('copy, anchored: a copy that starts at the key\'s checkpoint verifies from there - with no links, or with the links after it', () => {
+  const s = story();
+  const at = s.key.head.seq;
+  /* a fresh device: the key's head, nothing read before it */
+  const fresh = copy.verifyCopy({ links: [], openings: {}, anchor: { seq: at, head: s.key.head.head } }, s.key);
+  assert.deepEqual(fresh, { ok: true, verifiedThrough: at, head: s.key.head.head });
+  /* anchored before the budget opened (after the first receipt): everything after it, the budget included, is checked */
+  const grantAt = s.grantId - 1;
+  const from = grantAt - 1;
+  const later = copy.verifyCopy({ links: s.links.slice(from + 1), openings: s.openings, anchor: { seq: from, head: s.links[from].head } }, s.key);
+  assert.deepEqual(later, { ok: true, verifiedThrough: at, head: s.key.head.head });
+});
+
+test('copy, anchored: a forged anchor proves nothing - it must weld to the head the key signed', () => {
+  const s = story();
+  const at = s.key.head.seq;
+  const fake = new Uint8Array(32).fill(0x66);
+  /* no links: the anchor would be the head - and it is not the key's head (the weld check, before the signature) */
+  const alone = copy.verifyCopy({ links: [], openings: {}, anchor: { seq: at, head: fake } }, s.key);
+  assert.equal(alone.ok, false);
+  assert.equal(alone.reason, 'chain');
+  /* with links after it: they do not weld from a head the chain never had */
+  const from = s.grantId - 2;
+  const welded = copy.verifyCopy({ links: s.links.slice(from + 1), openings: s.openings, anchor: { seq: from, head: fake } }, s.key);
+  assert.equal(welded.ok, false);
+  assert.equal(welded.reason, 'chain');
+});
+
+test('copy, anchored: a budget opened before the anchor stays unchecked here - its spends after it fail closed', () => {
+  const s = story();
+  const grantAt = s.grantId - 1;
+  /* anchored AT the grant-create: its opening is behind the anchor, its spends after it */
+  const v = copy.verifyCopy({ links: s.links.slice(grantAt + 1), openings: s.openings, anchor: { seq: grantAt, head: s.links[grantAt].head } }, s.key);
+  assert.equal(v.ok, false);
+  assert.equal(v.reason, 'budget-opening-missing');
+});
+
 /* ONE HYBRID ANCHOR PER COPY (Brad, 2026-10-10: "yes do B") */
 test('copy, "B": an older opening with only P-256 verifies inside a copy whose NEWEST checkpoint is hybrid; a broken or missing newest pq half fails', () => {
   const s = story();
