@@ -224,7 +224,7 @@ It needs one more optional peer, per platform, exactly like `node-hid`:
 
 | platform | stack | install |
 | --- | --- | --- |
-| Windows | WinRT, through the noble fork (`@stoprocent/noble` 2.8.0-bm.1, N-API prebuilds) | `npm install github:bmatusiak/noble-ble#d41c7dd91130ae04603858249dd91edf2a324053` |
+| Windows | WinRT, through the noble fork (`@stoprocent/noble` 2.8.0-bm.2, N-API prebuilds, nothing compiled on install) | `npm install github:bmatusiak/noble-ble#d16fc663a0169d69c7f6a467974ce8d2c799d006` |
 | Linux | BlueZ's own GATT API over D-Bus, through `dbus-next` | `npm install dbus-next` |
 
 An app that syncs over Bluetooth lists them as its own dependencies - the ok-edge

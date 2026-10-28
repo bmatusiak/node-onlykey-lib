@@ -106,7 +106,7 @@
   },
   "peerDependencies": {
     "node-hid": "^3.4.0",
-    "@stoprocent/noble": "github:bmatusiak/noble-ble#d41c7dd91130ae04603858249dd91edf2a324053",
+    "@stoprocent/noble": "github:bmatusiak/noble-ble#d16fc663a0169d69c7f6a467974ce8d2c799d006",
     "dbus-next": "^0.10.2"
   },
   "peerDependenciesMeta": {

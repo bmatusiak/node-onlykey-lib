@@ -254,9 +254,14 @@ function createAssembler() {
  * and the failure is lost inside its native handler - "did not list its services".
  * bmatusiak/noble-ble fix/win-discovery asks for our one service by UUID and reports
  * failures (2.8.0-bm.1). Proven on the Pixel 6a: 0 of 2 before, 6 of 6 after.
+ *
+ * 2.8.0-bm.2 (2026-10-28) installs without compiling: its Windows prebuilds are rebuilt from that fix,
+ * and it has no install step - npm 11 broke a GLOBAL install of a git dependency with one (the
+ * dependency's preparation inherits -g and its node-gyp-build is not there), so `npm install -g
+ * bmatusiak/onlykey-js` - the CLI in one install - lost Bluetooth on Windows.
  */
-const NOBLE_FORK = 'github:bmatusiak/noble-ble#d41c7dd91130ae04603858249dd91edf2a324053';
-const NOBLE_FORK_VERSION = '2.8.0-bm.1';
+const NOBLE_FORK = 'github:bmatusiak/noble-ble#d16fc663a0169d69c7f6a467974ce8d2c799d006';
+const NOBLE_FORK_VERSION = '2.8.0-bm.2';
 
 function loadOptional(name, loader, why) {
   try {
