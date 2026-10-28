@@ -79,6 +79,28 @@ test('control ship --plan counts without a key; --ble names the phone in the req
   }
 });
 
+test('control ship --plan: a repo with no upstream STOPs naming root; root counts every commit, the first one too', async () => {
+  const home = tmp('okjs-ctl-home-');
+  const repo = repoWithWork();
+  try {
+    /* the default base (@{u}) does not resolve in a repo never pushed: no guess at what to sign */
+    const a = io();
+    assert.equal(await control.run({ io: a, opts: {}, argv: ['ship', repo, '--plan'], net: 'live', home }), 1);
+    assert.match(a.lines.join('\n'), /STOP: .*base @\{u\} does not resolve \(no upstream yet\).*:root:/);
+    const b = io();
+    assert.equal(await control.run({ io: b, opts: {}, argv: ['ship', `${repo}:nope`, '--plan'], net: 'live', home }), 1);
+    assert.match(b.lines.join('\n'), /STOP: .*base nope does not resolve - /);
+    /* root: both commits - the first one, which has no parent, included */
+    const c = io();
+    const branch = git(repo, 'branch', '--show-current');
+    assert.equal(await control.run({ io: c, opts: {}, argv: ['ship', `${repo}:root:${branch}`, '--plan'], net: 'live', home }), 0);
+    assert.deepEqual(c.lines, ['plan: 2 signature(s), 1 push(es)']);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('control: a path that is not a repo STOPs; an unknown verb is a usage error', async () => {
   const home = tmp('okjs-ctl-home-');
   try {

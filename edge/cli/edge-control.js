@@ -136,15 +136,27 @@ async function run({ io, opts, argv, net, home }) {
     const abs = path.resolve(repo);
     if (!fs.existsSync(path.join(abs, '.git'))) stop(`${repo} is not a git repository`);
     for (const b of also) if (!/^[\w./-]+$/.test(b)) stop(`${repo}: "${b}" is not a branch name`);
-    return { spec: abs + (base ? `:${base}` : '') + (branchSpec ? `:${branchSpec}` : ''), repo: abs, name: path.basename(abs), base: base || '@{u}', branch: branch || currentBranch(abs), also };
+    const r = { spec: abs + (base ? `:${base}` : '') + (branchSpec ? `:${branchSpec}` : ''), repo: abs, name: path.basename(abs), base: base || '@{u}', branch: branch || currentBranch(abs), also };
+    /*
+     * A FIRST PUSH NAMES ITS BASE "root" (2026-10-28, bmatusiak/onlykey-js: a new repository has no upstream, so
+     * `@{u}..HEAD` failed and the plan counted the error line as one commit - the first commit would have gone up
+     * unsigned). `root` = every commit from the first; any other base must resolve, or the plan stops saying so
+     * rather than guessing what to sign.
+     */
+    if (r.base !== 'root' && git(abs, 'rev-parse', '--verify', '-q', `${r.base}^{commit}`).code !== 0) {
+      stop(`${r.name}: base ${r.base} does not resolve${r.base === '@{u}' ? ' (no upstream yet)' : ''} - for a first push into an empty repository name the base root: ${repo}:root:${r.branch}`);
+    }
+    return r;
   }
+  /* the commits a ship takes: those after the base, or every one for a first push */
+  const range = (r) => (r.base === 'root' ? 'HEAD' : `${r.base}..HEAD`);
   const rebasing = (r) => fs.existsSync(path.join(r.repo, '.git', 'rebase-merge'));
   function finishRebase(r) {
     for (let i = 0; i < 500 && rebasing(r); i++) git(r.repo, '-c', 'commit.gpgsign=false', 'rebase', '--continue');
     if (rebasing(r)) stop(`${r.name}: a rebase is in progress and will not finish`);
   }
   /* commits after base, oldest first (G/U/E = signed; E = by a key whose public half is not on this machine) */
-  const commits = (r) => git(r.repo, 'log', '--reverse', '--format=%H%x09%G?%x09%s', `${r.base}..HEAD`).out.trim().split('\n').filter(Boolean)
+  const commits = (r) => git(r.repo, 'log', '--reverse', '--format=%H%x09%G?%x09%s', range(r)).out.trim().split('\n').filter(Boolean)
     .map((l) => { const [hash, g, subject] = l.split('\t'); return { hash, signed: /^[GUE]$/.test(g), subject }; });
   const unsigned = (r) => commits(r).filter((c) => !c.signed);
 
@@ -258,7 +270,9 @@ async function run({ io, opts, argv, net, home }) {
       try {
         /* GIT_EDITOR=true: no step may wait on an editor nobody sees (a scratch run of this flow hung on one) */
         const noEditor = { env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'sed -i s/^pick/edit/' } };
-        runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '-q', '-i', `${todo[0].hash}^`], noEditor);
+        /* the first commit of a repository has no parent to rebase onto: --root takes it too */
+        const onto = git(wt, 'rev-parse', '--verify', '-q', `${todo[0].hash}^`).code === 0 ? `${todo[0].hash}^` : '--root';
+        runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '-q', '-i', onto], noEditor);
         if (!wtRebasing()) stop(`${r.name}: the rebase did not stop at ${todo[0].hash.slice(0, 7)}`);
         /* the signed commits go on the branch - all of them, or as many as were signed before a stop */
         const keep = () => {
@@ -298,7 +312,8 @@ async function run({ io, opts, argv, net, home }) {
     }
     if (!ahead) return;
     const named = [r.branch, ...r.also].join(' + ');
-    const out = spend(`push: ${r.name} ${named}`, 'git', '-C', r.repo, 'push', 'origin', r.branch, ...r.also.map((b) => `${r.branch}:${b}`));
+    /* a first push also sets the upstream, so the next ship's default base (@{u}) is there */
+    const out = spend(`push: ${r.name} ${named}`, 'git', '-C', r.repo, 'push', ...(r.base === 'root' ? ['-u'] : []), 'origin', r.branch, ...r.also.map((b) => `${r.branch}:${b}`));
     for (const line of out.match(/\S+(?:\.\.\.?\S+)?\s+\S+ -> \S+/g) || ['pushed']) say(`  ${line}`);
     pushCount += 1;
     if (PROGRESS) PROGRESS.step(`pushed ${r.name} (${named})`);
@@ -434,7 +449,7 @@ ${c} edge control status               # the budget status
 ${c} edge control settings             # where the batch and settings live (the Edge home)
 \`\`\`
 
-A repo is a path, optionally \`<path>:<base>:<branch>\` (defaults: the upstream \`@{u}\`, the current branch); \`<branch>+<other>\` also moves the remote branch \`<other>\` to the same head in the same push (\`ok-edge::main+cloudflare\`). Commits land unsigned (\`git -c commit.gpgsign=false commit …\`) and \`ship\` signs them.
+A repo is a path, optionally \`<path>:<base>:<branch>\` (defaults: the upstream \`@{u}\`, the current branch); \`<branch>+<other>\` also moves the remote branch \`<other>\` to the same head in the same push (\`ok-edge::main+cloudflare\`). A first push into an empty repository names the base \`root\` (\`onlykey-js:root:main\`): every commit is signed, and the push sets the upstream. Commits land unsigned (\`git -c commit.gpgsign=false commit …\`) and \`ship\` signs them.
 
 ## ship, step by step
 1. Counts the work: signatures = commits after the base that are not signed; pushes = repos with commits ahead.
