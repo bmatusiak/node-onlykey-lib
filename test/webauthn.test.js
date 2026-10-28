@@ -96,6 +96,32 @@ test('the browser is asked to offer exactly the encoded keyhandle', async () => 
   assert.equal(publicKey.userVerification, 'discouraged');
 });
 
+test('ceremonies take turns: a second request waits for the first, and a failed one does not stop the next', async () => {
+  /* a browser runs one WebAuthn request per page - a second while one is out fails "A request is already pending" */
+  let active = 0;
+  let most = 0;
+  const order = [];
+  let calls = 0;
+  const credentials = fakeCredentials(async () => {
+    const n = ++calls;
+    active++;
+    most = Math.max(most, active);
+    order.push(`start ${n}`);
+    await new Promise((r) => setTimeout(r, 20));
+    order.push(`end ${n}`);
+    active--;
+    if (n === 2) throw domError('NotAllowedError');
+    return { signature: [0x00] };
+  });
+  const webauthn = createWebAuthnCtap({ credentials, randomBytes: fixedRandom });
+
+  const results = await Promise.allSettled([1, 2, 3].map(() => webauthn.getAssertion(sampleParams())));
+
+  assert.equal(most, 1, 'two ceremonies were out at once');
+  assert.deepEqual(order, ['start 1', 'end 1', 'start 2', 'end 2', 'start 3', 'end 3']);
+  assert.deepEqual(results.map((r) => r.status), ['fulfilled', 'rejected', 'fulfilled']);
+});
+
 test("the tunnel's rpId passes through to the browser", async () => {
   const credentials = fakeCredentials(() => ({ signature: [0x00] }));
   const webauthn = createWebAuthnCtap({ credentials, randomBytes: fixedRandom });

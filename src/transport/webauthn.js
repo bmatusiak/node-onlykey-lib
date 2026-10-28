@@ -194,10 +194,29 @@ function createWebAuthnCtap({
     );
   }
 
-  return {
+  /*
+   * ONE CEREMONY AT A TIME. A browser runs one WebAuthn request per page: a second credentials.get() while one is out
+   * fails at once ("A request is already pending"). A page has several askers - the key check when the window comes
+   * back, Edge's sync, okcrypto's derives, an Edge budget whose request waits on the key for its press - and every one
+   * of them comes through here, so here they take turns: each ceremony starts when the one before it has ended, however
+   * it ended. Found in the ok-edge web app (2026-10-28): an Edge approve queued behind a collision and never ran.
+   */
+  let lane = Promise.resolve();
+  const api = {
     rpId: rpId || null,
 
     /**
+     * One tunnelled round trip, in its turn (see ONE CEREMONY AT A TIME).
+     */
+    getAssertion(params, opts = {}) {
+      const turn = lane.then(() => ceremony(params, opts));
+      lane = turn.then(() => {}, () => {});
+      return turn;
+    },
+  };
+  return api;
+
+  /**
      * One tunnelled round trip.
      *
      * @param {Map} params  from ctap.assertionParams: 1 rpId, 2 clientDataHash,
@@ -208,7 +227,7 @@ function createWebAuthnCtap({
      * @returns {Promise<Map>}  2 = authenticatorData, 3 = signature - the shape
      *   ctap.decodeAssertion reads, the same one CtapHid returns
      */
-    async getAssertion(params, opts = {}) {
+  async function ceremony(params, opts = {}) {
       const id = keyhandleOf(params);
 
       /*
@@ -312,8 +331,7 @@ function createWebAuthnCtap({
         [2, new Uint8Array(response.authenticatorData)],
         [3, new Uint8Array(response.signature)],
       ]);
-    },
-  };
+  }
 }
 
 module.exports = {
