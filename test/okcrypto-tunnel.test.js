@@ -336,6 +336,37 @@ test('right after a connect the operation waits for the staged reply to expire, 
   await app.destroy();
 });
 
+/*
+ * EXPERIMENTAL (emulator patch 0016): a key that wipes a delivered reply at the next request. The host says so
+ * (wipesDeliveredReply) and the waits go: two signs right after the connect, back to back, no settle, both answered
+ * with their own signature - the fake keeps its replies for a minute, so a request it answered with the last reply
+ * would fail by name (the stale-reply test above).
+ */
+test('wipesDeliveredReply: a key with 0016 is asked again at once - no wait, and every answer is its own', async () => {
+  const device = fakeTunnelDevice({ wipeMs: 60000, wipesDelivered: true });
+  const app = await start(device, { wipesDeliveredReply: true });
+  const settles = [];
+  app.services.okcrypto.on('settle', (e) => settles.push(e));
+  await app.services.okcrypto.connectTunnel();
+  const a = await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(device) });
+  const b = await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST.map((x) => x ^ 0xff), { ...FAST, confirm: pressing(device) });
+  assert.equal(settles.length, 0, 'a wait before a request the key would answer fresh');
+  assert.equal(a.length, 64);
+  assert.equal(b.length, 64);
+  assert.notDeepEqual(Array.from(a), Array.from(b), 'the second sign was answered with the first sign\'s reply');
+  await app.destroy();
+});
+
+test('wipesDeliveredReply is off by default: the same key still gets the wait', async () => {
+  const device = fakeTunnelDevice({ wipesDelivered: true });
+  const app = await start(device);
+  const settles = [];
+  app.services.okcrypto.on('settle', (e) => settles.push(e));
+  await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(device) });
+  assert.equal(settles.length, 1);
+  await app.destroy();
+});
+
 test('a payload that cannot be sealed without padding is refused before anything is sent', async () => {
   /* 18 + 20 = 38 bytes: a 48-byte keyhandle, which the encoder must pad. */
   const device = fakeTunnelDevice();

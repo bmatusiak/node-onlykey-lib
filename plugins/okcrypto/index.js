@@ -692,6 +692,21 @@ function setup(imports, register, config) {
    * device can run in milliseconds - a real key's timer does not move.
    */
   const STAGED_WIPE_MS = Number.isFinite(settings.stagedWipeMs) ? settings.stagedWipeMs : 5500;
+  /*
+   * EXPERIMENTAL - A KEY THAT WIPES A DELIVERED REPLY AT THE NEXT REQUEST (emulator patch 0016, Brad 2026-10-28:
+   * "as an experimental speed improvement"). Such a key stops the Wipedata timer and wipes at once when a new
+   * request arrives after its last reply was delivered whole, so the wait above is 5.5 s spent for nothing - and a
+   * host making several requests in a row (Edge, the MCP plan runner) pays it before every one. Only the host knows
+   * its key carries the patch (a patch does not change the version the key reports), so it says so:
+   * `wipesDeliveredReply: true`. Never for a key without it: there the wait is what keeps a request from being
+   * answered with the last reply.
+   *
+   * replyWhole: the last operation (or the connect) got its whole answer. A reply abandoned partway - a timeout, a
+   * refusal, a thrown error - is not "delivered whole" to the key either, so the patched key would not wipe it, and
+   * the wait is kept for the request after it.
+   */
+  const WIPES_DELIVERED = settings.wipesDeliveredReply === true;
+  let replyWhole = false;
 
   async function tunnelSend(bound, req, opts) {
     const reply = await bound.send(req, opts);
@@ -700,7 +715,11 @@ function setup(imports, register, config) {
   }
 
   async function settleStagedReply() {
+    /* read what the LAST answer was, then this request begins: its own answer is not whole yet */
+    const whole = replyWhole;
+    replyWhole = false;
     if (!lastStagedAt) return;
+    if (WIPES_DELIVERED && whole) return;
     const since = Date.now() - lastStagedAt;
     if (since >= STAGED_WIPE_MS) return;
     const remaining = STAGED_WIPE_MS - since;
@@ -1157,7 +1176,15 @@ function setup(imports, register, config) {
    *
    * One WebAuthn ceremony, so one browser prompt.
    */
-  async function connectTunnel({ timeoutMs = 60000 } = {}) {
+  /* replyWhole follows the connect too: its answer is staged like any other (WIPES_DELIVERED) */
+  async function connectTunnel(opts) {
+    replyWhole = false;
+    const out = await connectTunnelRun(opts);
+    replyWhole = true;
+    return out;
+  }
+
+  async function connectTunnelRun({ timeoutMs = 60000 } = {}) {
     if (typeof randomBytes !== 'function') {
       throw new Error('okcrypto needs randomBytes from the host plugin to connect the tunnel');
     }
@@ -1375,7 +1402,19 @@ function setup(imports, register, config) {
     return inLane(transport, () => tunnelOperationNow(...args));
   }
 
-  async function tunnelOperationNow(msg, slot, data, opts = {}) {
+  /* replyWhole: true only once this operation has its whole answer (WIPES_DELIVERED) */
+  async function tunnelOperationNow(...args) {
+    try {
+      const out = await tunnelOperationRun(...args);
+      replyWhole = true;
+      return out;
+    } catch (e) {
+      replyWhole = false;
+      throw e;
+    }
+  }
+
+  async function tunnelOperationRun(msg, slot, data, opts = {}) {
     const {
       confirm = null,
       duo = false,

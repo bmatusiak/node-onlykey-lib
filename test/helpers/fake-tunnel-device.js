@@ -64,6 +64,8 @@ function fakeTunnelDevice({
   derived = Uint8Array.from({ length: 65 }, (_, i) => (i === 0 ? 0x04 : i)),
   /* (cmd, payload) => result bytes, to model a classic RSA/ECC answer's length. */
   results = null,
+  /* emulator patch 0016 (experimental): a new request, not a poll, wipes a reply already delivered whole */
+  wipesDelivered = false,
 } = {}) {
   const status = `UNLOCKED${firmware}`;
   const v2 = version.capabilities(status).transitV2 === true;
@@ -72,6 +74,7 @@ function fakeTunnelDevice({
   let ctrOut = 0;
   let staged = null;
   let cursor = 0;
+  let delivered = false;
   let lastServedAt = 0;
   let lastOpt3 = 0;
   let packets = [];
@@ -102,7 +105,7 @@ function fakeTunnelDevice({
   }
 
   /* Staging arms the wipe too: fadeoff() and the serve both call wipedata(). */
-  function stage(bytes) { staged = Uint8Array.from(bytes); cursor = 0; lastServedAt = Date.now(); }
+  function stage(bytes) { staged = Uint8Array.from(bytes); cursor = 0; delivered = false; lastServedAt = Date.now(); }
   function stageText(text) { stage(fromLatin1(text)); }
 
   function sealOut(plain) {
@@ -131,7 +134,7 @@ function fakeTunnelDevice({
       const piece = staged.subarray(cursor, cursor + 512);
       cursor += piece.length;
       lastServedAt = Date.now();
-      if (cursor >= staged.length) cursor = 0; /* delivered, and STILL staged */
+      if (cursor >= staged.length) { cursor = 0; delivered = true; } /* delivered, and STILL staged */
       return answer(CODE.SUCCESS, piece);
     }
     /* ret with no writeback: sigder's default 72 bytes, 71 of them stack. */
@@ -212,6 +215,8 @@ function fakeTunnelDevice({
       } else {
         plain = transit.box(key, region);
       }
+
+      if (wipesDelivered && cmd !== MSG.OKPING && staged && delivered && !cryptoAuth && !packets.length) wipetasks();
 
       if (cmd === MSG.OKPING) {
         if (!cryptoAuth && !staged) stageText('Error incorrect challenge was entered');
