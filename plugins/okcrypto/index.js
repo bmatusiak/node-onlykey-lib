@@ -1361,7 +1361,21 @@ function setup(imports, register, config) {
    * navigator.credentials.get() - one ceremony each. See the report in
    * CHANGELOG for the counts.
    */
-  async function tunnelOperation(msg, slot, data, opts = {}) {
+  /*
+   * A TUNNEL OPERATION IS ONE CONVERSATION, in the key's lane like a derive and a vendor operation. Every OKCONNECT
+   * re-keys the device (above), and every derive is one: a derive from another part of a page (its key check, the
+   * bucket, a site's password) landing between a request and its polls left the reply sealed under a key this session
+   * no longer held - "transit v2 message failed authentication", counter 0 (the ok-edge web app's Edge tab,
+   * 2026-10-28). Laned, the request, its press and its answer run as one turn.
+   *
+   * tunnelRequest() runs it UNLANED (tunnelOperationNow): its caller, Edge, already holds the lane for the whole call
+   * (edge/plugin exclusive()), and the lane is not re-entrant.
+   */
+  function tunnelOperation(...args) {
+    return inLane(transport, () => tunnelOperationNow(...args));
+  }
+
+  async function tunnelOperationNow(msg, slot, data, opts = {}) {
     const {
       confirm = null,
       duo = false,
@@ -1818,7 +1832,8 @@ function setup(imports, register, config) {
           + 'interface, session.connect() reads the version',
         );
       }
-      return connectTunnel(opts);
+      /* in the key's lane: a connect re-keys the device, so it must not land inside another conversation */
+      return inLane(transport, () => connectTunnel(opts));
     },
 
     /**
@@ -1827,10 +1842,13 @@ function setup(imports, register, config) {
      * with nothing of a crypto operation's own: no challenge event, no confirm - a request that waits for a press is
      * the plugin's to announce (Edge's sheets), and the polls simply see it pending until the press.
      * Resolves { data } (opened) or { text } (the key answered in a sentence).
+     *
+     * The CALLER HOLDS THE KEY'S LANE (Edge does, for each whole call), so this runs unlaned - laning it again would
+     * wait on itself (see tunnelOperation).
      */
     async tunnelRequest(msg, slot, data = [], opts = {}) {
       if (!suppliedCtap) throw new Error('tunnelRequest is for a host that reaches the key only through a supplied ctap (the web app)');
-      return tunnelOperation(msg, slot, Uint8Array.from(data), { ...opts, quiet: true, confirm: null, raw: true });
+      return tunnelOperationNow(msg, slot, Uint8Array.from(data), { ...opts, quiet: true, confirm: null, raw: true });
     },
 
     /**
