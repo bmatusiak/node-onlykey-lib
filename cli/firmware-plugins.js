@@ -137,10 +137,22 @@ function apply(plugins, stageDir) {
   const libOnlykey = path.join(stageDir, 'libraries', 'onlykey');
   /* a plugin staged by an EARLIER run must not linger in this one */
   fs.rmSync(path.join(libOnlykey, 'plugins'), { recursive: true, force: true });
+  /*
+   * A HOOK MAY NEED ANOTHER PLUGIN (2026-10-28, edge over WebAuthn): `with: '<plugin>'` applies the hook only when
+   * that plugin is in the same build. Edge's WebAuthn path sits behind ctap_bridge's switch, and the switch's gate is
+   * itself a ctap_bridge hook - so without the bridge those hooks are left out, and edge stays exactly the USB plugin
+   * it was, rather than reaching the browser with no switch in front of it.
+   */
+  const present = new Set(plugins.map((p) => p.name));
   const staged = plugins.map((p) => {
     const files = copyTree(path.join(p.dir, 'src'), path.join(libOnlykey, 'plugins', p.name));
-    for (const [i, h] of p.hooks.entries()) applyHook(stageDir, h, `plugin "${p.name}" hook ${i + 1} (${h.file})`);
-    return { name: p.name, hooks: p.hooks.length, files, notes: p.notes || '', backup: Boolean(p.backup) };
+    let hooks = 0;
+    for (const [i, h] of p.hooks.entries()) {
+      if (h.with && !present.has(h.with)) continue;
+      applyHook(stageDir, h, `plugin "${p.name}" hook ${i + 1} (${h.file})`);
+      hooks += 1;
+    }
+    return { name: p.name, hooks, files, notes: p.notes || '', backup: Boolean(p.backup) };
   });
   stageBackups(plugins.filter((p) => p.backup), stageDir);
   return staged;

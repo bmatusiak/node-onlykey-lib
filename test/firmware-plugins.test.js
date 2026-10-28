@@ -53,6 +53,21 @@ test('apply: the source is copied and each hook lands exactly where it was ancho
   assert.ok(fs.existsSync(path.join(f.stage, 'libraries', 'onlykey', 'plugins', 'demo', 'okplugin_demo.cpp')));
 });
 
+test('a hook `with` another plugin lands only when that plugin is in the build - even when its anchor is missing', () => {
+  const f = fixture({ hooks: [
+    { file: 'okcore.cpp', anchor: '#include "onlykey.h"\n', insert: 'after', text: '#include "plugins/demo/okplugin_demo.h"\n' },
+    /* an anchor that is not there at all: skipped, not refused, while the other plugin is absent */
+    { file: 'okcore.cpp', anchor: 'NOT IN THE FILE\n', insert: 'after', text: 'BRIDGED\n', with: 'bridge' },
+  ] });
+  const loaded = plugins.load(['demo'], { dir: f.dir, release: {} });
+  const [r] = plugins.apply(loaded, f.stage);
+  assert.equal(r.hooks, 1);
+  assert.doesNotMatch(fs.readFileSync(f.okcorePath, 'utf8'), /BRIDGED/);
+  /* with the other plugin in the build the hook applies - and so its anchor must be there */
+  const withBridge = [...loaded, { name: 'bridge', hooks: [], dir: loaded[0].dir }];
+  assert.throws(() => plugins.apply(withBridge, f.stage), /anchor is not in the staged file/);
+});
+
 test('an anchor that is missing, or occurs twice, stops the stage', () => {
   const missing = fixture({ okcore: OKCORE.replace('    default:\n      fido();\n', '') });
   assert.throws(() => plugins.apply(plugins.load(['demo'], { dir: missing.dir }), missing.stage), /anchor is not in the staged file/);

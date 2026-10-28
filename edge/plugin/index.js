@@ -31,6 +31,8 @@ const { identityIdOf } = require('../src/identity-id');
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, PUBKEY_PQ: 0x05, STATEMENT: 0x06,
+  /* over WebAuthn only: the ML-DSA-65 signature an answer left out (one answer holds at most 3392 bytes) - tunnelCall */
+  MORE: 0x07,
   /* R31: DEBUG firmware only - a production key answers it as unknown (EDGE:0A) */
   WIPE_DEBUG: 0x7e,
   GRANT_CREATE: 0x10, GRANT_LABEL: 0x11, GRANT_REVOKE: 0x12, GRANT_HOLD: 0x13, GRANT_RESUME: 0x14,
@@ -134,6 +136,8 @@ function setup(imports, register) {
    * reason: this bus carries traffic nobody asked for.)
    */
   function busQuiet(quietMs = 150, capMs = 1500) {
+    /* the tunnel has no bus to wait on: each request is its own ceremony, answered whole */
+    if (transport.tunnelOnly) return Promise.resolve();
     return new Promise((resolve) => {
       let timer = null;
       const finish = () => { clearTimeout(timer); clearTimeout(giveUp); off(); resolve(); };
@@ -160,6 +164,65 @@ function setup(imports, register) {
   /* the KEY's lane, shared with every other plugin (src/transport/lane.js) - not one of Edge's own */
   function exclusive(fn, laneOpts) {
     return inLane(transport, fn, laneOpts);
+  }
+
+  /*
+   * OVER WEBAUTHN (Brad, 2026-10-28: Edge needs a WebAuthn path, so the web app can be the key's host for agents).
+   * The tunnel transport has no vendor interface; the request goes through okcrypto's supplied ctap instead
+   * (okcrypto.tunnelRequest: sealed, polled), and the key's edge firmware plugin answers it there when ctap_bridge is
+   * on. The answer comes back whole - one stored response - and is cut into the same 64-byte replies a vendor
+   * interface delivers one by one, so every reply rule below (statuses, the key's sentences, the shape checks) is
+   * the one callNow applies over USB and Bluetooth. okcrypto is reached through app.services, only here: a host
+   * that never uses the tunnel needs no okcrypto for Edge.
+   */
+  async function tunnelCall(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null } = {}) {
+    const okcrypto = imports.app && imports.app.services && imports.app.services.okcrypto;
+    if (!okcrypto || typeof okcrypto.tunnelRequest !== 'function') {
+      throw Object.assign(new Error('Edge over WebAuthn needs okcrypto with a supplied ctap (the web app)'), { code: 'NO_VENDOR_INTERFACE' });
+    }
+    /*
+     * The length is not asked for (variable: the firmware's short-chunk end): an answer over WebAuthn can be SHORTER
+     * than over USB - an ML-DSA-65 signature does not fit one answer beside the replies before it, and the key keeps
+     * it for SUB.MORE (below). Every first answer is under the 512-byte poll chunk, which is what makes variable safe
+     * (PICKUP takes at most 3 links per request here).
+     */
+    const r = await okcrypto.tunnelRequest(OKEDGE, sub, args || [], { timeoutMs });
+    if (r.text !== undefined) {
+      const said = r.text;
+      const status = codes.parseStatus(said);
+      if (status) {
+        if (status.code !== 0) throw new EdgeError(status);
+        return text ? status : [];
+      }
+      if (/^Timeout/i.test(said)) throw Object.assign(new Error(`Edge: the key stopped waiting for the press (request ${sub})`), { code: 'ETIMEDOUT', pressTimeout: true });
+      const press = /press|confirmation|challenge/i.test(said);
+      throw Object.assign(new Error(`Edge: the key said "${said}" (request ${sub})`), { code: press ? 'ETIMEDOUT' : 'EKEYREFUSED', keyText: said, pressRefused: press });
+    }
+    if (text) throw new Error(`Edge: request ${sub} answers a status, and the key sent ${r.data.length} bytes`);
+    /* the reports a vendor interface would have delivered: 64 bytes each, the last zero-padded as the firmware pads */
+    const units = (data) => {
+      const out = [];
+      for (let i = 0; i < data.length; i += 64) {
+        const u = new Uint8Array(64);
+        u.set(data.subarray(i, i + 64));
+        out.push(u);
+      }
+      return out;
+    };
+    const got = [];
+    for (const bytes of units(r.data)) {
+      if (got.length >= reports) break;
+      if (accept && !accept(bytes, got)) throw new Error(`Edge: reply ${got.length + 1} of request ${sub} is not its shape (${hexHead(bytes)})`);
+      got.push(bytes);
+    }
+    /* short by exactly an ML-DSA-65 signature: the key kept it for SUB.MORE, one answer of its own */
+    if (got.length < reports && reports - got.length === reportsFor(chain.ML_DSA65.SIG)) {
+      const more = await okcrypto.tunnelRequest(OKEDGE, SUB.MORE, [], { expectBytes: chain.ML_DSA65.SIG, timeoutMs });
+      if (more.text !== undefined) throw new Error(`Edge: the key sent no signature for request ${sub} ("${more.text}")`);
+      got.push(...units(more.data));
+    }
+    if (got.length < reports) throw new Error(`Edge: request ${sub} answered ${got.length} of ${reports} reports`);
+    return got;
   }
 
   /* opts.urgent: to the front of the key's lane (rule 8 - a Hold or Revoke the person tapped) */
@@ -224,6 +287,7 @@ function setup(imports, register) {
     const timed = (p) => (edge && typeof edge.onTiming === 'function'
       ? p.then((v) => { edge.onTiming(sub, Date.now() - began, true); return v; }, (e) => { edge.onTiming(sub, Date.now() - began, false); throw e; })
       : p);
+    if (transport.tunnelOnly) return timed(tunnelCall(sub, args, { reports, timeoutMs, text, accept }));
     return timed(new Promise((resolve, reject) => {
       const got = [];
       let off = null;
@@ -429,6 +493,12 @@ function setup(imports, register) {
     /** Links the key still holds: [{link, head, reveal|null}] (reveal = a self-press's v_i). */
     async pickup(from, count = 1, opts) {
       if (count < 1 || count > HELD) throw new RangeError(`Edge: pick up 1 to ${HELD} links, not ${count}`);
+      /* over WebAuthn the key answers at most 3 links per request (one answer, under its 512-byte poll chunk) */
+      if (transport.tunnelOnly && count > 3) {
+        const out = [];
+        for (let s = from; s < from + count; s += 3) out.push(...await edge.pickup(s, Math.min(3, from + count - s), opts));
+        return out;
+      }
       const rs = await call(SUB.PICKUP, concat([u32(from), Uint8Array.of(count)]), { ...opts, reports: 2 * count, accept: pickupReply(from) });
       const out = [];
       for (let i = 0; i < rs.length; i += 2) {
@@ -731,7 +801,8 @@ function setup(imports, register) {
   register(null, { edge });
 }
 
-setup.consumes = ['transport'];
+/* app: okcrypto through app.services, for the tunnel only (tunnelCall) - not a consume of okcrypto, so a host without it composes Edge as before */
+setup.consumes = ['transport', 'app'];
 setup.provides = ['edge'];
 
 module.exports = setup;

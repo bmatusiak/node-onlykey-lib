@@ -1382,9 +1382,15 @@ function setup(imports, register, config) {
       confirmFirst = false,
       /* the key asks for a plain press, not the 3-button code (deriveSecret touch): confirm and the event get no digits */
       pressOnly = false,
+      /*
+       * A REQUEST, NOT A CRYPTO OPERATION (tunnelRequest - Edge over WebAuthn): the answer comes back as { data } or,
+       * when the key answers in a sentence ("EDGE:00", "Timeout ..."), as { text } - the caller reads both. An empty
+       * request is one zero byte (a keyhandle carries something).
+       */
+      raw = false,
     } = opts;
 
-    const payload = Uint8Array.from(data);
+    const payload = raw && !data.length ? new Uint8Array(1) : Uint8Array.from(data);
     if (!payload.length) throw new Error('nothing to sign or decrypt');
     /*
      * expectBytes is OPTIONAL. Without it the result is collected by the
@@ -1505,6 +1511,7 @@ function setup(imports, register, config) {
     if (confirmError) throw confirmError;
 
     if (!collected.data) {
+      if (raw) return { text: collected.message || '' };
       throw okmsg.deviceError(collected.message || 'no result', 'the device did not complete the operation');
     }
 
@@ -1522,7 +1529,7 @@ function setup(imports, register, config) {
     }
     /* Only a COMPLETED operation arms the device timers - see settleStaleTimers. */
     lastOperationEndedAt = Date.now();
-    return out;
+    return raw ? { data: out } : out;
   }
 
   /*
@@ -1812,6 +1819,18 @@ function setup(imports, register, config) {
         );
       }
       return connectTunnel(opts);
+    },
+
+    /**
+     * ONE REQUEST OVER THE SUPPLIED CTAP, for a plugin whose messages are not crypto operations - Edge over WebAuthn
+     * (edge/plugin: OKEDGE when the transport is the tunnel). Sealed and polled exactly as a stored-key operation,
+     * with nothing of a crypto operation's own: no challenge event, no confirm - a request that waits for a press is
+     * the plugin's to announce (Edge's sheets), and the polls simply see it pending until the press.
+     * Resolves { data } (opened) or { text } (the key answered in a sentence).
+     */
+    async tunnelRequest(msg, slot, data = [], opts = {}) {
+      if (!suppliedCtap) throw new Error('tunnelRequest is for a host that reaches the key only through a supplied ctap (the web app)');
+      return tunnelOperation(msg, slot, Uint8Array.from(data), { ...opts, quiet: true, confirm: null, raw: true });
     },
 
     /**
