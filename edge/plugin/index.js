@@ -186,7 +186,20 @@ function setup(imports, register) {
      * it for SUB.MORE (below). Every first answer is under the 512-byte poll chunk, which is what makes variable safe
      * (PICKUP takes at most 3 links per request here).
      */
-    const r = await okcrypto.tunnelRequest(OKEDGE, sub, args || [], { timeoutMs });
+    let r;
+    try {
+      r = await okcrypto.tunnelRequest(OKEDGE, sub, args || [], { timeoutMs });
+    } catch (e) {
+      /*
+       * A press the key stopped waiting for. Over USB the key says nothing then (the core's "Timeout occured" is a
+       * sign's or a decrypt's) and callNow's own timer ends the wait; over WebAuthn the next poll finds nothing pending
+       * and the key answers "Error incorrect challenge was entered". Both are the same press timeout to the caller.
+       */
+      if (/incorrect challenge/i.test(String(e && e.message))) {
+        throw Object.assign(new Error(`Edge: the key stopped waiting for the press (request ${sub})`), { code: 'ETIMEDOUT', pressTimeout: true, cause: e });
+      }
+      throw e;
+    }
     if (r.text !== undefined) {
       const said = r.text;
       const status = codes.parseStatus(said);
