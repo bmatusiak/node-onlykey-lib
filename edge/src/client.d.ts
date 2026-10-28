@@ -1,7 +1,21 @@
+/**
+ * @param {object} opts
+ * @param {any} opts.edge  the lib's Edge plugin, on the key the uses run on
+ * @param {{send: (msg: any) => Promise<any>} | null} [opts.channel]  to the phone that approves; null where this app
+ *   IS the phone (the web app): no request to send, no notes
+ * @param {{get: (key: string) => Promise<string | null>, set: (key: string, value: string) => Promise<void>} | null} [opts.store]
+ *   where budgets are kept between processes (resume)
+ * @param {number} [opts.noteTimeoutMs]
+ */
 export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
     edge: any;
-    channel: any;
-    store?: null | undefined;
+    channel?: {
+        send: (msg: any) => Promise<any>;
+    } | null | undefined;
+    store?: {
+        get: (key: string) => Promise<string | null>;
+        set: (key: string, value: string) => Promise<void>;
+    } | null | undefined;
     noteTimeoutMs?: number | undefined;
 }): {
     ping({ size, timeoutMs }?: {
@@ -63,12 +77,16 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
          * One use: TX start over the head this budget holds and SHA-256(bytes), run
          * op(bytes), and return the link it caused.
          * -> {result, link: {seq, paid, step, reveal}}
+         * @param {Uint8Array} bytes  what the key will sign - the TX start names exactly these
+         * @param {(bytes: Uint8Array) => Promise<any>} op
+         * @param {{reason?: string, intent?: string | null}} [opts]  the agent's words for the use (R13b)
          */
-        use(bytes: any, op: any, { reason, intent }?: {
-            intent?: any;
+        use(bytes: Uint8Array, op: (bytes: Uint8Array) => Promise<any>, { reason, intent }?: {
+            reason?: string;
+            intent?: string | null;
         }): Promise<{
             result: any;
-            purpose: any;
+            purpose: string | undefined;
             link: {
                 seq: number;
                 paid: boolean;
@@ -116,12 +134,16 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
          * One use: TX start over the head this budget holds and SHA-256(bytes), run
          * op(bytes), and return the link it caused.
          * -> {result, link: {seq, paid, step, reveal}}
+         * @param {Uint8Array} bytes  what the key will sign - the TX start names exactly these
+         * @param {(bytes: Uint8Array) => Promise<any>} op
+         * @param {{reason?: string, intent?: string | null}} [opts]  the agent's words for the use (R13b)
          */
-        use(bytes: any, op: any, { reason, intent }?: {
-            intent?: any;
+        use(bytes: Uint8Array, op: (bytes: Uint8Array) => Promise<any>, { reason, intent }?: {
+            reason?: string;
+            intent?: string | null;
         }): Promise<{
             result: any;
-            purpose: any;
+            purpose: string | undefined;
             link: {
                 seq: number;
                 paid: boolean;
@@ -255,12 +277,16 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
          * One use: TX start over the head this budget holds and SHA-256(bytes), run
          * op(bytes), and return the link it caused.
          * -> {result, link: {seq, paid, step, reveal}}
+         * @param {Uint8Array} bytes  what the key will sign - the TX start names exactly these
+         * @param {(bytes: Uint8Array) => Promise<any>} op
+         * @param {{reason?: string, intent?: string | null}} [opts]  the agent's words for the use (R13b)
          */
-        use(bytes: any, op: any, { reason, intent }?: {
-            intent?: any;
+        use(bytes: Uint8Array, op: (bytes: Uint8Array) => Promise<any>, { reason, intent }?: {
+            reason?: string;
+            intent?: string | null;
         }): Promise<{
             result: any;
-            purpose: any;
+            purpose: string | undefined;
             link: {
                 seq: number;
                 paid: boolean;

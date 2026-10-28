@@ -68,6 +68,15 @@ const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
  */
 const storeKey = (deviceHex, grantId) => `okedge.budget.${deviceHex}.${grantId}`;
 
+/**
+ * @param {object} opts
+ * @param {any} opts.edge  the lib's Edge plugin, on the key the uses run on
+ * @param {{send: (msg: any) => Promise<any>} | null} [opts.channel]  to the phone that approves; null where this app
+ *   IS the phone (the web app): no request to send, no notes
+ * @param {{get: (key: string) => Promise<string | null>, set: (key: string, value: string) => Promise<void>} | null} [opts.store]
+ *   where budgets are kept between processes (resume)
+ * @param {number} [opts.noteTimeoutMs]
+ */
 function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 }) {
   /* this key's device id, read once (edge.publicKey) - the half of every budget's name */
   let deviceHex = null;
@@ -147,6 +156,9 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
        * One use: TX start over the head this budget holds and SHA-256(bytes), run
        * op(bytes), and return the link it caused.
        * -> {result, link: {seq, paid, step, reveal}}
+       * @param {Uint8Array} bytes  what the key will sign - the TX start names exactly these
+       * @param {(bytes: Uint8Array) => Promise<any>} op
+       * @param {{reason?: string, intent?: string | null}} [opts]  the agent's words for the use (R13b)
        */
       async use(bytes, op, { reason, intent = reason } = {}) {
         if (state.ended) throw fail('EEDGE_TX', 'edge: this budget has ended', { reason: 'ended' });
