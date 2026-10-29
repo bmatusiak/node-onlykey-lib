@@ -163,3 +163,9 @@ test('a host files a copy that holds less than the bucket (a fresh web app from 
   assert.equal(f.forks.length, 1);
   assert.ok(!Object.keys(f.changed).some((k) => /\.links\./.test(k) && k.endsWith('0001')), 'a forked block was written');
 });
+
+test('each log\'s newest link, from its last links block - what the sealed copy\'s heads row says', () => {
+  const dev = require('../../src/bytes').toHex(id).slice(0, 16);
+  assert.deepEqual(logblocks.newestSeqs(logblocks.split(copyJSON(0, 140))), { [dev]: 140 });
+  assert.deepEqual(logblocks.newestSeqs({}), {});
+});

@@ -210,4 +210,23 @@ function fileInto(have, j) {
   return { changed, forks };
 }
 
-module.exports = { BLOCK, split, join, devices, parseKey, mergeEntry, devOf, fileInto };
+/*
+ * EACH LOG'S NEWEST LINK in a store's entries ({<dev>: seq}) - what a sealed copy's heads row says (bucket sealedcopy.js),
+ * so a device compares the key's head with it before reading anything from the key. From the last links block only.
+ * @param {Object<string, string>} entries the store's live keys -> values
+ */
+function newestSeqs(entries) {
+  const last = {};
+  for (const key of Object.keys(entries)) {
+    const k = parseKey(key);
+    if (k && k.kind === 'links' && (last[k.dev] === undefined || key > last[k.dev])) last[k.dev] = key;
+  }
+  const out = {};
+  for (const [dev, key] of Object.entries(last)) {
+    const ls = JSON.parse(entries[key]);
+    if (ls.length) out[dev] = Math.max(...ls.map(seqOfHex));
+  }
+  return out;
+}
+
+module.exports = { BLOCK, split, join, devices, parseKey, mergeEntry, devOf, fileInto, newestSeqs };

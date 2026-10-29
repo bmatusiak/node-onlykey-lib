@@ -41,3 +41,4 @@ export function fileInto(have: any, j: any): {
     changed: {};
     forks: string[];
 };
+export function newestSeqs(entries: any): {};
