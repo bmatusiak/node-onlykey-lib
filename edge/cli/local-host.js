@@ -36,6 +36,8 @@ const bucketHome = require('../../bucket/cli/home');
 const { approve, request, identity: identityLib, note: noteLib, receipts, codes } = require('../src');
 const copy = require('./copy');
 const { fromHex } = require('../../src/bytes');
+/* a ship's progress window, when one named its file for this process: the dialog's moments as they happen */
+const FEED = require('./progress-feed');
 
 /* who asked, for approveRequest's continue check: the same computer, always this one */
 const LOCAL = 'this computer';
@@ -124,13 +126,20 @@ function createLocalHost({ edge, home, confirm, say = () => {} }) {
         ];
         for (const l of lines) say(l);
         /* the same lines for a dialog (--gui-prompt); the terminal has them printed already */
-        const details = `${lines.join('\n')}\n\nAfter Yes, PRESS the key within 20 s (it pulses) - the budget opens with the press.`;
-        return (await confirm('approve this budget? [y/N] ', { details, title: 'OnlyKey Edge: a budget request' })) ? 'approve' : 'decline';
+        /* the dialog says what its own Yes does; the press is asked for when the key waits for it (onPress) */
+        const details = `${lines.join('\n')}\n\nYes approves this budget. The key asks for its press next.`;
+        FEED.line('a budget request - its window is open: Yes approves it');
+        const yes = await confirm('approve this budget? [y/N] ', { details, title: 'OnlyKey Edge: a budget request' });
+        FEED.line(yes ? 'approved - sending the budget to the key' : 'declined - no budget');
+        return yes ? 'approve' : 'decline';
       },
       verifyCopy,
       budgetOf: () => was,
-      onPress: () => say('PRESS the key now - the budget opens with the press'),
+      onPress: () => say('PRESS the key now - it waits 20 s (it pulses); the budget opens with the press'),
     });
+    /* the press's result, as soon as the key answers (a decline or an unverified copy said its own line already) */
+    if (r.ok) say('pressed - the budget is open');
+    else if (!r.dropped && r.refusal !== 'declined' && r.refusal !== 'copy_unverified') say(`no budget: ${r.detail || r.refusal || 'the key refused it'}`);
     if (r.ok) await keepOpening(msg, r.budget);
     return r.dropped ? null : r;
   }

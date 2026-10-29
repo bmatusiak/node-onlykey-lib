@@ -33,6 +33,8 @@ const { chain, copy: copyLib } = require('../src');
 const copyfile = require('../src/copyfile');
 const logblocks = require('../src/logblocks');
 const { toHex, fromHex } = require('../../src/bytes');
+/* a ship's progress window, when one named its file for this process: sync's parts as steps (nothing otherwise) */
+const FEED = require('./progress-feed');
 
 const PICKUP_MAX = 8;
 const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -153,11 +155,17 @@ function verdictOf(a) {
  * PC's copy file, and only when what it would store verifies (no tampering).
  */
 async function sync(edge, home, { status = false, history = null } = {}) {
-  const { publicKey, deviceId } = await edge.publicKey();
-  /* the ML-DSA-65 twin of the checkpoint key: every checkpoint and seal of this chain is checked under both */
-  const publicKeyPq = await edge.publicKeyPq('checkpoint');
-  const c = load(home, deviceId);
-  const h = await edge.head();
+  /*
+   * EACH PART ITS OWN STEP in a ship's progress window (progress-feed.js; Brad, 2026-10-29: "i'm trying to identify why
+   * we wait, and if we can stop waiting for no reason"): what the key does (its keys, its links, its checkpoint) apart
+   * from what this computer does (the check) - each with its time, so a wait shows which it is. No window: as before.
+   */
+  const { publicKey, deviceId, publicKeyPq, c, h } = await FEED.step('the key: its public keys and head', async () => {
+    const pk = await edge.publicKey();
+    /* the ML-DSA-65 twin of the checkpoint key: every checkpoint and seal of this chain is checked under both */
+    const pq = await edge.publicKeyPq('checkpoint');
+    return { publicKey: pk.publicKey, deviceId: pk.deviceId, publicKeyPq: pq, c: load(home, pk.deviceId), h: await edge.head() };
+  });
   const keySeq = h.seq === null ? -1 : h.seq;
   const ringFrom = h.oldest === null ? keySeq + 1 : h.oldest;
   const candidate = { ...c, links: [...c.links], publicKey, publicKeyPq };
@@ -198,22 +206,30 @@ async function sync(edge, home, { status = false, history = null } = {}) {
    */
   {
     const last = candidate.links.length ? seqOf(candidate.links[candidate.links.length - 1]) : -1;
-    for (let from = Math.max(last + 1, ringFrom); from <= keySeq;) {
-      const got = await edge.pickup(from, Math.min(PICKUP_MAX, keySeq - from + 1));
-      if (!got.length) break;
-      for (const r of got) {
-        const prev = candidate.links[candidate.links.length - 1];
-        if (follows(prev, r)) candidate.links.push(r);
-        else if (!prev || seqOf(r) > seqOf(prev)) { stopped = seqOf(r); break; }
-      }
-      if (stopped !== null) break;
-      from = seqOf(got[got.length - 1]) + 1;
+    const start = Math.max(last + 1, ringFrom);
+    const total = keySeq - start + 1;
+    if (total > 0) {
+      await FEED.step(`the key: reading ${total} new link(s)`, async () => {
+        for (let from = start; from <= keySeq;) {
+          const got = await edge.pickup(from, Math.min(PICKUP_MAX, keySeq - from + 1));
+          if (!got.length) break;
+          for (const r of got) {
+            const prev = candidate.links[candidate.links.length - 1];
+            if (follows(prev, r)) candidate.links.push(r);
+            else if (!prev || seqOf(r) > seqOf(prev)) { stopped = seqOf(r); break; }
+          }
+          if (stopped !== null) break;
+          from = seqOf(got[got.length - 1]) + 1;
+          FEED.part(Math.min(total, from - start), total);
+        }
+      });
     }
   }
-  const held = keySeq < 0 || h.oldest === null ? [] : await edge.pickup(h.oldest, Math.min(PICKUP_MAX, keySeq - h.oldest + 1));
-  const a = copyLib.assess({ links: candidate.links }, { publicKey, publicKeyPq, head: { seq: keySeq, head: h.head }, held }, {
+  const held = keySeq < 0 || h.oldest === null ? []
+    : await FEED.step('the key: reading the links it still holds', () => edge.pickup(h.oldest, Math.min(PICKUP_MAX, keySeq - h.oldest + 1)));
+  const a = await FEED.step(`this computer: checking ${candidate.links.length} link(s) - every weld, each budget's signature`, () => copyLib.assess({ links: candidate.links }, { publicKey, publicKeyPq, head: { seq: keySeq, head: h.head }, held }, {
     ringFrom, ...(candidate.lastSeen ? { lastSeen: candidate.lastSeen } : {}),
-  });
+  }));
   let verdict = verdictOf(a);
   /*
    * VERIFIED NEEDS THE KEY'S SIGNATURE (Brad, 2026-10-11: "checking every field in a token means
@@ -223,12 +239,13 @@ async function sync(edge, home, { status = false, history = null } = {}) {
    * that does not verify: "unsigned" - reported, never "verified".
    */
   if (verdict.kind === 'verified' && keySeq >= 0) {
-    const cp = await edge.checkpoint().catch(() => null);
-    let signed = false;
-    try {
-      signed = !!cp && cp.seq === keySeq && toHex(cp.head) === toHex(h.head)
-        && chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, publicKey, cp.signaturePq || null, publicKeyPq);
-    } catch { signed = false; }
+    const cp = await FEED.step(`the key: signing its checkpoint for #${keySeq}`, () => edge.checkpoint().catch(() => null));
+    const signed = await FEED.step('this computer: checking that signature (P-256 + ML-DSA-65)', () => {
+      try {
+        return !!cp && cp.seq === keySeq && toHex(cp.head) === toHex(h.head)
+          && chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, publicKey, cp.signaturePq || null, publicKeyPq);
+      } catch { return false; }
+    });
     if (!signed) verdict = { kind: 'unsigned', through: verdict.through };
   }
   const added = candidate.links.length - c.links.length;

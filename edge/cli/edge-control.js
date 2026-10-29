@@ -415,12 +415,19 @@ async function run({ io, opts, argv, net, home, dev = null }) {
       if (GUI) {
         PROGRESS = require('../../cli/gui-prompt').guiProgress({ title: `OnlyKey - ship${net === 'test' ? ' (testnet)' : ''}`, total: t.gpg + t.ssh });
         PROGRESS.note(`${t.gpg} signature(s), ${t.ssh} push(es): ${REPOS.map((r) => r.name).join(', ')} - checking the key`);
+        /*
+         * EVERY CHILD WRITES ITS OWN MOMENTS INTO THIS WINDOW (edge/cli/progress-feed.js): this process waits in spawnSync
+         * while a child works the key, so only the child knows when the dialog is up, when the key waits for its press,
+         * and how each step ended. In this process's environment, so git's rebase passes it to the CLI it runs too.
+         */
+        if (PROGRESS.file) process.env.OKJS_PROGRESS_FILE = PROGRESS.file;
       }
       ready();
       if (HOOKS.watch) watch();
       if (!HEAD) {
         cancelIfAsked();
-        if (PROGRESS) PROGRESS.note('approve the budget in its window, then PRESS the key');
+        /* only what happens now: the budget's own process says the dialog, the press when the key waits, and the result */
+        if (PROGRESS) PROGRESS.note('asking for the budget');
         openBudget(t);
       }
       if (PROGRESS) PROGRESS.note('budget open - signing');

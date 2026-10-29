@@ -126,32 +126,40 @@ function guiConfirm(question, { details = '', title = 'OnlyKey', labels = LABELS
  */
 const PROGRESS_PS = String.raw`
 Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Application]::EnableVisualStyles()
 $File = $env:OKJS_PROGRESS_FILE
 $f = New-Object System.Windows.Forms.Form
-$f.Text = $env:OKJS_GUI_TITLE; $f.TopMost = $true; $f.Width = 600; $f.Height = 420
+$f.Text = $env:OKJS_GUI_TITLE; $f.TopMost = $true; $f.Width = 600; $f.Height = 470
 $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.ControlBox = $false; $f.StartPosition = 'CenterScreen'
 $step = New-Object System.Windows.Forms.Label; $step.Left = 12; $step.Top = 12; $step.Width = 560; $step.Height = 36; $step.Text = 'starting...'
 $bar = New-Object System.Windows.Forms.ProgressBar; $bar.Left = 12; $bar.Top = 52; $bar.Width = 560; $bar.Height = 22; $bar.Minimum = 0; $bar.Maximum = 100
 $count = New-Object System.Windows.Forms.Label; $count.Left = 12; $count.Top = 78; $count.Width = 560; $count.Height = 18; $count.Text = '0%'
-$log = New-Object System.Windows.Forms.TextBox; $log.Multiline = $true; $log.ReadOnly = $true; $log.ScrollBars = 'Vertical'; $log.Left = 12; $log.Top = 100; $log.Width = 560; $log.Height = 230
-$ok = New-Object System.Windows.Forms.Button; $ok.Text = 'Cancel'; $ok.Left = 487; $ok.Top = 340; $ok.Width = 85; $ok.TabStop = $false
+$opName = New-Object System.Windows.Forms.Label; $opName.Left = 12; $opName.Top = 102; $opName.Width = 560; $opName.Height = 18; $opName.Text = ''
+$opBar = New-Object System.Windows.Forms.ProgressBar; $opBar.Left = 12; $opBar.Top = 122; $opBar.Width = 560; $opBar.Height = 14; $opBar.Minimum = 0; $opBar.Maximum = 100
+$log = New-Object System.Windows.Forms.TextBox; $log.Multiline = $true; $log.ReadOnly = $true; $log.ScrollBars = 'Vertical'; $log.Left = 12; $log.Top = 144; $log.Width = 560; $log.Height = 236
+$ok = New-Object System.Windows.Forms.Button; $ok.Text = 'Cancel'; $ok.Left = 487; $ok.Top = 390; $ok.Width = 85; $ok.TabStop = $false
 $script:over = $false
 $ok.Add_Click({ if ($script:over) { $f.Close(); return }; Set-Content -LiteralPath ($File + '.cancel') -Value 'cancel'; $ok.Enabled = $false; $ok.Text = 'Cancelling'; $step.Text = 'cancelling - the work stops after the step in progress' })
-$f.Controls.AddRange(@($step, $bar, $count, $log, $ok)); $f.ActiveControl = $log
+$f.Controls.AddRange(@($step, $bar, $count, $opName, $opBar, $log, $ok)); $f.ActiveControl = $log
 $script:seen = 0
+$script:opAt = $null; $script:opWords = ''; $script:opPart = ''
 $timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 300
 $timer.Add_Tick({
   if (-not (Test-Path -LiteralPath $File)) { return }
-  $lines = @(Get-Content -LiteralPath $File -ErrorAction SilentlyContinue)
+  $lines = @(Get-Content -LiteralPath $File -Encoding UTF8 -ErrorAction SilentlyContinue)
   for ($i = $script:seen; $i -lt $lines.Count; $i++) {
     $l = [string]$lines[$i]
+    if ($l -match '^@ go (.*)$') { $script:opAt = Get-Date; $script:opWords = $Matches[1]; $script:opPart = ''; $opBar.Style = 'Marquee'; $opBar.MarqueeAnimationSpeed = 30; continue }
+    if ($l -match '^@ (\d+)/(\d+)$') { $n = [Math]::Max(1, [int]$Matches[2]); $opBar.Style = 'Continuous'; $opBar.Maximum = $n; $opBar.Value = [Math]::Min($n, [int]$Matches[1]); $script:opPart = " - $($Matches[1]) of $($Matches[2])"; continue }
+    if ($l -eq '@ end') { $script:opAt = $null; $opBar.Style = 'Continuous'; $opBar.Value = 0; $opName.Text = ''; continue }
     if ($l -match '^\s*(\d{1,3})\s*$') { $bar.Value = [Math]::Min(100, [int]$Matches[1]); $count.Text = "$($bar.Value)%"; continue }
     if ($l.StartsWith('# ')) {
-      $t = $l.Substring(2); $step.Text = $t; $log.AppendText("$t" + [Environment]::NewLine)
-      if ($t.StartsWith('done') -or $t.StartsWith('STOP')) { $script:over = $true; $ok.Text = 'Close'; $ok.Enabled = $true; $timer.Stop(); if ($t.StartsWith('STOP')) { $step.ForeColor = 'Firebrick' } else { $close = New-Object System.Windows.Forms.Timer; $close.Interval = 2500; $close.Add_Tick({ $f.Close() }); $close.Start() } }
+      $t = $l.Substring(2); $w = $t -replace '^\[[0-9:.]+\] ', ''; $step.Text = $w; $log.AppendText("$t" + [Environment]::NewLine)
+      if ($w.StartsWith('done') -or $w.StartsWith('STOP')) { $script:over = $true; $ok.Text = 'Close'; $ok.Enabled = $true; $timer.Stop(); if ($w.StartsWith('STOP')) { $step.ForeColor = 'Firebrick' } else { $close = New-Object System.Windows.Forms.Timer; $close.Interval = 2500; $close.Add_Tick({ $f.Close() }); $close.Start() } }
     }
   }
   $script:seen = $lines.Count
+  if ($script:opAt) { $opName.Text = "now: $($script:opWords) $([Math]::Round(((Get-Date) - $script:opAt).TotalSeconds, 1)) s$($script:opPart)" }
 })
 $f.Add_Shown({ $timer.Start() })
 [void]$f.ShowDialog()
@@ -177,7 +185,7 @@ function guiProgress({ title = 'OnlyKey', total, platform = process.platform, en
     const child = platform === 'win32'
       ? (() => { const ps1 = path.join(path.dirname(file), 'progress.ps1'); fs.writeFileSync(ps1, PROGRESS_PS); return spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { env: wenv, stdio: 'ignore', windowsHide: false }); })()
       /* the file and title as environment, never spliced into the shell line; tail ends with this process */
-      : spawn('sh', ['-c', 'tail -n +1 -F --pid="$OKJS_PARENT_PID" "$OKJS_PROGRESS_FILE" 2>/dev/null | zenity --progress --auto-close --no-markup --title="$OKJS_GUI_TITLE" --text=starting --width=520 || touch "$OKJS_PROGRESS_FILE.cancel"'], { env: wenv, detached: true, stdio: 'ignore' });
+      : spawn('sh', ['-c', 'tail -n +1 -F --pid="$OKJS_PARENT_PID" "$OKJS_PROGRESS_FILE" 2>/dev/null | grep --line-buffered -v "^@" | zenity --progress --auto-close --no-markup --title="$OKJS_GUI_TITLE" --text=starting --width=520 || touch "$OKJS_PROGRESS_FILE.cancel"'], { env: wenv, detached: true, stdio: 'ignore' });
     child.on('error', () => {});
     child.unref();
   } catch (_) {
@@ -185,7 +193,7 @@ function guiProgress({ title = 'OnlyKey', total, platform = process.platform, en
   }
   let done = 0;
   const pct = () => (total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0);
-  const put = (text) => { try { fs.appendFileSync(file, `${pct()}\n# ${String(text).replace(/[\r\n]+/g, ' ')}\n`); } catch (_) { /* the window is a convenience */ } };
+  const put = (text) => { try { fs.appendFileSync(file, `${pct()}\n# [${stamp()}] ${String(text).replace(/[\r\n]+/g, ' ')}\n`); } catch (_) { /* the window is a convenience */ } };
   return {
     file,
     step(text) { done += 1; put(text); },
@@ -196,4 +204,14 @@ function guiProgress({ title = 'OnlyKey', total, platform = process.platform, en
   };
 }
 
-module.exports = { guiConfirm, dialogsFor, PS_SCRIPT, LABELS, guiProgress, PROGRESS_PS };
+/*
+ * EACH LINE STAMPED WITH THE CLOCK (Brad, 2026-10-29: "my whole thing is to remove the delays and make it sign as fast
+ * as it can - but i dont know what a delay is, because it could be a soft timer waiting or an operation happening"): a
+ * step line says its own time; a gap between two stamps that no line explains is a wait to find. HH:MM:SS.t, local.
+ */
+function stamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${Math.floor(d.getMilliseconds() / 100)}`;
+}
+
+module.exports = { stamp, guiConfirm, dialogsFor, PS_SCRIPT, LABELS, guiProgress, PROGRESS_PS };

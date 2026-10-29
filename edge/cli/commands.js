@@ -117,7 +117,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
   /* waiting: the host's words - the phone over Bluetooth; for a hard key on USB this computer asks y/N itself (register.js) */
   if (typeof ask !== 'function') throw new Error('edge commands need ask (the service or the in-process stack)');
   /* a step on the ship's timeline (edge/cli/dev/times.js) when the dev set is here */
-  const span = (name, fn) => (dev && dev.times ? dev.times.span(name, fn) : fn());
+  const span = (name, fn) => { const run = () => require('./progress-feed').span(name, fn); return dev && dev.times ? dev.times.span(name, run) : run(); };
   const [cmd, ...args] = argv;
   try {
     /* the dev build's own commands (edge/cli/dev - left out of the published package, CLI.md §5) */

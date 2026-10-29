@@ -400,8 +400,12 @@ const DEV = (() => {
     throw e;
   }
 })();
-/* a step on the ship's timeline (edge/cli/dev/times.js) when the dev set is here; without it, the step as it is */
-function span(name, fn) { return DEV && DEV.times ? DEV.times.span(name, fn) : fn(); }
+/*
+ * a step on the ship's timeline (edge/cli/dev/times.js) when the dev set is here; and in the ship's progress window when
+ * it named one (progress-feed.js: the steps where the key works silently, with their result); else the step as it is
+ */
+const FEED = require('./progress-feed');
+function span(name, fn) { const run = () => FEED.span(name, fn); return DEV && DEV.times ? DEV.times.span(name, run) : run(); }
 
 /*
  * THE TESTNET (BLOCKS.md; Brad, 2026-10-07: "we should treat --test-mode as test
@@ -471,6 +475,8 @@ module.exports = function register(COMMANDS, h) {
       /* an unknown subcommand is refused here, before anything connects to the phone */
       const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', 'migrate', 'name', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
+      /* a ship's step (its window named for its children): every `edge:` line said here also goes to the window, as said */
+      if (sub !== 'control') FEED.teeErr(io);
       /* this process on a ship's timeline (the ship itself, `control`, opens the timeline instead) */
       if (dev && dev.times && sub !== 'control') dev.times.started(`edge ${sub}`);
 

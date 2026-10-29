@@ -96,7 +96,9 @@ test('gui-prompt: guiProgress starts one window and appends percent + step lines
   p.step('pushed lib');
   p.finish('done: 2 signed, 1 pushed');
   const lines = fs.readFileSync(p.file, 'utf8').trim().split('\n');
-  assert.deepEqual(lines.slice(-8), ['25', '# signed 1', '50', '# signed 2', '75', '# pushed lib', '100', '# done: 2 signed, 1 pushed']);
+  /* each line stamped with the clock (a gap no line explains is a wait to find); the window reads past the stamp */
+  assert.ok(lines.slice(-8).filter((l) => l.startsWith('#')).every((l) => /^# \[\d\d:\d\d:\d\d\.\d\] /.test(l)), lines.join(' | '));
+  assert.deepEqual(lines.slice(-8).map((l) => l.replace(/^# \[[0-9:.]+\] /, '# ')), ['25', '# signed 1', '50', '# signed 2', '75', '# pushed lib', '100', '# done: 2 signed, 1 pushed']);
   assert.equal(started.length, 1, 'never restarted');
   assert.equal(p.cancelled(), false);
   fs.writeFileSync(`${p.file}.cancel`, 'cancel');
