@@ -33,6 +33,12 @@ const OP = Object.freeze({
    */
   CONTINUE: 16,
   /*
+   * DERIVE (PROPOSAL-login-plan.md; Brad, 2026-10-29: "we can change the RFC") - a touchless derive_secret on slot 128
+   * a budget paid: the scope names its 32-byte label hash, the subject is SHA-256 of the request (mode || label hash).
+   * A use like a sign or decrypt: intent in 47-62, owes a receipt. Appended last, so the numbers above never move.
+   */
+  DERIVE: 17,
+  /*
    * v1 (2026-10-08): 3-5 (FIDO, HMAC - never linked), 9-10 (peers), 12 (wipe, R9 dropped)
    * and 17-20 (siblings, anchor, sync) are unused: the key writes a link only for a press
    * or a use an approved budget pays (Brad), and pairing and sync are the app's.
@@ -185,4 +191,7 @@ function nameOf(table, value) {
   return null;
 }
 
-module.exports = { OP, DECISION, END, FLAG, TAG, RECEIPT, STATUS, parseStatus, receiptCode, receiptByte, nameOf };
+/* a budget USE - what a self-press pays, carries an intent and owes a receipt: a sign, a decrypt, or a paid derive */
+const isUse = (op) => op === OP.SIGN || op === OP.DECRYPT || op === OP.DERIVE;
+
+module.exports = { OP, DECISION, END, FLAG, TAG, RECEIPT, STATUS, parseStatus, receiptCode, receiptByte, nameOf, isUse };

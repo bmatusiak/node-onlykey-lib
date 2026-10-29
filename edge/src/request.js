@@ -47,7 +47,7 @@ const MAX_LIFETIME_MINUTES = 24 * 60;
 /* still_live (4.7a, 2026-10-03): a continue names a budget that has not ended - only an ended budget can be continued */
 /* busy (2026-10-04): another request is on the phone's sheet - one at a time, never queued */
 const REFUSALS = Object.freeze(['declined', 'timeout', 'copy_unverified', 'receipt_owed', 'still_live', 'invalid', 'busy']);
-const OPS = Object.freeze({ sign: OP.SIGN, decrypt: OP.DECRYPT });
+const OPS = Object.freeze({ sign: OP.SIGN, decrypt: OP.DECRYPT, derive: OP.DERIVE });
 
 const isHex = (s, n) => typeof s === 'string' && s.length === n * 2 && /^[0-9a-f]+$/i.test(s);
 const isU32 = (n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;

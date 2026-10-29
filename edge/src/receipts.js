@@ -19,7 +19,7 @@
  * only if recomputing the subject from it matches the receipt link (spec S5); a
  * message that does not match is shown as missing, never as text.
  */
-const { OP, DECISION, FLAG, TAG, receiptCode } = require('./codes');
+const { OP, DECISION, FLAG, TAG, receiptCode, isUse } = require('./codes');
 const { decodeLink } = require('./chain');
 const { H, u32le, u8, bytes32, same } = require('./hash');
 const { utf8ToBytes } = require('../../src/bytes');
@@ -99,7 +99,7 @@ function keyDebts(entries) {
       continuedAt = f.seq;
       carried = f.grantId > 0 ? 1 : 0;
     /* R16: the KEY decided at the sign, and wrote it into the link (owes_receipt) - the chain could not replay it */
-    } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && OWING.has(f.decision) && (f.flags & FLAG.OWES_RECEIPT)) owed = f.seq;
+    } else if (isUse(f.op) && OWING.has(f.decision) && (f.flags & FLAG.OWES_RECEIPT)) owed = f.seq;
     else if (f.op === OP.RECEIPT && owed !== null) {
       const settled = f.code === 0x8f && (f.flags & FLAG.PRESS_OBSERVED) && same(f.subject, settleSubject(owed));
       if (settled || f.refSeq === owed) owed = null;
@@ -119,7 +119,7 @@ function pairReceipts(entries, messages = {}) {
   for (const r of rows) {
     const f = decodeLink(r.link);
     bySeq.set(f.seq, { f, head: r.head });
-    if (f.op === OP.SIGN || f.op === OP.DECRYPT) {
+    if (isUse(f.op)) {
       /* every field from the start, so the generated .d.ts knows them all */
       uses.push({
         seq: f.seq,

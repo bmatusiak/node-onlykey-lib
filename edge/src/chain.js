@@ -36,7 +36,7 @@
  * amber), never "verified" - and never "tampered" either, unless a check that
  * could be made failed.
  */
-const { OP, TAG, DECISION } = require('./codes');
+const { OP, TAG, DECISION, isUse } = require('./codes');
 /* R3: the newest link format this library reads (byte 63) */
 const LINK_VERSION = 1;
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
@@ -107,10 +107,10 @@ function decodeLink(b) {
      * none). Every other link keeps 47-62 zero. R3: byte 63 = the format's version; v1 is
      * the first release and the only one known - nothing older is read (2026-10-08).
      */
-    intent: (b[4] === OP.SIGN || b[4] === OP.DECRYPT) && b.subarray(47, 63).some((x) => x !== 0) ? b.slice(47, 63) : null,
+    intent: isUse(b[4]) && b.subarray(47, 63).some((x) => x !== 0) ? b.slice(47, 63) : null,
     version: b[63],
     versionKnown: b[63] === LINK_VERSION,
-    reservedZero: (b[4] === OP.SIGN || b[4] === OP.DECRYPT || b.subarray(47, 63).every((x) => x === 0)) && b[63] === LINK_VERSION,
+    reservedZero: (isUse(b[4]) || b.subarray(47, 63).every((x) => x === 0)) && b[63] === LINK_VERSION,
   };
 }
 

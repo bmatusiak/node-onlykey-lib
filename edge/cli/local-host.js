@@ -58,7 +58,7 @@ function openingOf(o) {
 }
 
 /* the request's words for an op, as a continue's scopes are compared (the phone's loadAgentBudgets) */
-const opWord = (op) => (op === codes.OP.SIGN ? 'sign' : op === codes.OP.DECRYPT ? 'decrypt' : op);
+const opWord = (op) => (op === codes.OP.SIGN ? 'sign' : op === codes.OP.DECRYPT ? 'decrypt' : op === codes.OP.DERIVE ? 'derive' : op);
 
 /**
  * @param {object} o

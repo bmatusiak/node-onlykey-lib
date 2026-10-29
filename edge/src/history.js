@@ -23,7 +23,7 @@
 const chain = require('./chain');
 const codes = require('./codes');
 
-const { OP, DECISION } = codes;
+const { OP, DECISION, isUse } = codes;
 const END_HOW = { 1: 'completed', 2: 'revoked', 3: 'settled' };
 
 const bytesOf = (l) => (l instanceof Uint8Array ? l : Uint8Array.from(Buffer.from(String(l), 'hex')));
@@ -55,14 +55,14 @@ function budgetHistory(copy) {
         grantId: f.grantId, seq: f.seq, reason: o.reason || null, scopes: o.scopes || [], uses: o.uses || null,
         lifetime: o.lifetime || 0, opened: o.opened || null, from: o.from || null, spends: [], ended: null,
       });
-    } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS) {
+    } else if (isUse(f.op) && f.decision === DECISION.SELF_PRESS) {
       /* a spend of a budget whose opening is not in this copy (opened behind a loss): still listed */
       if (!budgets.has(f.grantId)) {
         const o = openings.get(f.grantId) || {};
         budgets.set(f.grantId, { grantId: f.grantId, seq: null, reason: o.reason || null, scopes: o.scopes || [], uses: o.uses || null, lifetime: o.lifetime || 0, opened: o.opened || null, from: o.from || null, spends: [], ended: null });
       }
       budgets.get(f.grantId).spends.push({ seq: f.seq, op: f.op === OP.SIGN ? 'sign' : 'decrypt', slot: f.slot, step: f.grantStep, intent: reasons[f.seq] || null, receipt: receiptFor.get(f.seq) || null });
-    } else if (f.op === OP.SIGN || f.op === OP.DECRYPT) {
+    } else if (isUse(f.op)) {
       presses.push({ seq: f.seq, op: f.op === OP.SIGN ? 'sign' : 'decrypt', slot: f.slot, intent: reasons[f.seq] || null, receipt: receiptFor.get(f.seq) || null });
     } else if (f.op === OP.GRANT_END) {
       const b = budgets.get(f.grantId);

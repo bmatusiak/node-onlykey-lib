@@ -60,7 +60,7 @@ function watchLines(feed, { color = false, time = new Date() } = {}) {
       lines.push(alarm ? red(`${line}  ⚠ ALARM`) : line);
       continue;
     }
-    if (l.op === codes.OP.SIGN || l.op === codes.OP.DECRYPT) {
+    if (codes.isUse(l.op)) {
       /* v1: the key links a sign or decrypt only when a budget paid it (R1, R16) */
       const how = `self-press · budget ${l.grantId}, use ${l.grantStep}`;
       /*

@@ -153,8 +153,23 @@ function identityLabel(name) {
   throw new Error(`edge: an identity is "ssh://user@host" or "gpg://user id", not "${text}"`);
 }
 
-/* a derived-code scope's 32-byte label; null for a stored slot (there the slot is the key) */
+/*
+ * A DERIVE SCOPE'S LABEL (the login budget, PROPOSAL-login-plan.md): derive_secret's touchless derive on slot 128 is paid
+ * only for the one label the scope names - SHA-256 of the label text, exactly as okcrypto.deriveSecret hashes it into its
+ * request (mode || sha256(label)). Given as `derive` (the label text, e.g. "okedge/bucket/v1/<identity>") or `label`.
+ */
+function deriveLabel(text) {
+  return crypto.sha256(utf8ToBytes(String(text)));
+}
+
+/* a derived-code or derive scope's 32-byte label; null for a stored slot (there the slot is the key) */
 function scopeLabel(s) {
+  if (s.op === OP.DERIVE) {
+    if (s.slot !== 128) throw new RangeError(`edge: a derive scope is on slot 128 (derive_secret), not ${s.slot}`);
+    if (s.label instanceof Uint8Array && s.label.length === 32) return s.label;
+    if (typeof s.derive === 'string' && s.derive) return deriveLabel(s.derive);
+    throw new RangeError('edge: a derive scope names its label - derive: "okedge/bucket/v1/<identity>"');
+  }
   if (!isDerivedCode(s.slot)) return null;
   if (s.label instanceof Uint8Array && s.label.length === 32) return s.label;
   if (typeof s.identity === 'string' && s.identity) return identityLabel(s.identity);
@@ -323,5 +338,5 @@ module.exports = {
   NAMETAG_MAX, nametagHash, statementDigest, verifyStatement,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, txToken, intentOf, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
-  isDerivedCode, identityLabel, scopeLabel,
+  isDerivedCode, identityLabel, scopeLabel, deriveLabel,
 };

@@ -47,7 +47,7 @@
  * assess() is that one answer; the tab's banner and verifyCopy (Approve) both
  * read it.
  */
-const { OP, DECISION } = require('./codes');
+const { OP, DECISION, isUse } = require('./codes');
 const chain = require('./chain');
 const grants = require('./grants');
 const { keyDebts } = require('./receipts');
@@ -448,7 +448,7 @@ function verifyCore(copy, key, prev, out) {
   const touched = new Set();
   for (const f of fields) {
     /* R3: a scope only on a link that spends a budget; bytes 47-63 always zero */
-    const spend = (f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS;
+    const spend = isUse(f.op) && f.decision === DECISION.SELF_PRESS;
     /* R3: the opening carries its scope count; a spend names its scope; nothing else carries one */
     if (f.scope !== 0 && !spend && f.op !== OP.GRANT_CREATE) return fail('scope', { seq: f.seq, detail: { scope: f.scope, reason: 'not-a-spend' } });
     if (!f.versionKnown) return fail('version', { seq: f.seq, detail: { version: f.version } }); /* R3: a format this library does not know - red */
@@ -484,7 +484,7 @@ function verifyCore(copy, key, prev, out) {
       openingScopes.set(f.grantId, f.scope);
       spends.set(f.grantId, []);
       touched.add(f.grantId);
-    } else if ((f.op === OP.SIGN || f.op === OP.DECRYPT) && f.decision === DECISION.SELF_PRESS) {
+    } else if (isUse(f.op) && f.decision === DECISION.SELF_PRESS) {
       const list = spends.get(f.grantId);
       /*
        * A BUDGET OPENED BEHIND AN ACCEPTED LOSS (key 1, 2026-10-23): the budget checks start after the
