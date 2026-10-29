@@ -71,7 +71,7 @@ function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 
       let m;
       try { m = JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data)); } catch { return; }
       /* a reply to one of this device's mcp-re: its waiter, not a listener */
-      if (m.re !== undefined && mcpPending.has(m.re) && (m.t === 'mcp' || m.t === 'error')) {
+      if (m.re !== undefined && mcpPending.has(m.re) && (m.t === 'mcp' || m.t === 'sealed' || m.t === 'error')) {
         const p = mcpPending.get(m.re);
         mcpPending.delete(m.re);
         if (m.t === 'error') p.reject(new Error(`the room refused it: ${m.why}`));
@@ -164,6 +164,30 @@ function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 
       async setAgent(agent, state) { await api.mcp('agent', { agent, state }); },
       async planUpdate(plan, { state, results, receipts, why } = {}) {
         await api.mcp('plan', { plan, ...(state ? { state } : {}), ...(results ? { results } : {}), ...(receipts ? { receipts } : {}), ...(why ? { why } : {}) });
+      },
+      /*
+       * THE SERVER'S SEALED COPY OF THIS BUCKET (bucket/src/sealedcopy.js; Phase 3): the room's rows as a row store for
+       * sealedcopy.syncWith - ids and tags, sealed units the server cannot read. on: false when this server keeps no
+       * copy for the identity (its allowlist): the table is empty and a put is refused.
+       */
+      sealed(op, fields = {}, { timeoutMs: t = 30000 } = {}) {
+        return new Promise((res, rej) => {
+          const re = ++mcpSeq;
+          const timer = setTimeout(() => { if (mcpPending.delete(re)) rej(new Error(`the room did not answer sealed ${op} within ${t} ms`)); }, t);
+          mcpPending.set(re, {
+            resolve: (v) => { clearTimeout(timer); res(v); },
+            reject: (e) => { clearTimeout(timer); rej(e); },
+          });
+          try { send({ t: 'sealed', op, re, ...fields }); } catch (e) { mcpPending.delete(re); clearTimeout(timer); rej(e); }
+        });
+      },
+      sealedStore() {
+        return {
+          async on() { return Boolean((await api.sealed('table')).on); },
+          async table() { return (await api.sealed('table')).rows || {}; },
+          async get(ids) { return ids.length ? (await api.sealed('get', { ids })).rows || {} : {}; },
+          async put(rows) { const r = await api.sealed('put', { rows }); if (!r.ok) throw new Error(`the server did not keep the rows: ${r.why || 'refused'}`); },
+        };
       },
       close() { try { ws.close(); } catch { /* closed */ } },
     };
