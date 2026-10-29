@@ -21,6 +21,7 @@ export const OP: Readonly<{
     GRANT_HOLD: 13;
     GRANT_RESUME: 14;
     CONTINUE: 16;
+    DERIVE: 17;
 }>;
 export const DECISION: Readonly<{
     APPROVE: 1;
@@ -151,3 +152,4 @@ export function receiptCode(code: any): {
 export function receiptByte(code: any): number;
 /** Reverse lookup for display: OP/DECISION value -> lower-case name, or null. */
 export function nameOf(table: any, value: any): string | null;
+export function isUse(op: any): boolean;

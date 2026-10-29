@@ -24,7 +24,7 @@ export function settleSubject(seq: any): Uint8Array<ArrayBufferLike> & Uint8Arra
 export function pairReceipts(entries: any, messages?: {}): {
     uses: {
         seq: number;
-        op: 1 | 2;
+        op: number;
         status: string;
         /** @type {{seq: number, code: number, name: string | null, alarm: boolean} | null} */
         receipt: {

@@ -133,3 +133,4 @@ export const DEFAULT_LIFETIME_MINUTES: number;
 export function isDerivedCode(slot: any): boolean;
 export function identityLabel(name: any): Uint8Array<ArrayBufferLike>;
 export function scopeLabel(s: any): any;
+export function deriveLabel(text: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
