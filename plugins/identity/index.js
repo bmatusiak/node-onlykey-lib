@@ -17,9 +17,9 @@
  * public key. The key is the identity's key only when it does what only the identity's private key can:
  *   verify()          the key signs a fresh random challenge with the identity's private key (agent ED25519, the
  *                     bucket identity's own label) and the signature is checked against the identity public key;
- *   proveByBucket()   the bucket key the key derived is the one the identity certified - its certificate signs that
- *                     bucket public key under the identity public key, and only the key derives the matching secret.
- *                     A login that opens its bucket is proven with no second press.
+ *   proveByBucket()   the bucket this device sealed for the identity opens with the secret the key derives for it -
+ *                     only the key that sealed it derives that secret. A login that opens its bucket is proven with
+ *                     no second press; a device with no bucket yet proves the key with verify() before sealing one.
  * requireVerified() refuses until one of them has passed. Every host composes the same plugin - the web app, the
  * desktop, the phone, the CLI - so the rule is the same everywhere.
  *
@@ -32,7 +32,7 @@
  *   identity.load(opts?)        -> held             (one read for every caller at once; held after)
  *   identity.current()          -> held | null      (no request)
  *   identity.verify(opts?)      -> held             (a press or the code, as the key's derive setting asks)
- *   identity.proveByBucket({bucketPublicKey, certificate, derivedPublicKey}) -> held
+ *   identity.proveByBucket({sealed, key}) -> {held, bucket}
  *   identity.requireVerified()  -> held, or throws
  *   identity.forget(why?)
  *   identity.on('change', fn)   (held | null)
@@ -43,6 +43,7 @@
 const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { ed25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 const bucketIdentity = require('../../bucket/src/bucket-identity');
+const bucket = require('../../bucket/src/bucket.js');
 
 const PROOF_DOMAIN = 'OKIDENTITY-PROOF-v1';
 const utf8 = (s) => new TextEncoder().encode(s);
@@ -52,7 +53,6 @@ const concat = (...parts) => {
   for (const p of parts) { out.set(p, o); o += p.length; }
   return out;
 };
-const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
 function setup(imports, register) {
   const { app, host, okcrypto } = imports;
@@ -109,14 +109,30 @@ function setup(imports, register) {
       return identity.proven('signature', h);
     },
 
-    proveByBucket({ bucketPublicKey, certificate, derivedPublicKey }) {
+    /*
+     * THE BUCKET THIS DEVICE KEPT FOR THE IDENTITY OPENS (Brad, 2026-10-28: "bucket will use the identity, so the key
+     * feature is identity, and verify they are the key"): `sealed` is the bucket file this device sealed earlier for
+     * the held identity, `key` the secret the key derived just now for it. Only the key that sealed it derives that
+     * secret, so it opening - with the owner inside the seal this identity (or the Edge identity this same key reports,
+     * a bucket kept under it before) - proves the key. A device with no sealed bucket yet has nothing to open: it
+     * proves the key with verify() before it seals one, or a device repeating someone's public key would plant a
+     * bucket under that identity. -> {held, bucket}: the bucket opened once, for the caller.
+     */
+    proveByBucket({ sealed, key }) {
       const h = held;
       if (!h) throw new Error('identity: nothing loaded to prove');
-      const certified = bucketIdentity.verifyCertificate({ identityPublicKey: h.publicKey, bucketPublicKey, certificate });
-      if (!certified || !same(Uint8Array.from(derivedPublicKey), Uint8Array.from(bucketPublicKey))) {
-        throw Object.assign(new Error("identity: this key's bucket key is not the one the identity certified"), { code: 'IDENTITY_NOT_PROVEN' });
+      let opened;
+      try {
+        opened = bucket.open(sealed, { key });
+      } catch (e) {
+        throw Object.assign(new Error(`identity: this key did not open the bucket kept for this identity (${(e && e.code) || (e && e.message)})`), { code: 'IDENTITY_NOT_PROVEN', cause: e });
       }
-      return identity.proven('bucket', h);
+      const edge = h.parts && h.parts.edge && h.parts.edge.identityId;
+      const owner = opened.bucket.owner;
+      if (!opened.sealed || !(owner === h.id || (edge && owner === edge))) {
+        throw Object.assign(new Error("identity: the bucket that opened is not this identity's"), { code: 'IDENTITY_NOT_PROVEN' });
+      }
+      return { held: identity.proven('bucket', h), bucket: opened.bucket };
     },
 
     /* internal: mark the held identity proven (a check above has passed for exactly this one) */

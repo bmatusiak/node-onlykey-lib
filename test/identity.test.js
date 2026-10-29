@@ -14,6 +14,7 @@ const { ed25519 } = require('../src/vendor/exports/@noble/curves/ed25519.js');
 const { randomBytes } = require('../src/vendor/exports/@noble/hashes/utils.js');
 const bucketIdentity = require('../bucket/src/bucket-identity');
 const identityPlugin = require('../plugins/identity');
+const bucket = require('../bucket/src/bucket.js');
 
 /* a key: the identity's secret, and what it is asked (or an impostor: it reports the key's public key, signs with its own) */
 function fakeKey({ secret = randomBytes(32), signWith = secret, site = 'ok-edge.example', slow = 0 } = {}) {
@@ -75,18 +76,19 @@ test('verify: an impostor that repeats the identity public key but signs with an
   assert.throws(() => identity.requireVerified(), (e) => e.code === 'IDENTITY_NOT_PROVEN');
 });
 
-test('proveByBucket: the bucket key derived is the one the identity certified - proven; another is refused', async () => {
+test('proveByBucket: the bucket this device sealed for the identity opens with the key secret - proven; another key or another identity bucket is refused', async () => {
   const key = fakeKey();
   const identity = compose(key);
   const held = await identity.load();
-  const bucketPublicKey = ed25519.getPublicKey(randomBytes(32));
-  const certificate = await bucketIdentity.certify(key.okcrypto, held.publicKey, bucketPublicKey);
-  assert.throws(() => identity.proveByBucket({ bucketPublicKey, certificate, derivedPublicKey: ed25519.getPublicKey(randomBytes(32)) }),
-    (e) => e.code === 'IDENTITY_NOT_PROVEN', 'a derived key that is not the certified one');
-  const other = await bucketIdentity.certify(fakeKey().okcrypto, held.publicKey, bucketPublicKey);
-  assert.throws(() => identity.proveByBucket({ bucketPublicKey, certificate: other, derivedPublicKey: bucketPublicKey }),
-    (e) => e.code === 'IDENTITY_NOT_PROVEN', 'a certificate another identity signed');
-  assert.equal(identity.proveByBucket({ bucketPublicKey, certificate, derivedPublicKey: bucketPublicKey }).verified.how, 'bucket');
+  const secret = randomBytes(32);
+  const sealed = bucket.seal(bucket.create({ owner: held.id }), secret, randomBytes);
+  assert.throws(() => identity.proveByBucket({ sealed, key: randomBytes(32) }), (e) => e.code === 'IDENTITY_NOT_PROVEN', 'the secret of another key');
+  const others = bucket.seal(bucket.create({ owner: 'f'.repeat(32) }), secret, randomBytes);
+  assert.throws(() => identity.proveByBucket({ sealed: others, key: secret }), (e) => e.code === 'IDENTITY_NOT_PROVEN', 'the bucket of another identity');
+  assert.equal(identity.current().verified, null);
+  const out = identity.proveByBucket({ sealed, key: secret });
+  assert.equal(out.held.verified.how, 'bucket');
+  assert.equal(out.bucket.owner, held.id, 'the bucket comes back opened');
 });
 
 test('forget: nothing held, and a read in flight is not kept for the next key', async () => {
