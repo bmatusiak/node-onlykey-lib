@@ -117,6 +117,8 @@ async function run({ io, opts, argv, net, home, dev = null }) {
   };
   /* --gui-prompt: one progress window for the run (cli/gui-prompt guiProgress), opened with the budget */
   let PROGRESS = null;
+  /* the ship's own service (shipService), declared before any command runs: the ship's code below is reached first */
+  let SHIP_SVC = null;
   let signedCount = 0;
   let pushCount = 0;
   const stop = (why) => {
@@ -424,12 +426,13 @@ async function run({ io, opts, argv, net, home, dev = null }) {
    * its own process (an identity made there: plug in and go), and asks it to stop at the end - the same close as Ctrl-C.
    * The person's own service, or the desktop app hosting the key, is used as it is and left running.
    */
-  let SHIP_SVC = null;
-  const controlUp = () => new Promise((resolve) => {
-    const s = require('net').connect(require('./control').controlPath());
-    s.once('connect', () => { s.destroy(); resolve(true); });
-    s.once('error', () => resolve(false));
-  });
+  function controlUp() {
+    return new Promise((resolve) => {
+      const s = require('net').connect(require('./control').controlPath());
+      s.once('connect', () => { s.destroy(); resolve(true); });
+      s.once('error', () => resolve(false));
+    });
+  }
   async function shipService() {
     if (VIA_APP || await controlUp()) return;
     const child = spawn(process.execPath, [CLI, ...keyArgs, 'edge', ...netArgs, 'agent', '--no-server', '--no-sync'], { stdio: ['inherit', 'ignore', 'inherit'], env: process.env, windowsHide: true });
