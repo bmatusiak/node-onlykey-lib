@@ -36,6 +36,11 @@ async function identity(seed) {
 function fakeServer() {
   const sockets = new Set();
   const seen = [];
+  /* the agents each room knows, and every mcp-re the server got */
+  const agents = new Map();
+  const mcpSeen = [];
+  /* an agent's message to a room's joined devices, as /mcp sends it */
+  const toRoom = (roomId, msg) => { for (const s of joined(roomId)) s.deliver({ t: 'mcp', ...msg }); };
   const joined = (roomId) => [...sockets].filter((s) => s.room === roomId && s.device);
   class FakeWS {
     constructor(url) {
@@ -59,6 +64,25 @@ function fakeServer() {
         return;
       }
       if (m.t === 'ping') return this.deliver({ t: 'pong' });
+      /* the owner's answers to the agents, as the room answers them: its broadcast first (the sender hears it too),
+       * then the reply carrying the device's re */
+      if (m.t === 'mcp-re') {
+        mcpSeen.push(m);
+        const reply = (r) => this.deliver({ ...r, re: m.re });
+        if (m.op === 'agents') return reply({ t: 'mcp', ev: 'agents', agents: agents.get(this.room) || [], plans: [] });
+        if (m.op === 'agent') {
+          const list = agents.get(this.room) || [];
+          const a = list.find((x) => x.id === m.agent);
+          if (!a) return reply({ t: 'error', why: 'no such agent here' });
+          a.state = m.state;
+          for (const s of joined(this.room)) s.deliver({ t: 'mcp', ev: 'agent', agent: a });
+          return reply({ t: 'mcp', ev: 'ok', op: 'agent' });
+        }
+        if (m.op === 'plan') return reply({ t: 'mcp', ev: 'ok', op: 'plan' });
+        /* an answer the room is slow with: no reply yet */
+        if (m.op === 'slow') return undefined;
+        return reply({ t: 'error', why: 'unknown op' });
+      }
       if (m.t === 'frame') {
         seen.push(m.body);
         const to = joined(this.room).find((s) => s.device.id === m.to);
@@ -71,7 +95,7 @@ function fakeServer() {
       setImmediate(() => this.onclose && this.onclose({}));
     }
   }
-  return { FakeWS, seen, sockets };
+  return { FakeWS, seen, sockets, agents, mcpSeen, toRoom };
 }
 
 const dev = (name, kind) => ({ id: crypto.randomBytes(8).toString('hex'), name, kind });
@@ -128,5 +152,43 @@ test('another identity is refused; a frame not sealed by the identity is dropped
   b.serve(() => new Promise(() => {})); /* never answers */
   b.close();
   await assert.rejects(waiting, /left the room|not in the room|no answer/);
+  a.close();
+});
+
+test('the agents: their messages reach every device; the owner\'s answers get their own reply, past the broadcasts', async () => {
+  const me = await identity('backup A');
+  const { FakeWS, agents, mcpSeen, toRoom } = fakeServer();
+  const a = await connectRoom({ url: URL_, me, device: dev('Chromium', 'webapp'), WebSocket: FakeWS, randomBytes: rnd });
+  const b = await connectRoom({ url: URL_, me, device: dev('Pixel', 'android'), WebSocket: FakeWS, randomBytes: rnd });
+  const heardA = [];
+  const heardB = [];
+  a.on('mcp', (m) => heardA.push(m));
+  b.on('mcp', (m) => heardB.push(m));
+
+  /* an agent's plan, live in the room */
+  const plan = { id: 'p1', title: 'sign two commits', agent: { id: 'a'.repeat(64), name: 'Claude' }, items: [] };
+  agents.set(me.id, [{ id: plan.agent.id, name: 'Claude', state: 'pending' }]);
+  toRoom(me.id, { ev: 'plan', plan });
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(heardA, [{ ev: 'plan', plan }]);
+  assert.deepEqual(heardB, [{ ev: 'plan', plan }]);
+
+  /* the list, for a device that joins later */
+  assert.deepEqual(await a.agents(), { agents: [{ id: plan.agent.id, name: 'Claude', state: 'pending' }], plans: [] });
+
+  /* accept: the room's broadcast reaches both devices (the sender too) before the reply - the reply is the waiter's */
+  await a.setAgent(plan.agent.id, 'accepted');
+  assert.deepEqual(heardA.slice(1), [{ ev: 'agent', agent: { id: plan.agent.id, name: 'Claude', state: 'accepted' } }]);
+  assert.equal(heardB.length, 2);
+
+  /* a plan's progress back to its agent, and a refusal that rejects */
+  await a.planUpdate('p1', { state: 'done', results: [{ item: 1, signature: 'sig' }], receipts: [{ seq: 4, code: 'OK' }] });
+  assert.deepEqual(mcpSeen.at(-1), { t: 'mcp-re', op: 'plan', re: mcpSeen.at(-1).re, plan: 'p1', state: 'done', results: [{ item: 1, signature: 'sig' }], receipts: [{ seq: 4, code: 'OK' }] });
+  await assert.rejects(a.setAgent('f'.repeat(64), 'blocked'), /refused it: no such agent here/);
+
+  /* a closing room fails what waits on it */
+  const waiting = b.mcp('slow', {}, { timeoutMs: 5000 });
+  b.close();
+  await assert.rejects(waiting, /closed|did not answer/);
   a.close();
 });
