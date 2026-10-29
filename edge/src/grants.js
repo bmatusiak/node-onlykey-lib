@@ -138,6 +138,16 @@ function checkSpends(genesis, uses, spends) {
  * the label itself and never trusts a label hash handed to it - or as `label`
  * (the 32 bytes) where the caller already holds them.
  */
+/*
+ * A LABEL GIVEN AS BYTES OR AS THEIR 64 HEX: a budget's opening is kept as JSON on every host (its words, checked against
+ * the grant link), where 32 bytes do not survive - the hex does, and reads back as the same label.
+ */
+function labelBytes(label) {
+  if (label instanceof Uint8Array && label.length === 32) return label;
+  if (typeof label === 'string' && /^[0-9a-f]{64}$/i.test(label)) return Uint8Array.from(label.match(/../g), (x) => parseInt(x, 16));
+  return null;
+}
+
 function isDerivedCode(slot) {
   return (slot >= 201 && slot <= 203) || (slot >= 221 && slot <= 223);
 }
@@ -166,12 +176,12 @@ function deriveLabel(text) {
 function scopeLabel(s) {
   if (s.op === OP.DERIVE) {
     if (s.slot !== 128) throw new RangeError(`edge: a derive scope is on slot 128 (derive_secret), not ${s.slot}`);
-    if (s.label instanceof Uint8Array && s.label.length === 32) return s.label;
+    if (labelBytes(s.label)) return labelBytes(s.label);
     if (typeof s.derive === 'string' && s.derive) return deriveLabel(s.derive);
     throw new RangeError('edge: a derive scope names its label - derive: "okedge/bucket/v1/<identity>"');
   }
   if (!isDerivedCode(s.slot)) return null;
-  if (s.label instanceof Uint8Array && s.label.length === 32) return s.label;
+  if (labelBytes(s.label)) return labelBytes(s.label);
   if (typeof s.identity === 'string' && s.identity) return identityLabel(s.identity);
   throw new RangeError(`edge: a scope on derived code ${s.slot} must name its identity (R11a) - give it identity: "ssh://..." or "gpg://..."`);
 }

@@ -173,7 +173,14 @@ function setup(imports, register) {
      * No Edge here, or a key whose firmware has no login budget (it refuses a derive scope): fn alone, with its codes as
      * today. -> {result, budget: {grantId, seq, checkpoint} | null, paid: n}
      */
-    async login(fn, { reason = 'log in', derives = [], signs = 0, onPress, ttlMinutes = 2 } = {}) {
+    /*
+     * THE APP FILES IT AS ITS OWN BUDGET (Brad, 2026-10-29: "after login, it gets added into the budget history"): an Edge
+     * copy checks every budget's grant against its opening words, and every use's receipt against its message, so the
+     * host is handed both - onOpened(budget, {reason, scopes, lifetime}) once the press opened it, before fn runs, and
+     * onUse({seq, message}) after each paid request's receipt (seq: the use's link). A host that files neither still logs
+     * in; its copy then cannot check the login's links.
+     */
+    async login(fn, { reason = 'log in', derives = [], signs = 0, onPress, ttlMinutes = 2, onOpened, onUse } = {}) {
       const edge = app.services && app.services.edge;
       if (!edge || typeof edge.grant !== 'function' || typeof okcrypto.setUseHook !== 'function' || (!derives.length && !signs)) {
         return { result: await fn(), budget: null, paid: 0 };
@@ -197,6 +204,8 @@ function setup(imports, register) {
         if (e && (e.status === 'scope-not-allowed' || (e.name === 'EdgeError' && e.code === 0x03))) return { result: await fn(), budget: null, paid: 0 };
         throw e;
       }
+      /* the scopes as a host keeps them (JSON): a label as its hex, which grants.scopeLabel reads back as the same bytes */
+      if (onOpened) await onOpened(budget, { reason, scopes: scopes.map((s) => (s.label ? { ...s, label: hex(s.label) } : s)), lifetime: ttlMinutes });
       let paid = 0;
       const was = okcrypto.setUseHook((msg, slot, payload) => {
         const derive = msg === 0xfc && slot === 128 && payload.length === 33 && payload[0] === 1 && left.get(hex(payload.subarray(1))) > 0;
@@ -212,7 +221,9 @@ function setup(imports, register) {
           async after() {
             if (derive) left.set(hex(payload.subarray(1)), 0); else signsLeft -= 1;
             paid += 1;
-            await edge.receipt(at, 0, sha256(utf8(`${reason}: ${derive ? 'derive' : 'sign'} ${paid}`)));
+            const message = `${reason}: ${derive ? 'derive' : 'sign'} ${paid}`;
+            await edge.receipt(at, 0, sha256(utf8(message)));
+            if (onUse) await onUse({ seq: at, message });
           },
         };
       });
