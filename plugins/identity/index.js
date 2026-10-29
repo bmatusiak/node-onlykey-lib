@@ -178,14 +178,15 @@ function setup(imports, register) {
       if (!edge || typeof edge.grant !== 'function' || typeof okcrypto.setUseHook !== 'function' || (!derives.length && !signs)) {
         return { result: await fn(), budget: null, paid: 0 };
       }
-      const { codes } = require('../../edge/src');
+      /* the Edge ops, as edge/src/codes.js fixes them (core never requires edge/: Edge is the plugin's, found through app.services) */
+      const OP = { SIGN: 1, DERIVE: 17 };
       const { MSG } = require('../../src/protocol/msg');
       const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
       const signLabel = sha256(utf8(bucketIdentity.IDENTITY_LABEL));
-      const scopes = [...new Set(derives)].slice(0, signs ? 3 : 4).map((d) => ({ op: codes.OP.DERIVE, slot: 128, cap: 1, derive: d }));
-      if (signs) scopes.push({ op: codes.OP.SIGN, slot: 201, cap: signs, label: signLabel });
+      const scopes = [...new Set(derives)].slice(0, signs ? 3 : 4).map((d) => ({ op: OP.DERIVE, slot: 128, cap: 1, derive: d }));
+      if (signs) scopes.push({ op: OP.SIGN, slot: 201, cap: signs, label: signLabel });
       /* what the budget may still pay: each derive once by its label hash, the identity's signatures up to `signs` */
-      const left = new Map(scopes.filter((s) => s.op === codes.OP.DERIVE).map((s) => [hex(sha256(utf8(s.derive))), 1]));
+      const left = new Map(scopes.filter((s) => s.op === OP.DERIVE).map((s) => [hex(sha256(utf8(s.derive))), 1]));
       let signsLeft = signs;
       const h = await edge.head();
       let budget;
