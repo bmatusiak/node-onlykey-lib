@@ -256,6 +256,15 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     const r = cli(['exec', '--head', HEAD, '--intent', intent, '--receipt', intent, '--', ...command]);
     const filed = /receipt filed for #\d+/.test(r.out) && !/receipt owed for #/.test(r.out) && r.out.match(/head = ([0-9a-f]{64})/g);
     if (filed) { HEAD = filed.pop().slice(7); return r.out; }
+    /*
+     * IT RAN AND THE KEY WAS NOT NEEDED (key 1, 2026-10-29: a push to a folder remote - or https with a token - asks no
+     * SSH signature): done, said so, the budget's use left unspent. A commit that should have been signed and was not is
+     * caught by the ship's own check after its rebase ("commits still unsigned").
+     */
+    if (r.code === 0 && /^signed: nothing under the budget$/m.test(r.out)) {
+      say(`  ${intent}: done - the key was not needed for it`);
+      return r.out;
+    }
     const seq = (r.out.match(/receipt owed for #(\d+)/) || [])[1];
     if (!seq) {
       const failed = (r.out.match(/note #(\d+): FAILED/) || [])[1];
@@ -404,9 +413,52 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     throw e;
   }
 
+  /*
+   * ONE SERVICE FOR THE WHOLE SHIP (Brad, 2026-10-29: "one process for the whole ship - well that's been the goal").
+   * Measured on key 1 the same day: a commit ~8 s, of it ~2 s the signature - the rest each child opening the key
+   * (~2.9 s: whose bucket, the Edge public key, the agent) and checking the chain at its close (~2.5 s: public keys,
+   * head, a fresh checkpoint). With `edge agent` up, a child's budget / exec / receipt go to it over the owner-only
+   * control socket (register.js serviceUp) and open nothing: the key is opened once, the chain checked once, at its
+   * stop. This process cannot be that service itself - it waits on each child in spawnSync - so it starts one for the
+   * ship (no bucket trades, no server room: the key and the budget only) after the status check, which still runs in
+   * its own process (an identity made there: plug in and go), and asks it to stop at the end - the same close as Ctrl-C.
+   * The person's own service, or the desktop app hosting the key, is used as it is and left running.
+   */
+  let SHIP_SVC = null;
+  const controlUp = () => new Promise((resolve) => {
+    const s = require('net').connect(require('./control').controlPath());
+    s.once('connect', () => { s.destroy(); resolve(true); });
+    s.once('error', () => resolve(false));
+  });
+  async function shipService() {
+    if (VIA_APP || await controlUp()) return;
+    const child = spawn(process.execPath, [CLI, ...keyArgs, 'edge', ...netArgs, 'agent', '--no-server', '--no-sync'], { stdio: ['inherit', 'ignore', 'inherit'], env: process.env, windowsHide: true });
+    child.on('error', () => {});
+    for (let i = 0; i < 600 && child.exitCode === null; i++) {
+      if (await controlUp()) {
+        SHIP_SVC = child;
+        say('the key is held for the whole ship (one service)');
+        if (PROGRESS) PROGRESS.note('the key is held for the whole ship - each step uses it without opening it again');
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (child.exitCode === null) child.kill();
+    say('the ship\'s service did not start - each step opens the key itself');
+  }
+  async function endShipService() {
+    const child = SHIP_SVC;
+    SHIP_SVC = null;
+    if (!child) return;
+    await require('./control').ask('stop', {}, { timeoutMs: 10000 }).catch(() => null);
+    /* its close brings the copy to the key's head (~2.5 s); a service that does not end in a minute is ended */
+    const ended = child.exitCode !== null || await new Promise((r) => { child.once('exit', () => r(true)); setTimeout(() => r(false), 60000); });
+    if (!ended) child.kill();
+  }
+
   /* the ship itself, once its plan is counted: the window, the budget, each repo, the end */
   async function shipIt(t, fromBatch) {
-    {
+    try {
       /*
        * THE WINDOW OPENS BEFORE ANY WORK (Brad, 2026-10-26: "it should start the progress window before it start work,
        * and automatically close when the job is done"): opened after the approval and press it came up when the ship was
@@ -423,6 +475,7 @@ async function run({ io, opts, argv, net, home, dev = null }) {
         if (PROGRESS.file) process.env.OKJS_PROGRESS_FILE = PROGRESS.file;
       }
       ready();
+      await shipService();
       if (HOOKS.watch) watch();
       if (!HEAD) {
         cancelIfAsked();
@@ -436,9 +489,13 @@ async function run({ io, opts, argv, net, home, dev = null }) {
       say(/not live|was ended/.test(ended) ? 'budget closed (every use spent)' : ended);
       unwatch();
       if (fromBatch) writeBatch([]);
+      await endShipService();
       say('DONE');
       if (PROGRESS) PROGRESS.finish(`done: ${signedCount} signed, ${pushCount} pushed - budget closed`);
       return 0;
+    } finally {
+      /* a STOP too: the service lets the key go; the budget stays open for --head, as without it */
+      await endShipService();
     }
   }
 }

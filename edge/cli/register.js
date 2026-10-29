@@ -778,11 +778,15 @@ module.exports = function register(COMMANDS, h) {
          */
         let serverOpt = null;
         let noServer = false;
+        let noSync = false;
         {
           const i = rest.indexOf('--server');
           if (i >= 0) { serverOpt = rest[i + 1]; rest.splice(i, 2); if (!serverOpt || serverOpt.startsWith('--')) throw h.usage('edge agent --server <url>'); }
           const j = rest.indexOf('--no-server');
           if (j >= 0) { noServer = true; rest.splice(j, 1); }
+          /* --no-sync: the key and the budget only - no bucket trades (a ship's own service: edge-control.js shipService) */
+          const k = rest.indexOf('--no-sync');
+          if (k >= 0) { noSync = true; rest.splice(k, 1); }
         }
         /* the optional service: one link kept open between commands; nothing it can do that a command can't */
         if (Object.keys(parseSetup(rest, h)).length) throw h.usage(`the identity is set with ${edgeCmd('setup')} (the phone keeps it); edge agent takes no identity flags`);
@@ -876,7 +880,7 @@ module.exports = function register(COMMANDS, h) {
             links.set(address, l);
             return l;
           };
-          const bucketSvc = (opts.ble || pairedPhones().length || !noServer) ? (() => {
+          const bucketSvc = !noSync && (opts.ble || pairedPhones().length || !noServer) ? (() => {
             const { tradeWith, tradeTimeoutMs } = require('../../bucket/cli/trade');
             const bucketHome = require('../../bucket/cli/home');
             const bucketDir = path.join(bucketHome.root(), 'buckets', NET === 'test' ? 'test' : 'live');
@@ -1001,10 +1005,17 @@ module.exports = function register(COMMANDS, h) {
             }, 1000)
             : null;
           if (idleTick && idleTick.unref) idleTick.unref();
-          await (io.untilStopped ? io.untilStopped() : new Promise((resolve) => {
+          /*
+           * STOP, ASKED OVER THE CONTROL SOCKET (owner-only, as every request): the same close as Ctrl-C - the copy brought
+           * to the key's head, the key let go. Windows has no signal another process can send that Node catches, so a
+           * ship that started this service ends it this way (edge-control.js shipService).
+           */
+          let stopAsked = null;
+          if (st.svc && st.svc.handlers) st.svc.handlers.stop = async () => { setTimeout(() => stopAsked && stopAsked(), 50); return { stopping: true }; };
+          await Promise.race([new Promise((resolve) => { stopAsked = resolve; }), io.untilStopped ? io.untilStopped() : new Promise((resolve) => {
             process.once('SIGINT', resolve);
             process.once('SIGTERM', resolve);
-          }));
+          })]);
           if (idleTick) clearInterval(idleTick);
           clearInterval(linkTick);
           if (bucketSvc) bucketSvc.stop();
