@@ -978,5 +978,9 @@ test('a two-digit patch is the maintainer\'s patch, then our build: 3.1.01 is 3.
   assert.equal(parseRelease('v3.1.12-test').patch, 1);
   const caps = capabilities('UNLOCKEDv3.1.01-prodc');
   const base = capabilities('UNLOCKEDv3.1.0-prodc');
-  for (const k of Object.keys(base)) if (typeof base[k] === 'boolean') assert.equal(caps[k], base[k], `capability ${k} differs from 3.1.0`);
+  for (const k of Object.keys(base)) if (typeof base[k] === 'boolean' && k !== 'wipesDeliveredReply') assert.equal(caps[k], base[k], `capability ${k} differs from 3.1.0`);
+  /* the one difference, our flag: build 01 on carries patch 0016 */
+  assert.equal(caps.wipesDeliveredReply, true);
+  assert.equal(base.wipesDeliveredReply, false);
+  assert.equal(capabilities('UNLOCKEDv3.1.1-prodc').wipesDeliveredReply, false, 'his 3.1.1 is not ours');
 });

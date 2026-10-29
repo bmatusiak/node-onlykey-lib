@@ -57,6 +57,7 @@ export function expectedCompatibility(version: any): {
         touchFreeDerive: string;
         deriveReqPress: boolean;
         transitV2: boolean;
+        wipesDeliveredReply: boolean;
         backupDigest: boolean;
         unknownSlotIsSilent: boolean;
         webDerive: boolean;

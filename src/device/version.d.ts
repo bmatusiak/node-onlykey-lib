@@ -390,6 +390,16 @@ export function capabilities(status: any, { unreleased }?: {}): {
      */
     transitV2: boolean;
     /**
+     * A new request wipes a reply already delivered whole (the emulator's patch 0016), so a host need not wait out the
+     * key's 5 s Wipedata timer before its next request over the tunnel (okcrypto settleStagedReply).
+     *
+     * OUR BUILD NUMBER IS THE FLAG (Brad, 2026-10-28: "we target 01 for the 0016 patch, that's our flag"): the
+     * version_control firmware plugin reports the maintainer's base with our build appended - v3.1.01 - and build 1
+     * of base 3.1.0 is the first release of ours that carries 0016, so every build of ours on that base from 1 on
+     * has it. The maintainer's own versions carry no build: false, and the wait stays for every key out there.
+     */
+    wipesDeliveredReply: boolean;
+    /**
      * Whether a captured backup carries a DIGEST to check it against.
      *
      * The backup file is armoured base64 the device TYPES at the keyboard, and
@@ -842,11 +852,17 @@ export function capabilities(status: any, { unreleased }?: {}): {
  *
  *   v3.0.4-test   major.minor.patch with a build keyword
  *   v0.2-beta.8   major.minor with a prerelease that has its own number
+ *
+ * And a third, ours (Brad, 2026-10-28: "set our version to his + 0 or 1 or 2, so it would be 3.1.01 or 3.1.02, so
+ * his base is followed"): a TWO-DIGIT patch is the maintainer's patch digit, then our build on top of it (the emulator's
+ * version_control firmware plugin). v3.1.01 is 3.1.0 + our build 1 - at least 3.1.0, below his 3.1.1 - never 3.1.1
+ * itself, which a plain number would make it. `build` is null for the maintainer's own versions.
  */
 export function parseRelease(version: any): {
     major: number;
     minor: number;
     patch: number | null;
+    build: number | null;
     prerelease: string | null;
 } | null;
 /**

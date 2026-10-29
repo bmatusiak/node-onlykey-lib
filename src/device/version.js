@@ -933,6 +933,17 @@ const gestures = (() => {
      */
     transitV2: atLeast(info.release, [3, 1, 0]),
     /**
+     * A new request wipes a reply already delivered whole (the emulator's patch 0016), so a host need not wait out the
+     * key's 5 s Wipedata timer before its next request over the tunnel (okcrypto settleStagedReply).
+     *
+     * OUR BUILD NUMBER IS THE FLAG (Brad, 2026-10-28: "we target 01 for the 0016 patch, that's our flag"): the
+     * version_control firmware plugin reports the maintainer's base with our build appended - v3.1.01 - and build 1
+     * of base 3.1.0 is the first release of ours that carries 0016, so every build of ours on that base from 1 on
+     * has it. The maintainer's own versions carry no build: false, and the wait stays for every key out there.
+     */
+    wipesDeliveredReply: !!(info.release && info.release.build !== null && info.release.build >= 1
+      && info.release.major === 3 && info.release.minor === 1 && info.release.patch === 0),
+    /**
      * Whether a captured backup carries a DIGEST to check it against.
      *
      * The backup file is armoured base64 the device TYPES at the keyboard, and

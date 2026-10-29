@@ -392,35 +392,28 @@ test('tunnel events: each operation begins, plans, steps per ceremony and ends -
 });
 
 /*
- * THE KEY SAYS IT HAS 0016 (Brad, 2026-10-28: "what can we do to help 0016 now"): ctap_bridge's capabilities, asked
- * once - "wipes-delivered" drops the waits for that key with no setting; an older plugin answers its report (none),
- * and the waits stay; forgetting the key brings them back.
+ * OUR BUILD NUMBER IS THE FLAG (Brad, 2026-10-28: "we target 01 for the 0016 patch, that's our flag"): a key that
+ * reports v3.1.01 (the version_control firmware plugin) carries 0016 - asked again at once, with no setting and no
+ * request to find out; the same key reporting the maintainer's v3.1.0 keeps the wait.
  */
-test('keyCapabilities: a key that says wipes-delivered is asked again without the wait; an older plugin keeps it', async () => {
-  const fast = fakeTunnelDevice({ wipeMs: 60000, wipesDelivered: true, ctapBridge: { site: 'x.example', caps: ['wipes-delivered'] } });
-  const app = await start(fast);
+test('wipesDeliveredReply follows the version: v3.1.01 is asked again without the wait, v3.1.0 keeps it', async () => {
+  const ours = fakeTunnelDevice({ firmware: 'v3.1.01-prodc', wipeMs: 60000, wipesDelivered: true });
+  const app = await start(ours);
   const settles = [];
   app.services.okcrypto.on('settle', (e) => settles.push(e));
   await app.services.okcrypto.connectTunnel();
-  assert.deepEqual(await app.services.okcrypto.keyCapabilities(), ['wipes-delivered']);
-  const before = settles.length;
-  const a = await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(fast) });
-  const b = await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST.map((x) => x ^ 0xff), { ...FAST, confirm: pressing(fast) });
-  assert.equal(settles.length, before, 'a wait before a request this key answers fresh');
+  const a = await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(ours) });
+  const b = await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST.map((x) => x ^ 0xff), { ...FAST, confirm: pressing(ours) });
+  assert.equal(settles.length, 0, 'a wait before a request a v3.1.01 key answers fresh');
   assert.notDeepEqual(Array.from(a), Array.from(b));
-  app.services.okcrypto.forgetKeyCapabilities();
-  await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(fast) });
-  assert.equal(settles.length, before + 1, 'forgotten: the wait is back');
   await app.destroy();
 
-  const older = fakeTunnelDevice({ ctapBridge: { site: 'x.example', old: true } });
-  const app2 = await start(older);
+  const his = fakeTunnelDevice({ firmware: 'v3.1.0-prodc' });
+  const app2 = await start(his);
   const settles2 = [];
   app2.services.okcrypto.on('settle', (e) => settles2.push(e));
-  await app2.services.okcrypto.connectTunnel();
-  assert.deepEqual(await app2.services.okcrypto.keyCapabilities(), [], 'an older plugin answers its report: no capabilities');
-  await app2.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(older) });
-  assert.ok(settles2.length >= 1, 'a key that did not say it keeps the wait');
+  await app2.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(his) });
+  assert.ok(settles2.length >= 1, 'v3.1.0, the maintainer\'s, keeps the wait');
   await app2.destroy();
 });
 

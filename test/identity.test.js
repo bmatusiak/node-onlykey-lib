@@ -16,11 +16,9 @@ const bucketIdentity = require('../bucket/src/bucket-identity');
 const identityPlugin = require('../plugins/identity');
 
 /* a key: the identity's secret, and what it is asked (or an impostor: it reports the key's public key, signs with its own) */
-function fakeKey({ secret = randomBytes(32), signWith = secret, caps = ['wipes-delivered'], site = 'ok-edge.example', slow = 0 } = {}) {
-  const asked = { capabilities: 0, publicKey: 0, site: 0, sign: 0, forgot: 0 };
+function fakeKey({ secret = randomBytes(32), signWith = secret, site = 'ok-edge.example', slow = 0 } = {}) {
+  const asked = { publicKey: 0, site: 0, sign: 0 };
   const okcrypto = {
-    async keyCapabilities() { asked.capabilities += 1; return caps; },
-    forgetKeyCapabilities() { asked.forgot += 1; },
     async keySite() { asked.site += 1; return { on: !!site, site }; },
     agent: {
       async publicKey() { asked.publicKey += 1; if (slow) await new Promise((r) => setTimeout(r, slow)); return ed25519.getPublicKey(secret); },
@@ -43,9 +41,8 @@ test('load: read once - a second load and callers at the same time get the same 
   const [a, b] = await Promise.all([identity.load(), identity.load()]);
   assert.equal(a, b);
   assert.equal(await identity.load(), a);
-  assert.deepEqual(key.asked, { capabilities: 1, publicKey: 1, site: 1, sign: 0, forgot: 0 });
+  assert.deepEqual(key.asked, { publicKey: 1, site: 1, sign: 0 });
   assert.equal(a.id, bucketIdentity.identityIdOf(ed25519.getPublicKey(key.secret)));
-  assert.deepEqual(a.capabilities, ['wipes-delivered']);
   assert.equal(a.site, 'ok-edge.example');
   assert.equal(a.verified, null, 'read is not proven');
   await identity.load({ force: true });
@@ -92,7 +89,7 @@ test('proveByBucket: the bucket key derived is the one the identity certified - 
   assert.equal(identity.proveByBucket({ bucketPublicKey, certificate, derivedPublicKey: bucketPublicKey }).verified.how, 'bucket');
 });
 
-test('forget: nothing held, the key\'s capabilities forgotten, and a read in flight is not kept for the next key', async () => {
+test('forget: nothing held, and a read in flight is not kept for the next key', async () => {
   const key = fakeKey({ slow: 30 });
   const identity = compose(key);
   const changes = [];
@@ -101,7 +98,6 @@ test('forget: nothing held, the key\'s capabilities forgotten, and a read in fli
   await identity.verify();
   identity.forget();
   assert.equal(identity.current(), null);
-  assert.equal(key.asked.forgot, 1);
   const reading = identity.load();
   identity.forget();
   await assert.rejects(reading, /changed while it was read/);

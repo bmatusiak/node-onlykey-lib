@@ -36,7 +36,7 @@
  *   identity.requireVerified()  -> held, or throws
  *   identity.forget(why?)
  *   identity.on('change', fn)   (held | null)
- * held: {id, publicKey, site, capabilities: string[], parts: {<service>: part}, verified: null | {how: 'signature' | 'bucket', at}, at}
+ * held: {id, publicKey, site, parts: {<service>: part}, verified: null | {how: 'signature' | 'bucket', at}, at}
  */
 'use strict';
 
@@ -65,14 +65,6 @@ function setup(imports, register) {
 
   async function read(opts) {
     const gen = generation;
-    /*
-     * FIRST, WHAT THE KEY CAN DO (ctap_bridge's capabilities): a key with emulator patch 0016 says "wipes-delivered"
-     * and okcrypto drops its 5.5 s wait before every request from here on - so every read after this one is quick.
-     * A key that cannot answer: none, the waits stay.
-     */
-    const capabilities = typeof okcrypto.keyCapabilities === 'function'
-      ? await okcrypto.keyCapabilities(opts).catch(() => [])
-      : [];
     const { publicKey, id } = await bucketIdentity.readIdentity(okcrypto, opts);
     /* the key's site (ctap_bridge's): where its bucket sync lives; a key without the plugin has none */
     const site = await okcrypto.keySite(opts).then((s) => (s && s.on ? s.site : null), () => null);
@@ -89,7 +81,7 @@ function setup(imports, register) {
     }
     /* forgotten while it read (the key locked, another was picked): this read is not that key's */
     if (gen !== generation) throw new Error('identity: the key changed while it was read');
-    held = { id, publicKey, site, capabilities, parts, verified: null, at: Date.now() };
+    held = { id, publicKey, site, parts, verified: null, at: Date.now() };
     changed();
     return held;
   }
@@ -143,8 +135,6 @@ function setup(imports, register) {
 
     forget() {
       generation += 1;
-      /* another key may answer next: what this one could do is not known of that one */
-      if (typeof okcrypto.forgetKeyCapabilities === 'function') okcrypto.forgetKeyCapabilities();
       if (held === null) return;
       held = null;
       changed();
