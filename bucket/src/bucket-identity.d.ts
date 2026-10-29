@@ -1,5 +1,4 @@
 export const IDENTITY_LABEL: "";
-export const KEY_LABEL: "onlykey-bucket/key";
 /** Is this a bucket identity id (32 lowercase hex)? */
 export function isBucketIdentityId(s: any): boolean;
 /** The id a bucket identity's public key goes by: 32 hex characters (the bucket's owner, its file name). */
@@ -18,22 +17,22 @@ export function readIdentity(okcrypto: {
     id: string;
 }>;
 /**
- * Make the bucket key: the key's ECDH between its two bucket X25519 keys (a press on production), turned into an
- * Ed25519 key pair on the host.
- * @param {{agent: {publicKey: Function, ecdh: Function}}} okcrypto
+ * Make the bucket key: the key's derive under its own site, turned into an Ed25519 key pair on the host.
+ * @param {{deriveSecret: Function}} okcrypto
  * @param {Uint8Array} identityPublicKey the bucket identity (readIdentity) - it names whose bucket key this is
+ * @param {string} site the key's ctap_bridge site (okcrypto.keySite) - required: no site, no bucket key
  * @param {object} [opts] passed to the key (confirm, onKeepAlive)
- * @returns {Promise<{secretKey: Uint8Array, publicKey: Uint8Array}>}
+ * @returns {Promise<{secretKey: Uint8Array, publicKey: Uint8Array, version: number}>}
  */
-export function deriveBucketKey(okcrypto: {
-    agent: {
-        publicKey: Function;
-        ecdh: Function;
-    };
-}, identityPublicKey: Uint8Array, opts?: object): Promise<{
+export function deriveBucketKeyAt(okcrypto: {
+    deriveSecret: Function;
+}, identityPublicKey: Uint8Array, site: string, opts?: object): Promise<{
     secretKey: Uint8Array;
     publicKey: Uint8Array;
+    version: number;
 }>;
+export const BUCKET_KEY_VERSION: 2;
+export function bucketKeyLabel(identityPublicKey: any): string;
 /**
  * The bucket identity signs the bucket key's public key, on the key (a press on production).
  * @returns {Promise<Uint8Array>} the 64-byte certificate signature

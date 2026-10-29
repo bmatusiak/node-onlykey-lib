@@ -576,7 +576,14 @@ function setup(imports, register, config) {
    * Lazily, because most sessions never derive anything, and the INIT costs
    * a round trip to a device that may be locked.
    */
-  let tunnelReady = null;
+  /*
+   * ONE TUNNEL PER SITE (rpId): the default site (rpIds[0]) for everything, and the key's own site for a derive that
+   * must be bound to it whatever this host's default is (the bucket key - Brad, 2026-10-29: "we derive by rpid, and we
+   * set a rpid for edge/ctap_bridge, no fallback"). The key holds ONE transit session at a time: sessionRpId says
+   * whose it is, and a request under another site connects again under its own.
+   */
+  const tunnelsReady = new Map();
+  let sessionRpId = null;
 
   /**
    * Which origin this device accepts, decided once and remembered.
@@ -633,21 +640,23 @@ function setup(imports, register, config) {
     return;
   }
 
-  function openTunnel() {
-    if (tunnelReady) return tunnelReady;
-    tunnelReady = (async () => {
+  function openTunnel(rpId = rpIds[0]) {
+    if (tunnelsReady.has(rpId)) return tunnelsReady.get(rpId);
+    const ready = (async () => {
+      /* a page's ctap is bound to its own origin by the browser: another site's derive is refused there, as it must be */
       if (suppliedCtap) {
-        return tunnelling.createTunnel(suppliedCtap, { randomBytes, rpId: rpIds[0] });
+        return tunnelling.createTunnel(suppliedCtap, { randomBytes, rpId });
       }
       const ctap = new CtapHid(transport);
       await ctap.init();
-      return tunnelling.createTunnel(ctap, { randomBytes, rpId: rpIds[0] });
+      return tunnelling.createTunnel(ctap, { randomBytes, rpId });
     })().catch((error) => {
       /* Not cached, so the next call tries again rather than replaying it. */
-      tunnelReady = null;
+      tunnelsReady.delete(rpId);
       throw error;
     });
-    return tunnelReady;
+    tunnelsReady.set(rpId, ready);
+    return ready;
   }
 
   /*
@@ -1185,6 +1194,7 @@ function setup(imports, register, config) {
      */
     if (suppliedCtap) {
       tunnelSession = transit.session(okconnect.transitKey(opened.devicePublicKey, app.secretKey));
+      sessionRpId = rpIds[0];
     }
 
     /*
@@ -1259,11 +1269,11 @@ function setup(imports, register, config) {
     return out;
   }
 
-  async function connectTunnelRun({ timeoutMs = 60000 } = {}) {
+  async function connectTunnelRun({ timeoutMs = 60000, rpId = rpIds[0] } = {}) {
     if (typeof randomBytes !== 'function') {
       throw new Error('okcrypto needs randomBytes from the host plugin to connect the tunnel');
     }
-    const bound = await openTunnel();
+    const bound = await openTunnel(rpId);
     const app = okconnect.newTransitKeypair();
     /*
      * buildMessage's frame, with no label: [header | OKCONNECT | epoch |
@@ -1306,6 +1316,7 @@ function setup(imports, register, config) {
     const key = okconnect.transitKey(opened.devicePublicKey, app.secretKey);
     app.secretKey.fill(0);
     tunnelSession = transit.session(key);
+    sessionRpId = rpId;
     key.fill(0);
 
     if (session && typeof session.observeStatus === 'function') session.observeStatus(opened.status);
@@ -1541,8 +1552,10 @@ function setup(imports, register, config) {
       );
     }
 
-    const bound = await openTunnel();
-    if (!tunnelSession) await connectTunnel({ timeoutMs });
+    /* the request's own site (opts.rpId, a derive bound to the key's site) or this host's default; another site's session is not this one's */
+    const site = opts.rpId || rpIds[0];
+    const bound = await openTunnel(site);
+    if (!tunnelSession || sessionRpId !== site) await connectTunnel({ timeoutMs, rpId: site });
     const sess = tunnelSession;
     const stepsBefore = currentOp ? currentOp.step : 0;
 

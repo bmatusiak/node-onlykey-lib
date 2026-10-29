@@ -21,13 +21,13 @@ const HOST = new URL(URL_).host;
 
 async function identity(seed) {
   const secretOf = (label, keyType) => sha256(new Uint8Array([...new TextEncoder().encode(seed), ...label, keyType]));
-  const key = { agent: {
+  const key = { deriveSecret: async (label, { rpId } = {}) => sha256(new TextEncoder().encode(`${seed}|${label}|${rpId}`)), keySite: async () => ({ on: true, site: 'okt.example' }), agent: {
     publicKey: async (label, { keyType }) => (keyType === 1 ? ed25519.getPublicKey(secretOf(label, 1)) : x25519.getPublicKey(secretOf(label, 4))),
     ecdh: async (label, peer) => x25519.getSharedSecret(secretOf(label, 4), peer),
     sign: async (label, message) => ed25519.sign(message, secretOf(label, 1)),
   } };
   const { publicKey, id } = await bid.readIdentity(key);
-  const bucketKey = await bid.deriveBucketKey(key, publicKey);
+  const bucketKey = await bid.deriveBucketKeyAt(key, publicKey, 'okt.example');
   const certificate = await bid.certify(key, publicKey, bucketKey.publicKey);
   return { id, identityPublicKey: publicKey, bucketKey, certificate };
 }

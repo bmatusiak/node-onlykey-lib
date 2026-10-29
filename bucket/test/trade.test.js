@@ -19,13 +19,13 @@ const rnd = (n) => new Uint8Array(crypto.randomBytes(n));
 /* a device of one backup: the bucket identity, bucket key and certificate its key makes (as bucket-identity.test) */
 async function device(seed) {
   const secretOf = (identity, keyType) => sha256(new Uint8Array([...new TextEncoder().encode(seed), ...identity, keyType]));
-  const key = { agent: {
+  const key = { deriveSecret: async (label, { rpId } = {}) => sha256(new TextEncoder().encode(`${seed}|${label}|${rpId}`)), keySite: async () => ({ on: true, site: 'okt.example' }), agent: {
     publicKey: async (identity, { keyType }) => (keyType === 1 ? ed25519.getPublicKey(secretOf(identity, 1)) : x25519.getPublicKey(secretOf(identity, 4))),
     ecdh: async (identity, peer) => x25519.getSharedSecret(secretOf(identity, 4), peer),
     sign: async (identity, message) => ed25519.sign(message, secretOf(identity, 1)),
   } };
   const { publicKey, id } = await bid.readIdentity(key);
-  const bucketKey = await bid.deriveBucketKey(key, publicKey);
+  const bucketKey = await bid.deriveBucketKeyAt(key, publicKey, 'okt.example');
   const certificate = await bid.certify(key, publicKey, bucketKey.publicKey);
   return { id, identityPublicKey: publicKey, bucketKey, certificate };
 }

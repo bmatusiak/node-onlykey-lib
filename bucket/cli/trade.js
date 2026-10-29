@@ -11,8 +11,8 @@
  *     identity's key; no press);
  *   - the bucket is the one this computer keeps opened for that identity (bucket/cli/home.js identityFile) - an empty
  *     one the first time: a new machine starts empty and catches up on its first trade;
- *   - its proof material - the bucket key and the certificate - is made once through that key (the key's ECDH and its
- *     signature: two presses on production) and kept beside the bucket, owner-only. Not in the bucket: a bucket holds
+ *   - its proof material - the bucket key and the certificate - is made once through that key (the key's derive under its site and its
+ *     signature: one press on production, the derive is touchless) and kept beside the bucket, owner-only. Not in the bucket: a bucket holds
  *     no secret (bucket.js), and the bucket key is one;
  *   - the trade runs on a copy; its result is merged into the kept file under the file's lock, so a desktop app
  *     writing the same file meanwhile loses nothing.
@@ -70,6 +70,8 @@ const certifies = (me) => bid.identityIdOf(me.identityPublicKey) === me.id
 function loadMe(id, net) {
   try {
     const j = JSON.parse(fs.readFileSync(keyFile(id, net), 'utf8'));
+    /* a bucket key of another version (v1: the ECDH, before 2026-10-29) is made again under the key's site - the bucket itself is untouched */
+    if (j.v !== bid.BUCKET_KEY_VERSION) return null;
     const me = {
       id,
       identityPublicKey: fromHex(j.identityPublicKey),
@@ -85,7 +87,7 @@ function loadMe(id, net) {
 /*
  * THE KEY IS BUSY, NOT LOCKED (the Windows desktop, 2026-10-25): the firmware signs or derives only when no other crypto
  * operation is in progress (okcore.cpp OKSIGN/OKDECRYPT: `!CRYPTO_AUTH`), and otherwise answers "Error device locked" -
- * on an unlocked key. The bucket key's ECDH and its signature come back to back, and a derive's gate stays in progress
+ * on an unlocked key. The bucket key's derive and its signature come back to back, and a derive's gate stays in progress
  * up to its 19 s window, so the second was refused. Such an answer is waited out and asked again, up to BUSY_MS.
  */
 const BUSY_MS = 25000;
@@ -103,8 +105,11 @@ async function whileBusy(say, what, fn) {
 }
 
 async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
-  say('sync: making this computer\'s bucket key, once - the key asks for two presses');
-  const bucketKey = await whileBusy(say, 'bucket key', () => bid.deriveBucketKey(okcrypto, identityPublicKey, opts));
+  say('sync: making this computer\'s bucket key, once - under the key\'s own site; the key may ask for two presses');
+  /* the key's site (ctap_bridge's): the bucket key is bound to it on every device, and a key that names none has none (no fallback) */
+  const s = typeof okcrypto.keySite === 'function' ? await okcrypto.keySite().catch(() => null) : null;
+  const site = s && s.on && s.site ? s.site : null;
+  const bucketKey = await whileBusy(say, 'bucket key', () => bid.deriveBucketKeyAt(okcrypto, identityPublicKey, site, opts));
   const certificate = await whileBusy(say, 'certificate', () => bid.certify(okcrypto, identityPublicKey, bucketKey.publicKey, opts));
   if (!certifies({ id, identityPublicKey, bucketKey, certificate })) {
     throw new Error('the key\'s certificate for this computer\'s bucket key does not verify - not kept (the key\'s answers were not its own?)');
@@ -112,7 +117,7 @@ async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
   const file = keyFile(id, net);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, `${JSON.stringify({
-    identityPublicKey: toHex(identityPublicKey), bucketPublicKey: toHex(bucketKey.publicKey),
+    v: bid.BUCKET_KEY_VERSION, identityPublicKey: toHex(identityPublicKey), bucketPublicKey: toHex(bucketKey.publicKey),
     bucketSecretKey: toHex(bucketKey.secretKey), certificate: toHex(certificate),
   })}\n`, { mode: 0o600 });
   return { id, identityPublicKey, bucketKey, certificate };

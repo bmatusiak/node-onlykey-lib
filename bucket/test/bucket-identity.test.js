@@ -17,6 +17,7 @@ function fakeKey(seed) {
   const secretOf = (identity, keyType) => sha256(new Uint8Array([...new TextEncoder().encode(seed), ...identity, keyType]));
   return {
     calls,
+    deriveSecret: async (label, { rpId } = {}) => { calls.derive = (calls.derive || 0) + 1; return sha256(new TextEncoder().encode(`${seed}|${label}|${rpId}`)); }, keySite: async () => ({ on: true, site: 'okt.example' }), 
     agent: {
       async publicKey(identity, { keyType, version }) {
         assert.equal(version, 1, 'agent version 1: the same keys on 3.0.4 and 3.1.0');
@@ -30,7 +31,7 @@ function fakeKey(seed) {
 
 async function setUp(key) {
   const identity = await bid.readIdentity(key);
-  const bucketKey = await bid.deriveBucketKey(key, identity.publicKey);
+  const bucketKey = await bid.deriveBucketKeyAt(key, identity.publicKey, 'okt.example');
   const certificate = await bid.certify(key, identity.publicKey, bucketKey.publicKey);
   return { identity, bucketKey, certificate };
 }
@@ -45,14 +46,26 @@ test('the bucket identity is the agent key of the empty label: the same on two k
   assert.notEqual(phone.id, other.id);
 });
 
-test('one backup, one bucket key and one certificate; the key is asked twice (ECDH and signature), reading asks nothing', async () => {
+test('one backup, one bucket key and one certificate; the key is asked twice (the derive and the signature), reading asks nothing', async () => {
   const k1 = fakeKey('backup-1');
   const a = await setUp(k1);
   const b = await setUp(fakeKey('backup-1'));
   assert.deepEqual(a.bucketKey.publicKey, b.bucketKey.publicKey);
   assert.deepEqual(a.certificate, b.certificate, 'Ed25519 is deterministic: every device holds the same certificate');
-  assert.deepEqual(k1.calls, { ecdh: 1, sign: 1 });
+  assert.deepEqual(k1.calls, { ecdh: 0, sign: 1, derive: 1 });
+  assert.equal(a.bucketKey.version, bid.BUCKET_KEY_VERSION);
   assert.equal(bid.verifyCertificate({ identityPublicKey: a.identity.publicKey, bucketPublicKey: a.bucketKey.publicKey, certificate: a.certificate }), true);
+});
+
+test('the bucket key is bound to the key\'s site: another site derives another key; a key with no site has none (no fallback)', async () => {
+  const key = fakeKey('backup-1');
+  const identity = await bid.readIdentity(key);
+  const here = await bid.deriveBucketKeyAt(key, identity.publicKey, 'okt.example');
+  const elsewhere = await bid.deriveBucketKeyAt(key, identity.publicKey, 'another.example');
+  assert.notDeepEqual(here.publicKey, elsewhere.publicKey, 'two sites derived one bucket key');
+  for (const site of [null, '', undefined]) {
+    await assert.rejects(bid.deriveBucketKeyAt(key, identity.publicKey, site), (e) => e.code === 'NO_KEY_SITE');
+  }
 });
 
 test('another backup cannot pass for this identity: its bucket key does not check under this identity', async () => {
