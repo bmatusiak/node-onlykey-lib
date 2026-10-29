@@ -617,13 +617,27 @@ module.exports = function register(COMMANDS, h) {
         const testHome = path.join(os.homedir(), '.onlykey-js', 'edge-test');
         if (control.edgeHome() !== testHome) throw h.usage(`clear removes only the testnet's own home (${testHome}), not ${control.edgeHome()}`);
         /* its machine files (keys) go with the folder; its data - copies, budgets, pointers, Key Chain list - leaves the bucket */
-        const stores = ['edge-test.copies', 'edge-test.budgets', 'edge-test.pointers', 'keychain-test'];
+        /*
+         * EVERY TESTNET STORE, the per-identity ones too (edge-test.<identity>.identity / .copies / .budgets …, since
+         * B3.0): on key 1, 2026-10-29, clear left the agent identity this computer keeps, so the next ship never had to
+         * make one. And the testnet's Edge logs in its identity buckets (buckets/test/*.json, edge-logs-test).
+         */
         const b = bucketHome.read();
+        const stores = [...new Set([...Object.keys(b.stores || {}).filter((s) => s.startsWith('edge-test.')), 'keychain-test'])];
         const held = stores.filter((s) => Object.values(b.stores[s] || {}).some((r) => r.v !== null));
-        if (held.length) bucketHome.clear(bucketHome.at(stores[0]).file, stores);
+        if (held.length) bucketHome.clear(bucketHome.at('edge-test.copies').file, held);
+        const logs = [];
+        const testBuckets = path.join(bucketHome.root(), 'buckets', 'test');
+        for (const f of fs.existsSync(testBuckets) ? fs.readdirSync(testBuckets).filter((n) => /^[0-9a-f]{32}\.json$/.test(n)) : []) {
+          const file = path.join(testBuckets, f);
+          if (Object.values((bucketHome.read(file).stores || {})['edge-logs-test'] || {}).some((r) => r.v !== null)) {
+            bucketHome.clear(file, ['edge-logs-test']);
+            logs.push(`edge-logs-test in buckets/test/${f.slice(0, 8)}…`);
+          }
+        }
         const gone = fs.existsSync(testHome) ? [testHome] : [];
         for (const p of gone) fs.rmSync(p, { recursive: true, force: true });
-        const what = [...gone, ...held.map((s) => `bucket ${s}`)];
+        const what = [...gone, ...held.map((s) => `bucket ${s}`), ...logs];
         io.out(what.length ? `testnet cleared on this computer: ${what.join(', ')}` : 'nothing to clear: no testnet data on this computer');
         return 0;
       }
