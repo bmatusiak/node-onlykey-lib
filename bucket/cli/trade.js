@@ -105,12 +105,20 @@ async function whileBusy(say, what, fn) {
 }
 
 async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
-  say('sync: making this computer\'s bucket key, once - under the key\'s own site; the key may ask for two presses');
+  say('sync: making this computer\'s bucket key, once - a derive under the key\'s own site, then its certificate (a signature); the key may ask a code or a press for each');
+  /*
+   * EACH ASK SAID (box, 2026-10-29: key 2 waited for the derive's 3-button code and nothing said it - the request timed
+   * out): the key's code for each request, or its press, through say - unless the caller shows them its own way (opts.confirm)
+   */
+  const asked = (what) => ({
+    ...opts,
+    confirm: opts.confirm || (({ digits } = {}) => say(digits && digits.length ? `sync: confirm on the OnlyKey (${what}): enter ${digits.join(' ')}` : `sync: press the OnlyKey (${what})`)),
+  });
   /* the key's site (ctap_bridge's): the bucket key is bound to it on every device, and a key that names none has none (no fallback) */
   const s = typeof okcrypto.keySite === 'function' ? await okcrypto.keySite().catch(() => null) : null;
   const site = s && s.on && s.site ? s.site : null;
-  const bucketKey = await whileBusy(say, 'bucket key', () => bid.deriveBucketKeyAt(okcrypto, identityPublicKey, site, opts));
-  const certificate = await whileBusy(say, 'certificate', () => bid.certify(okcrypto, identityPublicKey, bucketKey.publicKey, opts));
+  const bucketKey = await whileBusy(say, 'bucket key', () => bid.deriveBucketKeyAt(okcrypto, identityPublicKey, site, asked('the bucket key')));
+  const certificate = await whileBusy(say, 'certificate', () => bid.certify(okcrypto, identityPublicKey, bucketKey.publicKey, asked('its certificate')));
   if (!certifies({ id, identityPublicKey, bucketKey, certificate })) {
     throw new Error('the key\'s certificate for this computer\'s bucket key does not verify - not kept (the key\'s answers were not its own?)');
   }
