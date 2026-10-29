@@ -37,3 +37,7 @@ export function mergeEntry(key: any, haveText: any, lo: any, hi: any): {
     fork: string;
 };
 export function devOf(deviceIdHex: any): string;
+export function fileInto(have: any, j: any): {
+    changed: {};
+    forks: string[];
+};

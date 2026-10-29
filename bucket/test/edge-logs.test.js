@@ -145,3 +145,21 @@ test('edge-logs: different keys for one device are a fork; an archived block is 
   replicate.take(d, replicate.give(c, replicate.summarize(c, { rules }), {}, { rules }), { rules });
   assert.equal(bucket.kv(d, STORE).getItem(`${dev}.links.000000`), null);
 });
+
+test('a host files a copy that holds less than the bucket (a fresh web app from the checkpoint): the bucket keeps every link, gains the new ones; a fork is not written', () => {
+  const full = logblocks.split(copyJSON(0, 140));
+  /* the web app: only from #120, and two links the bucket has not seen yet */
+  const r = logblocks.fileInto(full, copyJSON(120, 149));
+  assert.deepEqual(r.forks, []);
+  const after = { ...full, ...r.changed };
+  const j = logblocks.join(after, require('../../src/bytes').toHex(id));
+  assert.equal(j.links.length, 150, 'links lost or not gained');
+  assert.ok(!Object.keys(r.changed).some((k) => k.endsWith('.links.0000')), 'a block the host did not change was written');
+  assert.deepEqual(logblocks.fileInto(after, copyJSON(120, 149)).changed, {}, 'filing it again changed something');
+  /* the same seq with other bytes: reported, the block left as it was */
+  const forked = copyJSON(120, 149);
+  forked.links[0] = { ...forked.links[0], head: '00'.repeat(32) };
+  const f = logblocks.fileInto(after, forked);
+  assert.equal(f.forks.length, 1);
+  assert.ok(!Object.keys(f.changed).some((k) => /\.links\./.test(k) && k.endsWith('0001')), 'a forked block was written');
+});

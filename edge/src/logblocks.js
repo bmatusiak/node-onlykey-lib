@@ -187,4 +187,27 @@ function mergeEntry(key, haveText, lo, hi) {
   return { v: hi, taken: hi === haveText ? 0 : 1, fork: null };
 }
 
-module.exports = { BLOCK, split, join, devices, parseKey, mergeEntry, devOf };
+/*
+ * A HOST FILES ITS COPY INTO WHAT THE BUCKET ALREADY HOLDS (Phase 5; Brad, 2026-10-29: the app's own log in the bucket,
+ * so the CLI and every device see its budgets). A host's copy may hold less than the bucket - a fresh web app starts at
+ * the key's checkpoint, while the CLI filed the whole history - so its blocks are merged into the ones there (mergeEntry:
+ * links by union, a fork reported and not written), never written over them.
+ * @param {Object<string, string>} have the store's live keys -> values
+ * @param {object} j the host's copy as JSON (copyfile.toJSON)
+ * @returns {{changed: Object<string, string>, forks: string[]}} the keys to write (only those that change), and why any were not
+ */
+function fileInto(have, j) {
+  const changed = {};
+  const forks = [];
+  for (const [key, mine] of Object.entries(split(j))) {
+    const was = have[key];
+    if (was === undefined || was === null) { changed[key] = mine; continue; }
+    if (was === mine) continue;
+    const r = mergeEntry(key, was, was, mine);
+    if (r.fork) { forks.push(`${key}: ${r.fork}`); continue; }
+    if (r.v !== was) changed[key] = r.v;
+  }
+  return { changed, forks };
+}
+
+module.exports = { BLOCK, split, join, devices, parseKey, mergeEntry, devOf, fileInto };
