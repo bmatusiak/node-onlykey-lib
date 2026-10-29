@@ -71,6 +71,27 @@ test('a save writes only what changed; every log is listed; without an identity 
   assert.deepEqual(bucketHome.kv(bucketHome.edgeAt(home, 'copies')).keys(), [], 'no identity bucket: the old store, still empty');
 });
 
+test('every log of the identity comes into its bucket once (a wiped key\'s too); one the bucket holds is left as it is', () => {
+  const home = scratch();
+  /* this key's log, and another device's - a key since wiped - both only in the Edge home */
+  const sk2 = new Uint8Array(32).fill(4);
+  const pub2 = p256.getPublicKey(sk2, false).subarray(1);
+  const id2 = chain.deviceIdOf(pub2);
+  const l2 = [chain.encodeLink({ seq: 0, op: OP.SIGN, decision: DECISION.SELF_PRESS, subject: new Uint8Array(32).fill(9), grantId: 1, version: 1 })];
+  const other = { ...copyfile.empty(id2), publicKey: pub2, links: [{ link: l2[0], head: chain.heads(l2, chain.genesis(id2))[0] }] };
+  const old = bucketHome.kv(bucketHome.edgeAt(home, 'copies'));
+  old.setItem(copyfile.toJSON(copyOf(0)).deviceId.slice(0, 16), JSON.stringify(copyfile.toJSON(copyOf(5))));
+  old.setItem(copyfile.toJSON(other).deviceId.slice(0, 16), JSON.stringify(copyfile.toJSON(other)));
+  copy.useIdentityBucket({ id: BUCKET_ID, net: 'live' });
+  /* this key's log is in the bucket already, newer than the Edge home's: it stays */
+  copy.load(home, id);
+  copy.keepNotes(home, id, { reasons: { 3: 'kept' }, messages: {} });
+  assert.equal(copy.adoptAll(home), 1, 'only the other device\'s log was missing');
+  assert.equal(copy.adoptAll(home), 0, 'once');
+  assert.equal(copy.load(home, id2).links.length, 1);
+  assert.ok(JSON.stringify(logStore().entries()).includes('kept'), 'the bucket\'s own (newer) log was not written over');
+});
+
 test('the testnet keeps its logs in its own store and bucket file', () => {
   const home = scratch();
   copy.useIdentityBucket({ id: BUCKET_ID, net: 'test' });

@@ -334,6 +334,8 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
   const home = migrating
     ? path.join(netHome, await edge.identityId())
     : await span('open: identity home', () => require('./migrate-identity').identityHome({ edge, okcrypto, netHome, say }));
+  /* every log of this identity into its bucket, once each (copy.adoptAll): a wiped key's history too */
+  try { const n = require('./copy').adoptAll(home); if (n) say(`${n} older log(s) of this identity copied into its bucket`); } catch (e) { say(`older logs not copied into the bucket this time (${e.message})`); }
   /*
    * WHO HOSTS EDGE. Over Bluetooth the phone does: the wire to its app. A key on USB is a hard key
    * (or Linux's emulated one on the bus) - no phone behind it answers the wire, so this computer is

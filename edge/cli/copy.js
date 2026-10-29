@@ -103,6 +103,32 @@ function load(home, deviceId) {
   return copyfile.fromJSON(text ? JSON.parse(text) : null, deviceId);
 }
 
+/*
+ * EVERY LOG OF THIS IDENTITY INTO ITS BUCKET (Brad, 2026-10-29, of key 1's old live chain - its key since wiped: "stay
+ * in, that log has value"). load() moves a device's log only when that device is read, and a wiped key's - or the first
+ * device's, the one both later chains CONTINUE from - never is. So once a command has the identity bucket, every log in
+ * this identity's Edge home that the bucket lacks is copied in, as load() copies one; a log the bucket already holds is
+ * left as it is (it is the newer). The Edge home's record stays. -> how many logs were copied.
+ */
+function adoptAll(home) {
+  if (!logs) return 0;
+  const kv = logsKv();
+  let have = kv.entries();
+  const st = store(home);
+  let n = 0;
+  for (const k of st.keys()) {
+    const text = st.getItem(k);
+    if (!text) continue;
+    let j;
+    try { j = JSON.parse(text); } catch { continue; }
+    if (!j || !j.deviceId || logblocks.join(have, j.deviceId)) continue;
+    saveBlocks(kv, have, j);
+    have = kv.entries();
+    n += 1;
+  }
+  return n;
+}
+
 function save(home, c) {
   if (logs) {
     const kv = logsKv();
@@ -454,4 +480,4 @@ async function catchUp(edge, home, deviceId) {
   return add.length;
 }
 
-module.exports = { sync, catchUp, lines, load, store, useIdentityBucket, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };
+module.exports = { sync, catchUp, adoptAll, lines, load, store, useIdentityBucket, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };
