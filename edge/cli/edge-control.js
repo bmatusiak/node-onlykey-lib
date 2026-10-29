@@ -187,8 +187,8 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     say(`>>>   ${gpg} signature(s), ${ssh} push(es), valid ${TTL} min${net === 'test' ? ' - TESTNET' : ''}`);
     say(`>>>   ${HOOKS.watch ? 'answered by the watch hook'
       : VIA_APP ? 'Approve it in the window, then PRESS the key within 20 s (it pulses); nothing else is asked until the batch is done'
-      : USB && GUI ? 'answer Yes in the window, then PRESS the key within 20 s (it pulses); nothing else is asked until the batch is done'
-      : USB ? 'answer y, then PRESS the key within 20 s of "PRESS the key now" (it pulses); nothing else is asked until the batch is done'
+      : USB && GUI ? 'Yes in the window approves it; the progress window says when to PRESS the key (it waits 20 s, and pulses); nothing else is asked until the batch is done'
+      : USB ? 'y approves it; PRESS the key when "PRESS the key now" shows (it waits 20 s, and pulses); nothing else is asked until the batch is done'
         : 'APPROVE it and PRESS the key; nothing else is asked until the batch is done'}`);
   }
 
