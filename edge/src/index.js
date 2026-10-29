@@ -29,6 +29,11 @@ module.exports = {
   block: require('./block'),
   /* a computer's copy of one device's chain, as data: its JSON, how two copies merge, its blocks (the bucket carries it) */
   copyfile: require('./copyfile'),
+  /*
+   * 2026-10-29: a device's copy as the identity bucket's `edge-logs` keys (blocks of 64 links, notes, openings) - the
+   * CLI files its logs there and the apps read them back from a trade, so one code cuts and joins them everywhere
+   */
+  logblocks: require('./logblocks'),
   /* SPEC H7 (2026-10-20): the agent identity the phone keeps - its record, checks, messages and words */
   identity: require('./identity'),
   /* 2026-10-24: a copy described as budget history - the desktop app's Edge tab for a hard key, and any host */

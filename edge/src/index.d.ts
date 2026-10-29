@@ -13,6 +13,7 @@ export let devices: typeof import("./devices");
 export let ping: typeof import("./ping");
 export let block: typeof import("./block");
 export let copyfile: typeof import("./copyfile");
+export let logblocks: typeof import("./logblocks");
 export let identity: typeof import("./identity");
 export let history: typeof import("./history");
 export let identityId: typeof import("./identity-id");
