@@ -1253,15 +1253,29 @@ COMMANDS.setpin = {
     if (args.length) throw usage('setpin takes no arguments - the PIN is pressed on the key, never typed here');
     const kind = opts.kind || 'primary';
     if (!['primary', 'secondary', 'selfDestruct'].includes(kind)) throw usage('--kind is primary, secondary or selfDestruct');
+    /*
+     * --gui-prompt (2026-10-28: key 2 set up by an agent's shell, which the person cannot type into): each "then press
+     * Enter" is an OK / Cancel window on the person's desktop, as the edge commands ask "unlock the key" - OK goes on,
+     * Cancel stops before the next step. The PIN itself is still pressed on the key, never typed anywhere.
+     */
+    const done = async (what) => {
+      if (!opts['gui-prompt']) { await io.prompt('Then press Enter here: '); return; }
+      const ok = await require('./gui-prompt').guiConfirm(`${what} Then click OK.`, {
+        title: `OnlyKey - set the ${kind} PIN`,
+        labels: { yes: 'OK', no: 'Cancel' },
+        details: 'Press the digits on the OnlyKey itself (7 to 10 presses). OK goes on to the next step; Cancel stops here.',
+      });
+      if (!ok) throw usage(`cancelled: the ${kind} PIN was not set`);
+    };
     return withDevice(io, opts, async ({ device }) => {
       const step = (label, timeoutMs) => deviceWrite(() => device.pinStep(label, { kind, timeoutMs }));
       await step('armed');
       io.out(`Press your new ${kind} PIN on the key's buttons now: 7 to 10 presses.`);
-      await io.prompt('Then press Enter here: ');
+      await done(`Press your new ${kind} PIN on the OnlyKey's buttons now: 7 to 10 presses.`);
       await step('stored');
       await step('confirming');
       io.out('Press the same PIN on the key again.');
-      await io.prompt('Then press Enter here: ');
+      await done('Press the same PIN on the OnlyKey again.');
       await step('matched');
       await step('committed', 30000);
       io.out(`The ${kind} PIN is set. Unplug the key and plug it back in: it starts locked, and the PIN unlocks it.`);
