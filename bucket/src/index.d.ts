@@ -17,6 +17,7 @@ declare const _exports: {
     serialize: typeof import("./bucket").serialize;
     parse: typeof import("./bucket").parse;
     seal: typeof import("./bucket").seal;
+    sealedKeyVersion: typeof import("./bucket").sealedKeyVersion;
     open: typeof import("./bucket").open;
     sealToKey: typeof import("./bucket").sealToKey;
     openWithKey: typeof import("./bucket").openWithKey;

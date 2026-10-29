@@ -70,9 +70,13 @@ export function parse(text: string): ReturnType<typeof create>;
  * @param {ReturnType<typeof create>} bucket
  * @param {Uint8Array} key 32 bytes, from okcrypto.deviceVault.key('bucket')
  * @param {(n: number) => Uint8Array} randomBytes
+ * @param {{keyVersion?: number}} [opts] which derive made `key` (sealedKeyVersion reads it back)
  * @returns {string}
  */
-export function seal(bucket: ReturnType<typeof create>, key: Uint8Array, randomBytes: (n: number) => Uint8Array): string;
+export function seal(bucket: ReturnType<typeof create>, key: Uint8Array, randomBytes: (n: number) => Uint8Array, { keyVersion }?: {
+    keyVersion?: number;
+}): string;
+export function sealedKeyVersion(text: any): any;
 /**
  * Open a bucket file, sealed or not.
  *

@@ -182,10 +182,26 @@ function parse(text) {
  * @param {ReturnType<typeof create>} bucket
  * @param {Uint8Array} key 32 bytes, from okcrypto.deviceVault.key('bucket')
  * @param {(n: number) => Uint8Array} randomBytes
+ * @param {{keyVersion?: number}} [opts] which derive made `key` (sealedKeyVersion reads it back)
  * @returns {string}
  */
-function seal(bucket, key, randomBytes) {
-  return canonical({ format: SEALED_FORMAT, v: VERSION, owner: bucket.owner ?? null, blob: vault.seal(key, serialize(bucket), randomBytes) });
+function seal(bucket, key, randomBytes, { keyVersion } = {}) {
+  return canonical({ format: SEALED_FORMAT, v: VERSION, ...(keyVersion ? { kv: keyVersion } : {}), owner: bucket.owner ?? null, blob: vault.seal(key, serialize(bucket), randomBytes) });
+}
+
+/*
+ * WHICH KEY OPENS IT, READ BEFORE ANY KEY IS ASKED (Brad, 2026-10-29: "move away from the old derive to new derive means
+ * resealing - then we do it"): a sealed bucket says which derive made its key - 1 (none written: the derive at each
+ * host's own site, before 2026-10-29) or 2 (the derive under the site the key names). Outside the seal, like the owner:
+ * a label that only picks which derive to ask for - a wrong one opens nothing.
+ */
+function sealedKeyVersion(text) {
+  try {
+    const outer = JSON.parse(String(text));
+    return outer && outer.format === SEALED_FORMAT ? (Number.isInteger(outer.kv) ? outer.kv : 1) : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 /*
@@ -362,4 +378,4 @@ function resolve(bucket, conflict, side) {
   bucket.stores[conflict.store][conflict.key] = { ...conflict[side] };
 }
 
-module.exports = { FORMAT, SEALED_FORMAT, AGE_FORMAT, AGE_LABEL, VERSION, create, kv, newer, purgeArchived, serialize, parse, seal, open, sealToKey, openWithKey, mergeKeys, merge, resolve };
+module.exports = { FORMAT, SEALED_FORMAT, AGE_FORMAT, AGE_LABEL, VERSION, create, kv, newer, purgeArchived, serialize, parse, seal, sealedKeyVersion, open, sealToKey, openWithKey, mergeKeys, merge, resolve };

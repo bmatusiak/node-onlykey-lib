@@ -174,3 +174,15 @@ test('bucket: one the key does not open is refused, never read another way', asy
   const text = bucket.sealToKey(bucket.create({ owner: '51fcbaf7' }), 'R2', encrypt);
   await assert.rejects(bucket.openWithKey(text, { decrypt, owner: '51fcbaf7' }), (e) => e.code === 'EBUCKET_NOT_OPENED');
 });
+
+test('a sealed bucket says which derive made its key: none written is 1; the version is outside the seal and opens nothing by itself', () => {
+  const b = bucket.create({ owner: 'abc' });
+  const v1 = bucket.seal(b, KEY, rnd);
+  const v2 = bucket.seal(b, KEY, rnd, { keyVersion: 2 });
+  assert.equal(bucket.sealedKeyVersion(v1), 1);
+  assert.equal(bucket.sealedKeyVersion(v2), 2);
+  assert.equal(bucket.sealedKeyVersion('{"format":"onlykey-bucket"}'), null, 'not sealed');
+  assert.equal(bucket.sealedKeyVersion('not json'), null);
+  assert.equal(bucket.open(v2, { key: KEY }).bucket.owner, 'abc');
+  assert.throws(() => bucket.open(v2, { key: new Uint8Array(32).fill(3) }), (e) => e.code === 'EBUCKET_NOT_YOURS');
+});
