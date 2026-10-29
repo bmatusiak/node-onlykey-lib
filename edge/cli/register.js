@@ -34,7 +34,7 @@ const USAGE = [
   '                                                              - or, for a hard key on USB, by this computer (approve here, y/N)',
   'onlykey-js edge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES',
   'onlykey-js edge continue --ttl MINUTES [--caps n,n] | end | status',
-  'onlykey-js edge exec --head H --intent "…" -- <command…>     the only way to spend a budget',
+  'onlykey-js edge exec --head H --intent "…" [--receipt "…"] -- <command…>     the only way to spend a budget',
   'onlykey-js edge receipt <seq> [--code OK] --msg "…"',
   'onlykey-js edge watch [--once] | sync [--status | --all]',
   'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',

@@ -246,9 +246,16 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     PROGRESS = null; /* nothing later writes over the cancel line */
     throw new Stop('cancelled in the progress window');
   };
+  /*
+   * ONE PROCESS A USE (Brad, 2026-10-29: "fit it in the same process so we dont need to do things twice"): the exec files
+   * its own receipt (--receipt) before it lets the key go, and HEAD follows the head it prints. Only a receipt it left
+   * owed goes to its own `edge receipt` (fileReceipt, with its tries) - as every receipt did before.
+   */
   function spend(intent, ...command) {
     cancelIfAsked();
-    const r = cli(['exec', '--head', HEAD, '--intent', intent, '--', ...command]);
+    const r = cli(['exec', '--head', HEAD, '--intent', intent, '--receipt', intent, '--', ...command]);
+    const filed = /receipt filed for #\d+/.test(r.out) && !/receipt owed for #/.test(r.out) && r.out.match(/head = ([0-9a-f]{64})/g);
+    if (filed) { HEAD = filed.pop().slice(7); return r.out; }
     const seq = (r.out.match(/receipt owed for #(\d+)/) || [])[1];
     if (!seq) {
       const failed = (r.out.match(/note #(\d+): FAILED/) || [])[1];

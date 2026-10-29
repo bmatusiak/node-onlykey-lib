@@ -6,8 +6,10 @@
  *
  *   edge budget --reason "…" --ssh N [--gpg N] --ttl MIN    ask for the work budget (Yes + a press on the phone)
  *   edge continue --ttl MIN [--caps n,n]                    continue it after a lock (ends the old one first)
- *   edge exec --head H --intent "…" -- <command…>           run one command; its signature is paid by the budget,
- *                                                           its intent welded into the link (R13b)
+ *   edge exec --head H --intent "…" [--receipt "…"] -- <command…>
+ *                                                           run one command; its signature is paid by the budget,
+ *                                                           its intent welded into the link (R13b); --receipt files
+ *                                                           the receipt too when it succeeded (prints the next head)
  *   edge receipt <seq> [--code OK] --msg "…"                 file the receipt; prints the next head
  *   edge sync [--status]                                    one phone at a time: its log into this PC's copy, and every other
  *                                                           device's log this PC holds offered to it (held until approved)
@@ -184,8 +186,16 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const reason = opt(args, '--intent') || opt(args, '--reason');
       /* --press is gone (Brad, 2026-10-06, R13b: budget or no go): Edge signs only under a budget; a pressed sign is the ordinary ssh/gpg agent */
       if (args.slice(0, dd < 0 ? args.length : dd).includes('--press')) { err('onlykey-js edge: --press was removed - Edge signs only under a budget; for a pressed sign use the ordinary ssh/gpg agent'); return 2; }
-      if (dd < 0 || !head || !reason || dd === args.length - 1) { err('onlykey-js edge exec --head H --intent "…" -- <command…>'); return 2; }
+      if (dd < 0 || !head || !reason || dd === args.length - 1) { err('onlykey-js edge exec --head H --intent "…" [--receipt "…"] -- <command…>'); return 2; }
       const command = args.slice(dd + 1);
+      /*
+       * --receipt "…": THE RECEIPT IN THE SAME PROCESS (Brad, 2026-10-29: "can we fit it in the same process so we dont
+       * need to do things twice?"). A ship ran `edge exec` and then `edge receipt` for every commit - two processes, each
+       * opening the key and checking the chain at its close: ~6 s of a commit's 15 s (the ship's timeline, key 3). With
+       * it, a command that succeeded files its uses' receipts (OK, this message) before the key is let go; one that
+       * cannot be filed is left owed, as without it, for the caller to file.
+       */
+      const receiptMsg = opt(args.slice(0, dd), '--receipt');
       const ex = await span('exec: open the use (the key opened first)', () => ask('exec-open', { head, reason }));
       const gitEntries = Object.entries(ex.git || {});
       const childEnv = {
@@ -225,6 +235,15 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
               continue;
             } catch (e) {
               err(`onlykey-js edge: the failed receipt for #${l.seq} was not filed: ${e.message}`);
+            }
+          } else if (receiptMsg) {
+            try {
+              const r = await span('exec: file the receipt', () => ask('receipt', { seq: l.seq, code: 'OK', message: receiptMsg }));
+              out(`signed: link #${l.seq} (${l.what})${paidWords(l)} - receipt filed for #${l.seq}`);
+              out(`head = ${r.head}`);
+              continue;
+            } catch (e) {
+              err(`onlykey-js edge: the receipt for #${l.seq} was not filed: ${e.message}`);
             }
           }
           out(`signed: link #${l.seq} (${l.what})${paidWords(l)} - receipt owed for #${l.seq}`);

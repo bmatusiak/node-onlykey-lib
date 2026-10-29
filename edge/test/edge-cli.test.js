@@ -133,6 +133,32 @@ test('onlykey-js edge budget, then `git commit -S` inside onlykey-js edge exec: 
   }
 });
 
+test('edge exec --receipt: the commit signed and its receipt filed in one process - the head it prints is the next use\'s (2026-10-29)', async () => {
+  const s = await stack();
+  try {
+    let cap = capture();
+    assert.equal(await okedge.main(['budget', '--reason', 'work: two commits', '--gpg', '2', '--ttl', '60'], cap.io), 0, cap.lines.join('\n'));
+    let head = cap.lines.find((l) => l.startsWith('head = ')).slice(7);
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-repo-'));
+    execFileSync('git', ['-C', repo, 'init', '-q']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Claude (agent)']);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 'claude@test']);
+    for (const n of [1, 2]) {
+      cap = capture();
+      const code = await okedge.main(['exec', '--head', head, '--intent', `commit ${n}`, '--receipt', `committed ${n}`, '--', 'git', '-C', repo, 'commit', '-q', '--allow-empty', '-S', '-m', `edge: ${n}`], cap.io);
+      assert.equal(code, 0, cap.lines.join('\n'));
+      assert.ok(cap.lines.some((l) => /^signed: link #\d+ \(gpg\) - receipt filed for #\d+$/.test(l)), cap.lines.join('\n'));
+      assert.ok(!cap.lines.some((l) => /receipt owed/.test(l)), cap.lines.join('\n'));
+      /* the head after the receipt: the next use is refused on any other ("--head is not the budget's head") */
+      head = cap.lines.filter((l) => l.startsWith('head = ')).pop().slice(7);
+    }
+    assert.equal(execFileSync('git', ['-C', repo, 'rev-list', '--count', 'HEAD']).toString().trim(), '2', 'both commits made, the second on the head the first printed');
+  } finally {
+    await s.agent.closeAll();
+    await s.control.close();
+  }
+});
+
 test('the gpg shim outside an exec is refused - budget or no go: no signature, no link (CLI.md §3-4, 2026-10-06)', async () => {
   const s = await stack();
   try {
