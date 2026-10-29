@@ -124,6 +124,22 @@ function setup(imports, register) {
           const room = await connectRoom({ url, me, device: thisDevice(), WebSocket: globalThis.WebSocket, randomBytes });
           try {
             const host = new URL(url).host;
+            /* the server's sealed copy first (bucket/cli/sealed.js): it answers with nobody else online */
+            const { syncKept } = require('./sealed');
+            const { storeRules } = require('./trade');
+            const { newestSeqs } = require('../../edge/src/logblocks');
+            const live = (b, s) => Object.fromEntries(Object.entries((b.stores || {})[s] || {}).filter(([, r]) => r && !r.archived && r.v !== null).map(([k, r]) => [k, r.v]));
+            try {
+              const s = await syncKept({
+                id: me.id, net, me, store: room.sealedStore(), rules: storeRules(), randomBytes,
+                heads: (b) => ({ ...newestSeqs(live(b, 'edge-logs')), ...newestSeqs(live(b, 'edge-logs-test')) }),
+              });
+              io.out(s.on
+                ? `sync: ${host}: the sealed copy - got ${s.got}, put ${s.put}${Object.keys(s.taken).length ? ` - took ${JSON.stringify(s.taken)}` : ''}${s.refused.length ? ` - ${s.refused.length} row(s) refused` : ''}`
+                : `sync: ${host}: this server keeps no sealed copy for this identity`);
+            } catch (e) {
+              io.out(`sync: ${host}: the sealed copy - not synced: ${e.message}`);
+            }
             const peers = room.peers();
             if (!peers.length) { io.out(`sync: ${host}: no other device of this identity is online`); return 0; }
             let failed = 0;
