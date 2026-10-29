@@ -115,7 +115,10 @@ async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
     confirm: opts.confirm || (({ digits } = {}) => say(digits && digits.length ? `sync: confirm on the OnlyKey (${what}): enter ${digits.join(' ')}` : `sync: press the OnlyKey (${what})`)),
   });
   /* the key's site (ctap_bridge's): the bucket key is bound to it on every device, and a key that names none has none (no fallback) */
-  const s = typeof okcrypto.keySite === 'function' ? await okcrypto.keySite().catch(() => null) : null;
+  /* a read that failed is said as that, with its reason - "names no site" only when the key answered so */
+  const s = typeof okcrypto.keySite === 'function'
+    ? await okcrypto.keySite().catch((e) => { throw new Error(`bucket key: the key's site could not be read - ${e && e.message ? e.message : e}`); })
+    : null;
   const site = s && s.on && s.site ? s.site : null;
   const bucketKey = await whileBusy(say, 'bucket key', () => bid.deriveBucketKeyAt(okcrypto, identityPublicKey, site, asked('the bucket key')));
   const certificate = await whileBusy(say, 'certificate', () => bid.certify(okcrypto, identityPublicKey, bucketKey.publicKey, asked('its certificate')));
