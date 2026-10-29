@@ -421,4 +421,37 @@ function keepNotes(home, deviceId, notes) {
   return { reasons: Object.keys(got.reasons).length, messages: Object.keys(got.messages).length };
 }
 
-module.exports = { sync, lines, load, store, useIdentityBucket, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };
+/*
+ * KEEP UP WITH THE KEY'S RING, BETWEEN CHECKS (key 3, 2026-10-29). The key holds only its newest PICKUP_MAX links. A
+ * process per use read them into this copy when it closed (sync above); one service for a whole ship (edge-control
+ * shipService) made ~21 links before its single close, and #565-#577 had left the ring: a gap no copy held, and the next
+ * budget was refused. So the service reads each request's new links right after it: only those after this copy's last,
+ * each kept only if it welds onto the one before (follows) - no checkpoint, no full check (~0.2 s); sync() still checks
+ * them all against the key's signed checkpoint at the close. An empty copy, or one the ring no longer reaches, is left
+ * to sync(), which reports what it finds. -> how many links were kept.
+ */
+async function catchUp(edge, home, deviceId) {
+  const c = load(home, deviceId);
+  if (!c.links.length) return 0;
+  const last = seqOf(c.links[c.links.length - 1]);
+  const h = await edge.head();
+  const keySeq = h.seq === null ? -1 : h.seq;
+  const add = [];
+  for (let from = last + 1; from <= keySeq;) {
+    const got = await edge.pickup(from, Math.min(PICKUP_MAX, keySeq - from + 1));
+    if (!got.length) break;
+    let welded = true;
+    for (const r of got) {
+      /* the very next seq only, welded to it (follows alone lets a later seq through: sync's read past a gap) */
+      const prev = add.length ? add[add.length - 1] : c.links[c.links.length - 1];
+      if (seqOf(r) === seqOf(prev) + 1 && follows(prev, r)) add.push(r);
+      else { welded = false; break; }
+    }
+    if (!welded) break;
+    from = seqOf(got[got.length - 1]) + 1;
+  }
+  if (add.length) save(home, { ...c, links: [...c.links, ...add] });
+  return add.length;
+}
+
+module.exports = { sync, catchUp, lines, load, store, useIdentityBucket, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };

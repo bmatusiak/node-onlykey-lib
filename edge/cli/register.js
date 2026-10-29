@@ -399,6 +399,8 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
     const c = client.createEdgeClient({ edge, channel, store });
     const svc = await span('open: start agent', () => startEdgeAgent({
       okcrypto, client: c, edge, home, identity, deviceId,
+      /* a service on USB reads each request's new links into this computer's copy (copy.catchUp) */
+      keepCopy: serve && !opts.ble,
       pointers: edgeStore.createPointerStore(pointerKv(home)),
       openpgp: require('../../src/crypto/pgp'),
       shimCommand: path.resolve(__dirname, 'gpg-shim.js').split(path.sep).join('/'),

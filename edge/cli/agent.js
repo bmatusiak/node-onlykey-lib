@@ -557,7 +557,7 @@ async function openWithOneRetry(open, { waitMs = 5000, log = () => {} } = {}) {
   }
 }
 
-async function startEdgeAgent({ okcrypto, client, edge = null, home = null, identity, pointers = null, deviceId = null, pins = null, openpgp, shimCommand = null, log = () => {}, confirm, onSilence = null, linkStats = null, serve = true }) {
+async function startEdgeAgent({ okcrypto, client, edge = null, home = null, identity, pointers = null, deviceId = null, pins = null, openpgp, shimCommand = null, log = () => {}, confirm, onSilence = null, linkStats = null, serve = true, keepCopy = false }) {
   const wire = require('../../cli/ssh-wire');
   const sshPub = require('../../src/crypto/ssh-pub');
   const { checkRecord } = require('../src/identity');
@@ -640,6 +640,21 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
       await held.set(op === 'end' ? null : r.budget);
       return r;
     };
+  }
+  /*
+   * A SERVICE KEEPS THIS COMPUTER'S COPY UP WITH THE KEY (copy.catchUp; key 3, 2026-10-29): every request that makes
+   * links reads them in right after - the key's ring holds only its newest 8, and a ship through one service made ~21
+   * before its close. keepCopy: a service on USB (over Bluetooth the phone keeps its own copy, as at a close).
+   */
+  if (keepCopy && edge && home && deviceId) {
+    for (const op of ['budget', 'continue', 'exec-close', 'receipt', 'end']) {
+      const h = handlers[op];
+      handlers[op] = async (req) => {
+        try { return await h(req); } finally {
+          await require('./copy').catchUp(edge, home, deviceId).catch((e) => log(`copy: the key's new links not read in yet (${e.message}) - the close reads them`));
+        }
+      };
+    }
   }
   /*
    * NOBODY ANSWERED (Brad, 2026-10-06): a request that ended in silence - no
