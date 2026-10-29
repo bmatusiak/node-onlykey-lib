@@ -2603,7 +2603,26 @@ async function main(argv, io = {}) {
       const r = await h.hook(full, parsed.values, rest);
       if (r !== undefined) return r;
     }
-    return await cmd.run(full, parsed.values, rest);
+    /*
+     * EVERY EDGE COMMAND WITH --gui-prompt GETS THE LIVE WINDOW (key 3, 2026-10-29: `edge loss` asked Yes in a dialog,
+     * then said "PRESS the key now" on a terminal the person could not see, and the key's 20 s ran out; Brad: "i dont
+     * like how there is no progress window telling me whats happening"). The ship opens its own (edge control); any
+     * other edge command opens one here: its edge: lines as they happen (edge/cli/progress-feed.js), the press when the
+     * key waits, and how it ended - "done", or STOP with the reason itself.
+     */
+    const sub = name === 'edge' ? rest.find((a) => !a.startsWith('--')) : null;
+    const win = sub && sub !== 'control' && parsed.values['gui-prompt'] && !process.env.OKJS_PROGRESS_FILE
+      ? require('./gui-prompt').guiProgress({ title: `OnlyKey - edge ${sub}${rest.includes('--test-mode') ? ' (testnet)' : ''}`, total: 1 })
+      : null;
+    if (win && win.file) { process.env.OKJS_PROGRESS_FILE = win.file; win.note(`edge ${sub}`); }
+    try {
+      const code = await cmd.run(full, parsed.values, rest);
+      if (win) win.finish(code === 0 ? 'done' : `STOP: edge ${sub} did not finish (exit ${code})`);
+      return code;
+    } catch (e) {
+      if (win) win.finish(`STOP: ${e && e.message ? e.message : e}`);
+      throw e;
+    }
   } catch (err) {
     /*
      * The key's own "no" is printed where python prints it - stdout - so the
