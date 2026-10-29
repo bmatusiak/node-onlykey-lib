@@ -46,7 +46,7 @@ function fakeEdge({ refuse = null } = {}) {
   return {
     calls,
     async head() { return { seq, head: new Uint8Array(32).fill(seq) }; },
-    async grant(o) { if (refuse) throw Object.assign(new Error(refuse), { code: 'scope-not-allowed' }); calls.push({ grant: o.scopes.map((s) => [s.op, s.slot, s.cap, s.derive || hex(s.label)]) }); seq += 1; return { grantId: seq + 1, seq, checkpoint: { seq } }; },
+    async grant(o) { if (refuse) throw Object.assign(new Error(refuse), { name: 'EdgeError', code: 0x03, status: 'scope-not-allowed' }); calls.push({ grant: o.scopes.map((s) => [s.op, s.slot, s.cap, s.derive || hex(s.label)]) }); seq += 1; return { grantId: seq + 1, seq, checkpoint: { seq } }; },
     async txStart(head, subject) { calls.push({ tx: hex(subject), at: head[0] }); },
     async receipt(ref) { seq += 2; calls.push({ receipt: ref }); },
     async revoke(id) { calls.push({ revoke: id }); },
@@ -93,7 +93,7 @@ test('login: a use the login did not need is ended with it; the hook is gone aft
 
 test('login: a key without the login budget logs in as always; no Edge, no budget', async () => {
   const ok = fakeOkcrypto();
-  const refused = compose(ok, fakeEdge({ refuse: 'the key refused OKEDGE 16: EDGE:03' }));
+  const refused = compose(ok, fakeEdge({ refuse: 'A budget cannot pay for that operation or slot' }));
   const r = await refused.login(async () => { await ok.deriveSecret('x'); return 1; }, { derives: ['x'] });
   assert.deepEqual([r.result, r.budget, r.paid], [1, null, 0]);
   assert.equal(ok.sent[0].paid, false);

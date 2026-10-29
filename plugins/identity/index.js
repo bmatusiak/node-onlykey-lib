@@ -194,7 +194,7 @@ function setup(imports, register) {
         budget = await edge.grant({ scopes, reasonHash: sha256(utf8(reason)), verifiedHead: h.head, ttlMinutes, onPress });
       } catch (e) {
         /* a firmware without the login budget refuses a derive scope: the login as it always was */
-        if (/scope|not allowed|EDGE:03/i.test(String(e && (e.code || e.message)))) return { result: await fn(), budget: null, paid: 0 };
+        if (e && (e.status === 'scope-not-allowed' || (e.name === 'EdgeError' && e.code === 0x03))) return { result: await fn(), budget: null, paid: 0 };
         throw e;
       }
       let paid = 0;
