@@ -155,6 +155,75 @@ function setup(imports, register) {
       return { held: identity.proven('bucket', h), bucket: opened.bucket };
     },
 
+    /*
+     * THE LOGIN PLAN (PROPOSAL-login-plan.md; Brad, 2026-10-29: "a 'login plan' that runs a 'login budget' - 1 press =
+     * logs into our app"; "keep it in the identity plugin"). fn is the login itself, run as it always is - the bucket
+     * opened, the identity proven, this device's bucket key made and certified. Around it ONE Edge budget, approved with
+     * one press, pays every request fn makes that the plan names: each derive by its label (`derives`, derive_secret's
+     * touchless derive on slot 128) and the identity's own signatures (`signs`, slot 201, the identity label). Each paid
+     * request is announced first (TX start for exactly its bytes) and receipted after (okcrypto's use hook), so it is a
+     * link on the key's chain - every login is in its history ("i know all the logins that happened"). The budget's reason
+     * names the login (the app, the device, the site); whatever it did not spend is ended with fn.
+     *
+     * THE HEAD IT OPENS ON: the key's current one (HEAD, no press). The copy behind it is checked right after, from the
+     * checkpoint the press returns (`budget.checkpoint`, both halves) back to the one the bucket kept - so nothing before
+     * the login is read from the key (Brad: "anything before a checkpoint can be verified without the key"). The login
+     * budget pays only the login's own requests, which is why it may open before that check; any other budget checks first.
+     *
+     * No Edge here, or a key whose firmware has no login budget (it refuses a derive scope): fn alone, with its codes as
+     * today. -> {result, budget: {grantId, seq, checkpoint} | null, paid: n}
+     */
+    async login(fn, { reason = 'log in', derives = [], signs = 0, onPress, ttlMinutes = 2 } = {}) {
+      const edge = app.services && app.services.edge;
+      if (!edge || typeof edge.grant !== 'function' || typeof okcrypto.setUseHook !== 'function' || (!derives.length && !signs)) {
+        return { result: await fn(), budget: null, paid: 0 };
+      }
+      const { codes } = require('../../edge/src');
+      const { MSG } = require('../../src/protocol/msg');
+      const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+      const signLabel = sha256(utf8(bucketIdentity.IDENTITY_LABEL));
+      const scopes = [...new Set(derives)].slice(0, signs ? 3 : 4).map((d) => ({ op: codes.OP.DERIVE, slot: 128, cap: 1, derive: d }));
+      if (signs) scopes.push({ op: codes.OP.SIGN, slot: 201, cap: signs, label: signLabel });
+      /* what the budget may still pay: each derive once by its label hash, the identity's signatures up to `signs` */
+      const left = new Map(scopes.filter((s) => s.op === codes.OP.DERIVE).map((s) => [hex(sha256(utf8(s.derive))), 1]));
+      let signsLeft = signs;
+      const h = await edge.head();
+      let budget;
+      try {
+        budget = await edge.grant({ scopes, reasonHash: sha256(utf8(reason)), verifiedHead: h.head, ttlMinutes, onPress });
+      } catch (e) {
+        /* a firmware without the login budget refuses a derive scope: the login as it always was */
+        if (/scope|not allowed|EDGE:03/i.test(String(e && (e.code || e.message)))) return { result: await fn(), budget: null, paid: 0 };
+        throw e;
+      }
+      let paid = 0;
+      const was = okcrypto.setUseHook((msg, slot, payload) => {
+        const derive = msg === 0xfc && slot === 128 && payload.length === 33 && payload[0] === 1 && left.get(hex(payload.subarray(1))) > 0;
+        const sign = msg === MSG.OKSIGN && slot === 201 && signsLeft > 0 && payload.length > 32 && hex(payload.subarray(payload.length - 32)) === hex(signLabel);
+        if (!derive && !sign) return null;
+        let at = null;
+        return {
+          async before() {
+            const now = await edge.head();
+            await edge.txStart(now.head, sha256(payload));
+            at = now.seq === null ? 0 : now.seq + 1;
+          },
+          async after() {
+            if (derive) left.set(hex(payload.subarray(1)), 0); else signsLeft -= 1;
+            paid += 1;
+            await edge.receipt(at, 0, sha256(utf8(`${reason}: ${derive ? 'derive' : 'sign'} ${paid}`)));
+          },
+        };
+      });
+      try {
+        return { result: await fn(), budget, paid };
+      } finally {
+        okcrypto.setUseHook(was);
+        /* the uses the login did not need end with it: a login budget never outlives its login */
+        if (left.size + signs > paid) await edge.revoke(budget.grantId).catch(() => undefined);
+      }
+    },
+
     /* internal: mark the held identity proven (a check above has passed for exactly this one) */
     proven(how, h) {
       if (h !== held) throw new Error('identity: the key changed while it was proven');

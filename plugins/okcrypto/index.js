@@ -314,8 +314,33 @@ function setup(imports, register, config) {
   }
 
   /* one conversation (src/transport/lane.js): the request, the press, the answer */
-  function deviceOperation(...args) {
-    return inLane(transport, () => deviceOperationBusyAware(...args));
+  /*
+   * A REQUEST A BUDGET PAYS (the login plan - identity plugin login(); PROPOSAL-login-plan.md; Brad, 2026-10-29: "1 press =
+   * logs into our app"). useHook(msg, slot, payload) -> null for an ordinary request, or {before, after}: before() announces
+   * it to the key (Edge's TX start for exactly these bytes) and after(result) files its receipt. Both run OUTSIDE the lane:
+   * Edge's own requests take it themselves (edge/plugin exclusive()), and the lane is not re-entrant. A paid request asks
+   * no press, so it shows no code (confirm none, quiet). One hook at a time (setUseHook), set only for a login's run.
+   */
+  let useHook = null;
+  async function asUse(msg, slot, data, opts, run) {
+    const use = useHook ? useHook(msg, slot, Uint8Array.from(data || [])) : null;
+    if (!use) return run(opts);
+    let announced = false;
+    try {
+      await use.before();
+      announced = true;
+    } catch (e) {
+      /* the key would not take the announcement (no budget can pay it now): an ordinary request, its press as always */
+      if (typeof use.failed === 'function') use.failed(e);
+    }
+    if (!announced) return run(opts);
+    const out = await run({ ...(opts || {}), confirm: null, quiet: true });
+    await use.after(out);
+    return out;
+  }
+
+  function deviceOperation(msg, slot, data, opts) {
+    return asUse(msg, slot, data, opts, (o) => inLane(transport, () => deviceOperationBusyAware(msg, slot, data, o)));
   }
 
   /*
@@ -1448,8 +1473,8 @@ function setup(imports, register, config) {
    * tunnelRequest() runs it UNLANED (tunnelOperationNow): its caller, Edge, already holds the lane for the whole call
    * (edge/plugin exclusive()), and the lane is not re-entrant.
    */
-  function tunnelOperation(...args) {
-    return inLane(transport, () => tunnelOperationNow(...args));
+  function tunnelOperation(msg, slot, data, opts) {
+    return asUse(msg, slot, data, opts, (o) => inLane(transport, () => tunnelOperationNow(msg, slot, data, o)));
   }
 
   /* replyWhole: true only once this operation has its whole answer (WIPES_DELIVERED) */
@@ -1774,6 +1799,16 @@ function setup(imports, register, config) {
      * @param {{touch?: boolean, confirm?: Function, timeoutMs?: number}} [opts]
      * @returns {Promise<Uint8Array>} 32 bytes
      */
+    /**
+     * The request hook a budget-paid run sets (asUse above): fn(msg, slot, payload) -> null | {before, after, failed?};
+     * null clears it. -> the hook it replaces, so a run puts it back.
+     */
+    setUseHook(fn) {
+      const was = useHook;
+      useHook = typeof fn === 'function' ? fn : null;
+      return was;
+    },
+
     async deriveSecret(label, { touch = false, ...opts } = {}) {
       if (typeof label !== 'string' || !label) throw new TypeError('deriveSecret needs a label');
       const payload = concat([Uint8Array.of(touch ? DERIVE_SECRET_TOUCH : DERIVE_SECRET_TOUCHLESS), subjectHash(utf8ToBytes(label))]);
