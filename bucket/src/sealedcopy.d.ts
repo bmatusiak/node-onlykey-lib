@@ -76,13 +76,53 @@ export function sealHeads(heads: any, keys: any, randomBytes: any): {
 };
 /** The heads row opened ({<dev>: seq}), or {} when it is missing or not this bucket's. */
 export function openHeads(blob: any, keys: any): any;
-export function syncWith(bucket: any, keys: any, store: any, { rules, randomBytes, heads }?: {
-    rules?: {} | undefined;
-    heads?: null | undefined;
+/**
+ * ONE SYNC WITH A ROW STORE (Brad, 2026-10-29: "we load the key on a fresh session empty, and it then needs to compare
+ * the remote and session, and decide"; "the webapp can have an encrypted backup for caching"). A row store is anything
+ * that keeps these rows - the server's room, or the web app's own encrypted cache in the browser - so a fresh session
+ * compares its cache and the server the same way, and moves only what differs:
+ *   store.table()      -> {id: tag}                 ids and tags only
+ *   store.get(ids)     -> {id: blob}
+ *   store.put(rows)    rows: {id: {tag, blob}}
+ * heads: this bucket's Edge logs' newest links ({<dev>: seq}, from logblocks.newestSeqs) - the heads row is put again
+ * whenever it changed.
+ * @param {{stores: Object, clock?: string|null}} bucket changed in place by what is taken
+ * @param {{tableKey: Uint8Array, unitKey: Uint8Array}} keys keysOf(bucket key)
+ * @param {{table: () => Promise<Object<string, string>>, get: (ids: string[]) => Promise<Object<string, string>>, put: (rows: Object<string, {tag: string, blob: string}>) => Promise<void>}} store
+ * @param {{rules?: Object, randomBytes: (n: number) => Uint8Array, heads?: Object<string, number>|null}} opts
+ * @returns {Promise<{got: number, put: number, taken: Object<string, number>, conflicts: Array, refused: string[]}>}
+ */
+export function syncWith(bucket: {
+    stores: Object;
+    clock?: string | null;
+}, keys: {
+    tableKey: Uint8Array;
+    unitKey: Uint8Array;
+}, store: {
+    table: () => Promise<{
+        [x: string]: string;
+    }>;
+    get: (ids: string[]) => Promise<{
+        [x: string]: string;
+    }>;
+    put: (rows: {
+        [x: string]: {
+            tag: string;
+            blob: string;
+        };
+    }) => Promise<void>;
+}, { rules, randomBytes, heads }?: {
+    rules?: Object;
+    randomBytes: (n: number) => Uint8Array;
+    heads?: {
+        [x: string]: number;
+    } | null;
 }): Promise<{
     got: number;
     put: number;
-    taken: {};
+    taken: {
+        [x: string]: number;
+    };
     conflicts: any[];
-    refused: any[];
+    refused: string[];
 }>;

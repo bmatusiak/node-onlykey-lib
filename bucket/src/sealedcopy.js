@@ -147,7 +147,7 @@ function openHeads(blob, keys) {
   }
 }
 
-/*
+/**
  * ONE SYNC WITH A ROW STORE (Brad, 2026-10-29: "we load the key on a fresh session empty, and it then needs to compare
  * the remote and session, and decide"; "the webapp can have an encrypted backup for caching"). A row store is anything
  * that keeps these rows - the server's room, or the web app's own encrypted cache in the browser - so a fresh session
@@ -157,6 +157,11 @@ function openHeads(blob, keys) {
  *   store.put(rows)    rows: {id: {tag, blob}}
  * heads: this bucket's Edge logs' newest links ({<dev>: seq}, from logblocks.newestSeqs) - the heads row is put again
  * whenever it changed.
+ * @param {{stores: Object, clock?: string|null}} bucket changed in place by what is taken
+ * @param {{tableKey: Uint8Array, unitKey: Uint8Array}} keys keysOf(bucket key)
+ * @param {{table: () => Promise<Object<string, string>>, get: (ids: string[]) => Promise<Object<string, string>>, put: (rows: Object<string, {tag: string, blob: string}>) => Promise<void>}} store
+ * @param {{rules?: Object, randomBytes: (n: number) => Uint8Array, heads?: Object<string, number>|null}} opts
+ * @returns {Promise<{got: number, put: number, taken: Object<string, number>, conflicts: Array, refused: string[]}>}
  */
 async function syncWith(bucket, keys, store, { rules = {}, randomBytes, heads = null } = {}) {
   const theirs = await store.table();
