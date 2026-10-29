@@ -89,3 +89,19 @@ test('the heads row: each Edge log\'s newest link, sealed; put again only when i
   const r = await sealed.syncWith(fresh, keys, server, { randomBytes: rnd });
   assert.deepEqual(r.refused, []);
 });
+
+test('a bucket kept as rows on the device comes back whole; another secret, another owner or a damaged row gives nothing', async () => {
+  const cache = rowStore();
+  const b = filled();
+  await sealed.syncWith(b, keys, cache, { randomBytes: rnd });
+  const o = sealed.sealOwner('abc', keys, rnd);
+  await cache.put({ [o.id]: { tag: o.tag, blob: o.blob } });
+  const all = Object.fromEntries(Object.entries(cache.rows).map(([id, r]) => [id, r.blob]));
+  const back = sealed.bucketFromRows(all, keys, { owner: 'abc' });
+  assert.equal(replicate.stateOf(back).hash, replicate.stateOf(b).hash, 'not the same bucket');
+  assert.equal(back.owner, 'abc');
+  assert.equal(sealed.bucketFromRows(all, sealed.keysOf({ secretKey: new Uint8Array(32).fill(6) }), { owner: 'abc' }), null, 'another secret opened it');
+  assert.equal(sealed.bucketFromRows(all, keys, { owner: 'def' }), null, 'another owner took it');
+  const id = Object.keys(all).find((x) => x !== o.id);
+  assert.equal(sealed.bucketFromRows({ ...all, [id]: all[o.id] }, keys, { owner: 'abc' }), null, 'a moved row was taken');
+});

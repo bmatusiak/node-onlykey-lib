@@ -126,3 +126,23 @@ export function syncWith(bucket: {
     conflicts: any[];
     refused: string[];
 }>;
+export function ownerId(keys: any): string;
+export function sealOwner(owner: any, keys: any, randomBytes: any): {
+    id: string;
+    tag: string;
+    blob: string;
+};
+/**
+ * Rows kept on this device back into its bucket: every row must open and the owner row must name `owner` - else null.
+ * @param {Object<string, string>} rows id -> blob (all of them, the heads row and the owner row included)
+ * @returns {{stores: Object, owner: string}|null}
+ */
+export function bucketFromRows(rows: {
+    [x: string]: string;
+}, keys: any, { owner, rules }: {
+    owner: any;
+    rules?: {} | undefined;
+}): {
+    stores: Object;
+    owner: string;
+} | null;

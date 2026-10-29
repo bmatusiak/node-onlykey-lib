@@ -187,4 +187,38 @@ async function syncWith(bucket, keys, store, { rules = {}, randomBytes, heads = 
   return { got: p.get.length, put: Object.keys(rows).length, taken, conflicts, refused };
 }
 
-module.exports = { keysOf, headsId, table, plan, sealRows, openRows, sealHeads, openHeads, syncWith };
+/*
+ * A BUCKET KEPT AS ROWS (Brad, 2026-10-29: "the webapp can have an encrypted backup for caching"; "making reloads of the
+ * app even cheaper"; IndexedDB in the browser). A device may keep its own bucket as these same rows - one write per
+ * changed unit, not the whole bucket sealed again - under keys from its own sealing secret. The OWNER row names whose
+ * bucket the rows are, sealed like the rest: rows that open with the secret the key derives, and name this identity,
+ * prove the key (as a sealed bucket opening did).
+ */
+const OWNER = '\u0000owner';
+const ownerId = (keys) => mac(keys.tableKey, OWNER);
+function sealOwner(owner, keys, randomBytes) {
+  const id = ownerId(keys);
+  return { id, tag: mac(keys.tableKey, `${OWNER}\u0000${owner}`), blob: vault.seal(keys.unitKey, JSON.stringify({ id, owner }), randomBytes) };
+}
+
+/**
+ * Rows kept on this device back into its bucket: every row must open and the owner row must name `owner` - else null.
+ * @param {Object<string, string>} rows id -> blob (all of them, the heads row and the owner row included)
+ * @returns {{stores: Object, owner: string}|null}
+ */
+function bucketFromRows(rows, keys, { owner, rules = {} }) {
+  const oid = ownerId(keys);
+  const hid = headsId(keys);
+  let who = null;
+  try { const u = JSON.parse(vault.open(keys.unitKey, rows[oid])); who = u && u.id === oid ? u.owner : null; } catch (_) { return null; }
+  if (who !== owner) return null;
+  const units = Object.fromEntries(Object.entries(rows).filter(([id]) => id !== oid && id !== hid));
+  const { given, refused } = openRows(units, keys);
+  if (refused.length) return null;
+  const { create } = require('./bucket');
+  const b = create({ owner });
+  replicate.take(b, given, { rules });
+  return b;
+}
+
+module.exports = { keysOf, headsId, table, plan, sealRows, openRows, sealHeads, openHeads, syncWith, ownerId, sealOwner, bucketFromRows };

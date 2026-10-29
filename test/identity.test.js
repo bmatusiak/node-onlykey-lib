@@ -124,3 +124,26 @@ test('forget: nothing held, and a read in flight is not kept for the next key', 
   assert.equal(identity.current(), null);
   assert.deepEqual(changes, ['held', 'held', 'none']);
 });
+
+test('proveByRows: the rows this device keeps for the identity open with the key secret - proven; another secret or another owner is refused', async () => {
+  const sealedCopy = require('../bucket/src/sealedcopy');
+  const key = fakeKey();
+  const identity = compose(key);
+  const held = await identity.load();
+  const secret = randomBytes(32);
+  const keys = sealedCopy.keysOf({ secretKey: secret });
+  const rowsFor = (owner) => {
+    const b = bucket.create({ owner });
+    bucket.kv(b, 'guestbook').setItem('myname', 'Pixel');
+    const t = sealedCopy.table(b, keys);
+    const rows = Object.fromEntries(Object.entries(sealedCopy.sealRows(b, keys, Object.keys(t.rows), { randomBytes })).map(([id, r]) => [id, r.blob]));
+    const o = sealedCopy.sealOwner(owner, keys, randomBytes);
+    return { ...rows, [o.id]: o.blob };
+  };
+  assert.throws(() => identity.proveByRows({ rows: rowsFor(held.id), key: randomBytes(32) }), (e) => e.code === 'IDENTITY_NOT_PROVEN', 'the secret of another key');
+  assert.throws(() => identity.proveByRows({ rows: rowsFor('f'.repeat(32)), key: secret }), (e) => e.code === 'IDENTITY_NOT_PROVEN', 'the rows of another identity');
+  assert.equal(identity.current().verified, null);
+  const out = identity.proveByRows({ rows: rowsFor(held.id), key: secret });
+  assert.equal(out.held.verified.how, 'bucket');
+  assert.equal(bucket.kv(out.bucket, 'guestbook').getItem('myname'), 'Pixel');
+});

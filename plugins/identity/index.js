@@ -33,6 +33,7 @@
  *   identity.current()          -> held | null      (no request)
  *   identity.verify(opts?)      -> held             (a press or the code, as the key's derive setting asks)
  *   identity.proveByBucket({sealed, key}) -> {held, bucket}
+ *   identity.proveByRows({rows, key, rules}) -> {held, bucket}   (a bucket kept as rows)
  *   identity.requireVerified()  -> held, or throws
  *   identity.forget(why?)
  *   identity.on('change', fn)   (held | null)
@@ -153,6 +154,20 @@ function setup(imports, register) {
         throw Object.assign(new Error("identity: the bucket that opened is not this identity's"), { code: 'IDENTITY_NOT_PROVEN' });
       }
       return { held: identity.proven('bucket', h), bucket: opened.bucket };
+    },
+
+    /*
+     * The same proof for a bucket this device keeps as ROWS (bucket/src/sealedcopy.js bucketFromRows; the web app's
+     * IndexedDB cache): every row opens with keys from the secret the key derived just now, and the owner row names this
+     * identity - else not proven. -> {held, bucket}
+     */
+    proveByRows({ rows, key, rules = {} }) {
+      const h = held;
+      if (!h) throw new Error('identity: nothing loaded to prove');
+      const sealedCopy = require('../../bucket/src/sealedcopy');
+      const b = sealedCopy.bucketFromRows(rows, sealedCopy.keysOf({ secretKey: key }), { owner: h.id, rules });
+      if (!b) throw Object.assign(new Error('identity: this key did not open the rows kept for this identity'), { code: 'IDENTITY_NOT_PROVEN' });
+      return { held: identity.proven('bucket', h), bucket: b };
     },
 
     /*
