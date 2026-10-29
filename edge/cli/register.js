@@ -116,6 +116,22 @@ async function askIdentity(channel) {
   return lib.clean(a.record);
 }
 
+/*
+ * WHOSE KEY CHAIN, WHEN THIS COMPUTER KEEPS MORE THAN ONE IDENTITY (2026-10-29: the packaged desktop app's soft key
+ * kept a second bucket on this PC, and from then on every edge command warned "more than one identity keeps its
+ * bucket" and recorded nothing - the certificate and the derived keys of a whole ship). An edge command does not learn
+ * the key's identity at its first record (keychain/cli/record.js: that question would land between an exec's arming
+ * and its signature), so it is read here, once, while the key is being opened and nothing is armed yet - and only when
+ * there is a choice to make, so a computer with one identity asks the key nothing more.
+ */
+async function pickKeychainIdentity(io, app) {
+  if (!io.keychainRecord) return;
+  if (require('../../bucket/cli/home').keptIdentities(NET).length < 2) return;
+  try {
+    await require('../../keychain/cli/record').learnIdentityOf(app);
+  } catch (_) { /* not read: the first record's warning says what to do */ }
+}
+
 /* the certificate into the host's Key Chain list, so `keychain export --pgp` prints the fingerprint git signs with (audit F10/F11) */
 function recordCert(io, record, tool) {
   if (!io.keychainRecord || !record) return;
@@ -202,6 +218,8 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
     return a;
   }, { log: say });
   const { transport, okcrypto } = app.services;
+  /* before the first derive below (the identity home) records anything */
+  await span('open: whose key chain', () => pickKeychainIdentity(io, app));
   let edge = null;
   require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
   /*

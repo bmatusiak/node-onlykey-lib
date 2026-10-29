@@ -88,3 +88,16 @@ test('the testnet\'s list is its own', async () => {
   assert.deepEqual(home.keptIdentities('test'), [idOf('backup-1')]);
   assert.deepEqual(home.keptIdentities('live'), []);
 });
+
+test('learnIdentityOf: an edge command (no learning at its first record) picks the key\'s identity when two are kept - the read itself records nothing', async () => {
+  scratch();
+  for (const seed of ['backup-1', 'other']) home.keepIdentityBucket(idOf(seed), 'live', bucketLib.create({ owner: idOf(seed) }));
+  const seen = [];
+  const recordFn = (f) => { seen.push(f.label); return rec.record(f); };
+  const app = await rec.recordingStart(fakeStart('backup-1', undefined), { tool: 'test', recordFn, learnIdentity: false })({});
+  assert.strictEqual(await rec.learnIdentityOf(app), idOf('backup-1'));
+  assert.deepStrictEqual(seen, [], 'reading the bucket identity is not a derive to record');
+  await derive(app);
+  assert.deepStrictEqual(listOf(idOf('backup-1')).map((e) => e.label), ['me@host']);
+  assert.deepStrictEqual(listOf(idOf('other')), []);
+});

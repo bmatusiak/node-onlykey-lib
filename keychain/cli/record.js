@@ -187,6 +187,22 @@ function identityName(identity) {
  * @param {(opts: object) => Promise<object>} start
  * @param {{tool: string, err?: (line: string) => void, recordFn?: typeof record}} o
  */
+/* each recording app's own derive, unwrapped (learnIdentityOf): reading the bucket identity records nothing */
+const UNWRAPPED = new WeakMap();
+
+/*
+ * WHOSE LIST, ASKED BY THE COMMAND ITSELF (edge/cli/register.js pickKeychainIdentity): an edge command does not learn
+ * the identity at its first record (learnIdentity false, below), so where this computer keeps more than one identity it
+ * reads the key's bucket identity here, at a moment it knows is safe - before anything is armed. Only the bucket
+ * identity: no Edge probe, no move. Nothing when an identity is already picked or the app does not record.
+ */
+async function learnIdentityOf(app) {
+  const derive = UNWRAPPED.get(app);
+  if (identity || !derive) return identity;
+  setIdentity((await require('../../bucket/src/bucket-identity').readIdentity({ agent: { publicKey: derive } })).id);
+  return identity;
+}
+
 function recordingStart(start, { tool, err = () => {}, recordFn = record, learnIdentity = true }) {
   let warned = false;
   const note = (fields) => {
@@ -202,6 +218,7 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record, learnI
     const okc = app && app.services && app.services.okcrypto;
     /* the agent's own derive, before it is wrapped below: reading the bucket identity is not a derive to record */
     const derive = okc && okc.agent && typeof okc.agent.publicKey === 'function' ? okc.agent.publicKey.bind(okc.agent) : null;
+    if (derive) UNWRAPPED.set(app, derive);
     /*
      * WHOSE LIST: the key's BUCKET IDENTITY (its "" agent key, bucket/src/bucket-identity.js - every OnlyKey since
      * 2.1.0, Edge or not), read once per run, the first time something is recorded (after the derive, so a command's
@@ -257,4 +274,4 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record, learnI
   };
 }
 
-module.exports = { keychainFile, setFile, setIdentity, testFile, load, save, record, recordingStart, identityName };
+module.exports = { keychainFile, setFile, setIdentity, testFile, load, save, record, recordingStart, learnIdentityOf, identityName };
