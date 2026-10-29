@@ -22,7 +22,7 @@ const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const DEV_ENV = ['OKEDGE_HOME', 'OKEDGE_TIMES', 'OKEDGE_IDLE_MS', 'ONLYKEY_JS_DEBUG'];
+const DEV_ENV = ['OKEDGE_HOME', 'OKEDGE_TIMES', 'OKEDGE_TIMES_FILE','OKEDGE_IDLE_MS', 'ONLYKEY_JS_DEBUG'];
 
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

@@ -19,6 +19,15 @@
  */
 
 const { ask } = require('./control');
+/* the ship's timeline (edge/cli/dev/times.js): this process on it when the dev set is here - git starts one per sign */
+const TIMES = (() => {
+  try {
+    return require('./dev/times');
+  } catch (e) {
+    if (e && e.code === 'MODULE_NOT_FOUND' && /'\.\/dev\/times'/.test(e.message)) return null;
+    throw e;
+  }
+})();
 
 const PUBKEY_EDDSA = 22; /* RFC 4880 public-key algorithm (EdDSA legacy, as the certificate) */
 const HASH_SHA256 = 8;
@@ -48,7 +57,8 @@ async function main(args, { stdin = process.stdin, stdout = process.stdout, stde
   try {
     /* the exec's own gpg endpoint (path + key in this exec's environment, 2026-10-06) - no home, no service needed */
     if (!env.OKEDGE_GPG_ENDPOINT || !env.OKEDGE_GPG_KEY) throw new Error('not inside onlykey-js edge exec (no gpg endpoint) - Edge signs only under a budget');
-    r = await ask('gpg-sign', { token: env.OKEDGE_GPG_TOKEN || null, data: data.toString('base64') }, { timeoutMs: 60000, where: env.OKEDGE_GPG_ENDPOINT, key: env.OKEDGE_GPG_KEY });
+    const sign = () => ask('gpg-sign', { token: env.OKEDGE_GPG_TOKEN || null, data: data.toString('base64') }, { timeoutMs: 60000, where: env.OKEDGE_GPG_ENDPOINT, key: env.OKEDGE_GPG_KEY });
+    r = TIMES ? await TIMES.span('shim: the exec signs it', sign) : await sign();
   } catch (e) {
     stderr.write(`onlykey-js edge (gpg): ${e.message}\n`);
     return 1;
@@ -65,5 +75,6 @@ async function main(args, { stdin = process.stdin, stdout = process.stdout, stde
 module.exports = { main, statusFd };
 
 if (require.main === module) {
+  if (TIMES) TIMES.started('gpg-shim');
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { process.stderr.write(`onlykey-js edge (gpg): ${e.message}\n`); process.exitCode = 1; });
 }

@@ -46,6 +46,12 @@ const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8'))
 /* a stop: printed by run(), exit 1 */
 class Stop extends Error {}
 
+/* what a child was, for the timeline: `edge exec`, `git rebase` - the command's verb past its options, nothing more */
+function ranWhat(file, a) {
+  const verb = (from) => { let i = from; while (i < a.length && /^-/.test(a[i])) i += /^-[Cc]$/.test(a[i]) ? 2 : 1; return a[i]; };
+  return file === process.execPath ? `edge ${verb(a.indexOf('edge') + 1)}` : `${path.basename(file)} ${verb(0)}`;
+}
+
 const USAGE = [
   'onlykey-js [--ble [--address <phone>]] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...',
   'onlykey-js … edge … control preview',
@@ -62,8 +68,10 @@ const USAGE = [
  * @param {string} o.home this net's Edge home
  * @returns {Promise<number>} the exit code
  */
-async function run({ io, opts, argv, net, home }) {
+async function run({ io, opts, argv, net, home, dev = null }) {
   const say = (s) => io.out(s);
+  /* the ship's timeline (edge/cli/dev/times.js): every child it runs, and their steps - the dev set only */
+  const TIMES = dev && dev.times ? dev.times : null;
   const args = argv.slice();
   const cmd = args.shift();
   const opt = (name) => { const i = args.indexOf(name); if (i < 0) return null; const v = args[i + 1]; args.splice(i, 2); return v; };
@@ -87,7 +95,10 @@ async function run({ io, opts, argv, net, home }) {
   const where = USB ? 'the key on USB' : `the phone${opts.address ? ` (${opts.address})` : ''}`;
 
   const runP = (file, a, o = {}) => {
+    const t = Date.now();
     const r = spawnSync(file, a, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...o });
+    /* on the timeline by what ran (edge exec, git rebase), never its arguments: an intent names what is signed */
+    if (TIMES) TIMES.took(`run ${ranWhat(file, a)}`, Date.now() - t, { failed: r.status !== 0 });
     return { code: r.status, out: `${r.stdout || ''}${r.stderr || ''}` };
   };
   const git = (repo, ...a) => runP('git', ['-C', repo, ...a]);
@@ -370,6 +381,25 @@ async function run({ io, opts, argv, net, home }) {
       say(`plan: ${t.gpg} signature(s), ${t.ssh} push(es)`);
       if (PLAN) return 0;
       if (t.gpg + t.ssh === 0) { say('nothing to do'); return 0; }
+      /* the timeline of this ship, printed at its end - DONE or STOP (Brad, 2026-10-29: where a commit's 14.5 s go) */
+      const timeline = TIMES ? TIMES.begin(home) : null;
+      try {
+        return await shipIt(t, fromBatch);
+      } finally {
+        if (timeline) { try { for (const l of TIMES.summary(timeline)) say(l); } catch (e) { say(`times: no summary (${e.message})`); } }
+      }
+    }
+    for (const l of USAGE) io.err(l);
+    return 2;
+  } catch (e) {
+    if (e instanceof Stop) return 1;
+    unwatch();
+    throw e;
+  }
+
+  /* the ship itself, once its plan is counted: the window, the budget, each repo, the end */
+  async function shipIt(t, fromBatch) {
+    {
       /*
        * THE WINDOW OPENS BEFORE ANY WORK (Brad, 2026-10-26: "it should start the progress window before it start work,
        * and automatically close when the job is done"): opened after the approval and press it came up when the ship was
@@ -396,12 +426,6 @@ async function run({ io, opts, argv, net, home }) {
       if (PROGRESS) PROGRESS.finish(`done: ${signedCount} signed, ${pushCount} pushed - budget closed`);
       return 0;
     }
-    for (const l of USAGE) io.err(l);
-    return 2;
-  } catch (e) {
-    if (e instanceof Stop) return 1;
-    unwatch();
-    throw e;
   }
 }
 

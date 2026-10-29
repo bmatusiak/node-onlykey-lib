@@ -197,8 +197,8 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
   /* ENOVENDOR at start: one more try after ~5 s (agent.js openWithOneRetry) */
   const dopts = h.deviceOpts(opts);
   const app = await openWithOneRetry(async () => {
-    const a = await io.start(dopts);
-    try { keyAnswers(await untilUnlocked(a, opts, h), h, 'edge'); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
+    const a = await span('open: lib + USB', () => io.start(dopts));
+    try { keyAnswers(await span('open: connect', () => untilUnlocked(a, opts, h)), h, 'edge'); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
     return a;
   }, { log: say });
   const { transport, okcrypto } = app.services;
@@ -220,7 +220,7 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
   const netHome = require('./control').edgeHome();
   const home = migrating
     ? path.join(netHome, await edge.identityId())
-    : await require('./migrate-identity').identityHome({ edge, okcrypto, netHome, say });
+    : await span('open: identity home', () => require('./migrate-identity').identityHome({ edge, okcrypto, netHome, say }));
   /*
    * WHO HOSTS EDGE. Over Bluetooth the phone does: the wire to its app. A key on USB is a hard key
    * (or Linux's emulated one on the bus) - no phone behind it answers the wire, so this computer is
@@ -262,7 +262,7 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
   const { app, transport, okcrypto, edge, channel, say, home } = d;
   const { store } = budgetStore(home);
   try {
-    const identity = await askIdentity(channel);
+    const identity = await span('open: agent identity', () => askIdentity(channel));
     if (!identity) {
       /* coded: a long-lived service runs its sync without an agent (the agent branch below) */
       throw Object.assign(h.usage(channel.local
@@ -270,9 +270,9 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
         : `${opts.ble ? 'the phone' : 'the desktop app'} keeps no agent identity yet - set it once, from any paired computer: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`), { code: 'ENOAGENTID' });
     }
     recordCert(io, identity, serve ? 'onlykey-js edge agent' : 'onlykey-js edge');
-    const { deviceId } = await edge.publicKey();
+    const { deviceId } = await span('open: edge public key', () => edge.publicKey());
     const c = client.createEdgeClient({ edge, channel, store });
-    const svc = await startEdgeAgent({
+    const svc = await span('open: start agent', () => startEdgeAgent({
       okcrypto, client: c, edge, home, identity, deviceId,
       pointers: edgeStore.createPointerStore(pointerKv(home)),
       openpgp: require('../../src/crypto/pgp'),
@@ -284,7 +284,7 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
       /* a request nobody answered: let the Bluetooth link go (the next one connects fresh, hello first) */
       onSilence: opts.ble ? async () => { await transport.release('nobody answered').catch(() => {}); } : null,
       serve,
-    });
+    }));
     /*
      * A HARD KEY'S LINKS ARE PICKED UP AFTER EVERY COMMAND (key 1, 2026-10-23). The key keeps only its
      * newest links in a ring; the phone keeps its copy current all the time, but for a hard key this
@@ -296,11 +296,11 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
      */
     const pickUp = async () => {
       if (opts.ble) return;
-      const r = await require('./copy').sync(edge, home).catch((e) => ({ error: e }));
+      const r = await span('close: copy - read + verify', () => require('./copy').sync(edge, home)).catch((e) => ({ error: e }));
       if (r && r.error) say(`could not bring this computer's copy to the key's head (${r.error.message})`);
       else if (r && r.verdict && r.verdict.kind !== 'verified' && r.verdict.kind !== 'unsigned') say(`this computer's copy of the chain: ${r.verdict.kind}${r.verdict.seq !== undefined ? ` at #${r.verdict.seq}` : ''}`);
       /* and its log kept ready to offer to the identity's other devices (nametag.js offerOwnLog - as a phone's pull does) */
-      else await require('./nametag').offerOwnLog({ edge, home }).catch(() => undefined);
+      else await span('close: copy - own log kept to offer', () => require('./nametag').offerOwnLog({ edge, home })).catch(() => undefined);
     };
     /*
      * LOGS GO EVERYWHERE BY THEMSELVES (Brad, 2026-10-24: "sync is invisible and a user should never
@@ -327,7 +327,12 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
       const n = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
       say(t.traded && t.same ? 'sync: in sync with the phone' : t.traded ? `sync: traded with the phone - took ${n(t.taken)}, gave ${n(t.gave)}` : `sync: not traded this time (${t.why})`);
     };
-    return { app, transport, svc, identity, home, channel, okcrypto, say, close: async () => { await shareLogs(); await svc.close(); await pickUp(); await app.destroy(); } };
+    return { app, transport, svc, identity, home, channel, okcrypto, say, close: async () => {
+      await span('close: logs to the phone', shareLogs);
+      await span('close: agent', () => svc.close());
+      await span('close: copy to the key\'s head', pickUp);
+      await span('close: lib + USB', () => app.destroy());
+    } };
   } catch (e) {
     await app.destroy().catch(() => undefined);
     throw e;
@@ -348,6 +353,8 @@ const DEV = (() => {
     throw e;
   }
 })();
+/* a step on the ship's timeline (edge/cli/dev/times.js) when the dev set is here; without it, the step as it is */
+function span(name, fn) { return DEV && DEV.times ? DEV.times.span(name, fn) : fn(); }
 
 /*
  * THE TESTNET (BLOCKS.md; Brad, 2026-10-07: "we should treat --test-mode as test
@@ -415,6 +422,8 @@ module.exports = function register(COMMANDS, h) {
       /* an unknown subcommand is refused here, before anything connects to the phone */
       const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', 'migrate', 'name', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
+      /* this process on a ship's timeline (the ship itself, `control`, opens the timeline instead) */
+      if (dev && dev.times && sub !== 'control') dev.times.started(`edge ${sub}`);
 
       /*
        * EDGE SYNC --ALL (Brad, 2026-10-11: "pull from all devices,, (dont update them) then on the
@@ -452,7 +461,7 @@ module.exports = function register(COMMANDS, h) {
        * It opens no key itself - each step is this CLI run as a child with the same flags.
        */
       if (sub === 'control') {
-        return require('./edge-control').run({ io, opts, argv: rest, net: NET, home: control.edgeHome() });
+        return require('./edge-control').run({ io, opts, argv: rest, net: NET, home: control.edgeHome(), dev });
       }
       const wait = opt(rest, '--wait');
 

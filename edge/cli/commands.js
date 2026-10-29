@@ -114,6 +114,8 @@ function paidWords(l) {
 async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n'), env = process.env, spawnFn = spawn, ask, dev = null, waiting = 'Waiting for the phone - read the request there, then press…' } = {}) {
   /* waiting: the host's words - the phone over Bluetooth; for a hard key on USB this computer asks y/N itself (register.js) */
   if (typeof ask !== 'function') throw new Error('edge commands need ask (the service or the in-process stack)');
+  /* a step on the ship's timeline (edge/cli/dev/times.js) when the dev set is here */
+  const span = (name, fn) => (dev && dev.times ? dev.times.span(name, fn) : fn());
   const [cmd, ...args] = argv;
   try {
     /* the dev build's own commands (edge/cli/dev - left out of the published package, CLI.md §5) */
@@ -157,7 +159,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       const seq = Number(args[0]);
       const message = opt(args, '--msg');
       if (!Number.isInteger(seq) || !message) { err('onlykey-js edge receipt <seq> [--code OK] --msg "…"'); return 2; }
-      const r = await ask('receipt', { seq, code: opt(args, '--code') || 'OK', message });
+      const r = await span('receipt: file it (the key opened first)', () => ask('receipt', { seq, code: opt(args, '--code') || 'OK', message }));
       out(`receipt filed for #${seq}`);
       out(`head = ${r.head}`);
       return 0;
@@ -184,7 +186,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       if (args.slice(0, dd < 0 ? args.length : dd).includes('--press')) { err('onlykey-js edge: --press was removed - Edge signs only under a budget; for a pressed sign use the ordinary ssh/gpg agent'); return 2; }
       if (dd < 0 || !head || !reason || dd === args.length - 1) { err('onlykey-js edge exec --head H --intent "…" -- <command…>'); return 2; }
       const command = args.slice(dd + 1);
-      const ex = await ask('exec-open', { head, reason });
+      const ex = await span('exec: open the use (the key opened first)', () => ask('exec-open', { head, reason }));
       const gitEntries = Object.entries(ex.git || {});
       const childEnv = {
         ...env,
@@ -199,13 +201,13 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       };
       let code;
       try {
-        code = await new Promise((resolve) => {
+        code = await span(`exec: run ${command[0]}`, () => new Promise((resolve) => {
           const p = spawnFn(command[0], command.slice(1), { stdio: 'inherit', env: childEnv });
           p.on('error', (e) => { err(`onlykey-js edge: could not run ${command[0]}: ${e.message}`); resolve(127); });
           p.on('exit', (c) => resolve(c === null ? 1 : c));
-        });
+        }));
       } finally {
-        const closed = await ask('exec-close', { token: ex.token });
+        const closed = await span('exec: close the use', () => ask('exec-close', { token: ex.token }));
         /*
          * A COMMAND THAT FAILED FILES A FAILED RECEIPT (Brad, 2026-10-07: "when a push
          * does not reach, it should give back a failed receipt"). Its uses get

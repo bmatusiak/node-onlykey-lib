@@ -18,17 +18,34 @@
  *   edge ping                         a Bluetooth link test (testing mode on the phone)
  */
 const control = require('../control');
+const times = require('./times');
 
 const opt = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 
-/* the timing wrapper (Brad, 2026-10-06: where a signed commit's 7 s go) - times and request names only */
+/*
+ * the timing wrapper (Brad, 2026-10-06: where a signed commit's 7 s go) - times and request names only: printed with
+ * OKEDGE_TIMES=1, and onto the ship's timeline (times.js) when a ship named one for this process
+ */
 function timed({ edge, wired, okcrypto, say }) {
-  if (process.env.OKEDGE_TIMES !== '1') return { channel: wired, okcrypto };
+  const print = process.env.OKEDGE_TIMES === '1';
+  if (!print && !process.env.OKEDGE_TIMES_FILE) return { channel: wired, okcrypto };
   const SUBNAMES = Object.fromEntries(Object.entries(edge.SUB || {}).map(([k, v]) => [v, k]));
-  edge.onTiming = (sub, ms, ok) => say(`time key ${SUBNAMES[sub] || sub} ${ms} ms${ok ? '' : ' (failed)'}`);
+  const note = (what, ms, ok) => {
+    if (print) say(`time ${what} ${ms} ms${ok ? '' : ' (failed)'}`);
+    times.took(what, ms, { failed: !ok });
+  };
+  edge.onTiming = (sub, ms, ok) => note(`key ${SUBNAMES[sub] || sub}`, ms, ok);
+  const timedCall = async (what, fn) => {
+    const t = Date.now();
+    let ok = false;
+    try { const v = await fn(); ok = true; return v; } finally { note(what, Date.now() - t, ok); }
+  };
+  /* the channel keeps everything else it has (openStack reads channel.local): only send is timed */
+  const channel = Object.create(wired);
+  channel.send = (m, o) => timedCall(`phone ${(m && m.type) || 'message'}`, () => wired.send(m, o));
   return {
-    channel: { send: async (m, o) => { const t = Date.now(); try { return await wired.send(m, o); } finally { say(`time phone ${(m && m.type) || 'message'} ${Date.now() - t} ms`); } } },
-    okcrypto: { ...okcrypto, agent: { ...okcrypto.agent, sign: async (...a) => { const t = Date.now(); try { return await okcrypto.agent.sign(...a); } finally { say(`time key SIGN ${Date.now() - t} ms`); } } } },
+    channel,
+    okcrypto: { ...okcrypto, agent: { ...okcrypto.agent, sign: (...a) => timedCall('key SIGN', () => okcrypto.agent.sign(...a)) } },
   };
 }
 
@@ -115,5 +132,7 @@ module.exports = {
     return a;
   },
   timed,
+  /* the ship's timeline (times.js): the steps of every process a ship runs */
+  times,
   commands: { ping, wipe },
 };
