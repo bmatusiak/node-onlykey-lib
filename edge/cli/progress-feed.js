@@ -72,9 +72,9 @@ async function step(words, fn) {
   const t = Date.now();
   const took = () => `${((Date.now() - t) / 1000).toFixed(1)} s`;
   try {
-    const v = await fn();
-    line(`  ok (${took()})`);
-    return v;
+    /* a step that ends well says nothing more (Brad, 2026-10-29: "ok (time) - you can omit that"): its time is the gap
+       to the next line's stamp, and the step bar counted it while it ran; only a failure gets a line of its own */
+    return await fn();
   } catch (e) {
     line(`  failed (${took()}): ${e && e.message ? e.message : e}`);
     throw e;

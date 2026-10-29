@@ -40,17 +40,17 @@ test('a line is stamped, loses its edge: prefix, and never starts with done/STOP
   assert.deepEqual(lines(), ['PRESS the key now - it waits 20 s', '- done: this is not the ship ending', '- STOP: nor this']);
 }));
 
-test('a silent step: its words before, its result and time after; a failure says so and still throws', withWindow(async (file, lines) => {
+test('a silent step: its words before; a failure says so, with its time, and still throws', withWindow(async (file, lines) => {
   assert.equal(await feed.span('close: copy - read + verify', async () => 'v'), 'v');
   await assert.rejects(feed.span('exec: close the use', async () => { throw new Error('the key went away'); }), /went away/);
   /* a point with no words writes nothing */
   await feed.span('open: lib + USB', async () => 1);
+  /* a step that ends well says nothing more - its time is the next stamp; a failure says so */
   const l = lines();
-  assert.equal(l.length, 4, l.join(' | '));
+  assert.equal(l.length, 3, l.join(' | '));
   assert.equal(l[0], "the key: checking this computer's copy of its chain…");
-  assert.match(l[1], /^ {2}ok \(\d+\.\d s\)$/);
-  assert.equal(l[2], 'the key: closing the use…');
-  assert.match(l[3], /^ {2}failed \(\d+\.\d s\): the key went away$/);
+  assert.equal(l[1], 'the key: closing the use…');
+  assert.match(l[2], /^ {2}failed \(\d+\.\d s\): the key went away$/);
 }));
 
 test('the step running now: its bar starts, counts when it can, and the outer step comes back when an inner one ends', withWindow(async (file) => {
