@@ -165,13 +165,16 @@ function follows(prev, r) {
 }
 
 /* the verdict, in words: verified / gap / tampered (fork, rollback, edited) */
-function verdictOf(a) {
+/* keySeq: the key's head - a copy whose only gaps are accepted as lost (LOSS) is verified up to it, and says what was lost */
+function verdictOf(a, keySeq) {
   const v = a.chain;
   if (v.failure || (v.failures && v.failures.length)) {
     const f = v.failure || v.failures[0];
     return { kind: 'tampered', seq: f.seq, reason: f.reason };
   }
   if (a.open && a.open.length) return { kind: 'gap', gaps: a.open };
+  /* v.verifiedThrough is the first unbroken run only: after a LOSS it stopped at the gap, though the check passed */
+  if (a.missing && a.missing.length) return { kind: 'verified', through: keySeq, lost: a.missing };
   return { kind: 'verified', through: v.verifiedThrough };
 }
 
@@ -256,7 +259,7 @@ async function sync(edge, home, { status = false, history = null } = {}) {
   const a = await FEED.step(`this computer: checking ${candidate.links.length} link(s) - every weld, each budget's signature`, () => copyLib.assess({ links: candidate.links }, { publicKey, publicKeyPq, head: { seq: keySeq, head: h.head }, held }, {
     ringFrom, ...(candidate.lastSeen ? { lastSeen: candidate.lastSeen } : {}),
   }));
-  let verdict = verdictOf(a);
+  let verdict = verdictOf(a, keySeq);
   /*
    * VERIFIED NEEDS THE KEY'S SIGNATURE (Brad, 2026-10-11: "checking every field in a token means
    * nothing if we never check the signature"). The welds only prove the links lead to the head
@@ -298,7 +301,7 @@ function lines(r, { status = false } = {}) {
   out.push(`key ${r.deviceId.slice(0, 16)}: head #${r.key.seq} (${r.key.head.slice(0, 12)}...), holds #${r.key.ringFrom}..#${r.key.seq}`);
   out.push(`PC copy: ${r.copy.count - (status ? r.copy.added : 0)} link(s)${status ? (r.copy.added ? `, ${r.copy.added} to read (onlykey-js edge sync)` : ', up to date') : `, ${r.copy.added} new${r.copy.saved ? '' : ' - NOT kept'}`}`);
   const v = r.verdict;
-  if (v.kind === 'verified') out.push(`verified through #${v.through}`);
+  if (v.kind === 'verified') out.push(`verified through #${v.through}${v.lost && v.lost.length ? ` - ${v.lost.map((g) => (g.from === g.to ? `#${g.from}` : `#${g.from}-#${g.to}`)).join(', ')} accepted as lost (LOSS)` : ''}`);
   else if (v.kind === 'unsigned') out.push(`not checked: the links weld to the key's head, but its signature (checkpoint, both halves) could not be checked - not called verified`);
   else if (v.kind === 'gap') out.push(`gap: ${v.gaps.map((g) => (g.from === g.to ? `#${g.from}` : `#${g.from}-#${g.to}`)).join(', ')} - links no copy here holds (repairs are the phone's)`);
   else out.push(`DOES NOT VERIFY at #${v.seq}: ${v.reason} - reported, nothing kept (repairs are the phone's)`);
