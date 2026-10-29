@@ -174,11 +174,11 @@ test('firmware older than the keyword reports an UNKNOWN console, not none', () 
 
 test('both shipped version shapes parse', () => {
   assert.deepEqual(parseRelease('v3.0.4-test'),
-    { major: 3, minor: 0, patch: 4, prerelease: 'test' });
+    { major: 3, minor: 0, patch: 4, build: null, prerelease: 'test' });
   assert.deepEqual(parseRelease('v0.2-beta.8'),
-    { major: 0, minor: 2, patch: null, prerelease: 'beta.8' });
+    { major: 0, minor: 2, patch: null, build: null, prerelease: 'beta.8' });
   assert.deepEqual(parseRelease('v1.0.0'),
-    { major: 1, minor: 0, patch: 0, prerelease: null });
+    { major: 1, minor: 0, patch: 0, build: null, prerelease: null });
 });
 
 test('something that is not a version returns null rather than zeroes', () => {
@@ -963,4 +963,20 @@ test('a build from the maintainer\'s rig carries its sources after the keyword, 
   assert.equal(parse('UNLOCKEDv3.1.0-prod-9fceea1-37aa531c').build, 'production');
   assert.equal(parse('UNLOCKEDv3.0.4-test').build, 'debug', 'the bare keyword still reads as before');
   assert.equal(parse('UNLOCKEDv3.1.0-prodc').build, 'production');
+});
+
+/*
+ * OUR BUILDS ON HIS BASE (the emulator's version_control plugin, 2026-10-28): v3.1.01 is the maintainer's 3.1.0 plus
+ * our build 1 - every 3.1.0 capability, never his 3.1.1.
+ */
+test('a two-digit patch is the maintainer\'s patch, then our build: 3.1.01 is 3.1.0 + build 1, below 3.1.1', () => {
+  const r = parseRelease('v3.1.01-prod');
+  assert.deepEqual([r.major, r.minor, r.patch, r.build, r.prerelease], [3, 1, 0, 1, 'prod']);
+  assert.equal(atLeast(r, [3, 1, 0]), true);
+  assert.equal(atLeast(r, [3, 1, 1]), false, 'our 3.1.01 is not his 3.1.1');
+  assert.equal(parseRelease('v3.1.0-prod').build, null, 'his own versions carry no build');
+  assert.equal(parseRelease('v3.1.12-test').patch, 1);
+  const caps = capabilities('UNLOCKEDv3.1.01-prodc');
+  const base = capabilities('UNLOCKEDv3.1.0-prodc');
+  for (const k of Object.keys(base)) if (typeof base[k] === 'boolean') assert.equal(caps[k], base[k], `capability ${k} differs from 3.1.0`);
 });

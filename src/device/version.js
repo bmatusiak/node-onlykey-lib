@@ -253,14 +253,21 @@ function stripModelSuffix(version) {
  *
  *   v3.0.4-test   major.minor.patch with a build keyword
  *   v0.2-beta.8   major.minor with a prerelease that has its own number
+ *
+ * And a third, ours (Brad, 2026-10-28: "set our version to his + 0 or 1 or 2, so it would be 3.1.01 or 3.1.02, so
+ * his base is followed"): a TWO-DIGIT patch is the maintainer's patch digit, then our build on top of it (the emulator's
+ * version_control firmware plugin). v3.1.01 is 3.1.0 + our build 1 - at least 3.1.0, below his 3.1.1 - never 3.1.1
+ * itself, which a plain number would make it. `build` is null for the maintainer's own versions.
  */
 function parseRelease(version) {
   const m = /^v(\d+)\.(\d+)(?:\.(\d+))?(?:-(.+))?$/.exec(version);
   if (!m) return null;
+  const ours = m[3] !== undefined && m[3].length === 2;
   return {
     major: Number(m[1]),
     minor: Number(m[2]),
-    patch: m[3] === undefined ? null : Number(m[3]),
+    patch: m[3] === undefined ? null : Number(ours ? m[3][0] : m[3]),
+    build: ours ? Number(m[3][1]) : null,
     prerelease: m[4] === undefined ? null : m[4],
   };
 }
