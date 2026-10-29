@@ -63,8 +63,12 @@ function setup(imports, register) {
 
   const changed = () => { try { events.emit('change', held); } catch { /* a listener's error is not identity's */ } };
 
-  /* the key's site (ctap_bridge's): where its bucket sync lives; a key without the plugin has none */
-  const readSite = (opts) => okcrypto.keySite(opts).then((s) => (s && s.on ? s.site : null), () => null);
+  /*
+   * the key's site (ctap_bridge's): where its bucket sync lives; a key without the plugin has none (null). A read that
+   * FAILED is not "none": it stays undefined (not read), so the next load asks again - key 3 in Chrome, 2026-10-29: one
+   * failed read over WebAuthn was kept as "your key names no server" for the whole session, and Read again kept it.
+   */
+  const readSite = (opts) => okcrypto.keySite(opts).then((s) => (s && s.on ? s.site : null), () => undefined);
 
   async function read(opts, withSite) {
     const gen = generation;
@@ -95,12 +99,14 @@ function setup(imports, register) {
      * that, once, and adds it to what is held.
      */
     async load({ force = false, site = true, ...opts } = {}) {
+      /* the site asked at most once a load: a read that just asked it (and failed) is not asked again until the next */
+      let asked = false;
       if (!held || force) {
         /* every caller that asks while it reads gets the same read: one request each, not one per caller */
-        if (!loading) loading = read(opts, site).finally(() => { loading = null; });
+        if (!loading) { loading = read(opts, site).finally(() => { loading = null; }); asked = site; }
         await loading;
       }
-      if (site && held && held.site === undefined) {
+      if (site && !asked && held && held.site === undefined) {
         const gen = generation;
         const s = await readSite(opts);
         if (gen === generation && held && held.site === undefined) { held = { ...held, site: s }; changed(); }

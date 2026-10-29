@@ -50,6 +50,24 @@ test('load: read once - a second load and callers at the same time get the same 
   assert.equal(key.asked.publicKey, 2, 'force reads the key again');
 });
 
+test('load: a site read that FAILED is not "no site" - the next load asks again; a key that says none is none', async () => {
+  const key = fakeKey();
+  let fail = true;
+  const plain = key.okcrypto.keySite;
+  key.okcrypto.keySite = async () => { if (fail) { key.asked.site += 1; throw new Error('the key did not answer'); } return plain(); };
+  const identity = compose(key);
+  assert.equal((await identity.load()).site, undefined, 'not read');
+  fail = false;
+  assert.equal((await identity.load()).site, 'ok-edge.example', 'asked again, and kept');
+  assert.equal((await identity.load()).site, 'ok-edge.example');
+  assert.equal(key.asked.site, 2, 'once more, not every load');
+  const none = fakeKey({ site: null });
+  const id2 = compose(none);
+  assert.equal((await id2.load()).site, null);
+  await id2.load();
+  assert.equal(none.asked.site, 1, 'a key with no site is asked once');
+});
+
 test('load: a feature adds its own part (identityPart), kept under its service name', async () => {
   const key = fakeKey();
   const identity = compose(key, { edge: { identityPart: async () => ({ deviceId: 'abc' }) }, plain: {} });
