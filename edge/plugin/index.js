@@ -438,11 +438,18 @@ function setup(imports, register) {
       };
     },
 
-    /** The Edge public key (X||Y) and the device id derived from it. */
+    /*
+     * The Edge public key (X||Y) and the device id derived from it - read once for this connection, as identityId below
+     * (key 3, 2026-10-29: one `edge status` asked it 3 times - "don't hammer the key"). Only a wipe or a restore changes
+     * it, and a restore is a new connection; wipeDebug below drops it.
+     */
     async publicKey(opts) {
-      const [r] = await call(SUB.PUBKEY, null, opts);
-      const publicKey = r.slice(0, 64);
-      return { publicKey, deviceId: chain.deviceIdOf(publicKey) };
+      if (!publicKeyHeld) {
+        const [r] = await call(SUB.PUBKEY, null, opts);
+        const publicKey = r.slice(0, 64);
+        publicKeyHeld = { publicKey, deviceId: chain.deviceIdOf(publicKey) };
+      }
+      return { publicKey: publicKeyHeld.publicKey.slice(), deviceId: publicKeyHeld.deviceId.slice() };
     },
 
     /**
@@ -476,6 +483,9 @@ function setup(imports, register) {
      */
     async wipeDebug(opts) {
       await call(SUB.WIPE_DEBUG, new Uint8Array(0), opts);
+      /* a fresh chain is a new device id: the held public key is not this key's any more */
+      publicKeyHeld = null;
+      publicKeyNow = null;
       return { wiped: true };
     },
 
@@ -799,6 +809,8 @@ function setup(imports, register) {
   let publicKeyPqNow = null;
   /* this connection's identity (edge.identityId), read once */
   let identityIdNow = null;
+  /* the Edge public key and device id, read once for this connection (edge.publicKey) */
+  let publicKeyHeld = null;
 
   async function verifiedHeadOf(copy) {
     const verdict = await edge.grants.check(copy || {});
