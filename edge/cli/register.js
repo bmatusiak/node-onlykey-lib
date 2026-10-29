@@ -394,7 +394,7 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false, setup =
     if (!identity) {
       /* coded: a long-lived service runs its sync without an agent (the agent branch below) */
       throw Object.assign(h.usage(channel.local
-        ? `this computer keeps no agent identity for this key yet - set it once: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`
+        ? `this computer keeps no agent identity for this key yet - set it once: ${edgeCmd('setup')} (named from git; --ssh / --gpg to choose)`
         : `${opts.ble ? 'the phone' : 'the desktop app'} keeps no agent identity yet - set it once, from any paired computer: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`), { code: 'ENOAGENTID' });
     }
     recordCert(io, identity, serve ? 'onlykey-js edge agent' : 'onlykey-js edge');
