@@ -368,7 +368,7 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
  * The agent's identity comes from the phone (SPEC H7); the budget pointer is this
  * computer's, per key.
  */
-async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
+async function openStack(io, opts, h, { serve, dev, wait, share = false, setup = true }) {
   const control = require('./control');
   const { client, store: edgeStore } = require('../src');
   const { startEdgeAgent } = require('./agent');
@@ -383,9 +383,10 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false }) {
      * autosetup itself - plug it in and go - but we dont want to remove best security practices"). The same setup as
      * `edge setup` with no labels named (setUpIdentity: the defaults, the certificate's two presses, the person's Yes on
      * the identity) - nothing kept without that Yes. The long-lived service (serve) runs its sync without an agent
-     * instead (the code below), and asks nobody.
+     * instead (the code below), and asks nobody; a command that only reads (status, watch, blocks) makes nothing - it says
+     * how to set one up, below.
      */
-    if (!identity && !serve) {
+    if (!identity && !serve && setup) {
       say('this computer has no agent identity for this key yet - making one now (approve it, then press when asked)');
       await setUpIdentity(io, d, h, {}, { wait });
       identity = await askIdentity(channel);
@@ -1055,7 +1056,7 @@ module.exports = function register(COMMANDS, h) {
       try {
         const ask = async (op, fields = {}, o = {}) => {
           /* a budget's own steps leave the swap to its end; sync is the swap */
-          if (!st) st = await openStack(io, opts, h, { serve: false, dev, wait, share: !['exec', 'receipt', 'sync'].includes(sub) });
+          if (!st) st = await openStack(io, opts, h, { serve: false, dev, wait, share: !['exec', 'receipt', 'sync'].includes(sub), setup: !['status', 'watch', 'blocks'].includes(sub) });
           const fn = st.svc.handlers[op];
           if (!fn) throw new Error(`no such request: ${op}`);
           if (o.onSent) o.onSent();
