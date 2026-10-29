@@ -66,6 +66,8 @@ function fakeTunnelDevice({
   results = null,
   /* emulator patch 0016 (experimental): a new request, not a poll, wipes a reply already delivered whole */
   wipesDelivered = false,
+  /* the ctap_bridge plugin: {site, caps: ['wipes-delivered'], old: an older plugin without capabilities} */
+  ctapBridge = null,
 } = {}) {
   const status = `UNLOCKED${firmware}`;
   const v2 = version.capabilities(status).transitV2 === true;
@@ -220,6 +222,19 @@ function fakeTunnelDevice({
 
       if (cmd === MSG.OKPING) {
         if (!cryptoAuth && !staged) stageText('Error incorrect challenge was entered');
+        return serve();
+      }
+
+      /*
+       * the ctap_bridge plugin (OKCTAPBRIDGE, 0xFB) when the fake has one: its report, or with the first payload
+       * byte 5 its capabilities - an older plugin (ctapBridge.old) answers the report to that too
+       */
+      if (cmd === 0xfb && ctapBridge && !cryptoAuth) {
+        const caps = plain[0] === 5 && !ctapBridge.old;
+        const text = caps
+          ? `ctap_bridge capabilities:${(ctapBridge.caps || []).map((c) => ` ${c}`).join('')}`
+          : `ctap_bridge on site ${ctapBridge.site || 'none'}`;
+        stage(v2 ? sealOut(fromLatin1(text)) : fromLatin1(text));
         return serve();
       }
 

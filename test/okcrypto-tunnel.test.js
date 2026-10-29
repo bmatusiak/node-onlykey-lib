@@ -391,6 +391,39 @@ test('tunnel events: each operation begins, plans, steps per ceremony and ends -
   await app.destroy();
 });
 
+/*
+ * THE KEY SAYS IT HAS 0016 (Brad, 2026-10-28: "what can we do to help 0016 now"): ctap_bridge's capabilities, asked
+ * once - "wipes-delivered" drops the waits for that key with no setting; an older plugin answers its report (none),
+ * and the waits stay; forgetting the key brings them back.
+ */
+test('keyCapabilities: a key that says wipes-delivered is asked again without the wait; an older plugin keeps it', async () => {
+  const fast = fakeTunnelDevice({ wipeMs: 60000, wipesDelivered: true, ctapBridge: { site: 'x.example', caps: ['wipes-delivered'] } });
+  const app = await start(fast);
+  const settles = [];
+  app.services.okcrypto.on('settle', (e) => settles.push(e));
+  await app.services.okcrypto.connectTunnel();
+  assert.deepEqual(await app.services.okcrypto.keyCapabilities(), ['wipes-delivered']);
+  const before = settles.length;
+  const a = await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(fast) });
+  const b = await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST.map((x) => x ^ 0xff), { ...FAST, confirm: pressing(fast) });
+  assert.equal(settles.length, before, 'a wait before a request this key answers fresh');
+  assert.notDeepEqual(Array.from(a), Array.from(b));
+  app.services.okcrypto.forgetKeyCapabilities();
+  await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(fast) });
+  assert.equal(settles.length, before + 1, 'forgotten: the wait is back');
+  await app.destroy();
+
+  const older = fakeTunnelDevice({ ctapBridge: { site: 'x.example', old: true } });
+  const app2 = await start(older);
+  const settles2 = [];
+  app2.services.okcrypto.on('settle', (e) => settles2.push(e));
+  await app2.services.okcrypto.connectTunnel();
+  assert.deepEqual(await app2.services.okcrypto.keyCapabilities(), [], 'an older plugin answers its report: no capabilities');
+  await app2.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(older) });
+  assert.ok(settles2.length >= 1, 'a key that did not say it keeps the wait');
+  await app2.destroy();
+});
+
 test('wipesDeliveredReply is off by default: the same key still gets the wait', async () => {
   const device = fakeTunnelDevice({ wipesDelivered: true });
   const app = await start(device);

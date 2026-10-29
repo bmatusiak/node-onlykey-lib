@@ -706,6 +706,14 @@ function setup(imports, register, config) {
    * the wait is kept for the request after it.
    */
   const WIPES_DELIVERED = settings.wipesDeliveredReply === true;
+  /*
+   * OR THE KEY SAYS SO (Brad, 2026-10-28: "what can we do to help 0016 now"): keyCapabilities() asks the ctap_bridge
+   * plugin what the key can do, and a key built with 0016 answers "wipes-delivered" - no build flag, no setting, and a
+   * key without it never says it (an older plugin answers its report: none). Kept until forgetKeyCapabilities(), when
+   * the host's identity forgets the key (another key, a lock).
+   */
+  let saysWipesDelivered = false;
+  const wipesDelivered = () => WIPES_DELIVERED || saysWipesDelivered;
   let replyWhole = false;
 
   /*
@@ -762,7 +770,7 @@ function setup(imports, register, config) {
     const whole = replyWhole;
     replyWhole = false;
     if (!lastStagedAt) return;
-    if (WIPES_DELIVERED && whole) return;
+    if (wipesDelivered() && whole) return;
     const since = Date.now() - lastStagedAt;
     if (since >= STAGED_WIPE_MS) return;
     const remaining = STAGED_WIPE_MS - since;
@@ -1785,6 +1793,27 @@ function setup(imports, register, config) {
      *
      * @returns {Promise<{on: boolean, site: string|null}>} site null when none is set (or the plugin is off)
      */
+    /**
+     * What this key can do beyond its firmware version - the ctap_bridge plugin's capabilities (its action 5, the
+     * request's first byte over the tunnel). "wipes-delivered" (emulator patch 0016): a new request wipes a reply
+     * already delivered, so the 5.5 s wait before each request is dropped for this key from now on. A plugin without
+     * capabilities answers its report: none, and the wait stays.
+     * @returns {Promise<string[]>}
+     */
+    async keyCapabilities(opts = {}) {
+      const out = await tunnelOperation(OKCTAPBRIDGE, 0, Uint8Array.of(5), { timeoutMs: 30000, ...opts, quiet: true });
+      const text = new TextDecoder().decode(out).replace(/\0.*$/s, '').trim();
+      const m = /^ctap_bridge capabilities:(.*)$/.exec(text);
+      const caps = m ? m[1].trim().split(/\s+/).filter(Boolean) : [];
+      saysWipesDelivered = caps.includes('wipes-delivered');
+      return caps;
+    },
+
+    /** The key's capabilities no longer known (the host forgets this key): the waits are back until asked again. */
+    forgetKeyCapabilities() {
+      saysWipesDelivered = false;
+    },
+
     async keySite(opts = {}) {
       const out = await tunnelOperation(OKCTAPBRIDGE, 0, Uint8Array.of(0), { timeoutMs: 30000, ...opts, quiet: true });
       const text = new TextDecoder().decode(out).replace(/\0.*$/s, '').trim();
