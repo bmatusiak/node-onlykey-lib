@@ -99,6 +99,12 @@ function startDesktop({ pipe, path, loadHid, ble = false, desktop = false, softK
     require('../plugins/okcrypto'),
     /* OKGETCONFIG (soft key only): silent until a command asks it to read */
     require('../plugins/config'),
+    /*
+     * WHO THE KEY IS, READ ONCE (plugins/identity; PROPOSAL-sync-and-identity.md Phase 1): the bucket identity the Key
+     * Chain, the Edge logs and the bucket trade all file under - one held read per command instead of each reading it.
+     * Lazy: nothing is asked until something calls load().
+     */
+    require('../plugins/identity'),
   ];
   plugins.config = {
     ...config,

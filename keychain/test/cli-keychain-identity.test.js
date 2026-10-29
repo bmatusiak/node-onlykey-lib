@@ -67,18 +67,21 @@ test('two bucket identities kept: a list with no key asks which; --identity take
   assert.equal(rec.load().length, 1);
 });
 
-test('a bucket kept under the key\'s Edge identity id moves to its bucket identity id once, owner rewritten', async () => {
+test('the identity plugin\'s one read names the list; reading the identity label itself is not a Key Chain entry', async () => {
   scratch();
-  const EDGE_ID = 'cd'.repeat(16);
-  const old = bucketLib.create({ owner: EDGE_ID });
-  bucketLib.kv(old, 'keychain').setItem('list', list.serialize([entry('desktop@host', 2)]));
-  home.keepIdentityBucket(EDGE_ID, 'live', old);
-  const edge = { probe: async () => 'edge', identityId: async () => EDGE_ID };
-  await derive(await rec.recordingStart(fakeStart('backup-1', edge), { tool: 'test' })({}));
-  const ID = idOf('backup-1');
-  assert.deepEqual(home.keptIdentities('live'), [ID], 'the Edge-named file is gone');
-  assert.deepEqual(listOf(ID).map((e) => e.label).sort(), ['desktop@host', 'me@host']);
-  assert.equal(home.read(home.identityFile(ID, 'live')).owner, ID);
+  let loads = 0;
+  const start = async () => {
+    const app = await fakeStart('backup-1', undefined)();
+    app.services.identity = { load: async () => { loads += 1; return { id: idOf('backup-1') }; } };
+    return app;
+  };
+  const app = await rec.recordingStart(start, { tool: 'test' })({});
+  /* the identity plugin reads the "" label through the same okcrypto: never listed */
+  await app.services.okcrypto.agent.publicKey(sha256(new Uint8Array(0)), { keyType: 1 });
+  await derive(app);
+  await derive(app);
+  assert.equal(loads, 1, 'the held read, once');
+  assert.deepEqual(listOf(idOf('backup-1')).map((e) => e.label), ['me@host']);
 });
 
 test('the testnet\'s list is its own', async () => {

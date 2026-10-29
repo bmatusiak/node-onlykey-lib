@@ -31,6 +31,9 @@ const list = require('../src/list');
 const bucketHome = require('../../bucket/cli/home');
 const bucketLib = require('../../bucket/src/bucket');
 const { toHex } = require('../../src/bytes');
+const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
+/* the label hash of the key's bucket identity ("" - bucket/src/bucket-identity.js IDENTITY_LABEL) */
+const IDENTITY_HASH = toHex(sha256(new TextEncoder().encode(require('../../bucket/src/bucket-identity').IDENTITY_LABEL)));
 
 /* okcrypto.agent keyType -> the list's type */
 const TYPE_OF_KEYTYPE = { 1: 'ed25519', 2: 'p256', 3: 'secp256k1', 4: 'x25519' };
@@ -199,8 +202,18 @@ const UNWRAPPED = new WeakMap();
 async function learnIdentityOf(app) {
   const derive = UNWRAPPED.get(app);
   if (identity || !derive) return identity;
-  setIdentity((await require('../../bucket/src/bucket-identity').readIdentity({ agent: { publicKey: derive } })).id);
+  setIdentity(await bucketIdOf(app, derive));
   return identity;
+}
+
+/*
+ * THE KEY'S BUCKET IDENTITY, READ ONCE: the identity plugin's held read when the app has it (cli/desktop.js composes it
+ * - one read for the whole command, shared with Edge and the bucket); else (a test's own app) the unwrapped derive.
+ */
+async function bucketIdOf(app, derive) {
+  const svc = app && app.services && app.services.identity;
+  if (svc && typeof svc.load === 'function') return (await svc.load({ site: false })).id;
+  return (await require('../../bucket/src/bucket-identity').readIdentity({ agent: { publicKey: derive } })).id;
 }
 
 function recordingStart(start, { tool, err = () => {}, recordFn = record, learnIdentity = true }) {
@@ -236,15 +249,11 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record, learnI
            * record goes where the list already is (the one bucket identity kept here, else bucket.json).
            */
           if (identity || !derive || !learnIdentity) return;
-          const bucketId = (await require('../../bucket/src/bucket-identity').readIdentity({ agent: { publicKey: derive } })).id;
-          try {
-            if (app.edge && typeof app.edge.identityId === 'function'
-              && (typeof app.edge.probe !== 'function' || (await app.edge.probe({ timeoutMs: 4000 })) === 'edge')) {
-              const edgeId = await app.edge.identityId();
-              for (const net of ['live', 'test']) bucketHome.moveIdentityBucket(edgeId, bucketId, net);
-            }
-          } catch { /* no Edge to move from */ }
-          setIdentity(bucketId);
+          /*
+           * No move from an Edge identity id here any more: `app.edge` was never set on a CLI app, so it never ran, and
+           * Edge is pre-release - a bucket kept under its id is not rescued (Brad, 2026-10-29).
+           */
+          setIdentity(await bucketIdOf(app, derive));
         })().catch(() => {});
       }
       return learned;
@@ -254,6 +263,8 @@ function recordingStart(start, { tool, err = () => {}, recordFn = record, learnI
         const raw = await derive(identity, o);
         const name = identityName(identity);
         const type = TYPE_OF_KEYTYPE[o.keyType || 1];
+        /* the key's own identity read (the identity plugin's load, the bucket's "" label) is not a derived key to list */
+        if (name && name.scheme === 'hash' && name.label === IDENTITY_HASH) return raw;
         if (name && type) { await learn(); note({ ...name, type, publicKey: raw, code: (o.version === 2 ? 232 : 132) }); }
         return raw;
       };

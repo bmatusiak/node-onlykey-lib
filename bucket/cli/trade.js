@@ -46,6 +46,12 @@ function storeRules() {
   out.passwords = rules.passwords();
   out.cryptobox = rules.cryptobox();
   out['cryptobox-test'] = rules.cryptobox();
+  /* the Edge logs (edge/src/logblocks.js): block by block - links the union, a fork reported */
+  try {
+    const el = rules.edgeLogs(require('../../edge/src/logblocks'));
+    out['edge-logs'] = el;
+    out['edge-logs-test'] = el;
+  } catch { /* no Edge here */ }
   return out;
 }
 

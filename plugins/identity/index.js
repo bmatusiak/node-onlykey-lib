@@ -63,11 +63,14 @@ function setup(imports, register) {
 
   const changed = () => { try { events.emit('change', held); } catch { /* a listener's error is not identity's */ } };
 
-  async function read(opts) {
+  /* the key's site (ctap_bridge's): where its bucket sync lives; a key without the plugin has none */
+  const readSite = (opts) => okcrypto.keySite(opts).then((s) => (s && s.on ? s.site : null), () => null);
+
+  async function read(opts, withSite) {
     const gen = generation;
     const { publicKey, id } = await bucketIdentity.readIdentity(okcrypto, opts);
-    /* the key's site (ctap_bridge's): where its bucket sync lives; a key without the plugin has none */
-    const site = await okcrypto.keySite(opts).then((s) => (s && s.on ? s.site : null), () => null);
+    /* not asked unless wanted (the CLI's commands: one key request fewer - Brad, 2026-10-29: "don't hammer the key") */
+    const site = withSite ? await readSite(opts) : undefined;
     const parts = {};
     const services = (app && app.services) || {};
     for (const name of Object.keys(services)) {
@@ -87,11 +90,22 @@ function setup(imports, register) {
   }
 
   const identity = {
-    async load({ force = false, ...opts } = {}) {
-      if (held && !force) return held;
-      /* every caller that asks while it reads gets the same read: one request each, not one per caller */
-      if (!loading) loading = read(opts).finally(() => { loading = null; });
-      return loading;
+    /*
+     * site: false - the identity alone (held.site stays undefined: not read); a later load that wants the site reads just
+     * that, once, and adds it to what is held.
+     */
+    async load({ force = false, site = true, ...opts } = {}) {
+      if (!held || force) {
+        /* every caller that asks while it reads gets the same read: one request each, not one per caller */
+        if (!loading) loading = read(opts, site).finally(() => { loading = null; });
+        await loading;
+      }
+      if (site && held && held.site === undefined) {
+        const gen = generation;
+        const s = await readSite(opts);
+        if (gen === generation && held && held.site === undefined) { held = { ...held, site: s }; changed(); }
+      }
+      return held;
     },
 
     current() {

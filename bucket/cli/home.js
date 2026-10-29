@@ -153,6 +153,10 @@ function kv(where) {
     setItem: (k, v) => update(where.file, (b) => bucket.kv(b, where.store).setItem(k, v)),
     removeItem: (k) => update(where.file, (b) => bucket.kv(b, where.store).removeItem(k)),
     keys: () => bucket.kv(read(where.file), where.store).keys(),
+    /* many keys in ONE locked read-modify-write (an Edge log is a dozen blocks; one file rewrite each was a dozen) */
+    setMany: (entries) => update(where.file, (b) => { const s = bucket.kv(b, where.store); for (const [k, v] of Object.entries(entries)) s.setItem(k, v); }),
+    /* every live key and its value, from one read */
+    entries: () => { const s = bucket.kv(read(where.file), where.store); return Object.fromEntries(s.keys().map((k) => [k, s.getItem(k)])); },
   };
 }
 

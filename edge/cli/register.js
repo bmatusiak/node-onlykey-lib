@@ -132,6 +132,35 @@ async function pickKeychainIdentity(io, app) {
   } catch (_) { /* not read: the first record's warning says what to do */ }
 }
 
+/*
+ * WHOSE BUCKET THIS KEY'S RECORDS GO IN (PROPOSAL-sync-and-identity.md Phase 1): the key's BUCKET identity - the Edge
+ * logs (copy.js useIdentityBucket) and the Key Chain list are kept in its bucket, the one a trade carries. Read once,
+ * through the identity plugin, and kept beside the Edge home it belongs to (`<home>` store `bucket-identity`): the
+ * Edge identity names the home and both come from the same backup, so the pair never changes and later commands ask
+ * the key nothing for it (Brad, 2026-10-29: "don't hammer the key"). Read before anything is armed.
+ * An app without the identity plugin (a test's own) keeps the old pick.
+ */
+async function knowTheBucket(io, app, edge, netHome) {
+  const svc = app.services && app.services.identity;
+  if (!svc) return pickKeychainIdentity(io, app);
+  const bucketHome = require('../../bucket/cli/home');
+  const { isBucketIdentityId } = require('../../bucket/src/bucket-identity');
+  let id = null;
+  try {
+    const kept = bucketHome.kv(bucketHome.edgeAt(path.join(netHome, await edge.identityId()), 'bucket-identity'));
+    id = kept.getItem('id');
+    if (!id || !isBucketIdentityId(id)) {
+      id = (await svc.load({ site: false })).id;
+      kept.setItem('id', id);
+    }
+  } catch (_) {
+    /* no Edge on this key (or it would not say): the identity plugin's read alone */
+    try { id = (await svc.load({ site: false })).id; } catch { return; }
+  }
+  require('./copy').useIdentityBucket({ id, net: NET });
+  if (io.keychainRecord) require('../../keychain/cli/record').setIdentity(id);
+}
+
 /* the certificate into the host's Key Chain list, so `keychain export --pgp` prints the fingerprint git signs with (audit F10/F11) */
 function recordCert(io, record, tool) {
   if (!io.keychainRecord || !record) return;
@@ -218,10 +247,10 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
     return a;
   }, { log: say });
   const { transport, okcrypto } = app.services;
-  /* before the first derive below (the identity home) records anything */
-  await span('open: whose key chain', () => pickKeychainIdentity(io, app));
   let edge = null;
   require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
+  /* before the first derive below (the identity home) records anything */
+  await span('open: whose bucket', () => knowTheBucket(io, app, edge, require('./control').edgeHome()));
   /*
    * WHOSE RECORDS (ok-edge B3.0; Brad, 2026-10-24: "one identity, one store"): the key's identity -
    * its owner key, one read, the same on every device of one backup - picks its home inside the net's:
@@ -399,6 +428,8 @@ function takeTestMode(argv, io, usage) {
   control.setNet(NET);
   if (MOVED_HOME) { control.setHome(null); MOVED_HOME = false; }
   record.setFile(null);
+  /* and no bucket picked yet for the Edge logs: this run's key decides (knowTheBucket) */
+  require('./copy').useIdentityBucket(null);
   const a = argv.slice();
   const dd = a.indexOf('--');
   const i = a.indexOf('--test-mode');

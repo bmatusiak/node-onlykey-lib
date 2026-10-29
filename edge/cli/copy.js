@@ -31,6 +31,7 @@ const path = require('path');
 const bucketHome = require('../../bucket/cli/home');
 const { chain, copy: copyLib } = require('../src');
 const copyfile = require('../src/copyfile');
+const logblocks = require('../src/logblocks');
 const { toHex, fromHex } = require('../../src/bytes');
 
 const PICKUP_MAX = 8;
@@ -48,25 +49,76 @@ function store(home) {
 
 const keyOf = (deviceId) => toHex(deviceId).slice(0, 16);
 
+/*
+ * THE LOGS GO IN THE IDENTITY BUCKET (PROPOSAL-sync-and-identity.md Phase 1; Brad, 2026-10-29: one sync - "compare and
+ * merge, newest edit time wins"): once the command knows the key's bucket identity (edge/cli/register.js, the identity
+ * plugin's one read), every copy is kept in that identity's bucket, store `edge-logs` (`edge-logs-test` on the testnet),
+ * as blocks (edge/src/logblocks.js) - the bucket the trade already carries to the app and the phone. Before that (a test,
+ * a command that never opened a key) the copies stay where they were: the Edge home's `copies` store in bucket.json.
+ * A device's log found only there is copied into the identity bucket the first time it is read - this computer's history
+ * comes along; the old record is left as it was.
+ */
+let logs = null;
+/** The identity bucket this run's Edge logs are kept in ({id, net}), or null for the Edge home's store. */
+function useIdentityBucket(who) {
+  logs = who && who.id ? { id: String(who.id).toLowerCase(), net: who.net === 'test' ? 'test' : 'live' } : null;
+}
+function logsKv() {
+  const { id, net } = logs;
+  if (!bucketHome.hasIdentityBucket(id, net)) bucketHome.keepIdentityBucket(id, net, require('../../bucket/src/bucket').create({ owner: id }));
+  return bucketHome.kv(bucketHome.identityAt(id, net, net === 'test' ? 'edge-logs-test' : 'edge-logs'));
+}
+/* write a copy's blocks: only the keys that changed, in one locked write */
+function saveBlocks(kv, have, json) {
+  const next = logblocks.split(json);
+  const changed = Object.fromEntries(Object.entries(next).filter(([k, v]) => have[k] !== v));
+  if (Object.keys(changed).length) kv.setMany(changed);
+}
+
 /* where one device's copy is kept, as a person reads it: the bucket, the store and the key */
 function where(home, deviceId) {
+  if (logs) {
+    const at = bucketHome.identityAt(logs.id, logs.net, logs.net === 'test' ? 'edge-logs-test' : 'edge-logs');
+    return `${at.file} (${at.store} ${keyOf(deviceId)}.*)`;
+  }
   const at = bucketHome.edgeAt(home, 'copies');
   return `${at.file} (${at.store} ${keyOf(deviceId)})`;
 }
 
 function load(home, deviceId) {
+  if (logs) {
+    const kv = logsKv();
+    const have = kv.entries();
+    const j = logblocks.join(have, toHex(deviceId));
+    if (j) return copyfile.fromJSON(j, deviceId);
+    const text = store(home).getItem(keyOf(deviceId));
+    if (!text) return copyfile.fromJSON(null, deviceId);
+    /* only in the Edge home: into the identity bucket now, so a trade carries it */
+    saveBlocks(kv, have, JSON.parse(text));
+    return copyfile.fromJSON(JSON.parse(text), deviceId);
+  }
   const text = store(home).getItem(keyOf(deviceId));
   return copyfile.fromJSON(text ? JSON.parse(text) : null, deviceId);
 }
 
 function save(home, c) {
+  if (logs) {
+    const kv = logsKv();
+    saveBlocks(kv, kv.entries(), copyfile.toJSON(c));
+    return;
+  }
   store(home).setItem(keyOf(c.deviceId), JSON.stringify(copyfile.toJSON(c)));
 }
 
-/* every copy in the home, as the JSON each was kept as */
+/* every copy in the home, as the JSON each was kept as - and, with the identity bucket, every log kept there */
 function allJSON(home) {
   const s = store(home);
-  return s.keys().map((k) => JSON.parse(s.getItem(k)));
+  const old = s.keys().map((k) => JSON.parse(s.getItem(k))).filter(Boolean);
+  if (!logs) return old;
+  const have = logsKv().entries();
+  const inBucket = logblocks.devices(Object.keys(have)).map((dev) => logblocks.join(have, dev));
+  const seen = new Set(inBucket.map((j) => keyOf(fromHex(j.deviceId))));
+  return [...inBucket, ...old.filter((j) => j.deviceId && !seen.has(keyOf(fromHex(j.deviceId))))];
 }
 
 /*
@@ -352,4 +404,4 @@ function keepNotes(home, deviceId, notes) {
   return { reasons: Object.keys(got.reasons).length, messages: Object.keys(got.messages).length };
 }
 
-module.exports = { sync, lines, load, store, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };
+module.exports = { sync, lines, load, store, useIdentityBucket, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };

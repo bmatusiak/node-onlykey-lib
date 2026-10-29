@@ -68,6 +68,27 @@ export function edgeCopies(copyfile: {
     }[];
 };
 /**
+ * THE EDGE LOGS IN THE IDENTITY BUCKET (edge/src/logblocks.js; Brad, 2026-10-29: "compare and merge, newest edit time
+ * wins" - and for Edge "they're all signed and unique"): each device's log as blocks, a key each, so a trade moves only
+ * the blocks that differ. Key by key: one side only - taken; both - the log's own merge for that kind of key (links the
+ * union by seq, notes the union, meta newest checkpoint, an opening the newer), on both sides in the same order so the
+ * two devices reach the same value; a fork is reported and never repaired. An archived record is not a log's.
+ * @param {{mergeEntry: Function}} logblocks edge's logblocks module
+ */
+export function edgeLogs(logblocks: {
+    mergeEntry: Function;
+}): (into?: {}, from?: {}) => {
+    store: {};
+    taken: number;
+    conflicts: {
+        key: string;
+        reason: any;
+        into: any;
+        from: any;
+        apply(): never;
+    }[];
+};
+/**
  * THE AUDIT DUMP (Brad, 2026-10-21: "the bucket may contain passwords, so the dump is just for the
  * Edge blockchain so it can be externally verified using pubkeys"): every Edge copy in the bucket
  * as JSON blocks, each checked against the keys kept with its copy. Public by nature - nothing

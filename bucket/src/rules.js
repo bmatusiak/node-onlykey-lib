@@ -234,6 +234,42 @@ function edgeCopies(copyfile) {
 }
 
 /**
+ * THE EDGE LOGS IN THE IDENTITY BUCKET (edge/src/logblocks.js; Brad, 2026-10-29: "compare and merge, newest edit time
+ * wins" - and for Edge "they're all signed and unique"): each device's log as blocks, a key each, so a trade moves only
+ * the blocks that differ. Key by key: one side only - taken; both - the log's own merge for that kind of key (links the
+ * union by seq, notes the union, meta newest checkpoint, an opening the newer), on both sides in the same order so the
+ * two devices reach the same value; a fork is reported and never repaired. An archived record is not a log's.
+ * @param {{mergeEntry: Function}} logblocks edge's logblocks module
+ */
+function edgeLogs(logblocks) {
+  return (into = {}, from = {}) => {
+    const store = { ...into };
+    const conflicts = [];
+    let taken = 0;
+    for (const [key, rec] of Object.entries(from)) {
+      if (!live(rec)) continue;
+      const have = into[key];
+      if (!live(have)) {
+        store[key] = { ...rec };
+        taken += 1;
+        continue;
+      }
+      if (have.v === rec.v) continue;
+      const [lo, hi] = ordered(have, rec);
+      const r = logblocks.mergeEntry(key, have.v, lo.v, hi.v);
+      if (r.fork) {
+        conflicts.push({ key, reason: r.fork, into: { ...have }, from: { ...rec }, apply() { throw new Error(`${r.fork}: a fork is reported, never repaired`); } });
+        continue;
+      }
+      if (r.v === have.v) continue;
+      store[key] = { v: r.v, at: later(have.at, rec.at) };
+      taken += r.taken;
+    }
+    return { store, taken, conflicts };
+  };
+}
+
+/**
  * THE AUDIT DUMP (Brad, 2026-10-21: "the bucket may contain passwords, so the dump is just for the
  * Edge blockchain so it can be externally verified using pubkeys"): every Edge copy in the bucket
  * as JSON blocks, each checked against the keys kept with its copy. Public by nature - nothing
@@ -301,4 +337,4 @@ function cryptobox({ key = 'cryptobox:v1' } = {}) {
   }), listParts(key, 'messages'));
 }
 
-module.exports = { settings, keychain, passwords, guestbook, edgeCopies, edgeBlocks, cryptobox };
+module.exports = { settings, keychain, passwords, guestbook, edgeCopies, edgeLogs, edgeBlocks, cryptobox };
