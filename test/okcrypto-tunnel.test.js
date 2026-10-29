@@ -357,6 +357,40 @@ test('wipesDeliveredReply: a key with 0016 is asked again at once - no wait, and
   await app.destroy();
 });
 
+/*
+ * THE HOST'S PROGRESS (Brad, 2026-10-28: "tracking each ctap operation, the sheet should show a progress bar"): each
+ * tunnel operation is reported - begin, its plan, a step per ceremony, its end - one at a time; the connect an
+ * operation opens with is steps of that operation (one bar), and the steps it took never more than the bar's end. A
+ * connect on its own is an operation of its own.
+ */
+test('tunnel events: each operation begins, plans, steps per ceremony and ends - the bar ends full', async () => {
+  const device = fakeTunnelDevice();
+  const app = await start(device);
+  const seen = [];
+  app.services.okcrypto.on('tunnel', (e) => seen.push(e));
+  await app.services.okcrypto.connectTunnel();
+  await app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, confirm: pressing(device) });
+  const ids = [...new Set(seen.map((e) => e.id))];
+  assert.equal(ids.length, 2, 'the connect on its own, then the sign: two operations');
+  assert.equal(seen.find((e) => e.id === ids[0]).msg, okconnect.OKCONNECT);
+  for (const id of ids) {
+    const ev = seen.filter((e) => e.id === id);
+    assert.equal(ev[0].phase, 'begin');
+    assert.equal(ev[ev.length - 1].phase, 'end');
+    assert.equal(ev[ev.length - 1].ok, true);
+    const steps = ev.filter((e) => e.phase === 'step');
+    assert.ok(steps.length >= 1, 'a ceremony is a step');
+    assert.deepEqual(steps.map((e) => e.step), steps.map((_, i) => i + 1), 'steps count up by one');
+    const last = ev[ev.length - 1];
+    assert.ok(last.step <= last.steps, `the bar runs past its end (${last.step} of ${last.steps})`);
+    assert.equal(last.step, steps.length);
+  }
+  const sign = seen.filter((e) => e.id === ids[1]);
+  assert.equal(sign[0].msg, MSG.OKSIGN);
+  assert.ok(sign.some((e) => e.phase === 'plan' && e.steps >= 2), 'the sign plans its packets and polls');
+  await app.destroy();
+});
+
 test('wipesDeliveredReply is off by default: the same key still gets the wait', async () => {
   const device = fakeTunnelDevice({ wipesDelivered: true });
   const app = await start(device);

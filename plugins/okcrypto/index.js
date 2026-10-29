@@ -69,7 +69,7 @@
  * platform-specific and the library has no business knowing how.
  */
 'use strict';
-const { inLane } = require('../../src/transport/lane');
+const { inLane, laneOf } = require('../../src/transport/lane');
 
 const age = require('../../src/crypto/age_file');
 const pqc = require('../../src/crypto/age_pqc');
@@ -708,9 +708,52 @@ function setup(imports, register, config) {
   const WIPES_DELIVERED = settings.wipesDeliveredReply === true;
   let replyWhole = false;
 
+  /*
+   * THE OPERATION IN FLIGHT OVER THE TUNNEL, for a host to show (Brad, 2026-10-28: "the ctap security dialog just
+   * consumes what's happening ... when a ctap operation is in progress, a sheet needs to be open telling the user to
+   * wait for it to be done"; "we should be tracking each ctap operation, the sheet should show a progress bar").
+   * Every WebAuthn ceremony is a browser dialog; one operation is several - its request packets, then the polls that
+   * collect the answer. okcrypto.on('tunnel', fn) gets, per operation:
+   *   {phase: 'begin' | 'plan' | 'step' | 'end', id, msg, slot, step, steps, waiting, ok?}
+   * step: ceremonies done; steps: the planned count (request packets + the polls an answer of its size takes),
+   * raised when more were needed (a press the key waits for); waiting: operations queued behind this one in the lane
+   * (the tunnel transport's). Tunnel operations take turns in the lane, so there is one in flight at a time.
+   */
+  let opSeq = 0;
+  let currentOp = null;
+  function laneWaiting() {
+    try { return transport.tunnelOnly ? laneOf(transport).state().waiting : 0; } catch { return 0; }
+  }
+  function tunnelEvent(phase, extra = {}) {
+    if (!currentOp) return;
+    const { id, msg, slot, step, steps } = currentOp;
+    try { events.emit('tunnel', { phase, id, msg, slot, step, steps, waiting: laneWaiting(), ...extra }); } catch { /* a listener's error is not the operation's */ }
+  }
+  async function tracked(msg, slot, steps, fn) {
+    /* nested (the connect an operation opens with): its ceremonies are steps of the outer one */
+    if (currentOp) return fn();
+    currentOp = { id: ++opSeq, msg, slot, step: 0, steps };
+    tunnelEvent('begin');
+    try {
+      const out = await fn();
+      tunnelEvent('end', { ok: true });
+      return out;
+    } catch (e) {
+      tunnelEvent('end', { ok: false });
+      throw e;
+    } finally {
+      currentOp = null;
+    }
+  }
+
   async function tunnelSend(bound, req, opts) {
     const reply = await bound.send(req, opts);
     if (reply && reply.status === CTAP_SUCCESS) lastStagedAt = Date.now();
+    if (currentOp) {
+      currentOp.step += 1;
+      if (currentOp.step > currentOp.steps) currentOp.steps = currentOp.step;
+      tunnelEvent('step');
+    }
     return reply;
   }
 
@@ -1179,7 +1222,7 @@ function setup(imports, register, config) {
   /* replyWhole follows the connect too: its answer is staged like any other (WIPES_DELIVERED) */
   async function connectTunnel(opts) {
     replyWhole = false;
-    const out = await connectTunnelRun(opts);
+    const out = await tracked(okconnect.OKCONNECT, 0, 1, () => connectTunnelRun(opts));
     replyWhole = true;
     return out;
   }
@@ -1405,7 +1448,8 @@ function setup(imports, register, config) {
   /* replyWhole: true only once this operation has its whole answer (WIPES_DELIVERED) */
   async function tunnelOperationNow(...args) {
     try {
-      const out = await tunnelOperationRun(...args);
+      /* tracked for the host's sheet; 'plan' gives the real step count once the packets are planned */
+      const out = await tracked(args[0], args[1], 1, () => tunnelOperationRun(...args));
       replyWhole = true;
       return out;
     } catch (e) {
@@ -1468,6 +1512,7 @@ function setup(imports, register, config) {
     const bound = await openTunnel();
     if (!tunnelSession) await connectTunnel({ timeoutMs });
     const sess = tunnelSession;
+    const stepsBefore = currentOp ? currentOp.step : 0;
 
     /*
      * THE FRAMING IS THE FIRMWARE'S, read from its version. v1 is the
@@ -1484,6 +1529,11 @@ function setup(imports, register, config) {
       overhead: v2 ? transit.OVERHEAD : 0,
     });
     const framed = variable ? null : (v2 ? expectBytes + transit.OVERHEAD : expectBytes);
+    /* the host's progress: these request packets, then the polls an answer of this size takes (one for a variable one) */
+    if (currentOp) {
+      currentOp.steps = Math.max(currentOp.step, stepsBefore + sizes.length + (framed ? Math.ceil(framed / chunk.RESPONSE_CHUNK) : 1));
+      tunnelEvent('plan');
+    }
 
     const digits = pressOnly ? null : challengeDigits(payload, { duo, formula });
     /* what the press is for, as the key sees it: SHA-256 of exactly these bytes - the same hash a soft key's press sheet shows, so a CLI can print it beside its prompt */

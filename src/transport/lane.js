@@ -79,7 +79,8 @@ function laneOf(transport) {
     });
     lane.urgentWaiting = () => waiting.some((x) => x.urgent);
     /* idle: nothing running, nothing waiting - and since when (an agent lets its Bluetooth link go after a quiet spell) */
-    lane.state = () => ({ idle: !running && waiting.length === 0, since: lastEnd });
+    /* waiting: how many queue behind the running one (a host's "N more" while the key works) */
+    lane.state = () => ({ idle: !running && waiting.length === 0, since: lastEnd, waiting: waiting.length });
     lanes.set(transport, lane);
   }
   return lane;
