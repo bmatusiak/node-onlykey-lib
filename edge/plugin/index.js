@@ -843,6 +843,9 @@ function setup(imports, register) {
   /* one pass of grants.check over one set of key reads; readMore: it read more than the head */
   async function checkOnce(copy, opts) {
     let c = copy;
+    /* where the copy ends: the head the key no longer reveals is welded on from there (headproof) */
+    const tail = (c.links || [])[(c.links || []).length - 1];
+    if (tail && tail.head) edge.knownHead(chain.decodeLink(tail.link || tail).seq, tail.head, (await edge.publicKey()).deviceId);
     const head = await edge.head();
     let readMore = false;
     /*

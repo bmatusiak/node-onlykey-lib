@@ -178,6 +178,17 @@ function verdictOf(a, keySeq) {
   return { kind: 'verified', through: v.verifiedThrough };
 }
 
+/*
+ * TELL THE KEY'S CLIENT WHERE THIS COPY ENDS (the head proof, 2026-10-30): a key that never reveals its head is followed by
+ * welding its newer links onto the last head this copy holds - edge.knownHead, no key request. A client without it
+ * (older lib) is left as it was.
+ */
+function seedHead(edge, kept, deviceId) {
+  const last = kept && kept.links && kept.links[kept.links.length - 1];
+  if (!last || !last.head || typeof edge.knownHead !== 'function') return;
+  edge.knownHead(chain.decodeLink(last.link).seq, last.head, deviceId);
+}
+
 /**
  * Bring the PC's copy up to the key's head (status: read and report only).
  * edge: the Edge plugin (head, pickup, publicKey, publicKeyPq). -> a report; changes only the
@@ -193,7 +204,10 @@ async function sync(edge, home, { status = false, history = null } = {}) {
     const pk = await edge.publicKey();
     /* the ML-DSA-65 twin of the checkpoint key: every checkpoint and seal of this chain is checked under both */
     const pq = await edge.publicKeyPq('checkpoint');
-    return { publicKey: pk.publicKey, deviceId: pk.deviceId, publicKeyPq: pq, c: load(home, pk.deviceId), h: await edge.head() };
+    const kept = load(home, pk.deviceId);
+    /* where this computer's copy ends: on a key that never reveals its head, the head is welded on from there */
+    seedHead(edge, kept, pk.deviceId);
+    return { publicKey: pk.publicKey, deviceId: pk.deviceId, publicKeyPq: pq, c: kept, h: await edge.head() };
   });
   const keySeq = h.seq === null ? -1 : h.seq;
   const ringFrom = h.oldest === null ? keySeq + 1 : h.oldest;
