@@ -133,10 +133,18 @@ function verify(msg, { seen } = {}) {
     const c = p.checkpoint;
     const st = p.statement;
     const u32ok = (n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
+    /*
+     * THE CHECKPOINT KEYS TRAVEL ON THEIR OWN (2026-10-30: a device's log is offered named or not - its login card or its
+     * nametag proves it): `keys`, and an optional statement and an optional card. An offer from an older computer
+     * carries the statement alone - still read, its keys as before.
+     */
+    const keys = p.keys || (st ? { publicKey: st.publicKey, publicKeyPq: st.publicKeyPq } : null);
+    const stBad = st && (!isHex(st.publicKey, 64) || !isHex(st.publicKeyPq, PQ_PK) || !(st.seq === null || u32ok(st.seq)) || typeof st.nametag !== 'string' || !st.nametag.trim()
+      || utf8ToBytes(st.nametag).length > 0xff || !isHex(st.signature, 64) || !isHex(st.signaturePq, PQ_SIG));
     if (!isHex(p.sid, 8) || !isHex(p.chain, 16) || !Number.isInteger(p.linkParts) || p.linkParts < 0 || p.linkParts > 255
       || !c || !u32ok(c.seq) || !isHex(c.head, 32) || !isHex(c.signature, 64) || !isHex(c.signaturePq, PQ_SIG)
-      || !st || !isHex(st.publicKey, 64) || !isHex(st.publicKeyPq, PQ_PK) || !(st.seq === null || u32ok(st.seq)) || typeof st.nametag !== 'string' || !st.nametag.trim()
-      || utf8ToBytes(st.nametag).length > 0xff || !isHex(st.signature, 64) || !isHex(st.signaturePq, PQ_SIG)
+      || !keys || !isHex(keys.publicKey, 64) || !isHex(keys.publicKeyPq, PQ_PK) || stBad
+      || (p.card !== undefined && (!p.card || typeof p.card !== 'object' || p.card.kind !== 'login-card'))
       || (p.openings !== undefined && (!Array.isArray(p.openings) || p.openings.length > 500 || p.openings.some((o) => !o || typeof o !== 'object')))
       || (p.notes !== undefined && (!p.notes || typeof p.notes !== 'object'))) {
       return { ok: false, reason: 'malformed' };
@@ -217,14 +225,20 @@ function canon(v) {
  * signature, signaturePq} (as plugin.statement gives it, or as that device's phone kept it) - the
  * hybrid halves both travel: the phone checks both (chain.verifyCheckpoint, grants.verifyStatement).
  */
-function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement, openings = [], notes = null }) {
+function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement = null, card = null, keys = null, openings = [], notes = null }) {
+  /* the checkpoint keys the log is checked with: given, or the statement's */
+  const k = keys || (statement ? { publicKey: statement.publicKey, publicKeyPq: statement.publicKeyPq } : null);
+  if (!k) throw new TypeError('edge: an offer names the checkpoint keys of the log (keys, or a statement)');
   return sign(OFFER_TYPE, signer, {
     sid, deviceId: toHex(deviceId), chain: toHex(chainId), linkParts,
     checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature), signaturePq: toHex(checkpoint.signaturePq) },
-    statement: {
+    keys: { publicKey: toHex(k.publicKey), publicKeyPq: toHex(k.publicKeyPq) },
+    ...(statement ? { statement: {
       publicKey: toHex(statement.publicKey), publicKeyPq: toHex(statement.publicKeyPq), seq: statement.seq ?? null,
       nametag: String(statement.nametag), signature: toHex(statement.signature), signaturePq: toHex(statement.signaturePq),
-    },
+    } } : {}),
+    /* its certified login card (certify.record), when this computer has it: the proof for a device with no nametag */
+    ...(card ? { card } : {}),
     /* the budgets' opening words (devices.checkOpenings) - the receiving phone checks each against the log */
     openings: (openings || []).slice(0, 500),
     /* its notes, intents and receipt messages by seq - each screen checks them against the chain's hashes */

@@ -489,7 +489,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
      * phone HOLDS it; the person approves the merge later from the Edge tab's banner.
      * -> {sent, held (true when the phone kept it), count}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
      */
-    async offerToPhone(peerSigner, { deviceId, chain, records, checkpoint, statement, openings = [], notes = null, name }) {
+    async offerToPhone(peerSigner, { deviceId, chain, records, checkpoint, statement = null, card = null, keys = null, openings = [], notes = null, name }) {
       const syncLib = require('./sync');
       const { randomBytes } = require('../../src/vendor/exports/@noble/ciphers/utils.js');
       const { toHex: hex } = require('../../src/bytes');
@@ -505,7 +505,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       const sid = hex(randomBytes(8));
       const linkMsgs = lacks.length ? await syncLib.buildLinks({ signer: peerSigner, deviceId, records: lacks, sid, chain }) : [];
       for (const m of linkMsgs) await ask(m, `part ${m.payload.part + 1} of ${m.payload.parts}`);
-      const done = await ask(await syncLib.buildOffer({ signer: peerSigner, deviceId, sid, chain, linkParts: linkMsgs.length, checkpoint, statement, openings, notes }), 'the offer');
+      const done = await ask(await syncLib.buildOffer({ signer: peerSigner, deviceId, sid, chain, linkParts: linkMsgs.length, checkpoint, statement, card, keys, openings, notes }), 'the offer');
       return { sent: lacks.length, held: Boolean(done.held), count: done.count ?? lacks.length };
     },
 

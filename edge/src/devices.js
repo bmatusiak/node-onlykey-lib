@@ -51,18 +51,41 @@ function nametagOf(statements, ownerKey, ownerKeyPq) {
   return { nametag: sorted[0].nametag, seq: sorted[0].seq ?? null, previously };
 }
 
+/*
+ * THE CARD PROVES THE DEVICE (Brad, 2026-10-30: one login card per device, certified at a press; unnamed devices' logs are
+ * accepted). A certification signs the device id and BOTH checkpoint keys with the owner key, so a device whose login card
+ * verifies under this owner's keys - for exactly the keys its log is checked with - is this owner's, named or not. When the
+ * log carries the certification's own link (op CERTIFY at its seq), that link must hold the card's subject.
+ */
+function cardProves(card, log, ownerKey, ownerKeyPq) {
+  if (!card) return false;
+  const certify = require('./certify');
+  const c = card.certification || {};
+  const id = hex(log.deviceId);
+  if (String(c.deviceId || '').toLowerCase() !== id || String(c.publicKey || '').toLowerCase() !== hex(log.publicKey)
+    || !log.publicKeyPq || String(c.publicKeyPq || '').toLowerCase() !== hex(log.publicKeyPq)) return false;
+  if (!certify.verify(card, ownerKey, ownerKeyPq)) return false;
+  const at = (log.records || []).find((r) => chain.decodeLink(Uint8Array.from(r.link)).seq === c.seq);
+  if (at) {
+    const f = chain.decodeLink(Uint8Array.from(at.link));
+    if (f.op !== 18 || hex(f.subject) !== hex(certify.subjectOf(card.kind, card.thing))) return false;
+  }
+  return true;
+}
+
 /**
  * Sort one offered log.
  * @param {object} o
- * @param {{deviceId, publicKey, publicKeyPq, records, checkpoint, statement}} o.log
+ * @param {{deviceId, publicKey, publicKeyPq, records, checkpoint, statement, card}} o.log
  *   records: [{link, head, reveal?}] of that device's chain; checkpoint: {seq, head, signature,
- *   signaturePq} from its key; statement: {deviceId, publicKey, publicKeyPq, seq, nametag,
- *   signature, signaturePq}
+ *   signaturePq} from its key; statement (optional): {deviceId, publicKey, publicKeyPq, seq, nametag,
+ *   signature, signaturePq}; card (optional): its certified login card (certify.record)
  * @param {Uint8Array} o.ownerKey   THIS device's own owner public key (X||Y)
  * @param {Uint8Array} o.ownerKeyPq THIS device's own owner ML-DSA-65 public key (1952 bytes)
  * @param {Array<{deviceId: string}>} [o.known]  your devices (deviceId hex)
  * @param {Array<{seq, head}>} [o.merged]  the points of that chain this device merged before
- * -> {class, deviceId (hex), nametag, check}
+ * -> {class, deviceId (hex), nametag, check}. class: mine-known / mine-new (a verified card or nametag of this owner),
+ *    unproven (neither carried: kept, shown, never yours, never the leak alarm), forged (a proof that does not verify)
  */
 function classify({ log, ownerKey, ownerKeyPq, known = [], merged = [] }) {
   const id = hex(log.deviceId);
@@ -70,14 +93,16 @@ function classify({ log, ownerKey, ownerKeyPq, known = [], merged = [] }) {
   /* the statement must name BOTH checkpoint keys the log is checked with - a statement without the pq half names nothing */
   const names = st && hex(st.deviceId) === id && hex(st.publicKey) === hex(log.publicKey) && hex(chain.deviceIdOf(Uint8Array.from(log.publicKey))) === id
     && Boolean(st.publicKeyPq && log.publicKeyPq) && hex(st.publicKeyPq) === hex(log.publicKeyPq);
-  const owned = Boolean(names && grants.verifyStatement(st, ownerKey, ownerKeyPq));
+  const namedOwned = Boolean(names && grants.verifyStatement(st, ownerKey, ownerKeyPq));
+  const cardOwned = cardProves(log.card || null, log, ownerKey, ownerKeyPq);
+  const owned = namedOwned || cardOwned;
   const check = sync.anchorCheck({
     records: log.records || [], publicKey: Uint8Array.from(log.publicKey), publicKeyPq: log.publicKeyPq ? Uint8Array.from(log.publicKeyPq) : null,
     checkpoint: log.checkpoint, anchors: merged,
   });
-  let kind = 'forged';
+  let kind = st || log.card ? 'forged' : 'unproven';
   if (owned) kind = known.some((k) => String(k.deviceId).toLowerCase() === id) ? 'mine-known' : 'mine-new';
-  return { class: kind, deviceId: id, nametag: owned ? st.nametag : null, check };
+  return { class: kind, deviceId: id, nametag: namedOwned ? st.nametag : null, check };
 }
 
 /**

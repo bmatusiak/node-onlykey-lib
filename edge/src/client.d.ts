@@ -223,12 +223,14 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
      * phone HOLDS it; the person approves the merge later from the Edge tab's banner.
      * -> {sent, held (true when the phone kept it), count}; rejects EEDGE_REFUSED or EEDGE_NO_ANSWER.
      */
-    offerToPhone(peerSigner: any, { deviceId, chain, records, checkpoint, statement, openings, notes, name }: {
+    offerToPhone(peerSigner: any, { deviceId, chain, records, checkpoint, statement, card, keys, openings, notes, name }: {
         deviceId: any;
         chain: any;
         records: any;
         checkpoint: any;
-        statement: any;
+        statement?: null | undefined;
+        card?: null | undefined;
+        keys?: null | undefined;
         openings?: never[] | undefined;
         notes?: null | undefined;
         name: any;

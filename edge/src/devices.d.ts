@@ -1,15 +1,16 @@
 /**
  * Sort one offered log.
  * @param {object} o
- * @param {{deviceId, publicKey, publicKeyPq, records, checkpoint, statement}} o.log
+ * @param {{deviceId, publicKey, publicKeyPq, records, checkpoint, statement, card}} o.log
  *   records: [{link, head, reveal?}] of that device's chain; checkpoint: {seq, head, signature,
- *   signaturePq} from its key; statement: {deviceId, publicKey, publicKeyPq, seq, nametag,
- *   signature, signaturePq}
+ *   signaturePq} from its key; statement (optional): {deviceId, publicKey, publicKeyPq, seq, nametag,
+ *   signature, signaturePq}; card (optional): its certified login card (certify.record)
  * @param {Uint8Array} o.ownerKey   THIS device's own owner public key (X||Y)
  * @param {Uint8Array} o.ownerKeyPq THIS device's own owner ML-DSA-65 public key (1952 bytes)
  * @param {Array<{deviceId: string}>} [o.known]  your devices (deviceId hex)
  * @param {Array<{seq, head}>} [o.merged]  the points of that chain this device merged before
- * -> {class, deviceId (hex), nametag, check}
+ * -> {class, deviceId (hex), nametag, check}. class: mine-known / mine-new (a verified card or nametag of this owner),
+ *    unproven (neither carried: kept, shown, never yours, never the leak alarm), forged (a proof that does not verify)
  */
 export function classify({ log, ownerKey, ownerKeyPq, known, merged }: {
     log: {
@@ -19,6 +20,7 @@ export function classify({ log, ownerKey, ownerKeyPq, known, merged }: {
         records: any;
         checkpoint: any;
         statement: any;
+        card: any;
     };
     ownerKey: Uint8Array;
     ownerKeyPq: Uint8Array;

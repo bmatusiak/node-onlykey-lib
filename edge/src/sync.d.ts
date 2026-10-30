@@ -24,14 +24,16 @@ export function buildGive({ signer, deviceId, from }: {
  * signature, signaturePq} (as plugin.statement gives it, or as that device's phone kept it) - the
  * hybrid halves both travel: the phone checks both (chain.verifyCheckpoint, grants.verifyStatement).
  */
-export function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement, openings, notes }: {
+export function buildOffer({ signer, deviceId, sid, chain: chainId, linkParts, checkpoint, statement, card, keys, openings, notes }: {
     signer: any;
     deviceId: any;
     sid: any;
     chain: any;
     linkParts: any;
     checkpoint: any;
-    statement: any;
+    statement?: null | undefined;
+    card?: null | undefined;
+    keys?: null | undefined;
     openings?: never[] | undefined;
     notes?: null | undefined;
 }): Promise<{

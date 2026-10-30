@@ -43,3 +43,42 @@ test('a changed card, another device\'s card, or another owner\'s - not this own
   const stranger = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey(), ownerSecret: p256.utils.randomSecretKey() }));
   assert.equal(await stranger.verifyRecord(rec), false, 'another owner\'s keys');
 });
+
+/* one device's log as an offer brings it: its links up to its key's confirmed checkpoint, its checkpoint keys */
+async function logOf(e, extra = {}) {
+  const cp = await e.checkpoint();
+  const { publicKey, deviceId } = await e.publicKey();
+  return { deviceId, publicKey, publicKeyPq: await e.publicKeyPq('checkpoint'), records: await e.pickup(0, cp.seq + 1), checkpoint: cp, ...extra };
+}
+
+test('membership: an UNNAMED device with this owner\'s card is yours; no proof at all is unproven; a card for other keys is forged', async () => {
+  const { devices } = require('../src');
+  const owner = p256.utils.randomSecretKey();
+  const mine = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey(), ownerSecret: owner }));
+  const card = await mine.certifyLoginCard(await cardFor(mine));
+  const me = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey(), ownerSecret: owner }));
+  const ownerKey = await me.ownerPublicKey();
+  const ownerKeyPq = await me.publicKeyPq('owner');
+  const named = devices.classify({ log: await logOf(mine, { card }), ownerKey, ownerKeyPq });
+  assert.equal(named.class, 'mine-new', 'a device with this owner\'s card');
+  assert.equal(named.nametag, null, 'unnamed: no nametag');
+  assert.equal(devices.classify({ log: await logOf(mine), ownerKey, ownerKeyPq }).class, 'unproven', 'no card, no nametag');
+  /* the card moved onto another device's log: it names other checkpoint keys */
+  const other = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey(), ownerSecret: owner }));
+  assert.equal(devices.classify({ log: await logOf(other, { card }), ownerKey, ownerKeyPq }).class, 'forged');
+});
+
+test('an offer without a nametag: the checkpoint keys travel on their own, with the card; the old statement-only shape still reads', async () => {
+  const { sync, request } = require('../src');
+  const signer = request.peerSignerFromSecret(p256.utils.randomSecretKey());
+  const e = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey() }));
+  const card = await e.certifyLoginCard(await cardFor(e));
+  const log = await logOf(e);
+  const sid = new Uint8Array(8).fill(1);
+  const msg = await sync.buildOffer({ signer, deviceId: log.deviceId, sid: Buffer.from(sid).toString('hex'), chain: log.deviceId, linkParts: 0, checkpoint: log.checkpoint, card, keys: log });
+  assert.equal(msg.payload.statement, undefined);
+  assert.equal(sync.verify(msg).ok, true, 'an offer with keys and a card verifies');
+  const st = await e.statement('green');
+  const old = await sync.buildOffer({ signer, deviceId: log.deviceId, sid: Buffer.from(sid).toString('hex'), chain: log.deviceId, linkParts: 0, checkpoint: log.checkpoint, statement: st });
+  assert.equal(sync.verify(old).ok, true, 'a statement-only offer still verifies');
+});
