@@ -276,6 +276,12 @@ async function sync(edge, home, { status = false, history = null } = {}) {
       } catch { return false; }
     });
     if (!signed) verdict = { kind: 'unsigned', through: verdict.through };
+    /*
+     * KEPT WITH THE COPY (2026-10-30: key 3's log reached the bucket with no checkpoint in its meta, and every other device's
+     * reader - the phone, the desktop - left it out: nothing to verify it against). The checkpoint that just verified goes
+     * into the copy (copyfile: the newer replaces the older), so the log carries the key's own signature wherever it goes.
+     */
+    else candidate.checkpoint = cp;
   }
   const added = candidate.links.length - c.links.length;
   let saved = false;
