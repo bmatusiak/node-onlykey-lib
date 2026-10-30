@@ -6,9 +6,9 @@
  * to set it in the edge manage popup"). One function for every host - the CLI's `edge name`, the desktop
  * app's Edge Management.
  *
- * Set: the key signs its owner STATEMENT over its device id, its checkpoint keys, its seq and the hash
- * of the nametag, with the owner key and its ML-DSA-65 twin (edge.statement: reads, no press, no link -
- * grants.js). It is checked here with the owner keys it names (grants.verifyStatement), and the owner key
+ * Set: the key CERTIFIES the nametag at a press (edge.statement -> edge.certify; Brad, 2026-10-30: "change
+ * nametag to certify") - one link on the chain, then its owner key and ML-DSA-65 twin sign the device id, its
+ * checkpoint keys, that link's seq and the nametag's hash (grants.certifyDigest). It is checked here with the owner keys it names (grants.verifyStatement), and the owner key
  * must be THIS identity's (its id is the identity home's) - then it is kept in the identity's `devices`
  * store, by device id. Another device of the identity checks the same statement with its own owner keys:
  * that is how a phone or a hard key of yours is recognised, under its name, when logs are offered.

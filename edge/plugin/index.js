@@ -30,7 +30,8 @@ const { identityIdOf } = require('../src/identity-id');
 
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
-  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, PUBKEY_PQ: 0x05, STATEMENT: 0x06,
+  /* 0x06 was the no-press owner statement: retired - the owner key signs only through CERTIFY (a press or a budget) */
+  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, PUBKEY_PQ: 0x05, CERTIFY: 0x08,
   /* over WebAuthn only: the ML-DSA-65 signature an answer left out (one answer holds at most 3392 bytes) - tunnelCall */
   MORE: 0x07,
   /* R31: DEBUG firmware only - a production key answers it as unknown (EDGE:0A) */
@@ -502,26 +503,48 @@ function setup(imports, register) {
     },
 
     /**
-     * The owner statement (Brad, 2026-10-08): the key signs its own fingerprint (device id,
-     * both checkpoint keys, current seq) and this NAMETAG with its owner key and the owner key's
-     * ML-DSA-65 twin - no press, no link. Another device of yours checks it with
-     * grants.verifyStatement against ITS owner keys; both signatures are required.
-     * -> {deviceId, publicKey, publicKeyPq, seq (null = no link yet), nametag, ownerKey, ownerKeyPq,
-     *     signature, signaturePq}
+     * THE OWNER KEY'S P-256 HALF, read - nothing is signed (PUBKEY {which: 1}). With publicKeyPq('owner') it is what every
+     * certification is checked against (Brad, 2026-10-30: "i dont want nametag to auto sign themselves" - the owner
+     * keys used to be learned from a statement the app asked for once a session). -> X || Y (64 bytes)
      */
-    async statement(nametag, opts) {
+    async ownerPublicKey(opts) {
+      const [r] = await call(SUB.PUBKEY, Uint8Array.of(1), opts);
+      return r.slice(0, 64);
+    },
+
+    /**
+     * CERTIFY a subject the host built (grants.certifyDigest; Brad, 2026-10-30: "it can be used to certify things used by
+     * the blockchain lib, so its generic"): the key waits for the press (or a budget's CERTIFY scope pays it, after its
+     * TX start), writes the certification's link, and signs with the owner key and its ML-DSA-65 twin, naming that link.
+     * -> {deviceId, publicKey, publicKeyPq, approval, seq, subject, ownerKey, ownerKeyPq, signature, signaturePq}
+     */
+    async certify(subject, { onPress, timeoutMs = 30000 } = {}) {
+      const sub = Uint8Array.from(subject);
+      if (sub.length !== 32) throw new TypeError('Edge: a certification subject is 32 bytes');
+      const { publicKey, deviceId } = await edge.publicKey();
+      const publicKeyPq = await edge.publicKeyPq('checkpoint');
+      const ownerKeyPq = await edge.publicKeyPq('owner');
+      const rs = await pressed(SUB.CERTIFY, sub, { reports: 3 + reportsFor(chain.ML_DSA65.SIG), timeoutMs }, onPress);
+      const [a, k, sg] = rs;
+      return {
+        deviceId, publicKey, publicKeyPq, approval: a[0], seq: get32(a, 1), subject: a.slice(5, 37),
+        ownerKey: k.slice(0, 64), ownerKeyPq, signature: sg.slice(0, 64), signaturePq: concat(rs.slice(3)).slice(0, chain.ML_DSA65.SIG),
+      };
+    },
+
+    /**
+     * This device's NAMETAG, certified: a press, then the key certifies the nametag's hash (grants.verifyStatement).
+     * -> {deviceId, publicKey, publicKeyPq, seq, nametag, ownerKey, ownerKeyPq, signature, signaturePq} - the statement
+     * shape every host keeps and offers.
+     */
+    async statement(nametag, { onPress, timeoutMs } = {}) {
       const { grants } = require('../src');
       const tag = String(nametag ?? '').trim();
-      const nh = grants.nametagHash(tag);
-      const { publicKey, deviceId } = await edge.publicKey(opts);
-      const publicKeyPq = await edge.publicKeyPq('checkpoint', opts);
-      const ownerKeyPq = await edge.publicKeyPq('owner', opts);
-      const rs = await call(SUB.STATEMENT, nh, { ...opts, reports: 3 + reportsFor(chain.ML_DSA65.SIG) });
-      const [a, k, sg] = rs;
-      const seq = get32(a, 0);
+      const c = await edge.certify(grants.nametagHash(tag), { onPress, timeoutMs });
+      if (c.approval !== grants.APPROVAL.PRESS) throw new Error('Edge: a nametag is certified only by a press');
       return {
-        deviceId, publicKey, publicKeyPq, seq: seq === SEQ_NONE ? null : seq, nametag: tag,
-        ownerKey: k.slice(0, 64), ownerKeyPq, signature: sg.slice(0, 64), signaturePq: concat(rs.slice(3)).slice(0, chain.ML_DSA65.SIG),
+        deviceId: c.deviceId, publicKey: c.publicKey, publicKeyPq: c.publicKeyPq, seq: c.seq, nametag: tag,
+        ownerKey: c.ownerKey, ownerKeyPq: c.ownerKeyPq, signature: c.signature, signaturePq: c.signaturePq,
       };
     },
 

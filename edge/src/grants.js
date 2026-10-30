@@ -307,35 +307,42 @@ function nametagHash(nametag) {
   return H('OKEDGE-NAMETAG-v1', utf8ToBytes(t));
 }
 
-/**
- * SHA256("OKEDGE-STATEMENT-v1" || device id 16 || checkpoint pubkey X||Y 64 ||
- *        SHA256(ML-DSA-65 checkpoint pubkey 1952) 32 || seq u32 LE || nametag hash 32)
- * - what both owner keys sign (okplugin_edge.cpp statement()).
+/*
+ * HOW A CERTIFICATION WAS APPROVED - signed into it (okplugin_edge.cpp APPROVED_BY_*): your press on the key, or a
+ * budget's CERTIFY scope. Which a kind of subject accepts is the verifier's rule (Brad, 2026-10-30: "the agent identity
+ * info is the only stuff it can autopress"): a nametag only PRESS.
  */
-function statementDigest({ deviceId, publicKey, publicKeyPq, seq, nametagHash: nh }) {
+const APPROVAL = Object.freeze({ PRESS: 1, BUDGET: 2 });
+
+/**
+ * SHA256("OKEDGE-CERTIFY-v1" || device id 16 || checkpoint pubkey X||Y 64 ||
+ *        SHA256(ML-DSA-65 checkpoint pubkey 1952) 32 || approval u8 || seq u32 LE || subject 32)
+ * - what both owner keys sign (okplugin_edge.cpp certify_sign()). seq is the certification's own link.
+ */
+function certifyDigest({ deviceId, publicKey, publicKeyPq, approval, seq, subject }) {
   const id = Uint8Array.from(deviceId);
   const pub = Uint8Array.from(publicKey);
   const pq = Uint8Array.from(publicKeyPq || []);
-  const tag = Uint8Array.from(nh);
-  if (id.length !== 16 || pub.length !== 64 || pq.length !== chain.ML_DSA65.PK || tag.length !== 32 || !Number.isInteger(seq) || seq < 0 || seq > 0xffffffff) {
-    throw new TypeError(`edge: a statement is the device id (16), the checkpoint key X||Y (64), the ML-DSA-65 checkpoint key (${chain.ML_DSA65.PK}), a u32 seq and a nametag hash (32)`);
+  const sub = Uint8Array.from(subject);
+  if (id.length !== 16 || pub.length !== 64 || pq.length !== chain.ML_DSA65.PK || sub.length !== 32 || !Number.isInteger(seq) || seq < 0 || seq > 0xffffffff
+      || (approval !== APPROVAL.PRESS && approval !== APPROVAL.BUDGET)) {
+    throw new TypeError(`edge: a certification is the device id (16), the checkpoint key X||Y (64), the ML-DSA-65 checkpoint key (${chain.ML_DSA65.PK}), its approval, a u32 seq and a subject (32)`);
   }
-  const s4 = Uint8Array.of(seq & 0xff, (seq >>> 8) & 0xff, (seq >>> 16) & 0xff, (seq >>> 24) & 0xff);
-  return H('OKEDGE-STATEMENT-v1', id, pub, crypto.sha256(pq), s4, tag);
+  const mid = Uint8Array.of(approval, seq & 0xff, (seq >>> 8) & 0xff, (seq >>> 16) & 0xff, (seq >>> 24) & 0xff);
+  return H('OKEDGE-CERTIFY-v1', id, pub, crypto.sha256(pq), mid, sub);
 }
 
 /**
- * Is this statement signed by MY owner keys, and does it name the key it carries?
- * statement: {deviceId, publicKey, publicKeyPq, seq, nametag (text), signature, signaturePq};
- * ownerKey / ownerKeyPq: this device's own owner public keys (P-256 X||Y, ML-DSA-65).
+ * Is this certification signed by MY owner keys, with an approval its kind accepts?
+ * c: {deviceId, publicKey, publicKeyPq, approval, seq, subject, signature, signaturePq}; accepts: the approvals allowed.
  * -> boolean: true only when BOTH signatures verify (false on anything malformed or missing)
  */
-function verifyStatement(statement, ownerKey, ownerKeyPq) {
+function verifyCertification(c, ownerKey, ownerKeyPq, accepts = [APPROVAL.PRESS]) {
   try {
-    const { deviceId, publicKey, publicKeyPq, seq, nametag, signature, signaturePq } = statement || {};
+    const { deviceId, publicKey, publicKeyPq, approval, seq, subject, signature, signaturePq } = c || {};
+    if (!accepts.includes(approval)) return false;
     if (!same(chain.deviceIdOf(Uint8Array.from(publicKey)), Uint8Array.from(deviceId))) return false; /* the id is the key's */
-    /* seq null = the key had no link yet: it signed 0xFFFFFFFF */
-    const digest = statementDigest({ deviceId, publicKey, publicKeyPq, seq: seq === null ? 0xffffffff : seq, nametagHash: nametagHash(nametag) });
+    const digest = certifyDigest({ deviceId, publicKey, publicKeyPq, approval, seq, subject });
     const owner = Uint8Array.from(ownerKey);
     return crypto.p256VerifyDigest(Uint8Array.from(signature), digest, owner.length === 64 ? Uint8Array.from([4, ...owner]) : owner, { lowS: false })
       && chain.mlDsaVerify(signaturePq, digest, ownerKeyPq);
@@ -344,8 +351,25 @@ function verifyStatement(statement, ownerKey, ownerKeyPq) {
   }
 }
 
+/**
+ * A device's NAMETAG statement: a PRESSED certification of the nametag's hash (Brad, 2026-10-30: "change nametag to
+ * certify, and then we certify our nametag"; "i dont want nametag to auto sign themselves"). Its stored shape is the
+ * statement's as before - the approval is not carried: a nametag is only ever pressed, so it is checked as PRESS, and
+ * one certified any other way has another digest and fails.
+ * statement: {deviceId, publicKey, publicKeyPq, seq, nametag (text), signature, signaturePq};
+ * ownerKey / ownerKeyPq: this device's own owner public keys (P-256 X||Y, ML-DSA-65).
+ */
+function verifyStatement(statement, ownerKey, ownerKeyPq) {
+  try {
+    const { seq, nametag } = statement || {};
+    return verifyCertification({ ...statement, approval: APPROVAL.PRESS, seq, subject: nametagHash(nametag) }, ownerKey, ownerKeyPq);
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
-  NAMETAG_MAX, nametagHash, statementDigest, verifyStatement,
+  NAMETAG_MAX, nametagHash, APPROVAL, certifyDigest, verifyCertification, verifyStatement,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, txToken, intentOf, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
   isDerivedCode, identityLabel, scopeLabel, deriveLabel,

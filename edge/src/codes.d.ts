@@ -22,6 +22,7 @@ export const OP: Readonly<{
     GRANT_RESUME: 14;
     CONTINUE: 16;
     DERIVE: 17;
+    CERTIFY: 18;
 }>;
 export const DECISION: Readonly<{
     APPROVE: 1;

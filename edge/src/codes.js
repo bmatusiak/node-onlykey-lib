@@ -39,6 +39,13 @@ const OP = Object.freeze({
    */
   DERIVE: 17,
   /*
+   * CERTIFY (Brad, 2026-10-30: "change nametag to certify ... and we certify agent identities"; "certify should be in
+   * the blockchain, so it needs to advance the head") - the owner key certified a subject the host built (grants
+   * certifyDigest): a nametag's hash, an agent identity's creation info. Pressed: decision approve, the press flag. Paid
+   * by a budget's CERTIFY scope (slot 0): a use like a sign - self-press, intent, owes a receipt. Appended last.
+   */
+  CERTIFY: 18,
+  /*
    * v1 (2026-10-08): 3-5 (FIDO, HMAC - never linked), 9-10 (peers), 12 (wipe, R9 dropped)
    * and 17-20 (siblings, anchor, sync) are unused: the key writes a link only for a press
    * or a use an approved budget pays (Brad), and pairing and sync are the app's.
@@ -191,7 +198,7 @@ function nameOf(table, value) {
   return null;
 }
 
-/* a budget USE - what a self-press pays, carries an intent and owes a receipt: a sign, a decrypt, or a paid derive */
-const isUse = (op) => op === OP.SIGN || op === OP.DECRYPT || op === OP.DERIVE;
+/* a budget USE - what a self-press pays, carries an intent and owes a receipt: a sign, a decrypt, a paid derive or certification */
+const isUse = (op) => op === OP.SIGN || op === OP.DECRYPT || op === OP.DERIVE || op === OP.CERTIFY;
 
 module.exports = { OP, DECISION, END, FLAG, TAG, RECEIPT, STATUS, parseStatus, receiptCode, receiptByte, nameOf, isUse };

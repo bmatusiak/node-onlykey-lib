@@ -1,23 +1,36 @@
 export const NAMETAG_MAX: 64;
 /** A nametag as the person typed it -> its hash, the 32 bytes the key signs. Throws on an empty or too long one. */
 export function nametagHash(nametag: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export const APPROVAL: Readonly<{
+    PRESS: 1;
+    BUDGET: 2;
+}>;
 /**
- * SHA256("OKEDGE-STATEMENT-v1" || device id 16 || checkpoint pubkey X||Y 64 ||
- *        SHA256(ML-DSA-65 checkpoint pubkey 1952) 32 || seq u32 LE || nametag hash 32)
- * - what both owner keys sign (okplugin_edge.cpp statement()).
+ * SHA256("OKEDGE-CERTIFY-v1" || device id 16 || checkpoint pubkey X||Y 64 ||
+ *        SHA256(ML-DSA-65 checkpoint pubkey 1952) 32 || approval u8 || seq u32 LE || subject 32)
+ * - what both owner keys sign (okplugin_edge.cpp certify_sign()). seq is the certification's own link.
  */
-export function statementDigest({ deviceId, publicKey, publicKeyPq, seq, nametagHash: nh }: {
+export function certifyDigest({ deviceId, publicKey, publicKeyPq, approval, seq, subject }: {
     deviceId: any;
     publicKey: any;
     publicKeyPq: any;
+    approval: any;
     seq: any;
-    nametagHash: any;
+    subject: any;
 }): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /**
- * Is this statement signed by MY owner keys, and does it name the key it carries?
+ * Is this certification signed by MY owner keys, with an approval its kind accepts?
+ * c: {deviceId, publicKey, publicKeyPq, approval, seq, subject, signature, signaturePq}; accepts: the approvals allowed.
+ * -> boolean: true only when BOTH signatures verify (false on anything malformed or missing)
+ */
+export function verifyCertification(c: any, ownerKey: any, ownerKeyPq: any, accepts?: 1[]): boolean;
+/**
+ * A device's NAMETAG statement: a PRESSED certification of the nametag's hash (Brad, 2026-10-30: "change nametag to
+ * certify, and then we certify our nametag"; "i dont want nametag to auto sign themselves"). Its stored shape is the
+ * statement's as before - the approval is not carried: a nametag is only ever pressed, so it is checked as PRESS, and
+ * one certified any other way has another digest and fails.
  * statement: {deviceId, publicKey, publicKeyPq, seq, nametag (text), signature, signaturePq};
  * ownerKey / ownerKeyPq: this device's own owner public keys (P-256 X||Y, ML-DSA-65).
- * -> boolean: true only when BOTH signatures verify (false on anything malformed or missing)
  */
 export function verifyStatement(statement: any, ownerKey: any, ownerKeyPq: any): boolean;
 export const MAX_USES: 1024;

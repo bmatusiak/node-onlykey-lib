@@ -111,16 +111,18 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
         emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, 0, refusedTx, 0]));
       } else if (sub === 0x04) {
-        emit(report([...myPub]));
+        /* PUBKEY {which}: 0 the checkpoint key, 1 the owner key - nothing signed */
+        emit(report([...(arg[0] ? p256.getPublicKey(ownerSecret, false).slice(1) : myPub)]));
       } else if (sub === 0x05) {
         /* PUBKEY_PQ: arg 0 = the checkpoint key's ML-DSA-65 twin, 1 = the owner key's - whole, in 64-byte reports */
         for (const r of reports(arg[0] ? ownerPq.publicKey : myPq.publicKey)) emit(r);
-      } else if (sub === 0x06) {
-        /* the owner statement (okplugin_edge statement()): seq . nametag hash, the owner key, the P-256 signature, the ML-DSA-65 one - no link */
-        const seq = held.length ? held.length - 1 : 0xffffffff;
-        const nh = arg.slice(0, 32);
-        const digest = grants.statementDigest({ deviceId: myDevice, publicKey: myPub, publicKeyPq: myPq.publicKey, seq, nametagHash: nh });
-        emit(report([...u32(seq), ...nh]));
+      } else if (sub === 0x08) {
+        /* CERTIFY (okplugin_edge certify_pressed): pressed at once here - its link, then approval . seq . subject, the owner key, both signatures */
+        const subject = arg.slice(0, 32);
+        const seq = append({ op: codes.OP.CERTIFY, decision: codes.DECISION.APPROVE, slot: 0, flags: codes.FLAG.PRESS_OBSERVED, subject });
+        const approval = grants.APPROVAL.PRESS;
+        const digest = grants.certifyDigest({ deviceId: myDevice, publicKey: myPub, publicKeyPq: myPq.publicKey, approval, seq, subject });
+        emit(report([approval, ...u32(seq), ...subject]));
         emit(report([...p256.getPublicKey(ownerSecret, false).slice(1)]));
         emit(report([...p256.sign(digest, ownerSecret, { prehash: false, lowS: false })]));
         for (const r of reports(signPq(digest, ownerPq.secretKey))) emit(r);

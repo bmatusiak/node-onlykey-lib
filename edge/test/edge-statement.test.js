@@ -77,21 +77,24 @@ test('the hybrid: a statement whose ML-DSA-65 signature is missing or wrong, or 
   assert.equal(grants.verifyStatement({ ...st, publicKeyPq: undefined }, owner, ownerPq), false, 'no ML-DSA-65 checkpoint key');
 });
 
-test('the statement digest is SHA256("OKEDGE-STATEMENT-v1" || id || key || SHA256(pq key) || seq u32 LE || nametag hash), computed with node:crypto', () => {
+test('the certification digest is SHA256("OKEDGE-CERTIFY-v1" || id || key || SHA256(pq key) || approval || seq u32 LE || subject), computed with node:crypto', () => {
   const id = new Uint8Array(16).fill(1);
   const key = new Uint8Array(64).fill(2);
   const keyPq = new Uint8Array(chain.ML_DSA65.PK).fill(3);
   const nh = grants.nametagHash('A13');
   const pqHash = crypto.createHash('sha256').update(keyPq).digest();
-  const want = crypto.createHash('sha256').update(Buffer.concat([Buffer.from('OKEDGE-STATEMENT-v1'), id, key, pqHash, Buffer.from([7, 1, 0, 0]), nh])).digest();
-  assert.deepEqual([...grants.statementDigest({ deviceId: id, publicKey: key, publicKeyPq: keyPq, seq: 263, nametagHash: nh })], [...want]);
+  const want = crypto.createHash('sha256').update(Buffer.concat([Buffer.from('OKEDGE-CERTIFY-v1'), id, key, pqHash, Buffer.from([1, 7, 1, 0, 0]), nh])).digest();
+  assert.deepEqual([...grants.certifyDigest({ deviceId: id, publicKey: key, publicKeyPq: keyPq, approval: grants.APPROVAL.PRESS, seq: 263, subject: nh })], [...want]);
   /* the digest commits to the ML-DSA-65 checkpoint key: another one, another digest */
   const keyPq2 = Uint8Array.from(keyPq);
   keyPq2[1951] ^= 1;
-  assert.notDeepEqual([...grants.statementDigest({ deviceId: id, publicKey: key, publicKeyPq: keyPq2, seq: 263, nametagHash: nh })], [...want]);
+  assert.notDeepEqual([...grants.certifyDigest({ deviceId: id, publicKey: key, publicKeyPq: keyPq2, approval: grants.APPROVAL.PRESS, seq: 263, subject: nh })], [...want]);
   /* and it has to be there, at its full length */
-  assert.throws(() => grants.statementDigest({ deviceId: id, publicKey: key, seq: 263, nametagHash: nh }), TypeError);
-  assert.throws(() => grants.statementDigest({ deviceId: id, publicKey: key, publicKeyPq: keyPq.slice(1), seq: 263, nametagHash: nh }), TypeError);
+  assert.throws(() => grants.certifyDigest({ deviceId: id, publicKey: key, approval: grants.APPROVAL.PRESS, seq: 263, subject: nh }), TypeError);
+  assert.throws(() => grants.certifyDigest({ deviceId: id, publicKey: key, publicKeyPq: keyPq.slice(1), approval: grants.APPROVAL.PRESS, seq: 263, subject: nh }), TypeError);
+  /* the approval is signed in: a budget-approved certification of the same subject is another digest */
+  assert.notDeepEqual([...grants.certifyDigest({ deviceId: id, publicKey: key, publicKeyPq: keyPq, approval: grants.APPROVAL.BUDGET, seq: 263, subject: nh })], [...want]);
+  assert.throws(() => grants.certifyDigest({ deviceId: id, publicKey: key, publicKeyPq: keyPq, approval: 3, seq: 263, subject: nh }), TypeError);
   const wantTag = crypto.createHash('sha256').update(Buffer.concat([Buffer.from('OKEDGE-NAMETAG-v1'), Buffer.from('A13', 'utf8')])).digest();
   assert.deepEqual([...nh], [...wantTag]);
 });
@@ -101,4 +104,22 @@ test('a nametag: trimmed, 1 to 64 characters', () => {
   assert.throws(() => grants.nametagHash('   '), TypeError);
   assert.throws(() => grants.nametagHash('x'.repeat(65)), RangeError);
   assert.doesNotThrow(() => grants.nametagHash('é'.repeat(64)));
+});
+
+test('a nametag is certified at a press: the certification is a link on the chain, and the statement names that link (2026-10-30)', async () => {
+  const k = mine();
+  const before = await k.head();
+  const st = await k.statement('green1');
+  const after = await k.head();
+  assert.equal(after.seq, (before.seq ?? -1) + 1, 'certify writes one link');
+  assert.equal(st.seq, after.seq, 'the statement names its own link');
+  const [{ link }] = await k.pickup(after.seq, 1);
+  const f = chain.decodeLink(link);
+  assert.equal(f.op, 18, 'op CERTIFY');
+  assert.deepEqual([...f.subject], [...grants.nametagHash('green1')], 'the link carries the nametag hash');
+  assert.equal(grants.verifyStatement(st, st.ownerKey, st.ownerKeyPq), true);
+  /* the owner keys are read from the key, nothing signed: the same keys the certification carries */
+  assert.deepEqual([...(await k.ownerPublicKey())], [...st.ownerKey]);
+  /* a nametag accepts only a press: the same signatures checked as a budget approval fail */
+  assert.equal(grants.verifyCertification({ ...st, approval: grants.APPROVAL.BUDGET, subject: grants.nametagHash('green1') }, st.ownerKey, st.ownerKeyPq, [grants.APPROVAL.BUDGET]), false);
 });
