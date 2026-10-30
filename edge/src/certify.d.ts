@@ -39,7 +39,7 @@ export function loginCard(c: {
     };
 };
 /** The 32 bytes the key certifies for a thing of this kind (the card's canonical JSON; a nametag its hash). */
-export function subjectOf(kind: any, thing: any): any;
+export function subjectOf(kind: any, thing: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /**
  * A certified thing as hosts keep and sync it: {kind, thing, certification (hex)}.
  * @param {string} kind @param {object} thing @param {object} certification edge.certify()'s answer

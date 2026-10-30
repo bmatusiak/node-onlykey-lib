@@ -195,28 +195,70 @@ function setup(imports, register) {
      * onUse({seq, message}) after each paid request's receipt (seq: the use's link). A host that files neither still logs
      * in; its copy then cannot check the login's links.
      */
-    async login(fn, { reason = 'log in', derives = [], signs = 0, onPress, ttlMinutes = 2, onOpened, onUse } = {}) {
+    /*
+     * THIS DEVICE'S LOGIN CARD, rebuilt from what the key gives with no press (Brad, 2026-10-30: "the card can be rebuilt
+     * with cert and used for 1 press login after"; one per salted device id): the Edge device id, the bucket identity,
+     * the key's site, and exactly a login's requests - the bucket's derive and the bucket key's (by label), the
+     * identity's signatures on slot 201 (its label, cap 2). -> the card (edge/src/certify.js loginCard), or null with no
+     * identity loaded, no site (a key that names none has no bucket) or no Edge.
+     */
+    async loginCard() {
       const edge = app.services && app.services.edge;
-      if (!edge || typeof edge.grant !== 'function' || typeof okcrypto.setUseHook !== 'function' || (!derives.length && !signs)) {
-        return { result: await fn(), budget: null, paid: 0 };
-      }
+      const h = held;
+      if (!h || !h.site || !edge || typeof edge.publicKey !== 'function') return null;
+      const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+      const { deviceId } = await edge.publicKey();
+      return {
+        device: hex(deviceId), identity: hex(h.publicKey), site: h.site,
+        derives: [bucketIdentity.bucketLabel(h.publicKey), bucketIdentity.bucketKeyLabel(h.publicKey)],
+        signs: { slot: 201, label: hex(sha256(utf8(bucketIdentity.IDENTITY_LABEL))), cap: 2 },
+      };
+    },
+
+    /* certify this device's login card at a press -> the record to keep with the bucket (edge.certifyLoginCard) */
+    async certifyLoginCard({ onPress } = {}) {
+      const edge = app.services && app.services.edge;
+      const card = await identity.loginCard();
+      if (!card) throw Object.assign(new Error('identity: no login card to certify - no identity, no site or no Edge'), { code: 'IDENTITY_NO_CARD' });
+      return edge.certifyLoginCard(card, { onPress });
+    },
+
+    async login(fn, { card = null, reason = 'log in', onPress, ttlMinutes = 2, onOpened, onUse } = {}) {
+      const edge = app.services && app.services.edge;
+      /*
+       * THE BUDGET ONLY INSIDE A VERIFIED CARD OF THIS DEVICE (Brad, 2026-10-30: "a manual multi press flow for initial
+       * login decryption"; then 1 press with the card): no card, a card for another device or identity, or one the
+       * owner keys do not verify - the login runs as it always did, each request asking its own code. No silent mix.
+       */
+      const manual = async (why) => ({ result: await fn(), budget: null, paid: 0, manual: why });
+      if (!card) return manual('no login card');
+      if (!edge || typeof edge.grant !== 'function' || typeof okcrypto.setUseHook !== 'function') return manual('no Edge');
+      const want = await identity.loginCard();
+      if (!want || !card.thing || card.thing.device !== want.device || card.thing.identity !== want.identity) return manual('the card is not this device\'s');
+      if (!(await edge.verifyRecord(card))) return manual('the card does not verify under the owner keys');
       /* the Edge ops, as edge/src/codes.js fixes them (core never requires edge/: Edge is the plugin's, found through app.services) */
       const OP = { SIGN: 1, DERIVE: 17 };
       const { MSG } = require('../../src/protocol/msg');
       const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
       const signLabel = sha256(utf8(bucketIdentity.IDENTITY_LABEL));
-      const scopes = [...new Set(derives)].slice(0, signs ? 3 : 4).map((d) => ({ op: OP.DERIVE, slot: 128, cap: 1, derive: d }));
-      if (signs) scopes.push({ op: OP.SIGN, slot: 201, cap: signs, label: signLabel });
+      const signs = card.thing.signs.cap;
+      const scopes = card.thing.derives.map((d) => ({ op: OP.DERIVE, slot: 128, cap: 1, derive: d }));
+      scopes.push({ op: OP.SIGN, slot: 201, cap: signs, label: signLabel });
+      /* the gate (certify.budgetAllowed): the hosts enforce that a budget stays inside the card; the key, later */
+      const allowed = edge.budgetAllowed(card, scopes);
+      if (!allowed.ok) return manual(`the budget is not inside the card: ${allowed.why}`);
       /* what the budget may still pay: each derive once by its label hash, the identity's signatures up to `signs` */
       const left = new Map(scopes.filter((s) => s.op === OP.DERIVE).map((s) => [hex(sha256(utf8(s.derive))), 1]));
       let signsLeft = signs;
       const h = await edge.head();
+      /* a host that holds no copy of the chain has no head to prove (the key never reveals it): manual, as a new host */
+      if (!h.head) return manual('this host holds no copy of the chain yet');
       let budget;
       try {
         budget = await edge.grant({ scopes, reasonHash: sha256(utf8(reason)), verifiedHead: h.head, ttlMinutes, onPress });
       } catch (e) {
         /* a firmware without the login budget refuses a derive scope: the login as it always was */
-        if (e && (e.status === 'scope-not-allowed' || (e.name === 'EdgeError' && e.code === 0x03))) return { result: await fn(), budget: null, paid: 0 };
+        if (e && (e.status === 'scope-not-allowed' || (e.name === 'EdgeError' && e.code === 0x03))) return manual('this firmware has no login budget');
         throw e;
       }
       /* the scopes as a host keeps them (JSON): a label as its hex, which grants.scopeLabel reads back as the same bytes */

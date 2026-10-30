@@ -558,6 +558,34 @@ function setup(imports, register) {
     },
 
     /**
+     * A LOGIN CARD, certified at a press (edge/src/certify.js): the record every host keeps and syncs with the bucket.
+     * -> {v, kind: 'login-card', thing: <the canonical card>, certification (hex)}
+     */
+    async certifyLoginCard(card, { onPress, timeoutMs } = {}) {
+      const { certify: c } = require('../src');
+      const thing = c.loginCard(card);
+      const cert = await edge.certify(c.subjectOf('login-card', thing), { onPress, timeoutMs });
+      if (!c.ACCEPTS['login-card'].includes(cert.approval)) throw new Error('Edge: a login card is certified only by a press');
+      return c.record('login-card', thing, cert);
+    },
+
+    /**
+     * Is this certified record this owner's? Checked against the owner keys READ from the key (both halves, nothing
+     * signed), held for this connection - never the keys the record carries. -> boolean
+     */
+    async verifyRecord(rec) {
+      const { certify: c } = require('../src');
+      if (!ownerKeysNow) ownerKeysNow = { ownerKey: await edge.ownerPublicKey(), ownerKeyPq: await edge.publicKeyPq('owner') };
+      return c.verify(rec, ownerKeysNow.ownerKey, ownerKeysNow.ownerKeyPq);
+    },
+
+    /* may a budget with these scopes open under this card? (certify.budgetAllowed - the hosts enforce it; the key, later) */
+    budgetAllowed(rec, scopes) {
+      const { certify: c } = require('../src');
+      return c.budgetAllowed(rec, scopes);
+    },
+
+    /**
      * This device's NAMETAG, certified: a press, then the key certifies the nametag's hash (grants.verifyStatement).
      * -> {deviceId, publicKey, publicKeyPq, seq, nametag, ownerKey, ownerKeyPq, signature, signaturePq} - the statement
      * shape every host keeps and offers.
@@ -966,6 +994,8 @@ function setup(imports, register) {
 
   let publicKeyNow = null;
   let publicKeyPqNow = null;
+  /* the owner keys, read once for this connection (verifyRecord) */
+  let ownerKeysNow = null;
   /* this connection's identity (edge.identityId), read once */
   let identityIdNow = null;
   /* the Edge public key and device id, read once for this connection (edge.publicKey) */

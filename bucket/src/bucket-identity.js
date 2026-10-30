@@ -82,6 +82,8 @@ async function readIdentity(okcrypto, opts = {}) {
  */
 const BUCKET_KEY_VERSION = 2;
 const bucketKeyLabel = (identityPublicKey) => `okedge/bucket-key/v2/${identityIdOf(identityPublicKey)}`;
+/* the label the BUCKET's own secret is derived under (its rows are sealed with it) - beside the bucket key's, in the lib */
+const bucketLabel = (identityPublicKey) => `okedge/bucket/v2/${identityIdOf(identityPublicKey)}`;
 
 /**
  * Make the bucket key: the key's derive under its own site, turned into an Ed25519 key pair on the host.
@@ -154,4 +156,4 @@ function verify({ identityPublicKey, bucketPublicKey, certificate, purpose, byte
   }
 }
 
-module.exports = { IDENTITY_LABEL,isBucketIdentityId, identityIdOf, readIdentity, deriveBucketKeyAt, BUCKET_KEY_VERSION, bucketKeyLabel, certify, verifyCertificate, sign, verify };
+module.exports = { bucketLabel, IDENTITY_LABEL,isBucketIdentityId, identityIdOf, readIdentity, deriveBucketKeyAt, BUCKET_KEY_VERSION, bucketKeyLabel, certify, verifyCertificate, sign, verify };

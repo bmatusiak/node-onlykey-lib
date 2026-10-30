@@ -1,6 +1,7 @@
 export let codes: typeof import("./codes");
 export let chain: typeof import("./chain");
 export let grants: typeof import("./grants");
+export let certify: typeof import("./certify");
 export let receipts: typeof import("./receipts");
 export let copy: typeof import("./copy");
 export let note: typeof import("./note");

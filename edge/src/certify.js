@@ -24,7 +24,7 @@
  * this owner - its log is yours, named or not.
  */
 
-const crypto = require('../../src/crypto');
+const crypto = require('../../src/crypto/provider');
 const { utf8ToBytes, toHex, fromHex } = require('../../src/bytes');
 const grants = require('./grants');
 

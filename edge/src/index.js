@@ -10,6 +10,8 @@ module.exports = {
   codes: require('./codes'),
   chain: require('./chain'),
   grants: require('./grants'),
+  /* what the owner key certifies (a nametag, a login card, an agent identity) and how a host checks it */
+  certify: require('./certify'),
   receipts: require('./receipts'),
   copy: require('./copy'),
   /* B7: what a use was and whether it stands out - the phone's Live view and onlykey-js edge watch */

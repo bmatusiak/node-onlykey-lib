@@ -1,3 +1,4 @@
+export function bucketLabel(identityPublicKey: any): string;
 export const IDENTITY_LABEL: "";
 /** Is this a bucket identity id (32 lowercase hex)? */
 export function isBucketIdentityId(s: any): boolean;
