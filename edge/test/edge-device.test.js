@@ -271,7 +271,8 @@ test('edge: R11a - a derived-code scope stages its identity label first, and the
   const reasonHash = new Uint8Array(32).fill(7);
   const writesBefore = transport.writes.length;
   const g = await edge.grant({ scopes, reasonHash, verifiedHead: before.head });
-  assert.deepEqual(transport.writes.slice(writesBefore), [0x11, 0x10], 'GRANT_LABEL, then GRANT_CREATE');
+  /* then HEAD and PICKUP: on a key that never reveals its head the client welds the grant link's head itself */
+  assert.deepEqual(transport.writes.slice(writesBefore, writesBefore + 2), [0x11, 0x10], 'GRANT_LABEL, then GRANT_CREATE');
   const [l] = await edge.pickup(g.seq, 1);
   const opening = (sc) => grants.verifyBudgetOpening({
     deviceId: DEVICE, publicKey: PUB, link: l.link, prevHead: before.head,

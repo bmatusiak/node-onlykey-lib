@@ -44,7 +44,12 @@ const reports = (bytes) => {
 const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUpperCase().padStart(2, '0')}`)]);
 
 /* a fake key: a tiny chain, one held link, answers by sub-op */
-function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET } = {}) {
+/*
+ * headproof (default): the firmware since CERTIFY_HEADPROOF - HEAD byte 59 = 1, the head never revealed (zeros in HEAD, PICKUP
+ * and the RECEIPT/SETTLE/LOSS answers), CHECKPOINT unknown, PROVE_HEAD {seq, head} confirms a head the host welded.
+ * headproof: false - the firmware before it.
+ */
+function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true } = {}) {
   /* each fake key its own Edge key - SECRET by default */
   const myPub = p256.getPublicKey(secret, false).slice(1);
   const myDevice = chain.deviceIdOf(myPub);
@@ -81,11 +86,12 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
     onHold.delete(id);
     append({ op: codes.OP.GRANT_END, decision: how, slot: 0, flags: 0, grantId: id, subject: new Uint8Array(32) });
   };
-  const checkpoint = () => {
+  const hidden = (h) => (headproof ? new Uint8Array(32) : h);
+  const checkpoint = (show = !headproof) => {
     const seq = held.length - 1;
     const sig = chain.signCheckpoint({ deviceId: myDevice, seq, head }, secret);
     const sigPq = signPq(chain.checkpointDigest({ deviceId: myDevice, seq, head }), myPq.secretKey);
-    emit(report([...u32(seq), ...head]));
+    emit(report([...u32(seq), ...(show ? head : new Uint8Array(32))]));
     emit(report([...sig]));
     for (const r of reports(sigPq)) emit(r);
   };
@@ -93,7 +99,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
   append({ op: codes.OP.SIGN, decision: codes.DECISION.APPROVE, slot: 2, flags: codes.FLAG.PRESS_OBSERVED | codes.FLAG.OWES_RECEIPT, subject: new Uint8Array(32).fill(9) });
   owed = [0];
   /* seq . head: RECEIPT's, SETTLE's and LOSS's answer (no vouch tag since 2026-10-08) */
-  const seqHead = () => report([...u32(held.length - 1), ...head]);
+  const seqHead = () => report([...u32(held.length - 1), ...hidden(head)]);
   let staged = {}; /* R11a: GRANT_LABEL's labels, by scope index, for the next GRANT_CREATE */
 
   const transport = {
@@ -109,7 +115,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...head, ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, 0, refusedTx, 0]));
+        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, headproof ? 1 : 0, refusedTx, 0]));
       } else if (sub === 0x04) {
         /* PUBKEY {which}: 0 the checkpoint key, 1 the owner key - nothing signed */
         emit(report([...(arg[0] ? p256.getPublicKey(ownerSecret, false).slice(1) : myPub)]));
@@ -127,7 +133,13 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         emit(report([...p256.sign(digest, ownerSecret, { prehash: false, lowS: false })]));
         for (const r of reports(signPq(digest, ownerPq.secretKey))) emit(r);
       } else if (sub === 0x03) {
+        if (headproof) return emit(status(0x0a));
         checkpoint();
+      } else if (sub === 0x09 && headproof) {
+        /* PROVE_HEAD {seq, head}: the host's welded head - confirmed only when it is the key's own */
+        const seq = (arg[0] | (arg[1] << 8) | (arg[2] << 16) | (arg[3] << 24)) >>> 0;
+        if (seq !== held.length - 1 || !same(arg.slice(4, 36), head)) return emit(status(0x0b));
+        checkpoint(true);
       } else if (sub === 0x02) {
         const from = arg[0] | (arg[1] << 8);
         for (let s = from; s < from + arg[4]; s++) {
@@ -135,7 +147,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         }
         for (let s = from; s < from + arg[4]; s++) {
           emit(report([...held[s].link]));
-          emit(report([...held[s].head, ...(held[s].reveal || new Uint8Array(32))]));
+          emit(report([...hidden(held[s].head), ...(held[s].reveal || new Uint8Array(32))]));
         }
       } else if (sub === 0x20) {
         const ref = arg[0] | (arg[1] << 8);

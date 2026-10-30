@@ -31,7 +31,8 @@ const { identityIdOf } = require('../src/identity-id');
 const OKEDGE = 0xf8;
 const SUB = Object.freeze({
   /* 0x06 was the no-press owner statement: retired - the owner key signs only through CERTIFY (a press or a budget) */
-  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, PUBKEY_PQ: 0x05, CERTIFY: 0x08,
+  /* CHECKPOINT (0x03): firmware before CERTIFY_HEADPROOF only - after it the key confirms a head the host proves (PROVE_HEAD) */
+  HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, PUBKEY_PQ: 0x05, CERTIFY: 0x08, PROVE_HEAD: 0x09,
   /* over WebAuthn only: the ML-DSA-65 signature an answer left out (one answer holds at most 3392 bytes) - tunnelCall */
   MORE: 0x07,
   /* R31: DEBUG firmware only - a production key answers it as unknown (EDGE:0A) */
@@ -55,6 +56,16 @@ const GRANT_HEAD_BYTES = 6;
 const seqHead = (r) => ({ seq: (r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24)) >>> 0, head: r.slice(4, 36) });
 const SEQ_NONE = 0xffffffff;
 const HELD = 8;
+/*
+ * HEAD byte 59: what the firmware does (okplugin_edge.h OKEDGE_CAPS_*). CERTIFY_HEADPROOF (Brad, 2026-10-30: "providing
+ * proof to the key we have the last transaction"): CERTIFY and PUBKEY {which} answer, and the key NEVER reveals its head -
+ * HEAD, PICKUP, RECEIPT, SETTLE and LOSS carry zeros where it was - so a host knows the head only by welding the links
+ * onto a head it already holds (its copy, or the chain's genesis), and every request that names the head (a TX start,
+ * a budget, a resume, PROVE_HEAD) is the proof that it holds the chain. Older firmware: 0, today's behaviour.
+ */
+const CAPS = Object.freeze({ CERTIFY_HEADPROOF: 0x01 });
+/* how many computed heads the tracker keeps, by seq - the key's ring is 8 links */
+const TRACKED = 32;
 
 /** A refusal from the key: `code` and `name` from codes.STATUS. */
 class EdgeError extends Error {
@@ -91,10 +102,11 @@ function hexHead(bytes) {
  * refused-TX start counter since B7 stage 2; older firmware sends 0 there.)
  */
 function isHeadReply(r) {
-  /* bytes 61-63 zero (v1: every key takes TX start {token, intent}; no capability byte) */
+  /* bytes 61-63 zero (v1: every key takes TX start {token, intent}); byte 59 the capability bits (CAPS) */
   if (r.length < 64 || r[61] | r[62] | r[63]) return false;
   return r[56] < 16 && r[57] <= 1 && r[58] === 0 && r[59] <= 1;
 }
+const allZero = (b) => b.every((x) => x === 0);
 
 /*
  * PICKUP's answer, report by report: each link is the seq asked for, with its 17
@@ -110,6 +122,8 @@ function pickupReply(from) {
       return f.reservedZero && f.seq === from + i / 2;
     }
     if (i < 3) return true;
+    /* a key that never reveals its head sends zeros there: nothing to weld here, the tracker welds */
+    if (allZero(bytes.slice(0, 32))) return true;
     return sameBytes(chain.weld(got[i - 2].slice(0, 32), got[i - 1]), bytes.slice(0, 32));
   };
 }
@@ -440,9 +454,16 @@ function setup(imports, register) {
       const oldest = get32(r, 36);
       const ids = [0, 1, 2, 3].map((i) => get32(r, 40 + 4 * i));
       const mask = r[56];
+      caps = r[59];
+      capsRead = true;
+      /* a key that never reveals its head: the one this host welds - null when it holds nothing to weld onto */
+      const head = caps & CAPS.CERTIFY_HEADPROOF
+        ? await trackedHead(seq === SEQ_NONE ? null : seq, oldest === SEQ_NONE ? null : oldest, opts)
+        : r.slice(4, 36);
       return {
         seq: seq === SEQ_NONE ? null : seq,
-        head: r.slice(4, 36),
+        head,
+        caps,
         oldest: oldest === SEQ_NONE ? null : oldest,
         live: ids.filter(Boolean),
         held: ids.filter((id, i) => id && (mask >> i) & 1),
@@ -508,6 +529,7 @@ function setup(imports, register) {
      * keys used to be learned from a statement the app asked for once a session). -> X || Y (64 bytes)
      */
     async ownerPublicKey(opts) {
+      await needCaps(CAPS.CERTIFY_HEADPROOF, 'the owner key read');
       const [r] = await call(SUB.PUBKEY, Uint8Array.of(1), opts);
       return r.slice(0, 64);
     },
@@ -521,10 +543,13 @@ function setup(imports, register) {
     async certify(subject, { onPress, timeoutMs = 30000 } = {}) {
       const sub = Uint8Array.from(subject);
       if (sub.length !== 32) throw new TypeError('Edge: a certification subject is 32 bytes');
+      await needCaps(CAPS.CERTIFY_HEADPROOF, 'certify');
       const { publicKey, deviceId } = await edge.publicKey();
       const publicKeyPq = await edge.publicKeyPq('checkpoint');
       const ownerKeyPq = await edge.publicKeyPq('owner');
-      const rs = await pressed(SUB.CERTIFY, sub, { reports: 3 + reportsFor(chain.ML_DSA65.SIG), timeoutMs }, onPress);
+      /* the answer is this certification's: an approval byte, then this subject (a late report of another request is not) */
+      const accept = (bytes, got) => got.length !== 0 || ((bytes[0] === 1 || bytes[0] === 2) && sameBytes(bytes.slice(5, 37), sub));
+      const rs = await pressed(SUB.CERTIFY, sub, { reports: 3 + reportsFor(chain.ML_DSA65.SIG), timeoutMs, accept }, onPress);
       const [a, k, sg] = rs;
       return {
         deviceId, publicKey, publicKeyPq, approval: a[0], seq: get32(a, 1), subject: a.slice(5, 37),
@@ -548,22 +573,29 @@ function setup(imports, register) {
       };
     },
 
-    /** Links the key still holds: [{link, head, reveal|null}] (reveal = a self-press's v_i). */
+    /**
+     * Links the key still holds: [{link, head, reveal|null}] (reveal = a self-press's v_i). On a key that never reveals
+     * its head, each head is the tracker's weld - null for a link whose previous head this host does not hold.
+     */
     async pickup(from, count = 1, opts) {
-      if (count < 1 || count > HELD) throw new RangeError(`Edge: pick up 1 to ${HELD} links, not ${count}`);
-      /* over WebAuthn the key answers at most 3 links per request (one answer, under its 512-byte poll chunk) */
-      if (transport.tunnelOnly && count > 3) {
-        const out = [];
-        for (let s = from; s < from + count; s += 3) out.push(...await edge.pickup(s, Math.min(3, from + count - s), opts));
-        return out;
-      }
-      const rs = await call(SUB.PICKUP, concat([u32(from), Uint8Array.of(count)]), { ...opts, reports: 2 * count, accept: pickupReply(from) });
-      const out = [];
-      for (let i = 0; i < rs.length; i += 2) {
-        const reveal = rs[i + 1].slice(32, 64);
-        out.push({ link: rs[i], head: rs[i + 1].slice(0, 32), reveal: reveal.some((x) => x) ? reveal : null });
-      }
-      return out;
+      /* what this firmware does decides whether the heads are the key's or this host's welds: read once per connection */
+      if (!capsRead) await edge.head(opts);
+      const out = await rawPickup(from, count, opts);
+      if (!(caps & CAPS.CERTIFY_HEADPROOF)) return out;
+      const { deviceId } = await edge.publicKey(opts);
+      return out.map((l) => ({ ...l, head: weldTracked(deviceId, l.link) }));
+    },
+
+    /**
+     * THIS HOST'S COPY ENDS HERE: the head it verified at seq (its copy's last link), for the tracker to weld the key's
+     * newer links onto. Hosts call it when they load a copy; nothing is asked of the key.
+     */
+    knownHead(seq, head, deviceId) {
+      const dev = deviceId ? toHex(deviceId) : track && track.dev;
+      if (!dev || !Number.isInteger(seq) || !(head instanceof Uint8Array) || head.length !== 32) return false;
+      if (!track || track.dev !== dev) track = { dev, heads: new Map() };
+      remember(seq, head);
+      return true;
     },
 
     /**
@@ -571,7 +603,17 @@ function setup(imports, register) {
      * signature over (device_id, seq, head), both required by chain.verifyCheckpoint.
      */
     async checkpoint(opts) {
-      const rs = await call(SUB.CHECKPOINT, null, { ...opts, reports: 2 + reportsFor(chain.ML_DSA65.SIG) });
+      const h = await edge.head(opts);
+      if (!(caps & CAPS.CERTIFY_HEADPROOF)) {
+        const rs = await call(SUB.CHECKPOINT, null, { ...opts, reports: 2 + reportsFor(chain.ML_DSA65.SIG) });
+        return checkpointOf(rs[0], rs.slice(1));
+      }
+      /*
+       * PROVE_HEAD: this host's welded head; the key confirms it (both checkpoint signatures) only when it is its own -
+       * a host without the chain has no head to prove (EdgeError 'stale-head', or no head at all here).
+       */
+      if (!h.head) throw Object.assign(new Error('Edge: this host holds no copy to prove the head from - load the copy first'), { code: 'ENOHEAD' });
+      const rs = await call(SUB.PROVE_HEAD, concat([u32(h.seq === null ? SEQ_NONE : h.seq), h.head]), { ...opts, reports: 2 + reportsFor(chain.ML_DSA65.SIG) });
       return checkpointOf(rs[0], rs.slice(1));
     },
 
@@ -613,13 +655,16 @@ function setup(imports, register) {
       const pending = pressed(SUB.GRANT_CREATE, args, { reports: 3 + reportsFor(chain.ML_DSA65.SIG), timeoutMs }, onPress);
       const rs = await pending;
       const g = rs[0];
+      const checkpoint = checkpointOf(rs[1], rs.slice(2));
+      /* a key that never reveals its head signs the grant link's head; the host welds it */
+      if (caps & CAPS.CERTIFY_HEADPROOF) checkpoint.head = await headAt(checkpoint.seq);
       return {
         grantId: get32(g, 0),
         uses: get16(g, 4),
         genesis: g.slice(6, 38),
         lifetime: ttlMinutes,
         seq: get32(g, 38),
-        checkpoint: checkpointOf(rs[1], rs.slice(2)),
+        checkpoint,
       };
     },
 
@@ -639,7 +684,7 @@ function setup(imports, register) {
       /* a code object here became 0 - OK - for every receipt (codes.receiptByte, 2026-10-07) */
       if (!Number.isInteger(code) || code < 0 || code > 0xff) throw new TypeError(`edge: a receipt code is a byte, got ${typeof code === 'object' ? JSON.stringify(code) : code}`);
       const [r] = await call(SUB.RECEIPT, concat([u32(refSeq), Uint8Array.of(code), msgHash]), opts);
-      return seqHead(r);
+      return headAfter(seqHead(r));
     },
 
 
@@ -690,7 +735,7 @@ function setup(imports, register) {
     async settle({ onPress, timeoutMs = 30000 } = {}) {
       const pending = pressed(SUB.SETTLE, null, { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
-      return seqHead(r);
+      return headAfter(seqHead(r));
     },
 
 
@@ -764,7 +809,7 @@ function setup(imports, register) {
       if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) throw new RangeError(`Edge: a loss is #from..#to, not ${from}..${to}`);
       const pending = pressed(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs, newLink: true }, onPress);
       const [r] = await pending;
-      return seqHead(r);
+      return headAfter(seqHead(r));
     },
 
     /**
@@ -838,6 +883,80 @@ function setup(imports, register) {
       r = { ...copyCheck.verifyCopyKept(c, { publicKey: publicKeyNow, publicKeyPq: publicKeyPqNow, head, checkpoint, held: ring }, null), why };
     }
     return { r, st, head, checkpoint, readMore };
+  }
+
+  /*
+   * THE HEAD TRACKER (CERTIFY_HEADPROOF firmware): heads this host computed, by seq, for one device - welded from a head
+   * it held (knownHead: its copy; or the genesis, for a chain from #0 or a restored device's continue link). The key's
+   * ring holds the last 8 links: a host whose copy ends further back has no head until it loads a newer copy.
+   */
+  let caps = 0;
+  let capsRead = false;
+  let track = null;
+  function remember(seq, head) {
+    track.heads.set(seq, head);
+    if (track.heads.size > TRACKED) track.heads.delete(Math.min(...track.heads.keys()));
+  }
+  async function needCaps(bit, what) {
+    if (!capsRead) await edge.head();
+    if (!(caps & bit)) throw Object.assign(new Error(`Edge: this key's firmware has no ${what} - update the key`), { code: 'EOLDFIRMWARE' });
+  }
+  /* the head after one picked-up link: the previous head welded, the genesis for a chain's first link; null if unknown */
+  function weldTracked(deviceId, link) {
+    const dev = toHex(deviceId);
+    if (!track || track.dev !== dev) track = { dev, heads: new Map() };
+    const f = chain.decodeLink(link);
+    const prev = f.seq === 0 || f.op === codes.OP.CONTINUE ? chain.genesis(deviceId) : track.heads.get(f.seq - 1);
+    if (!prev) return null;
+    const h = chain.weld(prev, link);
+    remember(f.seq, h);
+    return h;
+  }
+  async function rawPickup(from, count, opts) {
+    if (count < 1 || count > HELD) throw new RangeError(`Edge: pick up 1 to ${HELD} links, not ${count}`);
+    /* over WebAuthn the key answers at most 3 links per request (one answer, under its 512-byte poll chunk) */
+    if (transport.tunnelOnly && count > 3) {
+      const out = [];
+      for (let s = from; s < from + count; s += 3) out.push(...await rawPickup(s, Math.min(3, from + count - s), opts));
+      return out;
+    }
+    const rs = await call(SUB.PICKUP, concat([u32(from), Uint8Array.of(count)]), { ...opts, reports: 2 * count, accept: pickupReply(from) });
+    const out = [];
+    for (let i = 0; i < rs.length; i += 2) {
+      const reveal = rs[i + 1].slice(32, 64);
+      out.push({ link: rs[i], head: rs[i + 1].slice(0, 32), reveal: reveal.some((x) => x) ? reveal : null });
+    }
+    return out;
+  }
+  /* the key's current head as this host welds it (seq null = an empty chain: the genesis) */
+  async function trackedHead(seq, oldest, opts) {
+    const { deviceId } = await edge.publicKey(opts);
+    const dev = toHex(deviceId);
+    if (!track || track.dev !== dev) track = { dev, heads: new Map() };
+    if (seq === null) return chain.genesis(deviceId);
+    if (track.heads.has(seq)) return track.heads.get(seq);
+    if (oldest === null) return null;
+    /* weld from the newest head held at or after the ring's start - else from the chain's start, when the ring holds it */
+    const from = [...track.heads.keys()].filter((s) => s < seq && s >= oldest - 1).sort((a, b) => b - a)[0];
+    let next = from === undefined ? oldest : from + 1;
+    while (next <= seq) {
+      const n = Math.min(HELD, seq - next + 1);
+      for (const l of await rawPickup(next, n, opts)) if (!weldTracked(deviceId, l.link)) return null;
+      next += n;
+    }
+    return track.heads.get(seq) || null;
+  }
+  /* the head at a seq the tracker can reach (after a new link: HEAD welds it first) */
+  async function headAt(seq) {
+    const h = await edge.head();
+    if (h.seq === seq) return h.head;
+    return (track && track.heads.get(seq)) || null;
+  }
+  /* RECEIPT / SETTLE / LOSS: {seq, head} after their link - the head welded on headproof firmware */
+  async function headAfter(sh) {
+    if (!capsRead) await edge.head();
+    if (!(caps & CAPS.CERTIFY_HEADPROOF)) return sh;
+    return { seq: sh.seq, head: await headAt(sh.seq) };
   }
 
   let publicKeyNow = null;
