@@ -910,6 +910,8 @@ function setup(imports, register) {
     if (!track || track.dev !== dev) track = { dev, heads: new Map() };
     const f = chain.decodeLink(link);
     const prev = f.seq === 0 || f.op === codes.OP.CONTINUE ? chain.genesis(deviceId) : track.heads.get(f.seq - 1);
+    /* a link whose head this host already holds (where its copy ends): that head, when it welds from nothing it holds */
+    if (!prev) return track.heads.get(f.seq) || null;
     if (!prev) return null;
     const h = chain.weld(prev, link);
     remember(f.seq, h);
