@@ -18,7 +18,7 @@
  * setting) - see probe() for why the library does not guess.
  */
 'use strict';
-const { inLane } = require('../../src/transport/lane');
+const { inLane, laneOf } = require('../../src/transport/lane');
 
 const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
@@ -162,6 +162,11 @@ function setup(imports, register) {
    * pressed ones for their whole wait - runs after the one before it settles.
    */
   /* the KEY's lane, shared with every other plugin (src/transport/lane.js) - not one of Edge's own */
+  /* how many requests wait in the key's lane behind the running one (a host's queue bar) */
+  function laneWaiting() {
+    try { return laneOf(transport).state().waiting; } catch { return 0; }
+  }
+
   function exclusive(fn, laneOpts) {
     return inLane(transport, fn, laneOpts);
   }
@@ -306,7 +311,7 @@ function setup(imports, register) {
      * as the web app does - "a refresh is just a trigger for the operation, the sheet shows what's happening"). Only on
      * this direct path: over the tunnel okcrypto's own 'tunnel' events say it already.
      */
-    const said = (phase, ok) => { if (edge && typeof edge.onRequest === 'function') { try { edge.onRequest({ phase, sub, ok }); } catch { /* a listener's error is not the request's */ } } };
+    const said = (phase, ok) => { if (edge && typeof edge.onRequest === 'function') { try { edge.onRequest({ phase, sub, ok, waiting: laneWaiting() }); } catch { /* a listener's error is not the request's */ } } };
     said('begin');
     return timed(new Promise((resolve, reject) => {
       const got = [];
