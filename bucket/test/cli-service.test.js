@@ -78,8 +78,8 @@ test('the trade\'s own write, seen while the trade still runs, is not traded aga
 test('one sync service per computer: a second one sees the live holder, does not trade, says who does', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'okbucket-svc-'));
   const lockFile = path.join(dir, '..', `sync-${path.basename(dir)}.json`);
-  /* the holder: another live process (a pid the check calls alive) */
-  fs.writeFileSync(lockFile, JSON.stringify({ pid: 424242, who: 'the desktop app' }));
+  /* the holder: another live process (a pid the check calls alive) that beat a moment ago */
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 424242, who: 'the desktop app', at: new Date().toISOString(), every: 30000 }));
   const said = [];
   let traded = 0;
   const second = startBucketService({ dir, lockFile, alive: (pid) => pid === 424242, watch: () => ({ close() {} }), intervalMs: 60000, say: (l) => said.push(l), tradeOnce: async () => { traded++; return { traded: true, same: true }; } });
@@ -95,4 +95,23 @@ test('one sync service per computer: a second one sees the live holder, does not
   assert.equal(JSON.parse(fs.readFileSync(lockFile, 'utf8')).pid, process.pid);
   third.stop();
   assert.equal(fs.existsSync(lockFile), false, 'the lock is given back');
+});
+
+test('a lock whose pid answers but whose holder stopped beating is taken (Windows reused the pid)', async () => {
+  /*
+   * Windows, 2026-10-30: the dead desktop app's pid 149784 had gone to GameInputSvc.exe, which answers EPERM - alive to
+   * the pid check - and no sync ran. The lock's time is what tells: hours old here, against a 30 s tick.
+   */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'okbucket-svc-'));
+  const lockFile = path.join(dir, '..', `sync-${path.basename(dir)}.json`);
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 149784, who: 'the desktop app', at: new Date(Date.now() - 3 * 3600e3).toISOString(), every: 30000 }));
+  let traded = 0;
+  const svc = startBucketService({ dir, lockFile, alive: () => true, watch: () => ({ close() {} }), intervalMs: 60000, tradeOnce: async () => { traded++; return { traded: true, same: true }; } });
+  assert.equal(svc.heldBy, undefined, 'a stale lock holds nothing');
+  await svc.trade('asked');
+  assert.equal(traded, 1);
+  const j = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+  assert.equal(j.pid, process.pid);
+  assert.equal(j.every, 60000, 'the new holder says how often it beats');
+  svc.stop();
 });

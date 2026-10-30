@@ -44,15 +44,23 @@ function contentsOf(dir) {
  * answers only the computer that connected last. The first to start holds a lock (lockFile: its pid and who it is,
  * owner-only); a later one sees a live holder and does not trade - it says who does. A holder that died leaves a lock
  * whose pid no longer runs: the next one takes it. The liveness check is desktop/trust.js's.
+ *
+ * A PID ALONE IS NOT ENOUGH (Windows, 2026-10-30: the desktop app said "Another sync service on this computer has it
+ * (the desktop app, pid 149784)" - that desktop app was long gone, and Windows had given 149784 to GameInputSvc.exe,
+ * which answers EPERM, so it counted as alive and no sync ran at all). EPERM cannot simply mean "dead": a service
+ * started elevated answers it too. So the holder also beats: it rewrites the lock's time on its regular tick, and a
+ * lock is held only while its pid answers AND its time is under three ticks old.
  */
 function pidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
-function holderOf(lockFile, alive) {
+function holderOf(lockFile, alive, now = Date.now()) {
   try {
     const j = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
-    return j && j.pid !== process.pid && alive(j.pid) ? j : null;
+    const beat = Date.parse(j && j.at);
+    const fresh = Number.isFinite(beat) && now - beat <= 3 * (Number(j.every) || INTERVAL_MS);
+    return j && j.pid !== process.pid && fresh && alive(j.pid) ? j : null;
   } catch {
     return null;
   }
@@ -73,7 +81,19 @@ function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOU
       return { trade: async () => {}, stop() {}, heldBy: { pid: held.pid, who: held.who } };
     }
     fs.mkdirSync(path.dirname(lockFile), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(lockFile, `${JSON.stringify({ pid: process.pid, who, at: new Date().toISOString() })}\n`, { mode: 0o600 });
+  }
+  /* the lock, with this tick's time (its beat - holderOf); only while it is still this process's */
+  const beatLock = () => {
+    if (!lockFile) return;
+    try {
+      const j = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+      if (j && j.pid !== process.pid) return;
+    } catch { /* none yet, or unreadable: this process writes it */ }
+    fs.writeFileSync(lockFile, `${JSON.stringify({ pid: process.pid, who, at: new Date().toISOString(), every: intervalMs })}\n`, { mode: 0o600 });
+  };
+  if (lockFile) {
+    try { fs.unlinkSync(lockFile); } catch { /* none */ }
+    beatLock();
   }
   let synced = contentsOf(dir);
   let running = null;
@@ -127,7 +147,10 @@ function startBucketService({ dir, tradeOnce, say = () => {}, debounceMs = DEBOU
   } catch (e) {
     say(`sync: cannot watch ${dir} (${e.message}) - trading on the timer only`);
   }
-  const tick = setInterval(() => { void trade('the regular check'); }, intervalMs);
+  const tick = setInterval(() => {
+    try { beatLock(); } catch { /* the folder went: the next tick writes it again */ }
+    void trade('the regular check');
+  }, intervalMs);
   if (tick.unref) tick.unref();
   return {
     trade,
