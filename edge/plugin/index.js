@@ -301,6 +301,13 @@ function setup(imports, register) {
       ? p.then((v) => { edge.onTiming(sub, Date.now() - began, true); return v; }, (e) => { edge.onTiming(sub, Date.now() - began, false); throw e; })
       : p);
     if (transport.tunnelOnly) return timed(tunnelCall(sub, args, { reports, timeoutMs, text, accept }));
+    /*
+     * EACH REQUEST SAID AS IT STARTS AND ENDS (edge.onRequest; Brad, 2026-10-29: the phone shows what the key is doing,
+     * as the web app does - "a refresh is just a trigger for the operation, the sheet shows what's happening"). Only on
+     * this direct path: over the tunnel okcrypto's own 'tunnel' events say it already.
+     */
+    const said = (phase, ok) => { if (edge && typeof edge.onRequest === 'function') { try { edge.onRequest({ phase, sub, ok }); } catch { /* a listener's error is not the request's */ } } };
+    said('begin');
     return timed(new Promise((resolve, reject) => {
       const got = [];
       let off = null;
@@ -406,7 +413,7 @@ function setup(imports, register) {
       } catch (e) {
         failed(e);
       }
-    }));
+    }).then((v) => { said('end', true); return v; }, (e) => { said('end', false); throw e; }));
   }
 
   const edge = {
