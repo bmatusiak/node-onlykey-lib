@@ -288,9 +288,10 @@ function verifyBudgetOpening({ deviceId, publicKey, link, prevHead, head, signat
  * then i want the log"; a device names its own fingerprint with a NAMETAG). Each key signs,
  * with an OWNER key derived from its secret with no salt - the same on every device made
  * from the same backup - a statement about itself: its device id, its checkpoint key, its
- * seq and the hash of its nametag (okplugin_edge.cpp statement()). Any device of yours
- * checks another's statement with ITS OWN owner public key: it verifies only if the same
- * OnlyKey secret made it. No press, no link.
+ * seq and the hash of its nametag. Any device of yours checks another's statement with ITS
+ * OWN owner public key: it verifies only if the same OnlyKey secret made it. Since 2026-10-30
+ * it is a CERTIFICATION (okplugin_edge.cpp certify; Brad: "i dont want nametag to auto sign
+ * themselves"): made only at a press, a link on the chain, its digest certifyDigest below.
  *
  * HYBRID (Brad, 2026-10-10): the statement carries both checkpoint keys - the ML-DSA-65 one
  * as its SHA-256, so the digest stays small - and is signed by the owner P-256 key AND the

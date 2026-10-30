@@ -9,15 +9,15 @@
  *   1. THE KEY: every report the CLI writes goes to the hard key the app holds, and every report the
  *      key sends comes back - so budget, exec and the key's signing work as on USB.
  *   2. THE HOST: an 0xF7 piece is not for the key. Its pieces are gathered into the message and
- *      answered by the host - local-host.js, the CLI's own (hostFor) - and the answer goes back in
+ *      answered by the host the caller gives (hostFor): the desktop app's page (ok-edge electron/desktop/hosting.js),
+ *      or the CLI's own local-host.js - and the answer goes back in
  *      0xF7 pieces, stamped with the request's net (wire.answerEnvelope), exactly as the phone's
  *      bridge answers (ok-edge vendorBridge keepForApp). The CLI's wire channel cannot tell the
  *      app from the phone, and needs no other code.
  *
- * ONE HOST, ONE SET OF RECORDS: the host is the CLI's local-host.js with the CLI's own Edge homes
- * (the bucket in ~/.onlykey-js), so the identity record, the copies and the openings are the same
- * ones the CLI uses alone ("desktop and cli use the same bucket data", Brad, 2026-10-23). Only the
- * person's approval comes from the app's window (the confirm the app gives hostFor).
+ * THE RECORDS: the desktop app's page answers from the identity bucket it holds, the CLI's local-host.js from
+ * the CLI's Edge homes (~/.onlykey-js) - the desktop app reads and merges that same bucket file ("desktop and
+ * cli use the same bucket data", Brad, 2026-10-23).
  *
  * THE NET is the request's own (wire.net): one running app answers the testnet and the live chain,
  * each from its own home, and never mixes them.
