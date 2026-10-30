@@ -20,53 +20,55 @@ const { grants } = require('../src');
 const { identityIdOf } = require('../src/identity-id');
 const { toHex } = require('../../src/bytes');
 
-const devices = (home) => bucketHome.kv(bucketHome.edgeAt(home, 'devices'));
+const { fromHex } = require('../../src/bytes');
 
-/* a statement's bytes as hex, for the store */
-const BYTE_FIELDS = ['deviceId', 'publicKey', 'publicKeyPq', 'ownerKey', 'ownerKeyPq', 'signature', 'signaturePq'];
-const toStored = (st) => Object.fromEntries(Object.entries(st).map(([k, v]) => [k, BYTE_FIELDS.includes(k) ? toHex(v) : v]));
+/*
+ * WHERE A NAMETAG LIVES (2026-10-30): the device's copy in the identity bucket (edge-logs <dev>.statement) and the
+ * bucket's edge-names history - the same records the app reads and writes (copy.keepNametag). Not a store of this
+ * computer's own: a name set here shows on the phone and the desktop app, and theirs show here.
+ */
 
-/** the name kept for one device of this identity, or null */
+/** the name of one device of this identity: its copy's statement, or null */
 function getName(home, deviceIdHex) {
-  const t = devices(home).getItem(deviceIdHex);
-  if (!t) return null;
-  try { const r = JSON.parse(t); return { nametag: r.nametag, at: r.at }; } catch (_) { return null; }
+  const copy = require('./copy');
+  const st = copy.load(home, fromHex(deviceIdHex)).statement;
+  if (!st) return null;
+  const at = copy.nametagHistory().filter((r) => r.deviceId === deviceIdHex.toLowerCase() && r.statement.nametag === st.nametag).map((r) => r.at)[0];
+  return { nametag: st.nametag, seq: st.seq ?? null, at: at || null };
 }
 
-/** every device of this identity with a name kept here: [{deviceId, nametag, at}] */
+/** every device of this identity with a nametag in the bucket: [{deviceId, nametag, at}], the newest name each */
 function listNames(home) {
-  const kv = devices(home);
-  return kv.keys().map((k) => { const n = getName(home, k); return n ? { deviceId: k, ...n } : null; }).filter(Boolean);
+  const copy = require('./copy');
+  const newest = new Map();
+  for (const r of copy.nametagHistory()) {
+    const was = newest.get(r.deviceId);
+    if (!was || (r.statement.seq ?? -1) > (was.statement.seq ?? -1) || ((r.statement.seq ?? -1) === (was.statement.seq ?? -1) && r.at > was.at)) newest.set(r.deviceId, r);
+  }
+  return [...newest.values()].map((r) => ({ deviceId: r.deviceId, nametag: r.statement.nametag, at: r.at }));
 }
 
 /**
- * Name this device: the key signs the statement, it is checked, it is kept.
- * @param {{edge: object, home: string, nametag: string, now?: () => number}} o
+ * Name this device: the key CERTIFIES the nametag at a press (onPress: say so), it is checked, it is kept with the copy.
+ * @param {{edge: object, home: string, nametag: string, onPress?: () => void, now?: () => number}} o
  * @returns {Promise<{deviceId: string, nametag: string, at: number}>}
  */
-async function setName({ edge, home, nametag, now = Date.now }) {
+async function setName({ edge, home, nametag, onPress, now = Date.now }) {
   grants.nametagHash(nametag); /* throws for an empty or too long one, before the key is asked */
-  const st = await edge.statement(String(nametag).trim());
-  if (!grants.verifyStatement(st, st.ownerKey, st.ownerKeyPq)) throw new Error('edge: the key\'s statement does not verify with the owner keys it names - nothing kept');
+  const st = await edge.statement(String(nametag).trim(), { onPress });
+  if (!grants.verifyStatement(st, st.ownerKey, st.ownerKeyPq)) throw new Error('edge: the key\'s certification does not verify with the owner keys it names - nothing kept');
   if (identityIdOf(st.ownerKeyPq) !== path.basename(home)) throw new Error('edge: the key\'s owner key is not this identity\'s - nothing kept');
-  const rec = { nametag: st.nametag, at: now(), statement: toStored(st) };
+  const at = now();
+  require('./copy').keepNametag(home, st.deviceId, st, { now: () => at });
   const deviceId = toHex(st.deviceId);
-  devices(home).setItem(deviceId, JSON.stringify(rec));
   /* named: its log can now be offered to the identity's other devices */
   const log = await offerOwnLog({ edge, home }).catch((e) => ({ kept: false, why: e.message }));
-  return { deviceId, nametag: rec.nametag, at: rec.at, log };
+  return { deviceId, nametag: st.nametag, at, log };
 }
 
-/* the kept statement of one device, back as the bytes copy.keepLog checks */
+/* the statement on one device's copy, as copy.keepLog checks it */
 function statementOf(home, deviceIdHex) {
-  const t = devices(home).getItem(deviceIdHex);
-  if (!t) return null;
-  try {
-    const s = JSON.parse(t).statement;
-    if (!s) return null;
-    const { fromHex } = require('../../src/bytes');
-    return Object.fromEntries(Object.entries(s).map(([k, v]) => [k, BYTE_FIELDS.includes(k) && typeof v === 'string' ? fromHex(v) : v]));
-  } catch (_) { return null; }
+  return require('./copy').load(home, fromHex(deviceIdHex)).statement || null;
 }
 
 /**

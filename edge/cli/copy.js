@@ -503,4 +503,36 @@ async function catchUp(edge, home, deviceId) {
   return add.length;
 }
 
-module.exports = { sync, catchUp, adoptAll, lines, load, store, useIdentityBucket, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes };
+/*
+ * A DEVICE'S CERTIFIED NAMETAG (edge/cli/nametag.js; Brad, 2026-10-30: nametags are certified at a press, and the list of a
+ * key's names is kept - "if a key name is changed i can see the old names it had"): onto its copy - the identity bucket's
+ * `edge-logs` <dev>.statement, the one the app and every log carry (the newest by seq) - and, once, into `edge-names`
+ * (<dev>.<its signature's first 16 hex>), the history the app's Your devices reads. Without an identity bucket (a test, a
+ * command that never read the identity) only the copy keeps it.
+ */
+function namesKv() {
+  const { id, net } = logs;
+  return bucketHome.kv(bucketHome.identityAt(id, net, net === 'test' ? 'edge-names-test' : 'edge-names'));
+}
+function keepNametag(home, deviceId, statement, { now = Date.now } = {}) {
+  const c = load(home, deviceId);
+  c.statement = {
+    deviceId: Uint8Array.from(statement.deviceId), publicKey: Uint8Array.from(statement.publicKey), publicKeyPq: Uint8Array.from(statement.publicKeyPq),
+    seq: statement.seq ?? null, nametag: String(statement.nametag), signature: Uint8Array.from(statement.signature), signaturePq: Uint8Array.from(statement.signaturePq),
+  };
+  save(home, c);
+  if (!logs) return;
+  const sig = toHex(statement.signature);
+  const stored = {
+    deviceId: toHex(statement.deviceId), publicKey: toHex(statement.publicKey), publicKeyPq: toHex(statement.publicKeyPq),
+    seq: statement.seq ?? null, nametag: String(statement.nametag), signature: sig, signaturePq: toHex(statement.signaturePq),
+  };
+  namesKv().setItem(`${keyOf(deviceId)}.${sig.slice(0, 16)}`, JSON.stringify({ v: 1, deviceId: stored.deviceId, statement: stored, at: now() }));
+}
+/** every nametag the identity bucket holds, by device: [{deviceId, statement, at}] (unchecked - the caller checks) */
+function nametagHistory() {
+  if (!logs) return [];
+  return Object.values(namesKv().entries()).map((v) => { try { return JSON.parse(v); } catch (_) { return null; } }).filter((r) => r && r.statement);
+}
+
+module.exports = { sync, catchUp, adoptAll, lines, load, store, useIdentityBucket, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes, keepNametag, nametagHistory };

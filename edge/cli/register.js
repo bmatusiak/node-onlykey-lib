@@ -662,8 +662,8 @@ module.exports = function register(COMMANDS, h) {
        */
       /*
        * EDGE NAME ("my device name", Brad 2026-10-24): this device's nametag in its identity - shown, or
-       * set / changed through the key's signed statement (nametag.js: a read, no press). The desktop
-       * app's Edge Management calls the same function.
+       * set / changed through the key's certification (nametag.js: a press - the key waits for it). The desktop
+       * app's Edge Management certifies the same way.
        */
       if (sub === 'name') {
         const nametag = rest.join(' ').trim();
@@ -678,7 +678,7 @@ module.exports = function register(COMMANDS, h) {
             for (const o of names.listNames(d.home).filter((x) => x.deviceId !== deviceIdHex)) io.out(`  another device of this identity: ${o.deviceId.slice(0, 16)} "${o.nametag}"`);
             return 0;
           }
-          const r = await names.setName({ edge: d.edge, home: d.home, nametag });
+          const r = await names.setName({ edge: d.edge, home: d.home, nametag, onPress: () => io.out(`PRESS the key to certify the nametag "${nametag}"`) });
           io.out(`this device is "${r.nametag}" (device ${r.deviceId.slice(0, 16)}, identity ${path.basename(d.home).slice(0, 12)}…)`);
           io.out(r.log && r.log.kept ? 'its log goes to your other devices the next time they connect' : `its log is not shared yet:${(r.log && r.log.why) || 'unknown'}`);
           return 0;
