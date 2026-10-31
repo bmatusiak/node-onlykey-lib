@@ -174,7 +174,7 @@ function normalise(entries) {
  *   mirrorDeviceId  the key the mirror says it belongs to -> device-mismatch
  *   fromSeq, fromHead  start somewhere other than genesis: fromHead = head[fromSeq-1]
  *   anchors         [{seq, head}] verified checkpoints: resume points after a gap
- *   expectHead      {seq, head} the key's live HEAD
+ *   expectHead      {seq, head} the key's live HEAD (head null: the seq only, no anchor)
  *   lastSeen        {seq, head} the head this host verified last session -> rollback
  *   ringFrom        lowest seq the key's ring still holds: missing links at or
  *                   above it are tampering (they could have been read), below it
@@ -214,7 +214,13 @@ function verify(entries, opts = {}) {
   /* trusted heads by seq; `source` remembers which kind, to name a failure */
   const trusted = new Map([[fromSeq - 1, { head: start, source: 'start' }]]);
   for (const a of opts.anchors || []) trusted.set(a.seq, { head: bytes32(a.head, 'anchor head'), source: 'anchor' });
-  if (exp) {
+  /*
+   * A HEAD WITH NO BYTES IS A SEQ ONLY: the key never reveals its head (HEAD answers seq; PROVE_HEAD confirms one a
+   * host welded), so a host whose copy cannot weld it yet has {seq, head: null}. The seq still bounds the walk and
+   * catches a rollback; it anchors nothing (box, key 2, 2026-10-31: a budget's close threw "expectHead.head must be
+   * 32 bytes" and the copy never moved).
+   */
+  if (exp && exp.head) {
     const had = trusted.get(exp.seq);
     if (had && !same(had.head, exp.head)) return fail(exp.seq, 'head-mismatch');
     trusted.set(exp.seq, { head: bytes32(exp.head, 'expectHead.head'), source: 'key' });

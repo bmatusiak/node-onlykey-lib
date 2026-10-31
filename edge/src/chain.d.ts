@@ -41,7 +41,7 @@ export function heads(links: any, startHead: any): (Uint8Array<ArrayBufferLike> 
  *   mirrorDeviceId  the key the mirror says it belongs to -> device-mismatch
  *   fromSeq, fromHead  start somewhere other than genesis: fromHead = head[fromSeq-1]
  *   anchors         [{seq, head}] verified checkpoints: resume points after a gap
- *   expectHead      {seq, head} the key's live HEAD
+ *   expectHead      {seq, head} the key's live HEAD (head null: the seq only, no anchor)
  *   lastSeen        {seq, head} the head this host verified last session -> rollback
  *   ringFrom        lowest seq the key's ring still holds: missing links at or
  *                   above it are tampering (they could have been read), below it
