@@ -1,6 +1,6 @@
 'use strict';
 
-/* CLI.md §1, §2, §7 (decided 2026-10-06): one CLI, onlykey-js - okedge, onlykey-edge-gpg, edge-agent and pairing are gone */
+/* CLI.md §1, §2, §7 (decided 2026-10-06): one CLI, onlykey-js - okedge, onlykey-edge-gpg, edge-agent and pairing are gone; pair (the cli pair) too since 2026-10-30 */
 const test = require('node:test');
 const assert = require('node:assert');
 const pkg = require('../package.json');
@@ -20,15 +20,15 @@ test('one CLI: the only bin is onlykey-js', () => {
   assert.deepEqual(Object.keys(pkg.bin), ['onlykey-js']);
 });
 
-test('help lists edge and pair; no okedge, edge-agent or pairing', async () => {
+test('help lists edge; no okedge, edge-agent, pairing or pair', async () => {
   const r = await run(['help']);
   assert.match(r.text, /^\s*edge\s/m);
-  assert.match(r.text, /^\s*pair\s/m);
-  for (const gone of ['okedge', 'edge-agent', 'pairing']) assert.doesNotMatch(r.text, new RegExp(`^\s*${gone}\s`, 'm'), gone);
+  for (const gone of ['okedge', 'edge-agent', 'pairing', 'pair']) assert.doesNotMatch(r.text, new RegExp(`^\\s*${gone}\\s`, 'm'), gone);
+  assert.doesNotMatch(r.text, /--ble|--address/);
 });
 
-test('pairing and edge-agent are unknown commands', async () => {
-  for (const c of ['pairing', 'edge-agent']) {
+test('pairing, pair and edge-agent are unknown commands', async () => {
+  for (const c of ['pairing', 'pair', 'edge-agent']) {
     const r = await run([c]);
     assert.equal(r.code, 2, c);
     assert.match(r.text, /unknown command/, c);

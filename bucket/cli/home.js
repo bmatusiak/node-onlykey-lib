@@ -9,8 +9,7 @@
  * with the key and `bucket import` opens a sealed one with the key. So an everyday command needs no
  * derive and no press to read its own state.
  *
- * WHAT IS NOT HERE: machine files stay files - cli-pairing.json (each computer pairs: Brad,
- * 2026-10-21), the Edge homes' control.key, peer.key and agent.key (private keys), agent-gpg.asc
+ * WHAT IS NOT HERE: machine files stay files - the Edge homes' control.key, peer.key and agent.key (private keys), agent-gpg.asc
  * and the GnuPG home.
  *
  * Stores (one per net, the testnet's beside the live one; Edge's per identity - edgeAt):
@@ -249,7 +248,7 @@ function clear(file, stores) {
  * written, and each file read is renamed <name>.moved - kept, never read again: there is no
  * reader for the old files anywhere else. A file whose schema the CLI had already stopped reading
  * (a budgets or pointers file without v: 1, from before the 2026-10-07 clean start) is left as it
- * was. agent.json is not moved: the phone keeps the agent's identity since 2026-10-20.
+ * was. agent.json is not moved: the agent's host keeps its identity since 2026-10-20.
  */
 const movedFrom = new Set();
 

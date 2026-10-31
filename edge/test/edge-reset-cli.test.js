@@ -24,7 +24,7 @@ test('edge reset removes budgets.json, pointers.json and copy-*.json, keeps the 
     for (const n of ['peer.key', 'control.key', 'agent-gpg.asc']) assert.equal(fs.readFileSync(path.join(home, n), 'utf8'), files[n]);
     assert.match(out.join('\n'), /removed /);
     for (const n of ['budgets.json', 'pointers.json', 'copy-0123456789abcdef.json']) assert.match(out.join('\n'), new RegExp(n.replace(/\./g, '\\.')));
-    assert.match(out.join('\n'), /kept: peer\.key, control\.key and agent-gpg\.asc; the agent identity is the phone's$/m);
+    assert.match(out.join('\n'), /kept: peer\.key, control\.key and agent-gpg\.asc; the agent identity is its host's$/m);
     assert.doesNotMatch(out.join('\n'), /register|agent\.key/, 'no registration to redo');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });

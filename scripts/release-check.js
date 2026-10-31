@@ -10,9 +10,9 @@
  *   1. one bin: onlykey-js (no okedge, no onlykey-edge-gpg);
  *   2. nothing of cli/dev or edge/cli/dev ships, nor cli/okedge.js;
  *   3. no shipped code reads a dev switch (OKEDGE_HOME, OKEDGE_TIMES,
- *      OKEDGE_IDLE_MS, ONLYKEY_JS_DEBUG) - the agent could set those itself;
+ *      ONLYKEY_JS_DEBUG) - the agent could set those itself;
  *   4. the packed CLI, with every dev switch set, refuses `edge ping` as an unknown
- *      command and lists no removed command (okedge, edge-agent, pairing).
+ *      command and lists no removed command (okedge, edge-agent, pairing, pair).
  *
  * It never connects to a key or a phone. Exit 0 = pass, 1 = a finding (each named).
  */
@@ -22,7 +22,7 @@ const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const DEV_ENV = ['OKEDGE_HOME', 'OKEDGE_TIMES', 'OKEDGE_TIMES_FILE','OKEDGE_IDLE_MS', 'ONLYKEY_JS_DEBUG'];
+const DEV_ENV = ['OKEDGE_HOME', 'OKEDGE_TIMES', 'OKEDGE_TIMES_FILE', 'ONLYKEY_JS_DEBUG'];
 
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -67,13 +67,13 @@ function main() {
     }
 
     /* 4. the packed CLI, every dev switch set: edge ping is unknown, no removed command is listed */
-    const env = { ...process.env, NODE_PATH: path.join(ROOT, 'node_modules'), OKEDGE_HOME: path.join(tmp, 'home'), OKEDGE_TIMES: '1', OKEDGE_IDLE_MS: '5', ONLYKEY_JS_DEBUG: '1' };
+    const env = { ...process.env, NODE_PATH: path.join(ROOT, 'node_modules'), OKEDGE_HOME: path.join(tmp, 'home'), OKEDGE_TIMES: '1', ONLYKEY_JS_DEBUG: '1' };
     const cli = path.join(pkg, 'cli', 'index.js');
     const ping = spawnSync(process.execPath, [cli, 'edge', 'ping'], { env, encoding: 'utf8', timeout: 30000 });
     const pingSaid = `${ping.stdout}${ping.stderr}`;
     if (ping.status === 0 || !/unknown edge command "ping"/.test(pingSaid)) findings.push(`the packed CLI did not refuse "edge ping" as unknown (exit ${ping.status}): ${pingSaid.trim().split('\n')[0]}`);
     const help = spawnSync(process.execPath, [cli, 'help'], { env, encoding: 'utf8', timeout: 30000 });
-    for (const gone of ['okedge', 'edge-agent', 'pairing']) {
+    for (const gone of ['okedge', 'edge-agent', 'pairing', 'pair']) {
       if (new RegExp(`(^|\\s)${gone}(\\s|$)`, 'm').test(help.stdout)) findings.push(`"onlykey-js help" lists the removed "${gone}"`);
     }
     if (help.status !== 0) findings.push(`"onlykey-js help" failed in the packed package (exit ${help.status}): ${String(help.stderr).trim().split('\n')[0]}`);

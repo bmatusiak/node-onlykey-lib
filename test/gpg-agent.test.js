@@ -526,7 +526,7 @@ test('gpg home settings: a hand-run agent serves what init chose; gpg check find
     assert.equal(c.code, 0, c.out.join('\n'));
     assert.equal(fs.readFileSync(path.join(home, script), 'utf8'), good);
 
-    /* NODE_PATH comes from the home's settings, not from the shell that runs --fix: without it --ble cannot load */
+    /* NODE_PATH comes from the home's settings, not from the shell that runs --fix: without it an optional peer kept outside the lib cannot load */
     const settings = JSON.parse(fs.readFileSync(path.join(home, 'onlykey-agent.json'), 'utf8'));
     fs.writeFileSync(path.join(home, 'onlykey-agent.json'), JSON.stringify({ ...settings, nodePath: '/np' }));
     c = await runCli(['gpg', 'check', '--homedir', home, '--fix']);

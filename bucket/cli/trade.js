@@ -1,14 +1,13 @@
 'use strict';
 /*
- * THIS COMPUTER TRADES ITS BUCKET WITH A PAIRED DEVICE (ok-edge plan S3; Brad, 2026-10-25: "the CLI pair is our hook to
- * try and sync with - those are the pre-set-up trusted devices, what we can replicate with"; "the stale mobile device
- * will most likely talk to the desktop at one point, so they trade when they can").
+ * THIS COMPUTER TRADES ITS BUCKET WITH ANOTHER DEVICE OF ITS IDENTITY (ok-edge plan S3; Brad, 2026-10-25: "the stale
+ * mobile device will most likely talk to the desktop at one point, so they trade when they can").
  *
- * Run whenever this computer and a cli-paired device talk (edge/cli/register.js, after the log swap), over that pair's
- * channel. The computer's side of bucket/src/trade.js:
+ * Run over the key's server room (edge/cli/register.js --service, bucket/cli/plugin.js bucket sync), one device at a
+ * time, the room's request the trade's send. (The Bluetooth trade with cli-paired phones was removed 2026-10-30.) The
+ * computer's side of bucket/src/trade.js:
  *
- *   - the bucket identity is read from the key this computer talks to (the phone's key over Bluetooth - the same
- *     identity's key; no press);
+ *   - the bucket identity is read from the key this computer talks to (no press);
  *   - the bucket is the one this computer keeps opened for that identity (bucket/cli/home.js identityFile) - an empty
  *     one the first time: a new machine starts empty and catches up on its first trade;
  *   - its proof material - the bucket key and the certificate - is made once through that key (the key's derive under its site and its
@@ -137,16 +136,16 @@ async function makeMe(okcrypto, id, identityPublicKey, net, say, opts) {
 /**
  * Trade this computer's bucket with the device at the other end of `send`.
  * @param {{send: (message: object) => Promise<object|null>, okcrypto: object, net?: 'live'|'test', say?: (l: string) => void, keyOpts?: object}} o
- *   send: one message to the paired device, its answer (null when it did not answer); okcrypto: the key this computer
+ *   send: one message to the other device, its answer (null when it did not answer); okcrypto: the key this computer
  *   talks to (for the bucket identity, and the bucket key the first time); keyOpts: the presses' confirm/onKeepAlive
  * @returns {Promise<{traded: boolean, same?: boolean, settled?: boolean, refused?: boolean, why?: string, taken?: object, gave?: object}>}
  *   same: the states matched, nothing moved; settled: they match after the trade
  */
 /*
- * HOW LONG ONE TRADE MESSAGE MAY TAKE (the box, 2026-10-25): over Bluetooth a message crosses at about 2.6 KB/s (469-byte
- * writes, ~180 ms each), and a store kept as one value goes whole - the Key Chain list was 139 KB, about 55 s - so a
- * fixed 30 s wait cut every such GIVE off and the phone's answer was lost. The wait grows with the message: the first
- * round's minute (the phone may ask for presses), then 30 s plus a second for every 1.5 KB.
+ * HOW LONG ONE TRADE MESSAGE MAY TAKE (the box, 2026-10-25, measured over Bluetooth at about 2.6 KB/s): a store kept as
+ * one value goes whole - the Key Chain list was 139 KB - so a fixed 30 s wait cut every such GIVE off and the other
+ * device's answer was lost. The wait grows with the message: the first round's minute (the other device may ask for
+ * presses), then 30 s plus a second for every 1.5 KB.
  */
 /* an answer that was not the one expected, described by its shape only (keys, a refusal word) */
 function answerShape(answer) {
@@ -163,8 +162,8 @@ function tradeTimeoutMs(message, first) {
 
 /*
  * WHICH IDENTITY TO TRADE AS, WITHOUT ASKING THE KEY EVERY TIME (the box, 2026-10-25). Reading the bucket identity is a
- * derive on the key this computer talks to - over Bluetooth the phone's - and the phone's Key Chain records each derive
- * ("last used"), so a sync that read it every time changed the phone's bucket every time, and never settled. The
+ * derive on the key this computer talks to, and a host's Key Chain records each derive ("last used") - so a sync that
+ * read it every time changed the bucket every time, and never settled. The
  * identity of the last trade that went through is kept (buckets/<net>/synced-with.json, a public id); its bucket key is
  * already here. The key is asked only when there is none, or the device does not prove that identity.
  */

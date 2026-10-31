@@ -12,7 +12,7 @@
  * What lives here:
  *   ONLYKEY_JS_DEBUG                  stack traces on errors
  *
- * Edge's dev set (--edge-home, --identity, OKEDGE_TIMES, OKEDGE_IDLE_MS, `edge ping`)
+ * Edge's dev set (--edge-home, --identity, OKEDGE_TIMES, `edge ping`)
  * lives with Edge, in edge/cli/dev (step 3b), so core never names it.
  */
 module.exports = {

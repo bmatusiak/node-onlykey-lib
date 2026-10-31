@@ -74,7 +74,7 @@ test('sealsFromPhone reads the phone\'s last-batch fields: the seals, and the st
   const refusing = client.createEdgeClient({ edge: {}, channel: { send: async () => ({ ok: false, refusal: 'busy' }) } });
   await assert.rejects(refusing.sealsFromPhone(peer, { deviceId: id }), { code: 'EEDGE_REFUSED' });
   const silent = client.createEdgeClient({ edge: {}, channel: { send: async () => null } });
-  await assert.rejects(silent.sealsFromPhone(peer, { deviceId: id }), (e) => e.code === 'EEDGE_NO_ANSWER' && /paired/.test(e.message));
+  await assert.rejects(silent.sealsFromPhone(peer, { deviceId: id }), (e) => e.code === 'EEDGE_NO_ANSWER' && /answered nothing/.test(e.message));
 });
 
 test('keepSeals merges by seq, and edge blocks lists the verified blocks without a phone', async () => {

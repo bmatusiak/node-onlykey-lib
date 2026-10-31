@@ -6,10 +6,11 @@
  *
  * Every `onlykey-js edge` command talks to two parties: the key's Edge firmware (0xF8 - head,
  * grant, txStart, receipt, revoke ...) and the HOST that shows the person what is asked and keeps
- * the agent's identity (SPEC H2, H7). Over Bluetooth the host is the phone, reached on the wire
- * (0xF7, edge/src/wire.js): it keeps the identity record, shows the budget sheet, checks its copy
- * of the chain (R27) and waits for the press. A hard key on USB has no phone behind it, so nobody
- * answers the wire and every command stopped at "the phone did not answer the identity question".
+ * the agent's identity (SPEC H2, H7). Through the desktop app the host is the app, reached on the
+ * wire (0xF7, edge/src/wire.js): it keeps the identity record, shows the budget sheet, checks its
+ * copy of the chain (R27) and waits for the press - as the phone did over Bluetooth until
+ * 2026-10-30. A hard key on USB has no app behind it, so nobody answers the wire and every
+ * command stopped at "the phone did not answer the identity question".
  *
  * So the CLI is the host here: an object with the wire channel's own `send(message, opts)`
  * contract, answering in-process with the same library code the phone runs - approve.js's

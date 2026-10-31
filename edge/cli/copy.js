@@ -351,10 +351,10 @@ function lines(r, { status = false } = {}) {
 /*
  * This computer's own sync key: <edge home>/peer.key, P-256 (made on first use, this
  * user only). It signs every sync message, so the phone knows which
- * computer offered a log. The agent that asks for budgets has no key of its own (the
- * cli pair names the computer since 2026-10-08). No peer list on the key or the phone since 2026-10-08 (Brad:
- * peers dropped) - a computer the person approved for Bluetooth may offer logs, and
- * the phone holds them until the person approves the merge.
+ * computer offered a log. The agent that asks for budgets has no key of its own (since
+ * 2026-10-08). No peer list on the key or the phone since 2026-10-08 (Brad: peers dropped) -
+ * a computer its host trusts may offer logs, and the host holds them until the person
+ * approves the merge.
  */
 function peerSigner(home) {
   const { request } = require('../src');

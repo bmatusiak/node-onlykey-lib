@@ -128,7 +128,7 @@ function createAssembler() {
  * net is an older app's: live.
  */
 function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = null, log = () => {}, net = 'live' } = {}) {
-  /* this computer's id on the wire: given (its Part T pairing id), else one per run */
+  /* this computer's id on the wire: given, else one per run */
   const runId = newId();
   const devOf = () => String((typeof device === 'function' ? device() : device) || runId);
   return {
@@ -191,7 +191,7 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
           times.done = Date.now();
           const theirs = (got.message && got.message.wire && got.message.wire.net) || 'live';
           if (theirs !== net) {
-            resolve({ ok: false, refusal: 'net', detail: theirs === 'test' ? 'this phone is on the testnet - add --test-mode' : 'this phone is on the live chain - drop --test-mode' });
+            resolve({ ok: false, refusal: 'net', detail: theirs === 'test' ? 'the host is on the testnet - add --test-mode' : 'the host is on the live chain - drop --test-mode' });
             return;
           }
           resolve(got.message);
@@ -211,7 +211,7 @@ function createWireChannel(transport, { timeoutMs = 120000, iface = 2, device = 
          */
         if (timer && typeof timer.unref === 'function') timer.unref();
         (async () => {
-          /* one request's frames together: the Bluetooth pipe puts several in one write (cli/transport-ble.js KIND_REPORTS) */
+          /* one request's frames together: a pipe with writeMany puts several in one write (pipeTransport.writeMany) */
           const frames = encode(KIND.REQUEST, stamped);
           if (typeof transport.writeMany === 'function') await transport.writeMany(iface, frames);
           else for (const frame of frames) await transport.write(iface, frame);

@@ -5,15 +5,15 @@
  * preview it, and ship it in ONE budget (Brad, 2026-10-23: the workspace's edge skill, "so this
  * skill comes with the cli", its info "with its other home files").
  *
- *   onlykey-js [--ble [--address <phone>]] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...
+ *   onlykey-js [--path <hid path>] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...
  *   onlykey-js … edge … control preview          everything pending: commits to sign, pushes, the request
  *   onlykey-js … edge … control ship [<repo>...] [--plan] [--reason "..."] [--head <h>]
  *   onlykey-js … edge … control status
  *   onlykey-js … edge … control settings         where its files are, and what they say
  *
  * WHICH KEY: the global flags, as every other command - no flag is a hard key on USB (this computer
- * is the host: a y/N here, then the press), --ble the phone. The skill used to carry its own
- * "phone" / "usb" settings for that; one way of saying it is enough.
+ * is the host: a y/N here, then the press), or the key the ok-edge desktop app holds while it runs.
+ * The skill used to carry its own "phone" / "usb" settings for that; one way of saying it is enough.
  *
  * WHERE ITS STATE LIVES: the net's Edge home (control.edgeHome(): ~/.onlykey-js/edge, or edge-test
  * with --test-mode), beside the agent's files - `control-batch.json` (the repos noted) and
@@ -29,7 +29,7 @@
  * that step with the `--head` to go on. It stops at the first thing it does not expect.
  *
  * It never force-pushes, deletes a branch or tag, or rewrites a commit that is already pushed
- * (only commits after the base). The person holding the key or phone approves every budget; hooks
+ * (only commits after the base). The person holding the key approves every budget; hooks
  * exist for test rigs, not to take that away.
  */
 
@@ -53,7 +53,7 @@ function ranWhat(file, a) {
 }
 
 const USAGE = [
-  'onlykey-js [--ble [--address <phone>]] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...',
+  'onlykey-js [--path <hid path>] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...',
   'onlykey-js … edge … control preview',
   'onlykey-js … edge … control ship [<repo>...] [--plan] [--reason "..."] [--head <h>]',
   'onlykey-js … edge … control status | settings',
@@ -62,7 +62,7 @@ const USAGE = [
 /**
  * @param {object} o
  * @param {{out: Function, err: Function}} o.io
- * @param {object} o.opts the global options (ble, address, path)
+ * @param {object} o.opts the global options (path, desktop, gui-prompt)
  * @param {string[]} o.argv after `control`
  * @param {string} o.net 'live' | 'test'
  * @param {string} o.home this net's Edge home
@@ -85,14 +85,13 @@ async function run({ io, opts, argv, net, home, dev = null }) {
   const CFG = readJson(settingsFile, {});
   const HOOKS = CFG.hooks || {};
   const TTL = String(CFG.ttl || 30);
-  const USB = !opts.ble;
   /* the key on USB, hosted by the ok-edge desktop app when it runs (cli deviceOpts: --desktop, or plain with a live app) */
-  const VIA_APP = USB && (opts.desktop || (!opts.path && Boolean(require('../../desktop/trust').liveTrust())));
+  const VIA_APP = Boolean(opts.desktop || (!opts.path && Boolean(require('../../desktop/trust').liveTrust())));
   /* --gui-prompt: the budget's y/N in a desktop dialog, so whoever runs this (an agent's shell) never answers it */
   const GUI = Boolean(opts['gui-prompt']);
-  const keyArgs = [...(opts.ble ? ['--ble', ...(opts.address ? ['--address', opts.address] : [])] : (opts.path ? ['--path', opts.path] : [])), ...(GUI ? ['--gui-prompt'] : [])];
+  const keyArgs = [...(opts.path ? ['--path', opts.path] : []), ...(GUI ? ['--gui-prompt'] : [])];
   const netArgs = net === 'test' ? ['--test-mode'] : [];
-  const where = USB ? 'the key on USB' : `the phone${opts.address ? ` (${opts.address})` : ''}`;
+  const where = 'the key on USB';
 
   const runP = (file, a, o = {}) => {
     const t = Date.now();
@@ -181,15 +180,14 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     : `push: ${REPOS.map((r) => r.name).join(', ')}`);
   function sheet({ gpg, ssh }) {
     say(VIA_APP ? '>>> In the ok-edge desktop app\'s window, a budget request for the key on USB:'
-      : USB && GUI ? '>>> In a window on this desktop, a budget request for the key on USB:'
-        : USB ? '>>> On this terminal, a budget request for the key on USB:' : `>>> On ${where}, a budget request:`);
+      : GUI ? '>>> In a window on this desktop, a budget request for the key on USB:'
+        : '>>> On this terminal, a budget request for the key on USB:');
     say(`>>>   reason: "${reasonText(gpg)}"`);
     say(`>>>   ${gpg} signature(s), ${ssh} push(es), valid ${TTL} min${net === 'test' ? ' - TESTNET' : ''}`);
     say(`>>>   ${HOOKS.watch ? 'answered by the watch hook'
       : VIA_APP ? 'Approve it in the window, then PRESS the key within 20 s (it pulses); nothing else is asked until the batch is done'
-      : USB && GUI ? 'Yes in the window approves it; the progress window says when to PRESS the key (it waits 20 s, and pulses); nothing else is asked until the batch is done'
-      : USB ? 'y approves it; PRESS the key when "PRESS the key now" shows (it waits 20 s, and pulses); nothing else is asked until the batch is done'
-        : 'APPROVE it and PRESS the key; nothing else is asked until the batch is done'}`);
+      : GUI ? 'Yes in the window approves it; the progress window says when to PRESS the key (it waits 20 s, and pulses); nothing else is asked until the batch is done'
+        : 'y approves it; PRESS the key when "PRESS the key now" shows (it waits 20 s, and pulses); nothing else is asked until the batch is done'}`);
   }
 
   /* ---------------------------------------------------------------- the budget */
@@ -210,7 +208,7 @@ async function run({ io, opts, argv, net, home, dev = null }) {
   function openBudget(t) {
     sheet(t);
     const r = cli(['budget', '--reason', reasonText(t.gpg), '--gpg', String(t.gpg), '--ssh', String(t.ssh), '--ttl', TTL],
-      HOOKS.watch ? 180000 : 600000, USB && !GUI ? { stdio: ['inherit', 'pipe', 'inherit'] } : {});
+      HOOKS.watch ? 180000 : 600000, !GUI ? { stdio: ['inherit', 'pipe', 'inherit'] } : {});
     HEAD = (r.out.match(/head = ([0-9a-f]{64})/) || [])[1];
     if (!HEAD) stop(`no budget: ${r.out.trim().split('\n').pop() || 'refused (see above)'}`);
     say(`budget open, head ${HEAD.slice(0, 12)}`);
@@ -528,7 +526,7 @@ ${SKILL_MARK}
 
 # edge control
 
-\`onlykey-js edge control\` keeps the batch of repos whose commits need an Edge signature, shows what is pending, and ships it in ONE budget: the person approves once (on the phone, or y + a press on a hard key) and every signature and push after that is paid by the budget, each with a receipt.
+\`onlykey-js edge control\` keeps the batch of repos whose commits need an Edge signature, shows what is pending, and ships it in ONE budget: the person approves once (in the ok-edge desktop app, or y + a press on a hard key) and every signature and push after that is paid by the budget, each with a receipt.
 
 Which key is chosen by the CLI's own flags; add \`--test-mode\` after \`edge\` for the testnet:
 
@@ -536,7 +534,7 @@ Which key is chosen by the CLI's own flags; add \`--test-mode\` after \`edge\` f
 |---|---|
 | a hard key on USB (y/N here, then the press - it pulses) | \`${c} edge control\` |
 | a hard key on USB, the y/N in a desktop dialog (an agent's shell runs it, the person answers) | \`${c} --gui-prompt edge control\` |
-| a phone (ok-edge mobile) over Bluetooth | \`${c} --ble --address "<phone>" edge control\` |
+| the key the ok-edge desktop app holds (while it runs, plain goes through it) | \`${c} edge control\` |
 
 \`\`\`
 ${c} edge control note <repo>          # after each commit that will need signing (once per repo)

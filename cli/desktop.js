@@ -18,10 +18,11 @@
  * same transport plugin the phone uses for a hard key - only the pipe beneath it
  * differs - so a CLI command exercises the code the GUIs ship, not a copy.
  *
- * With `ble: true` the transport is transport/ble instead, over the Bluetooth
- * pipe in ./transport-ble.js - a phone running ok-rn, its soft key's vendor
- * interface published as a GATT service. Nothing above the transport changes,
- * which is what lets every command (agent and gpg-agent included) take --ble.
+ * The other pipes go under the same transport/usb: `desktop: true` is the key
+ * the ok-edge desktop app holds, over its local socket (./transport-desktop.js),
+ * and `softKey: true` the desktop app's own soft key booted in this process
+ * (./transport-softkey.js). Nothing above the transport changes, which is what
+ * lets every command (agent and gpg-agent included) take any of them.
  *
  * WHY A HELPER. Every Node consumer - this CLI now, the test kit's hardware
  * runs and any script after them - would otherwise repeat the composition and
@@ -35,65 +36,29 @@
  *                                 test fakes, or the emulator's bus
  * @param {string} [opts.path]     which key, when more than one is plugged in
  * @param {() => object} [opts.loadHid]  returns node-hid; injectable
- * @param {boolean} [opts.ble]     reach a phone over Bluetooth LE, not USB
- * @param {string} [opts.address]  with ble: which phone (address or name)
- * @param {() => object} [opts.loadNoble]  returns @stoprocent/noble; injectable
- * @param {() => object} [opts.loadDbus]   returns dbus-next; injectable
+ * @param {boolean} [opts.desktop] the key the ok-edge desktop app holds
+ * @param {boolean} [opts.softKey]  the desktop app's soft key, booted here
+ * @param {'live'|'test'} [opts.softKeyNet]  which soft key: the live one or the testnet's
  * @param {object} [opts.config]   further plugins.config, merged under the pipe
  * @returns {Promise<object>} the started Rectify app with the transport OPEN;
  *   its services (device, okcrypto, transport) are the API
  */
 'use strict';
 
-function startDesktop({ pipe, path, loadHid, ble = false, desktop = false, softKey = false, softKeyNet = 'live', address, loadNoble, loadDbus, config = {}, pairingHome } = {}) {
+function startDesktop({ pipe, path, loadHid, desktop = false, softKey = false, softKeyNet = 'live', config = {} } = {}) {
   const Rectify = require('@bmatusiak/rectify');
   /*
-   * The pipe is built lazily per bus: a --ble run must not touch hidapi (it
-   * would enumerate, and on a machine with a hard key plugged in that is the
-   * wrong key's business), and a USB run must not load a Bluetooth stack.
-   *
-   * Part T: over Bluetooth, when THIS user is paired with that phone, the pipe
-   * opens an encrypted session first (cli/clipair-store.js); a renewal on day 6
-   * of 7 is saved back to the same owner-only file.
+   * The pipe is built lazily per bus: a desktop-app or soft-key run must not
+   * touch hidapi (it would enumerate, and on a machine with a hard key plugged
+   * in that is the wrong key's business).
    */
-  const makeBlePipe = () => {
-    const store = require('./clipair-store');
-    /*
-     * ok-rn answers only paired computers (Part T) and refuses everything else
-     * with silence - so without a pairing, say so before a request times out
-     * with nothing but "no reply". Plaintext still works only against a phone
-     * in testing mode with transit switched off.
-     */
-    /*
-     * Looked up under the phone the link REACHED, not --address as typed (audit F1):
-     * the warning comes once the phone is known, before the request that would
-     * otherwise time out on its silence.
-     */
-    const pairingFor = (reached) => {
-      const rec = store.pairingFor(reached, pairingHome);
-      if (!rec) {
-        process.stderr.write(`onlykey-js: this computer user is not paired with ${reached || address || 'the phone'} - ok-rn answers only paired computers. `
-          + `Pair first: onlykey-js --ble${address ? ` --address ${address}` : ''} pair (and on the phone: Sync > Pair a computer - in ok-rn, Bluetooth > Pair a computer).\n`);
-      }
-      return rec;
-    };
-    return require('./transport-ble').createBlePipe({
-      address, loadNoble, loadDbus,
-      pairingFor,
-      computerName: store.computerName(),
-      onPairingRenewed: (record, reached) => store.savePairing(reached, record, pairingHome),
-      /* the link going down and coming back, said where a long-running edge-agent's log shows it */
-      onLink: (line) => process.stderr.write(`onlykey-js ble: ${line}\n`),
-    });
-  };
   /* desktop: the key the ok-edge desktop app holds, over its local socket (cli/transport-desktop.js) */
-  const makePipe = () => (ble ? makeBlePipe()
-    : desktop ? require('./transport-desktop').createDesktopPipe()
-      : softKey ? require('./transport-softkey').createSoftKeyPipe({ net: softKeyNet })
-        : require('./transport-hid').createHidPipe({ path, loadHid }));
+  const makePipe = () => (desktop ? require('./transport-desktop').createDesktopPipe()
+    : softKey ? require('./transport-softkey').createSoftKeyPipe({ net: softKeyNet })
+      : require('./transport-hid').createHidPipe({ path, loadHid }));
   const plugins = [
     require('../plugins/host'),
-    ble ? require('../plugins/transport/ble') : require('../plugins/transport/usb'),
+    require('../plugins/transport/usb'),
     require('../plugins/session'),
     require('../plugins/device'),
     require('../plugins/okcrypto'),

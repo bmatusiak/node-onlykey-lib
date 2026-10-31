@@ -6,12 +6,10 @@
  *
  *   onlykey-js edge setup --ssh ssh://user@host [--gpg "Name <email>"
  *                               --committer-name N --committer-email E --expires 1y|<n>d|never]
- *                                         name the agent's own identities, once (no phone). No
- *                                         registration with the phone since 2026-10-08 (Brad: "so
- *                                         the claude key thing is overkill"): the phone trusts this
- *                                         computer by its cli pair (onlykey-js pair)
- *   onlykey-js edge agent [--wait s]      the OPTIONAL service (CLI.md §4): keeps the Bluetooth
- *                                         link open between commands - for speed only
+ *                                         name the agent's own identities, once; the host (the
+ *                                         desktop app, or this computer for a key on USB) keeps them
+ *   onlykey-js edge agent [--wait s]      the OPTIONAL service (CLI.md §4): keeps the key open
+ *                                         between commands, with the bucket sync in it
  *   onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync
  *                                         edge/cli/commands.js
  *
@@ -30,15 +28,14 @@ const bucketHome = require('../../bucket/cli/home');
 
 const USAGE = [
   'onlykey-js edge setup --ssh ssh://user@host --gpg "Name <email>" [--committer-name N --committer-email E --expires 1y|<n>d|never --created <unix>]',
-  '                                                              the agent identity: made here, kept by the phone (approve on its Edge sheet)',
-  '                                                              - or, for a hard key on USB, by this computer (approve here, y/N)',
+  '                                                              the agent identity: made here, kept by the desktop app (approve in its window)',
+  '                                                              - or, for a key on USB, by this computer (approve here, y/N)',
   'onlykey-js edge budget --reason "…" --ssh N [--gpg N] --ttl MINUTES',
   'onlykey-js edge continue --ttl MINUTES [--caps n,n] | end | status',
   'onlykey-js edge exec --head H --intent "…" [--receipt "…"] -- <command…>     the only way to spend a budget',
   'onlykey-js edge receipt <seq> [--code OK] --msg "…"',
-  'onlykey-js edge watch [--once] | sync [--status | --all]',
-  'onlykey-js edge sync --all                                    every paired phone: pull each into this PC first (writes nothing), then push each what it lacks',
-  'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no phone)',
+  'onlykey-js edge watch [--once] | sync [--status]',
+  'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no key)',
   'onlykey-js edge name [<a name>]                              the name of this device in its identity: shown, or set / changed (signed by the key, no press)',
   'onlykey-js edge migrate --dry-run                             what of the records from before identities is this key\'s (the first command copies them by itself)',
   'onlykey-js edge loss [<from> [<to>]]                          a hard key: accept links gone before this PC read them as lost (y, then the press);',
@@ -47,15 +44,14 @@ const USAGE = [
   'onlykey-js edge control note <repo>… | preview | ship [<repo>…] [--plan] | status | settings',
   '                                                              commits to sign and push, shipped in ONE budget (the batch lives in the Edge home)',
   'onlykey-js edge --claude-setup [--force]                      write the edge-control skill into this workspace (.claude/skills/edge-control)',
-  'add --test-mode to any of them: the testnet - its own home, its own chain on the phone (Enter testing mode)',
+  'add --test-mode to any of them: the testnet - its own home, its own chain (the testnet)',
   'onlykey-js edge --test-mode clear                             delete the testnet on this computer (its home and Key Chain file)',
 ];
 
 const opt = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 
 /*
- * The budgets this computer asked for (no agent key since 2026-10-08: the cli pair says
- * who asks): the home's `budgets` store in the CLI's bucket (bucket/cli/home.js), one key per
+ * The budgets this computer asked for (no agent key since 2026-10-08): the home's `budgets` store in the CLI's bucket (bucket/cli/home.js), one key per
  * budget, its JSON.
  */
 function budgetStore(home) {
@@ -70,14 +66,14 @@ function budgetStore(home) {
 /*
  * THIS COMPUTER'S OWN EDGE STATE: one budget pointer per key (edge/src/store.js), the home's
  * `pointers` store in the CLI's bucket, through the host-store seam (getItem/setItem/removeItem).
- * The agent's identity is NOT here: the phone keeps it (SPEC H7, 2026-10-20 - it was
+ * The agent's identity is NOT here: its host keeps it (SPEC H7, 2026-10-20 - it was
  * agent.json, one per computer folder; a new computer had to be given a copy by hand).
  */
 function pointerKv(home) {
   return bucketHome.kv(bucketHome.edgeAt(home, 'pointers'));
 }
 
-/* edge setup's flags: only what was given (the rest comes from the identity the phone keeps) */
+/* edge setup's flags: only what was given (the rest comes from the identity the host keeps) */
 function parseSetup(args, h) {
   const ssh = opt(args, '--ssh');
   const gpg = opt(args, '--gpg');
@@ -94,7 +90,7 @@ function parseSetup(args, h) {
   /*
    * --created <unix seconds>: remake the certificate with that creation time. The time is
    * part of the fingerprint, so the same key and the same time give the SAME fingerprint -
-   * how an identity made elsewhere moves to the phone without changing a key on GitHub.
+   * how an identity made elsewhere moves to another host without changing a key on GitHub.
    */
   if (created !== undefined) {
     const n = Number(created);
@@ -123,8 +119,8 @@ function defaultIdentity() {
 
 /*
  * THE AGENT IDENTITY, SET FROM A COMPUTER AND KEPT BY ITS HOST (SPEC H7; Brad, 2026-10-20: "computer sets, phone
- * keeps"). The certificate is made HERE - the key signs it, two presses - and sent with the labels; the host (the phone
- * over Bluetooth, this computer for a key on USB) shows it and keeps it only when the person approves. Labels not given
+ * keeps"). The certificate is made HERE - the key signs it, two presses - and sent with the labels; the host (the
+ * desktop app, this computer for a key on USB) shows it and keeps it only when the person approves. Labels not given
  * keep the host's current ones, and a first identity takes defaultIdentity(); a certificate is remade only when the gpg
  * user ID, the lifetime or --created changes it. One function for `edge setup` and for a command that finds none (openStack).
  * -> {record, host, changed}
@@ -158,11 +154,11 @@ async function setUpIdentity(io, d, h, given, { wait } = {}) {
     });
     record.cert = { armored: made.armored, fingerprint: made.fingerprint, created: made.created, expires: made.expires, signPublic: Buffer.from(made.signPublic).toString('hex') };
   }
-  const host = d.channel.local ? 'this computer' : 'the phone';
+  const host = d.channel.local ? 'this computer' : 'the desktop app';
   if (now && lib.same(now, record)) return { record, host, changed: false };
-  io.out(d.channel.local ? 'approve the identity here' : 'the phone shows the identity on its Edge sheet - approve it there');
+  io.out(d.channel.local ? 'approve the identity here' : 'the desktop app shows the identity - approve it there');
   const a = await d.channel.send(lib.buildSet({ record }), { timeoutMs: (Number(wait) || 180) * 1000 });
-  if (!a) throw new h.CliError('the phone did not answer (its sheet ran out, or ok-rn is not up to date) - nothing was kept');
+  if (!a) throw new h.CliError(`${host} did not answer (its request ran out, or it is not up to date) - nothing was kept`);
   if (a.ok === false) {
     throw new h.CliError(`${host} did not keep it: ${a.refusal}${a.detail ? ` - ${a.detail}` : ''}${def ? ` - to name it yourself: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}` : ''}`);
   }
@@ -170,15 +166,16 @@ async function setUpIdentity(io, d, h, given, { wait } = {}) {
   return { record, host, changed: true };
 }
 
-/* the phone's identity record (or null), asked over the paired channel */
+/* the host's identity record (or null), asked over the channel to it */
 async function askIdentity(channel) {
   const lib = require('../src/identity');
   const a = await channel.send(lib.buildGet(), { timeoutMs: 20000 });
-  if (!a) throw new Error('the phone did not answer the identity question (EDGE_IDENTITY_GET) - is ok-rn up to date and open?');
-  if (a.ok === false) throw new Error(`the phone refused the identity question: ${a.detail || a.refusal}`);
+  const host = channel.local ? 'this computer' : 'the desktop app';
+  if (!a) throw new Error(`${host} did not answer the identity question (EDGE_IDENTITY_GET) - is it up to date and open?`);
+  if (a.ok === false) throw new Error(`${host} refused the identity question: ${a.detail || a.refusal}`);
   if (!a.record) return null;
   const c = lib.checkRecord(a.record);
-  if (!c.ok) throw new Error(`the phone's agent identity is not usable (${c.reason}) - set it again: ${edgeCmd('setup')}`);
+  if (!c.ok) throw new Error(`the agent identity ${host} keeps is not usable (${c.reason}) - set it again: ${edgeCmd('setup')}`);
   return lib.clean(a.record);
 }
 
@@ -241,14 +238,13 @@ function recordCert(io, record, tool) {
   }
 }
 
-/* what a budget request waits on, in words: the phone over Bluetooth, the desktop app's window, or this terminal for a hard key on USB (local-host.js) */
 /* the person's y/N for a hard key's host: on this terminal, or in a desktop dialog with --gui-prompt (cli/gui-prompt.js) */
 function personConfirm(opts) {
   return opts && opts['gui-prompt'] ? require('../../cli/gui-prompt').guiConfirm : require('./local-host').terminalConfirm;
 }
 
+/* what a budget request waits on, in words: the desktop app's window, or this terminal for a key on USB (local-host.js) */
 function waitingLine(opts, h) {
-  if (opts.ble) return 'Waiting for the phone - read the request there, then press…';
   if (h && h.deviceOpts(opts).desktop) return 'Waiting for the desktop app - answer the request in its window, then press the key…';
   return 'The request is shown here - answer y/N, then press the key…';
 }
@@ -266,12 +262,11 @@ function serviceUp(controlPath) {
 
 /*
  * THE KEY MUST BE THERE AND OPEN before anything is asked of it (Brad,
- * 2026-10-07): a halted soft key (ok-rn's inactivity lockout) or a locked key
- * stops the command here with what to do - the agent reads it and tells Brad -
- * instead of a request timing out as "no reply on interface 2".
+ * 2026-10-07): a locked key stops the command here with what to do - the agent
+ * reads it and tells Brad - instead of a request timing out as "no reply on
+ * interface 2".
  */
 function keyAnswers(connected, h, what) {
-  if (h.requireAnswered) h.requireAnswered(connected && connected.identity);
   if (h.requireUnlocked && connected && connected.identity) h.requireUnlocked(connected.identity, what);
 }
 
@@ -298,20 +293,15 @@ async function untilUnlocked(app, opts, h) {
 }
 
 /*
- * The phone and the key's Edge, with the wire to the app - what `edge setup` needs, and
- * what the stack below is built on.
+ * The key's Edge, with its host (the desktop app's wire, or this computer) - what `edge setup`
+ * needs, and what the stack below is built on.
  */
 async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
   const { wire } = require('../src');
-  const { openWithOneRetry } = require('./agent');
   const say = (l) => io.err(`edge: ${l}`);
-  /* ENOVENDOR at start: one more try after ~5 s (agent.js openWithOneRetry) */
   const dopts = h.deviceOpts(opts);
-  const app = await openWithOneRetry(async () => {
-    const a = await span('open: lib + USB', () => io.start(dopts));
-    try { keyAnswers(await span('open: connect', () => untilUnlocked(a, opts, h)), h, 'edge'); } catch (e) { await Promise.resolve(a.destroy()).catch(() => undefined); throw e; }
-    return a;
-  }, { log: say });
+  const app = await span('open: lib + USB', () => io.start(dopts));
+  try { keyAnswers(await span('open: connect', () => untilUnlocked(app, opts, h)), h, 'edge'); } catch (e) { await Promise.resolve(app.destroy()).catch(() => undefined); throw e; }
   const { transport, okcrypto } = app.services;
   let edge = null;
   require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
@@ -337,20 +327,16 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
   /* every log of this identity into its bucket, once each (copy.adoptAll): a wiped key's history too */
   try { const n = require('./copy').adoptAll(home); if (n) say(`${n} older log(s) of this identity copied into its bucket`); } catch (e) { say(`older logs not copied into the bucket this time (${e.message})`); }
   /*
-   * WHO HOSTS EDGE. Over Bluetooth the phone does: the wire to its app. A key on USB is a hard key
-   * (or Linux's emulated one on the bus) - no phone behind it answers the wire, so this computer is
-   * the host (local-host.js: the y/N on this terminal, then the press on the key; B4, 2026-10-23).
-   * The phone gives the person 2 min to say Yes, then the key 25 s for the press (ok-rn,
-   * 2026-10-03) - the wire waits past both.
-   *
-   * The ok-edge desktop app (--desktop, or plain while it runs) is the phone's twin on this machine:
-   * it holds the key and hosts it, answering the same wire (desktop/serve.js) from the same records -
-   * so the wire channel, not local-host.js, which then runs inside the app.
+   * WHO HOSTS EDGE. The ok-edge desktop app (--desktop, or plain while it runs) holds the key and
+   * hosts it, answering the Edge wire (desktop/serve.js) from its records - so the wire channel,
+   * with local-host.js running inside the app. The app gives the person 2 min to say Yes, then the
+   * key 25 s for the press (2026-10-03) - the wire waits past both. A key on USB or the soft key
+   * booted here has no app behind it to answer the wire, so this computer is the host
+   * (local-host.js: the y/N on this terminal, then the press on the key; B4, 2026-10-23).
    */
-  const wired = (opts.ble || dopts.desktop)
+  const wired = dopts.desktop
     ? wire.createWireChannel(transport, {
       timeoutMs: (Number(wait) || 180) * 1000,
-      device: () => (typeof transport.deviceId === 'function' ? transport.deviceId() : null),
       log: say,
       net: NET,
     })
@@ -363,12 +349,11 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
 }
 
 /*
- * The stack - the phone, the key's Edge, the wire to the app, the agent with its
- * own keys - for one command (serve: false) or for the service (serve: true).
- * The agent's identity comes from the phone (SPEC H7); the budget pointer is this
- * computer's, per key.
+ * The stack - the key's Edge, its host, the agent with its own keys - for one command
+ * (serve: false) or for the service (serve: true). The agent's identity comes from the
+ * host (SPEC H7); the budget pointer is this computer's, per key.
  */
-async function openStack(io, opts, h, { serve, dev, wait, share = false, setup = true }) {
+async function openStack(io, opts, h, { serve, dev, wait, setup = true }) {
   const control = require('./control');
   const { client, store: edgeStore } = require('../src');
   const { startEdgeAgent } = require('./agent');
@@ -395,70 +380,39 @@ async function openStack(io, opts, h, { serve, dev, wait, share = false, setup =
       /* coded: a long-lived service runs its sync without an agent (the agent branch below) */
       throw Object.assign(h.usage(channel.local
         ? `this computer keeps no agent identity for this key yet - set it once: ${edgeCmd('setup')} (named from git; --ssh / --gpg to choose)`
-        : `${opts.ble ? 'the phone' : 'the desktop app'} keeps no agent identity yet - set it once, from any paired computer: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`), { code: 'ENOAGENTID' });
+        : `the desktop app keeps no agent identity yet - set it once: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`), { code: 'ENOAGENTID' });
     }
     recordCert(io, identity, serve ? 'onlykey-js edge agent' : 'onlykey-js edge');
     const { deviceId } = await span('open: edge public key', () => edge.publicKey());
     const c = client.createEdgeClient({ edge, channel, store });
     const svc = await span('open: start agent', () => startEdgeAgent({
       okcrypto, client: c, edge, home, identity, deviceId,
-      /* a service on USB reads each request's new links into this computer's copy (copy.catchUp) */
-      keepCopy: serve && !opts.ble,
+      /* a service reads each request's new links into this computer's copy (copy.catchUp) */
+      keepCopy: serve,
       pointers: edgeStore.createPointerStore(pointerKv(home)),
       openpgp: require('../../src/crypto/pgp'),
       shimCommand: path.resolve(__dirname, 'gpg-shim.js').split(path.sep).join('/'),
       /* for one command the command itself prints the signed line; the service logs it to its own console */
       log: serve ? say : (l) => { if (!l.startsWith('signed: link')) say(l); },
       /* no confirm: under budget or no go a sign is paid or refused, never pressed (CLI.md §3) */
-      linkStats: () => (typeof transport.linkStats === 'function' ? transport.linkStats() : null),
-      /* a request nobody answered: let the Bluetooth link go (the next one connects fresh, hello first) */
-      onSilence: opts.ble ? async () => { await transport.release('nobody answered').catch(() => {}); } : null,
       serve,
     }));
     /*
      * A HARD KEY'S LINKS ARE PICKED UP AFTER EVERY COMMAND (key 1, 2026-10-23). The key keeps only its
-     * newest links in a ring; the phone keeps its copy current all the time, but for a hard key this
-     * computer's copy moved only when a budget opened - a ship (grant, five uses, five receipts, end)
-     * pushed #387-#389 out of the ring before anyone read them, and the next budget was refused
-     * "copy does not verify (gap at #387)" for good. So on USB, and through the desktop app (the
-     * same homes), the copy is brought to the key's head before the key is let go. Over Bluetooth
-     * the phone keeps its own copy.
+     * newest links in a ring, and this computer's copy moved only when a budget opened - a ship
+     * (grant, five uses, five receipts, end) pushed #387-#389 out of the ring before anyone read
+     * them, and the next budget was refused "copy does not verify (gap at #387)" for good. So on
+     * USB, and through the desktop app (the same homes), the copy is brought to the key's head
+     * before the key is let go.
      */
     const pickUp = async () => {
-      if (opts.ble) return;
       const r = await span('close: copy - read + verify', () => require('./copy').sync(edge, home)).catch((e) => ({ error: e }));
       if (r && r.error) say(`could not bring this computer's copy to the key's head (${r.error.message})`);
       else if (r && r.verdict && r.verdict.kind !== 'verified' && r.verdict.kind !== 'unsigned') say(`this computer's copy of the chain: ${r.verdict.kind}${r.verdict.seq !== undefined ? ` at #${r.verdict.seq}` : ''}`);
       /* and its log kept ready to offer to the identity's other devices (nametag.js offerOwnLog - as a phone's pull does) */
       else await span('close: copy - own log kept to offer', () => require('./nametag').offerOwnLog({ edge, home })).catch(() => undefined);
     };
-    /*
-     * LOGS GO EVERYWHERE BY THEMSELVES (Brad, 2026-10-24: "sync is invisible and a user should never
-     * have to do it"; "if a hacker gets on my PC, this should show it if it used my key across any one
-     * of my devices"). Whenever this computer and the phone talk, they swap logs before the link is
-     * let go - the phone's comes here, every log here goes to the phone - the same work as edge sync.
-     */
-    const shareLogs = async () => {
-      if (!opts.ble || !share) return;
-      const r = await svc.handlers.sync({}).catch((e) => ({ error: e }));
-      if (r.error) { say(`logs: not swapped with the phone this time (${r.error.message})`); return; }
-      const given = (r.offered || []).filter((o) => o.held).map((o) => `"${o.nametag}"`);
-      say(`logs: swapped with the phone${given.length ? ` - it now has ${given.join(', ')}` : ''}`);
-      /*
-       * AND THE BUCKET, TRADED (bucket/cli/trade.js; Brad, 2026-10-25: "the CLI pair is our hook to try and sync with -
-       * those are the pre-set-up trusted devices"): this paired phone and this computer prove their bucket identity to
-       * each other, then each takes the other's changes. The first hello may wait on the phone's presses (its bucket
-       * key, made once); later rounds are quick.
-       */
-      let round = 0;
-      const send = (m) => channel.send(m, { timeoutMs: require('../../bucket/cli/trade').tradeTimeoutMs(m, round++ === 0) }).catch((e) => { say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
-      const t = await require('../../bucket/cli/trade').tradeWith({ send, okcrypto, net: NET, say })
-        .catch((e) => ({ traded: false, why: e.message }));
-      const n = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
-      say(t.traded && t.same ? 'sync: in sync with the phone' : t.traded ? `sync: traded with the phone - took ${n(t.taken)}, gave ${n(t.gave)}` : `sync: not traded this time (${t.why})`);
-    };
     return { app, transport, svc, identity, home, channel, okcrypto, say, close: async () => {
-      await span('close: logs to the phone', shareLogs);
       await span('close: agent', () => svc.close());
       await span('close: copy to the key\'s head', pickUp);
       await span('close: lib + USB', () => app.destroy());
@@ -541,7 +495,7 @@ module.exports = function register(COMMANDS, h) {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
     usage: 'setup | budget | continue | end | status | exec | receipt | watch | sync | blocks | agent | control … | --claude-setup | --test-mode … | --test-mode clear',
-    summary: 'Edge: an agent uses the key inside a budget you approve (on the phone, or here for a hard key on USB) - budget or no go',
+    summary: 'Edge: an agent uses the key inside a budget you approve (in the desktop app, or here for a key on USB) - budget or no go',
     device: true,
     async run(io, opts, argv) {
       /* the edge-control skill into this workspace (Brad, 2026-10-23: "edge --claude-setup that dumps a skill into the workspace") - no key */
@@ -555,7 +509,7 @@ module.exports = function register(COMMANDS, h) {
         for (const l of USAGE) io.out(l);
         return sub ? 0 : 2;
       }
-      /* an unknown subcommand is refused here, before anything connects to the phone */
+      /* an unknown subcommand is refused here, before anything connects to the key */
       const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', 'migrate', 'name', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
       /* a ship's step (its window named for its children): every `edge:` line said here also goes to the window, as said */
@@ -563,34 +517,6 @@ module.exports = function register(COMMANDS, h) {
       /* this process on a ship's timeline (the ship itself, `control`, opens the timeline instead) */
       if (dev && dev.times && sub !== 'control') dev.times.started(`edge ${sub}`);
 
-      /*
-       * EDGE SYNC --ALL (Brad, 2026-10-11: "pull from all devices,, (dont update them) then on the
-       * host,, after we have both sync state in the host, merging them into the host then we push
-       * to both devices at same time"). Every phone paired with this computer: first each one is
-       * PULLED into this PC's copies (nothing written to any phone), then each one is PUSHED what
-       * it lacks - so every phone is offered every other device's newest log in one run, not after
-       * a second round. One phone at a time over Bluetooth (one link is the reliable path); a phone
-       * that cannot be reached is reported and the run goes on with the others.
-       */
-      if (sub === 'sync' && rest.includes('--all')) {
-        const phones = require('../../cli/clipair-store').list().map((p) => ({ address: p.address, name: p.name })).filter((p) => p.address);
-        if (!phones.length) throw h.usage('no phone is paired with this computer - onlykey-js --ble pair');
-        const { spawnSync } = require('child_process');
-        const cli = path.join(__dirname, '..', '..', 'cli', 'index.js');
-        const one = (address, mode) => {
-          const r = spawnSync(process.execPath, [cli, '--ble', '--address', address, 'edge', ...(NET === 'test' ? ['--test-mode'] : []), 'sync', mode], { encoding: 'utf8', timeout: 240000 });
-          for (const l of `${r.stdout || ''}${r.stderr || ''}`.split('\n')) if (l.trim() && !/^edge: TESTNET|ble: /.test(l)) io.out(`  ${l}`);
-          return r.status === 0;
-        };
-        let ok = true;
-        for (const [mode, label] of [['--pull-only', 'pull'], ['--push-only', 'push']]) {
-          for (const p of phones) {
-            io.out(`${label} ${p.address}`);
-            if (!one(p.address, mode)) { ok = false; io.out(`  ${label} ${p.address}: did not finish`); }
-          }
-        }
-        return ok ? 0 : 1;
-      }
       const control = require('./control');
 
       /*
@@ -647,13 +573,13 @@ module.exports = function register(COMMANDS, h) {
         return 0;
       }
 
-      /* BLOCKS (BLOCKS.md, Brad 2026-10-07): this PC's copy cut at the key's seals into JSON blocks - local, no phone */
+      /* BLOCKS (BLOCKS.md, Brad 2026-10-07): this PC's copy cut at the key's seals into JSON blocks - local, no key */
       /*
        * EDGE LOSS (R24) for a hard key: links gone from the key's ring before this computer read them
        * are accepted as lost - the key links a LOSS (op 11) for #from..#to with a PHYSICAL press, and a
        * copy then passes R27 with that gap. Key 1, 2026-10-23: #387-#389 rolled out of the ring
        * unread, and every budget after was refused "copy does not verify". The person says yes here,
-       * then presses. Over Bluetooth the phone has its own Accept loss.
+       * then presses.
        */
       /*
        * EDGE MIGRATE (B3.0): the records from before identities, copied into THIS key's identity home -
@@ -712,7 +638,6 @@ module.exports = function register(COMMANDS, h) {
       }
 
       if (sub === 'loss') {
-        if (opts.ble) throw h.usage('over Bluetooth a loss is accepted on the phone (its Edge tab: Accept loss)');
         const nums = rest.filter((x) => /^\d+$/.test(x)).map(Number);
         if (nums.length > 2 || rest.length !== nums.length) throw h.usage(edgeCmd('loss [<from> [<to>]]'));
         const d = await openDevice(io, opts, h, { dev, wait });
@@ -770,11 +695,11 @@ module.exports = function register(COMMANDS, h) {
 
       if (sub === 'setup') {
         /*
-         * THE AGENT IDENTITY, SET FROM A COMPUTER AND KEPT BY THE PHONE (SPEC H7; Brad,
+         * THE AGENT IDENTITY, SET FROM A COMPUTER AND KEPT BY ITS HOST (SPEC H7; Brad,
          * 2026-10-20: "computer sets, phone keeps"). The certificate is made HERE - the key
-         * signs it, two presses - and sent with the labels; the phone shows it on its Edge
-         * sheet and keeps it only when the person approves. Flags not given keep the
-         * phone's current values; a certificate is remade only when the gpg user ID, the
+         * signs it, two presses - and sent with the labels; the host (setUpIdentity) shows
+         * it and keeps it only when the person approves. Flags not given keep the
+         * host's current values; a certificate is remade only when the gpg user ID, the
          * lifetime or --created changes it.
          */
         /* no labels named: a first identity takes the defaults (defaultIdentity), an existing one stays as it is */
@@ -807,8 +732,8 @@ module.exports = function register(COMMANDS, h) {
           const k = rest.indexOf('--no-sync');
           if (k >= 0) { noSync = true; rest.splice(k, 1); }
         }
-        /* the optional service: one link kept open between commands; nothing it can do that a command can't */
-        if (Object.keys(parseSetup(rest, h)).length) throw h.usage(`the identity is set with ${edgeCmd('setup')} (the phone keeps it); edge agent takes no identity flags`);
+        /* the optional service: the key kept open between commands; nothing it can do that a command can't */
+        if (Object.keys(parseSetup(rest, h)).length) throw h.usage(`the identity is set with ${edgeCmd('setup')} (its host keeps it); edge agent takes no identity flags`);
         /*
          * ONE SERVICE, THE SYNC EVEN WITHOUT AN AGENT: a key with no agent identity yet (a fresh soft key, the desktop
          * app's) cannot run the Edge agent, but its bucket still syncs - the device is opened for the sync alone, and
@@ -836,29 +761,23 @@ module.exports = function register(COMMANDS, h) {
               }
             }
           };
-          if (opts.ble) {
-            /* over Bluetooth the phone is the device AND the channel the trades go over: kept open */
-            const d = await openOnce();
-            st = { ...d, close: () => Promise.resolve(d.app.destroy()).catch(() => undefined) };
-          } else {
-            /*
-             * NOTHING HELD BETWEEN TRADES (the Windows desktop, 2026-10-25): through the desktop app one CLI at a time,
-             * and a service holding the key refused every other onlykey-js "busy" - a ship included. The sync needs the
-             * key only to make this computer's bucket key, once (bucket/cli/trade.js takes a function for it): the key is
-             * opened then, and let go.
-             */
-            const d = await openOnce();
-            const say = d.say;
-            await Promise.resolve(d.app.destroy()).catch(() => undefined);
-            const okcryptoBriefly = async () => {
-              const k = await openOnce();
-              return { okcrypto: k.okcrypto, close: () => Promise.resolve(k.app.destroy()).catch(() => undefined) };
-            };
-            st = { say, okcrypto: okcryptoBriefly, transport: {}, channel: null, home: d.home, close: async () => {} };
-          }
+          /*
+           * NOTHING HELD BETWEEN TRADES (the Windows desktop, 2026-10-25): through the desktop app one CLI at a time,
+           * and a service holding the key refused every other onlykey-js "busy" - a ship included. The sync needs the
+           * key only to make this computer's bucket key, once (bucket/cli/trade.js takes a function for it): the key is
+           * opened then, and let go.
+           */
+          const d = await openOnce();
+          const say = d.say;
+          await Promise.resolve(d.app.destroy()).catch(() => undefined);
+          const okcryptoBriefly = async () => {
+            const k = await openOnce();
+            return { okcrypto: k.okcrypto, close: () => Promise.resolve(k.app.destroy()).catch(() => undefined) };
+          };
+          st = { say, okcrypto: okcryptoBriefly, home: d.home, close: async () => {} };
         }
         try {
-          const { svc, transport } = st;
+          const { svc } = st;
           if (agentOff) {
             io.out(`no Edge agent here: ${agentOff}`);
             io.out('ready - the sync service runs; Ctrl-C to stop');
@@ -875,51 +794,29 @@ module.exports = function register(COMMANDS, h) {
             io.out(`ready - ${edgeCmd('budget / exec / receipt')} use this service; Ctrl-C to stop`);
           }
           /*
-           * AND THE SYNC SERVICE (bucket/cli/service.js; Brad, 2026-10-25: "--service will be our long-lived"; "the
-           * service can do bluetooth stuff"): this computer's kept buckets watched, and traded with the paired phone this
-           * service reaches - when they change (the desktop app writes the same files), on a slow timer, and once now.
+           * AND THE SYNC SERVICE (bucket/cli/service.js; Brad, 2026-10-25: "--service will be our long-lived"): this
+           * computer's kept buckets watched, and traded in the key's server room - when they change (the desktop app writes
+           * the same files), on a slow timer, and once now. The room is its only sync (Brad, 2026-10-30: the Bluetooth
+           * trade with cli-paired phones was removed pending a redesign). Whatever key this service uses (a key on USB,
+           * the soft key or the desktop app - Brad, 2026-10-25: "cli without desktop == --service, and --soft-key also runs
+           * the service while it's alive"), it is asked for the bucket key once (bucket/cli/trade.js makeMe, the same
+           * backup's key); later trades use the kept proof material and need none.
            */
-          /*
-           * WHATEVER KEY THIS SERVICE USES (Brad, 2026-10-25: "cli without desktop == --service, and --soft-key also runs
-           * the service while it's alive"): over Bluetooth the phone is this service's own device and its channel carries
-           * the trade; with a key on USB, the soft key or the desktop app, the sync service opens its own Bluetooth link to
-           * each phone this computer is cli-paired with, for trade messages only. The key is asked for the bucket key once
-           * (bucket/cli/trade.js makeMe, the same backup's key); later trades use the remembered identity and need none.
-           */
-          const pairStore = require('../../cli/clipair-store');
-          /* the phones switched on (the Sync tab's Paired devices toggle; off: left alone) */
-          const pairedPhones = () => pairStore.list().filter((p) => p.address && !p.off);
-          const links = new Map();
-          const linkTo = async (address) => {
-            if (links.has(address)) return links.get(address);
-            const { wire } = require('../src');
-            const a = await io.start({ ble: true, address });
-            const tr = a.services.transport;
-            const l = { app: a, transport: tr, used: Date.now(), channel: wire.createWireChannel(tr, { timeoutMs: 60000, device: () => (typeof tr.deviceId === 'function' ? tr.deviceId() : null), log: st.say, net: NET }) };
-            links.set(address, l);
-            return l;
-          };
-          const bucketSvc = !noSync && (opts.ble || pairedPhones().length || !noServer) ? (() => {
+          const bucketSvc = !noSync && !noServer ? (() => {
             const { tradeWith, tradeTimeoutMs } = require('../../bucket/cli/trade');
             const bucketHome = require('../../bucket/cli/home');
             const bucketDir = path.join(bucketHome.root(), 'buckets', NET === 'test' ? 'test' : 'live');
-            const tradeOver = (channel) => {
-              let round = 0;
-              const send = (m) => channel.send(m, { timeoutMs: tradeTimeoutMs(m, round++ === 0) }).catch((e) => { st.say(`sync: the phone gave no answer to ${m.type} (${e.message})`); return null; });
-              return tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say });
-            };
             const n = (o) => Object.values(o || {}).reduce((x, y) => x + y, 0);
             /*
              * THE KEY'S SERVER ROOM (Brad, 2026-10-27: "--service" joins the key's server): this identity's room on the
              * server the key names (its ctap_bridge site; --server for another, --no-server for none), held open while
-             * the service runs - the web app and the phones meet this computer there with no Bluetooth. Joined with the
-             * key's proof (room.js); every device of the identity online is traded with, as the paired phones are, and a
-             * device that comes online starts a trade at once. Lost: joined again at the next trade (the slow timer).
-             * This side starts the trades; a trade another device starts is not answered yet (room.serve unset).
+             * the service runs - the web app and the phones meet this computer there. Joined with the key's proof
+             * (room.js); every device of the identity online is traded with, and a device that comes online starts a
+             * trade at once. Lost: joined again at the next trade (the slow timer). This side starts the trades; a trade
+             * another device starts is not answered yet (room.serve unset).
              */
             let roomP = null;
             const roomOpen = () => {
-              if (noServer) return Promise.resolve(null);
               if (!roomP) {
                 roomP = (async () => {
                   let url = serverOpt;
@@ -965,30 +862,9 @@ module.exports = function register(COMMANDS, h) {
               lockFile: path.join(bucketHome.root(), 'sync.json'),
               who: process.env.OKEDGE_SYNC_WHO || `onlykey-js --service (pid ${process.pid})`,
               tradeOnce: async () => {
-                /* the phone this service runs over (--ble), or each paired phone in turn over its own link; then the room */
-                const results = [];
-                if (opts.ble) results.push({ name: 'the phone', ...(await tradeOver(st.channel)) });
-                for (const p of opts.ble ? [] : pairedPhones()) {
-                  const name = p.phoneName || p.address;
-                  try {
-                    const l = await linkTo(p.address);
-                    /*
-                     * IN USE FOR THE WHOLE TRADE (Windows desktop + A13, 2026-10-25: the first trade makes this computer's
-                     * bucket key - two presses - and with the idle clock started only before it, the link was let go
-                     * between HAVE and its answer; the phone answered into a closed link, "took 0, gave 0 - NOT settled").
-                     * The idle clock starts again when the trade ends.
-                     */
-                    l.trading = true;
-                    let r;
-                    try { r = await tradeOver(l.channel); } finally { l.trading = false; l.used = Date.now(); }
-                    if (r.traded) pairStore.markUsed(p.address);
-                    results.push({ name, ...r });
-                  } catch (e) {
-                    results.push({ name, traded: false, why: e.message });
-                  }
-                }
-                results.push(...(await tradeRoom()));
-                if (!results.length) return { traded: false, why: noServer ? 'no phone is cli-paired with this computer' : 'no phone is cli-paired with this computer, and no other device of this identity is in the server room' };
+                /* each other device of this identity online in the room */
+                const results = await tradeRoom();
+                if (!results.length) return { traded: false, why: 'no other device of this identity is in the server room' };
                 const ok = results.filter((r) => r.traded);
                 if (!ok.length) return { traded: false, why: results.map((r) => `${r.name}: ${r.why}`).join('; ') };
                 return {
@@ -1003,27 +879,6 @@ module.exports = function register(COMMANDS, h) {
             void svcBucket.trade('the service started');
             return svcBucket;
           })() : null;
-          /* its own links let go when idle (60 s, as the --ble link below); the 30 s check usually keeps them up */
-          const linkTick = setInterval(() => {
-            for (const l of links.values()) {
-              if (!l.trading && Date.now() - l.used >= 60000 && typeof l.transport.isOpen === 'function' && l.transport.isOpen()) void l.transport.release('idle').catch(() => {});
-            }
-          }, 5000);
-          if (linkTick.unref) linkTick.unref();
-
-          /*
-           * RELEASE WHEN IDLE (Brad, 2026-10-06): the link is let go once the key's
-           * lane has been quiet 60 s - nothing running, nothing waiting. The phone
-           * goes back to advertising; the next request connects fresh, hello first.
-           */
-          const IDLE_MS = (dev && dev.idleMs) || 60000;
-          const idleTick = opts.ble && typeof transport.laneState === 'function'
-            ? setInterval(() => {
-              const s = transport.laneState();
-              if (s.idle && Date.now() - s.since >= IDLE_MS && transport.isOpen()) void transport.release('idle').catch(() => {});
-            }, 1000)
-            : null;
-          if (idleTick && idleTick.unref) idleTick.unref();
           /*
            * STOP, ASKED OVER THE CONTROL SOCKET (owner-only, as every request): the same close as Ctrl-C - the copy brought
            * to the key's head, the key let go. Windows has no signal another process can send that Node catches, so a
@@ -1035,10 +890,7 @@ module.exports = function register(COMMANDS, h) {
             process.once('SIGINT', resolve);
             process.once('SIGTERM', resolve);
           })]);
-          if (idleTick) clearInterval(idleTick);
-          clearInterval(linkTick);
           if (bucketSvc) bucketSvc.stop();
-          for (const l of links.values()) await Promise.resolve(l.app.destroy()).catch(() => undefined);
           return 0;
         } finally {
           await st.close();
@@ -1050,13 +902,12 @@ module.exports = function register(COMMANDS, h) {
       /* the service, if Brad started one (CLI.md §4: for speed only) */
       if (await serviceUp(control.controlPath())) return commands.main(args, { ...outs, ask: control.ask, waiting: waitingLine(opts, h) });
       /* no service (the default): this one command, in-process - connect, run, disconnect.
-       * The phone is opened on the command's first request, not before: a usage error
-       * (exec without --head) answers at once instead of after a Bluetooth connect. */
+       * The key is opened on the command's first request, not before: a usage error
+       * (exec without --head) answers at once instead of after the key's connect. */
       let st = null;
       try {
         const ask = async (op, fields = {}, o = {}) => {
-          /* a budget's own steps leave the swap to its end; sync is the swap */
-          if (!st) st = await openStack(io, opts, h, { serve: false, dev, wait, share: !['exec', 'receipt', 'sync'].includes(sub), setup: !['status', 'watch', 'blocks'].includes(sub) });
+          if (!st) st = await openStack(io, opts, h, { serve: false, dev, wait, setup: !['status', 'watch', 'blocks'].includes(sub) });
           const fn = st.svc.handlers[op];
           if (!fn) throw new Error(`no such request: ${op}`);
           if (o.onSent) o.onSent();

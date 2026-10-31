@@ -2,18 +2,16 @@
 
 /**
  * desktop/serve.js - the ok-edge desktop app's side of `onlykey-js --desktop` (and of plain
- * `onlykey-js` while the app runs): the phone's twin on this machine (ok-edge TODO B4b; Brad,
- * 2026-10-23: "we treat --desktop like --ble, where the desktop app does the usb talking").
- *
- * Over Bluetooth the phone gives the CLI two things on one link, and so does this, on one local socket:
+ * `onlykey-js` while the app runs), made as the twin of the phone's Bluetooth link (ok-edge TODO B4b;
+ * Brad, 2026-10-23: "we treat --desktop like --ble, where the desktop app does the usb talking"; --ble
+ * itself was removed 2026-10-30). It gives the CLI two things on one local socket:
  *   1. THE KEY: every report the CLI writes goes to the hard key the app holds, and every report the
  *      key sends comes back - so budget, exec and the key's signing work as on USB.
  *   2. THE HOST: an 0xF7 piece is not for the key. Its pieces are gathered into the message and
  *      answered by the host the caller gives (hostFor): the desktop app's page (ok-edge electron/desktop/hosting.js),
  *      or the CLI's own local-host.js - and the answer goes back in
- *      0xF7 pieces, stamped with the request's net (wire.answerEnvelope), exactly as the phone's
- *      bridge answers (ok-edge vendorBridge keepForApp). The CLI's wire channel cannot tell the
- *      app from the phone, and needs no other code.
+ *      0xF7 pieces, stamped with the request's net (wire.answerEnvelope). The CLI's wire channel
+ *      is the same one any Edge host answers, and needs no other code.
  *
  * THE RECORDS: the desktop app's page answers from the identity bucket it holds, the CLI's local-host.js from
  * the CLI's Edge homes (~/.onlykey-js) - the desktop app reads and merges that same bucket file ("desktop and

@@ -434,7 +434,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
        * Phase 2: this PC's copy fills the phone's - only a copy that verifies (R27).
        * The phone HOLDS what it lacks until the person approves the merge from the
        * Edge tab's banner (Brad, 2026-10-08) - no sheet pops up, no key press, no sync
-       * link. Any computer the person paired over Bluetooth may offer (peers dropped).
+       * link. Any computer its host trusts may offer (peers dropped).
        * Never repairs: a fork on the phone stops it, reported.
        */
       if (r.verdict.kind !== 'verified' && r.verdict.kind !== 'gap') {
@@ -525,46 +525,14 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
  * @param {object} o.openpgp the openpgp fork (src/crypto/pgp)
  * @param {string} [o.shimCommand] what git runs as gpg.program
  */
-/*
- * Silence: the key or the phone sent nothing at all back - not a refusal, not
- * a press that ran out (the key spoke then), not a reply cut short.
- */
-function isSilence(e) {
-  for (let x = e; x; x = x.cause) {
-    if (x.code === 'EEDGE_UNSUPPORTED') return true;
-    if (x.code === 'ETIMEDOUT' && !x.pressTimeout && !x.pressRefused && !x.partial) return true;
-  }
-  return false;
-}
-
-/*
- * Opening the phone at the agent's start (Brad, 2026-10-06): an agent restarted
- * right after the old one quit met a phone still tearing the old link down -
- * discovery found no vendor service (ENOVENDOR) and the agent quit; the next
- * start worked. So that one error gets one more try after ~5 s. Anything else,
- * or a second ENOVENDOR, is thrown as it was: a phone that really has no
- * soft key still fails, just 5 s later.
- * open() -> app (with destroy()) whose device is connected.
- */
-async function openWithOneRetry(open, { waitMs = 5000, log = () => {} } = {}) {
-  try {
-    return await open();
-  } catch (e) {
-    if (!e || e.code !== 'ENOVENDOR') throw e;
-    log(`${String(e.message).split('. ')[0]} - the phone may still be dropping the last link; trying once more in ${Math.round(waitMs / 1000)} s`);
-    await new Promise((r) => setTimeout(r, waitMs));
-    return open();
-  }
-}
-
-async function startEdgeAgent({ okcrypto, client, edge = null, home = null, identity, pointers = null, deviceId = null, pins = null, openpgp, shimCommand = null, log = () => {}, confirm, onSilence = null, linkStats = null, serve = true, keepCopy = false }) {
+async function startEdgeAgent({ okcrypto, client, edge = null, home = null, identity, pointers = null, deviceId = null, pins = null, openpgp, shimCommand = null, log = () => {}, confirm, serve = true, keepCopy = false }) {
   const wire = require('../../cli/ssh-wire');
   const sshPub = require('../../src/crypto/ssh-pub');
   const { checkRecord } = require('../src/identity');
   const { serveControl } = require('./control');
   const checked = checkRecord(identity);
   if (!checked.ok) {
-    throw Object.assign(new Error(`the phone keeps no usable agent identity (${checked.reason}) - set one: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`), { code: 'EIDENTITY' });
+    throw Object.assign(new Error(`the host keeps no usable agent identity (${checked.reason}) - set one: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}`), { code: 'EIDENTITY' });
   }
   /* the budget this computer holds on THIS key - per key, never per folder (audit F8) */
   const held = {
@@ -630,9 +598,6 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
   }
 
   const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge, home });
-  /* onlykey-js edge status also says how the Bluetooth link has been: connects, reconnects, failures */
-  const plainStatus = handlers.status;
-  handlers.status = async (req) => ({ ...(await plainStatus(req)), link: linkStats ? linkStats() : null });
   for (const op of ['budget', 'continue', 'end']) {
     const h = handlers[op];
     handlers[op] = async (req) => {
@@ -644,7 +609,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
   /*
    * A SERVICE KEEPS THIS COMPUTER'S COPY UP WITH THE KEY (copy.catchUp; key 3, 2026-10-29): every request that makes
    * links reads them in right after - the key's ring holds only its newest 8, and a ship through one service made ~21
-   * before its close. keepCopy: a service on USB (over Bluetooth the phone keeps its own copy, as at a close).
+   * before its close. keepCopy: a service (a one-command run reads them at its close instead).
    */
   if (keepCopy && edge && home && deviceId) {
     for (const op of ['budget', 'continue', 'exec-close', 'receipt', 'end']) {
@@ -656,13 +621,6 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
       };
     }
   }
-  /*
-   * NOBODY ANSWERED (Brad, 2026-10-06): a request that ended in silence - no
-   * report at all from the key or the phone - means this link may be one the
-   * phone no longer holds a session for (it drops sealed requests in silence).
-   * onSilence lets the link go; the next request connects fresh, hello first.
-   * The request is not sent again.
-   */
   const base = {
     agent,
     handlers,
@@ -672,7 +630,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
   };
   /* no service (CLI.md §4, the default): the caller runs the handlers in-process for one command */
   if (!serve) return { ...base, controlPath: null, async close() { await agent.closeAll(); } };
-  const control = await serveControl({ handlers, log, onError: async (e) => { if (onSilence && isSilence(e)) await onSilence(e); } });
+  const control = await serveControl({ handlers, log });
   return { ...base, controlPath: control.path, async close() { await agent.closeAll(); await control.close(); } };
 }
 
@@ -685,4 +643,4 @@ const AGENT_DERIVE = { keyType: 1, version: 2 };
 const agentPublicKey = (okcrypto, identity) => okcrypto.agent.publicKey(identity, AGENT_DERIVE);
 
 module.exports = {
-  isSilence, openWithOneRetry, createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS, AGENT_DERIVE, agentPublicKey };
+  createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS, AGENT_DERIVE, agentPublicKey };

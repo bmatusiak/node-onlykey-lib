@@ -7,9 +7,9 @@
  * from a copy the PC verified (R27). Pure: no device, no Node built-ins.
  *
  * The rules this follows (Brad / the spec session; as of 2026-10-08):
- *  - a computer the person approved for Bluetooth (paired with its 6-digit code)
- *    may offer links; until 2026-10-08 that was a place on the KEY's peer list
- *    (R20), and the key and the phone keep no peer list now;
+ *  - a computer its host trusts may offer links (the cli pair over Bluetooth was
+ *    that trust until 2026-10-30); until 2026-10-08 it was a place on the KEY's
+ *    peer list (R20), and the key and the phone keep no peer list now;
  *  - the phone's OWN links merge at once (its own key's, checked against its
  *    signature) - no sheet, no press, no link on the key. Until 2026-10-08 a sync
  *    took Yes and a press and the key wrote a `sync` link (op 20); that op is unused;
@@ -107,8 +107,7 @@ async function buildLinks({ signer, deviceId, records, sid = toHex(randomBytes(8
 
 /**
  * The phone's side: signed by the key it names, well formed, new. Which computer
- * that key is, is the caller's to show (the link itself came over a Bluetooth
- * pairing the person approved with its 6-digit code).
+ * that key is, is the caller's to show (the channel it came over says).
  * -> {ok} | {ok: false, reason}
  */
 function verify(msg, { seen } = {}) {

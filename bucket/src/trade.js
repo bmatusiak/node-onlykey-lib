@@ -1,12 +1,11 @@
 'use strict';
 
 /**
- * THE BUCKET TRADE between two paired devices of one bucket identity (ok-edge plan S3; Brad, 2026-10-25: "the desktop
- * app/cli has what's paired with this computer, so we trade with them - it could be ble or web-app remote"; "the stale
- * mobile device will most likely talk to the desktop at one point, so they trade when they can").
+ * THE BUCKET TRADE between two devices of one bucket identity (ok-edge plan S3; Brad, 2026-10-25: "the stale mobile
+ * device will most likely talk to the desktop at one point, so they trade when they can").
  *
- * A COMPUTER asks, the PEER (the phone, a remote) answers - over whatever carries their messages (the cli pair over
- * Bluetooth, the relay), each a message and its answer:
+ * A COMPUTER asks, the PEER (a phone, a remote) answers - over whatever carries their messages (the server room's
+ * relay; the cli pair over Bluetooth until 2026-10-30), each a message and its answer:
  *
  *   1. hello   computer -> {nonce, identity}                    peer -> {nonce, proof of the computer's nonce}
  *   2. prove   computer -> {proof of the peer's nonce, STATE}   peer -> {STATE}        (only after checking the proof)
@@ -29,7 +28,7 @@
  *
  * WHAT IS TRADED is bucket/src/replicate.js's HAVE and GIVE: each side imports the other's changes into its own open
  * bucket by the store rules (the newer wins, archived values travel, entries join). The carrier is the caller's - it
- * must be the paired, encrypted channel (the cli pair) - and a GIVE inside it is the bucket's own records: the labels
+ * must be an encrypted channel between the two (the room's sealed frames) - and a GIVE inside it is the bucket's own records: the labels
  * and encrypted forms a bucket may hold, never a secret (bucket.js).
  *
  * Pure: no device, no wire; the caller passes its open bucket, its bucket key and certificate, and randomness.

@@ -60,7 +60,7 @@ test('control note keeps the batch in the Edge home; preview shows the commit TO
   }
 });
 
-test('control ship --plan counts without a key; --ble names the phone in the request; the testnet says so', async () => {
+test('control ship --plan counts without a key; --path asks on this terminal; the testnet says so', async () => {
   const home = tmp('okjs-ctl-home-');
   const repo = repoWithWork();
   try {
@@ -69,10 +69,10 @@ test('control ship --plan counts without a key; --ble names the phone in the req
     assert.deepEqual(a.lines, ['plan: 1 signature(s), 1 push(es)']);
 
     fs.writeFileSync(path.join(home, control.SETTINGS_FILE), JSON.stringify({ ttl: 45 }));
-    await control.run({ io: io(), opts: { ble: true, address: 'Pixel 6a' }, argv: ['note', `${repo}:HEAD~1`], net: 'test', home });
+    await control.run({ io: io(), opts: { path: 'hid-1' }, argv: ['note', `${repo}:HEAD~1`], net: 'test', home });
     const p = io();
-    await control.run({ io: p, opts: { ble: true, address: 'Pixel 6a' }, argv: ['preview'], net: 'test', home });
-    assert.match(p.lines.join('\n'), /On the phone \(Pixel 6a\), a budget request[\s\S]*valid 45 min - TESTNET/);
+    await control.run({ io: p, opts: { path: 'hid-1' }, argv: ['preview'], net: 'test', home });
+    assert.match(p.lines.join('\n'), /On this terminal, a budget request for the key on USB:[\s\S]*valid 45 min - TESTNET/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(repo, { recursive: true, force: true });
@@ -124,7 +124,8 @@ test('edge --claude-setup writes the edge-control skill; a file it did not write
     const text = fs.readFileSync(file, 'utf8');
     assert.match(text, /^---\nname: edge-control\n/);
     assert.match(text, /onlykey-js edge control ship/);
-    assert.match(text, /onlykey-js --ble --address "<phone>" edge control/);
+    assert.match(text, /onlykey-js --gui-prompt edge control/);
+    assert.ok(!/--ble/.test(text), 'no Bluetooth row since 2026-10-30');
     /* its own file is rewritten (a newer CLI), a foreign one is not */
     assert.equal(control.claudeSetup({ io: io(), cwd: ws, cmdline: 'node "/x/cli/index.js"' }), 0);
     assert.match(fs.readFileSync(file, 'utf8'), /node "\/x\/cli\/index.js" edge control note/);

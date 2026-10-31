@@ -1,7 +1,7 @@
 'use strict';
 /*
  * BUG 2 (2026-10-05): with no live edge-agent, okedge says "no edge-agent is
- * running" AT ONCE - never "Waiting for the phone" and a 200 s hang. Both of
+ * running" AT ONCE - never "Waiting for the host" and a 200 s hang. Both of
  * the day's hangs were an agent dying WHILE handling the request: the socket
  * closed with no answer, and nothing listened for that.
  */
@@ -29,7 +29,7 @@ test('never set up here (no control key): "no edge agent is running", at once', 
   assert.ok(Date.now() - t0 < 1000);
 });
 
-test('set up, but no agent listening: onlykey-js edge budget says "no edge agent is running" at once, and never "Waiting for the phone"', async () => {
+test('set up, but no agent listening: onlykey-js edge budget says "no edge agent is running" at once, and never "Waiting for the host"', async () => {
   controlKey({ create: true });
   const cap = capture();
   const t0 = Date.now();
@@ -37,7 +37,7 @@ test('set up, but no agent listening: onlykey-js edge budget says "no edge agent
   assert.notEqual(code, 0);
   assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
   assert.ok(cap.lines.some((l) => /no edge agent is running/.test(l)), cap.lines.join('\n'));
-  assert.ok(!cap.lines.some((l) => /Waiting for the phone/.test(l)), 'said "Waiting for the phone" with nothing waiting');
+  assert.ok(!cap.lines.some((l) => /Waiting for the host/.test(l)), 'said "Waiting for the host" with nothing waiting');
 });
 
 test('the agent takes the request and dies without answering: okedge says the agent stopped, at once - no 200 s hang', async () => {
@@ -54,7 +54,7 @@ test('the agent takes the request and dies without answering: okedge says the ag
     assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
     assert.ok(cap.lines.some((l) => /the edge agent stopped/.test(l)), cap.lines.join('\n'));
     /* it DID take the request, so "waiting" was true while it lasted */
-    assert.ok(cap.lines.some((l) => /Waiting for the phone/.test(l)), cap.lines.join('\n'));
+    assert.ok(cap.lines.some((l) => /Waiting for the host/.test(l)), cap.lines.join('\n'));
   } finally {
     await new Promise((r) => server.close(r));
     if (process.platform !== 'win32') fs.rmSync(where, { force: true });

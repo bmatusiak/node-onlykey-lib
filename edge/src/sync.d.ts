@@ -142,8 +142,7 @@ export function buildLinks({ signer, deviceId, records, sid, chain }: {
 }[]>;
 /**
  * The phone's side: signed by the key it names, well formed, new. Which computer
- * that key is, is the caller's to show (the link itself came over a Bluetooth
- * pairing the person approved with its 6-digit code).
+ * that key is, is the caller's to show (the channel it came over says).
  * -> {ok} | {ok: false, reason}
  */
 export function verify(msg: any, { seen }?: {}): {

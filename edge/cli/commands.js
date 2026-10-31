@@ -113,8 +113,8 @@ function paidWords(l) {
   return ' - not paid by a budget (a pressed use)';
 }
 
-async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n'), env = process.env, spawnFn = spawn, ask, dev = null, waiting = 'Waiting for the phone - read the request there, then press…' } = {}) {
-  /* waiting: the host's words - the phone over Bluetooth; for a hard key on USB this computer asks y/N itself (register.js) */
+async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n'), env = process.env, spawnFn = spawn, ask, dev = null, waiting = 'Waiting for the host - answer the request there, then press the key…' } = {}) {
+  /* waiting: the host's words - the desktop app's window, or this terminal's y/N for a key on USB (register.js waitingLine) */
   if (typeof ask !== 'function') throw new Error('edge commands need ask (the service or the in-process stack)');
   /* a step on the ship's timeline (edge/cli/dev/times.js) when the dev set is here */
   const span = (name, fn) => { const run = () => require('./progress-feed').span(name, fn); return dev && dev.times ? dev.times.span(name, run) : run(); };
@@ -134,7 +134,6 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
           for (const q of keyOwed) out(`  #${q}: ${s.owed.includes(q) ? "this budget's use" : "an owed use from before this budget (R16)"} - onlykey-js edge receipt ${q} --msg "…"`);
         } else if (s.owed.length) out(`receipt owed for #${s.owed.join(', #')}`);
       }
-      if (s.link) out(`bluetooth: ${s.link.connects} connect(s), ${s.link.reconnects} reconnect(s), ${s.link.reconnectsFailed} failed${s.link.lastUpMs !== null ? `; last link up in ${s.link.lastUpMs} ms` : ''}`);
       return 0;
     }
     if (cmd === 'budget') {

@@ -21,7 +21,6 @@
     "./guestbook": "./guestbook/src/index.js",
     "./cryptobox": "./cryptobox/src/index.js",
     "./bucket": "./bucket/src/index.js",
-    "./clipair": "./src/clipair/index.js",
     "./config": "./src/config/ini.js",
     "./device/press": "./src/device/press.js",
     "./device/version": "./src/device/version.js",
@@ -40,7 +39,6 @@
     "./plugins/transport/memory": "./plugins/transport/memory.js",
     "./plugins/transport/embedded": "./plugins/transport/embedded.js",
     "./plugins/transport/usb": "./plugins/transport/usb.js",
-    "./plugins/transport/ble": "./plugins/transport/ble.js",
     "./plugins/transport/tunnel": "./plugins/transport/tunnel.js",
     "./plugins/device": "./plugins/device/index.js",
     "./plugins/okcrypto": "./plugins/okcrypto/index.js",
@@ -50,10 +48,7 @@
     "./browser": "./plugins/browser.js",
     "./cli/desktop": "./cli/desktop.js",
     "./cli/transport-hid": "./cli/transport-hid.js",
-    "./cli/transport-ble": "./cli/transport-ble.js",
     "./cli/edge-agent": "./edge/cli/agent.js",
-    "./cli/bt-radio": "./cli/bt-radio.js",
-    "./cli/clipair-store": "./cli/clipair-store.js",
     "./cli/index": "./cli/index.js",
     "./cli/edge-control": "./edge/cli/control.js",
     "./cli/keychain-record": "./keychain/cli/record.js",
@@ -106,18 +101,10 @@
     "typescript": "^6.0.3"
   },
   "peerDependencies": {
-    "node-hid": "^3.4.0",
-    "@stoprocent/noble": "github:bmatusiak/noble-ble#d16fc663a0169d69c7f6a467974ce8d2c799d006",
-    "dbus-next": "^0.10.2"
+    "node-hid": "^3.4.0"
   },
   "peerDependenciesMeta": {
     "node-hid": {
-      "optional": true
-    },
-    "@stoprocent/noble": {
-      "optional": true
-    },
-    "dbus-next": {
       "optional": true
     }
   }

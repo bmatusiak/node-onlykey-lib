@@ -68,7 +68,7 @@ const same = (a, b) => {
  * Serve the control endpoint. handlers: {[op]: async (request) => answer}.
  * A request without the right `auth` gets {ok: false, error: 'unauthorised'}.
  */
-async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOWS, log = () => {}, onError = null, where: at = null, key: givenKey = null }) {
+async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOWS, log = () => {}, where: at = null, key: givenKey = null }) {
   /* where/key: a one-shot endpoint of its own (an exec's gpg endpoint) instead of the home's control endpoint */
   const key = givenKey || controlKey({ home, create: true });
   const where = at || controlPath({ home, windows });
@@ -97,7 +97,6 @@ async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOW
             return { ok: true, ...(await h(req)) };
           } catch (e) {
             log(`control ${req.op}: ${e.message}`);
-            if (onError) { try { await onError(e, req); } catch { /* the answer still goes back */ } }
             return { ok: false, error: e.message, code: e.code };
           }
         })().then((answer) => { if (!sock.destroyed) sock.write(JSON.stringify(answer) + '\n'); });
@@ -124,8 +123,8 @@ async function serveControl({ handlers, home = os.homedir(), windows = IS_WINDOW
  * "Waiting for the phone" and sat out its 200 s while the phone showed nothing.
  * Now the close without an answer is an answer: the agent stopped.
  *
- * onSent: called once the agent has the request - "waiting for the phone" is
- * said only when something is actually waiting.
+ * onSent: called once the agent has the request - "waiting for ..." is said
+ * only when something is actually waiting.
  */
 function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeoutMs = 120000, onSent = null, where = null, key: givenKey = null } = {}) {
   let key = givenKey;
@@ -133,7 +132,7 @@ function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeo
     try {
       key = controlKey({ home });
     } catch (e) {
-      return Promise.reject(Object.assign(new Error(`no edge agent is running here (it was never set up) - start \`${edgeCmd('agent', '--ble --address <phone> ')}\``), { code: 'EEDGE_NO_AGENT' }));
+      return Promise.reject(Object.assign(new Error(`no edge agent is running here (it was never set up) - start \`${edgeCmd('agent')}\``), { code: 'EEDGE_NO_AGENT' }));
     }
   }
   return new Promise((resolve, reject) => {
@@ -146,7 +145,7 @@ function ask(op, fields = {}, { home = os.homedir(), windows = IS_WINDOWS, timeo
     sock.once('error', (e) => {
       finish(reject, connected
         ? Object.assign(new Error(`the edge agent stopped while handling "${op}" (${e.code || e.message}) - see its log, then start it again`), { code: 'EEDGE_AGENT_GONE' })
-        : Object.assign(new Error(`no edge agent is running (${e.code || e.message}) - start \`${edgeCmd('agent', '--ble --address <phone> ')}\``), { code: 'EEDGE_NO_AGENT' }));
+        : Object.assign(new Error(`no edge agent is running (${e.code || e.message}) - start \`${edgeCmd('agent')}\``), { code: 'EEDGE_NO_AGENT' }));
     });
     sock.on('connect', () => {
       connected = true;

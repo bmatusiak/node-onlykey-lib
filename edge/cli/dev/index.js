@@ -13,9 +13,9 @@
  * What lives here:
  *   --edge-home <dir> / OKEDGE_HOME   a test's scratch Edge home, or a second agent
  *   --identity <id>                   edge budget for another identity (rule-10 tests)
- *   OKEDGE_TIMES=1                    every key request, sign and phone message, timed
- *   OKEDGE_IDLE_MS                    the service's idle release (default 60 s)
- *   edge ping                         a Bluetooth link test (testing mode on the phone)
+ *   OKEDGE_TIMES=1                    every key request, sign and host message, timed
+ *   edge ping                         a wire link test, answered by a host that serves pings
+ *                                     (the phone over Bluetooth did, until 2026-10-30)
  */
 const control = require('../control');
 const times = require('./times');
@@ -42,7 +42,7 @@ function timed({ edge, wired, okcrypto, say }) {
   };
   /* the channel keeps everything else it has (openStack reads channel.local): only send is timed */
   const channel = Object.create(wired);
-  channel.send = (m, o) => timedCall(`phone ${(m && m.type) || 'message'}`, () => wired.send(m, o));
+  channel.send = (m, o) => timedCall(`host ${(m && m.type) || 'message'}`, () => wired.send(m, o));
   return {
     channel,
     okcrypto: { ...okcrypto, agent: { ...okcrypto.agent, sign: (...a) => timedCall('key SIGN', () => okcrypto.agent.sign(...a)) } },
@@ -50,9 +50,9 @@ function timed({ edge, wired, okcrypto, say }) {
 }
 
 /*
- * edge ping: a pure Bluetooth link test (Brad, 2026-10-06) - random bytes to the
- * phone and back, checked by their SHA-256; testing mode, encrypted session only.
- * No key, no budget, nothing signed or written.
+ * edge ping: a pure link test (Brad, 2026-10-06) - random bytes to the host and
+ * back, checked by their SHA-256. No key, no budget, nothing signed or written.
+ * Only a host that serves pings answers (neither the desktop app nor local-host.js does).
  */
 /*
  * edge wipe --yes (dev): the key's DEBUG-only Edge wipe (R31) - a fresh chain, a new device id;
@@ -95,9 +95,7 @@ async function ping(args, { out, ask }) {
  * (budgets.json), its copies (copy-*.json) and the budgets this computer held on
  * each key (pointers.json). What stays: peer.key, control.key and agent-gpg.asc
  * (keys and the agent's own certificate - R31 keeps every key). The agent's
- * identity is the phone's (SPEC H7), not this computer's: a reset here leaves it.
- * No registration to redo: the phone trusts this computer by its Bluetooth
- * pairing. Local: no phone.
+ * identity is its host's (SPEC H7): a reset here leaves it. Local: no key.
  * -> the files removed
  */
 function reset(home, out) {
@@ -113,14 +111,13 @@ function reset(home, out) {
     }
   }
   out(removed.length ? `edge reset (${home}): removed ${removed.join(', ')}` : `edge reset (${home}): nothing of an old chain here`);
-  out('kept: peer.key, control.key and agent-gpg.asc; the agent identity is the phone\'s');
+  out('kept: peer.key, control.key and agent-gpg.asc; the agent identity is its host\'s');
   return removed;
 }
 
 module.exports = {
   reset,
   identityOption: true,
-  idleMs: Number(process.env.OKEDGE_IDLE_MS) || null,
   /* --edge-home <dir> (before any `--`), else OKEDGE_HOME: the Edge home for this run */
   prepare(argv) {
     const a = argv.slice();

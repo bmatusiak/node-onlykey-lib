@@ -136,3 +136,7 @@ export function openMessage(session: any, msg: any): {
     reason: any;
     card?: undefined;
 };
+/** Seal one message: [ctr 4][AES-256-GCM ct][tag 16]. Mutates the session's send counter. */
+export function sealFrame(session: any, plaintext: any): Uint8Array<any>;
+/** Open one frame, or throw. Only a counter higher than the last one is taken. */
+export function openFrame(session: any, frame: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;

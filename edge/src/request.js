@@ -22,13 +22,11 @@
  * makes from the names and the text. A request carrying hashes of its own
  * (reasonHash, label, labels ...) is not read for them: nothing here looks.
  *
- * WHO ASKS is the cli pair (Brad, 2026-10-08: "so the claude key thing is overkill";
- * "lets cut it out"): the phone takes a request only inside the encrypted session of a computer
- * paired with its 6-digit code, and names that computer on the sheet. No agent key, no signature,
- * no registration - the pairing already proves which computer it is, and Revoke cuts it off.
- *
- * Channels: Bluetooth first (the phone's vendor bridge keeps it for the app),
- * the Worker mailbox later (sealed). Pure: no device, no Node built-ins.
+ * WHO ASKS is the channel's to say (Brad, 2026-10-08: "so the claude key thing is overkill";
+ * "lets cut it out"): no agent key, no signature, no registration. The desktop app's host is
+ * trusted through a file only this user can read (desktop/trust.js); a key on USB is hosted by
+ * this computer itself. (The phone's cli pair over Bluetooth was removed 2026-10-30, pending a
+ * redesign.) Pure: no device, no Node built-ins.
  */
 
 const crypto = require('../../src/crypto/provider');
@@ -67,7 +65,7 @@ async function build({ reason, scopes, lifetime, continueOf = null, nonce = rand
 /*
  * A P-256 signer from a 32-byte secret - this computer's own sync key (<edge home>/peer.key):
  * it signs every sync message, so the phone can tell which computer sent a log. No list
- * of peers since 2026-10-08 (Brad: peers dropped) - the cli pair is the gate.
+ * of peers since 2026-10-08 (Brad: peers dropped).
  */
 function peerSignerFromSecret(secret) {
   return {
@@ -79,8 +77,7 @@ function peerSignerFromSecret(secret) {
 /**
  * The app side, first: is it a well-formed request, and new? seen: the nonces already taken
  * (a Set the app keeps). -> {ok} or {ok: false, reason: 'malformed' | 'replayed'}. An app DROPS
- * these - it answers nothing. Who asks was settled before: the paired computer's encrypted
- * session (the phone's vendor bridge).
+ * these - it answers nothing. Who asks was settled before, by the channel (see above).
  */
 function verify(msg, { seen } = {}) {
   if (!msg || msg.type !== TYPE || msg.v !== 1 || !isHex(msg.nonce, 16)

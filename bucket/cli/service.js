@@ -5,13 +5,14 @@
  * will be our long-lived, and --soft-key is also long-lived until it ends").
  *
  * It lives in the computer's one long-lived process (`onlykey-js --service`, which is the Edge agent too) and trades
- * with the paired device that process reaches (bucket/cli/trade.js) whenever there may be something to trade:
+ * (bucket/cli/trade.js) with the devices its caller's tradeOnce reaches - the other devices of the identity in the
+ * key's server room (edge/cli/register.js) - whenever there may be something to trade:
  *
  *   - THIS COMPUTER'S BUCKET CHANGED: the folder of kept buckets is watched - the desktop app writes the same files, so
- *     a password added there is traded from here (the desktop app has no Bluetooth of its own). Changes in a burst are
- *     waited out (DEBOUNCE_MS) and one trade covers them.
- *   - A REGULAR CHECK (INTERVAL_MS): what changed on the other device - the phone cannot start a link to a computer;
- *     the computer reaches it - and anything a watcher missed. Short, because a check costs two small messages: the
+ *     a password added there is traded from here. Changes in a burst are waited out (DEBOUNCE_MS) and one trade
+ *     covers them.
+ *   - A REGULAR CHECK (INTERVAL_MS): what changed on the other device - this side starts the trades - and anything a
+ *     watcher missed. Short, because a check costs two small messages: the
  *     trade compares the two buckets' hashes and timestamps first, and moves records only when they differ (Brad,
  *     2026-10-25: "shorter regular check is easy if we check hashes and timestamps").
  *
@@ -40,8 +41,8 @@ function contentsOf(dir) {
 
 /*
  * ONE SYNC SERVICE PER COMPUTER. The desktop app runs one while it is open (ok-edge electron/desktop/sync.js), a terminal
- * `onlykey-js --service` runs one, `--soft-key` runs one - two at once would both reach the same phone, and a phone
- * answers only the computer that connected last. The first to start holds a lock (lockFile: its pid and who it is,
+ * `onlykey-js --service` runs one, `--soft-key` runs one - two at once would both trade the same kept files with the
+ * same devices, each undoing the other's view of what changed. The first to start holds a lock (lockFile: its pid and who it is,
  * owner-only); a later one sees a live holder and does not trade - it says who does. A holder that died leaves a lock
  * whose pid no longer runs: the next one takes it. The liveness check is desktop/trust.js's.
  *
@@ -69,7 +70,7 @@ function holderOf(lockFile, alive, now = Date.now()) {
 /**
  * Start watching and trading.
  * @param {{dir: string, tradeOnce: () => Promise<{traded: boolean, why?: string, taken?: object, gave?: object}>, say?: (l: string) => void, debounceMs?: number, intervalMs?: number, watch?: typeof fs.watch}} o
- *   dir: the folder of this net's kept buckets (bucket/cli/home.js); tradeOnce: one trade with the paired device
+ *   dir: the folder of this net's kept buckets (bucket/cli/home.js); tradeOnce: one round of trades (the server room's devices)
  *   lockFile: this computer's one sync lock (omitted: no lock - tests); who: how the holder is named to the next one
  * @returns {{trade: (why: string) => Promise<void>, stop: () => void, heldBy?: {pid: number, who: string}}}
  */

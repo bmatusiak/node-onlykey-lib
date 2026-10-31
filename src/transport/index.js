@@ -23,8 +23,8 @@ module.exports = {
 
   /*
    * The key's lane (one conversation at a time; urgent goes to the front -
-   * rule 8). Exported for a host that relays another computer's requests to
-   * the key (ok-rn's Bluetooth bridge) and its tests.
+   * rule 8). Exported for a host that holds the key between its own requests
+   * and another program's (the ok-edge app's computer hold) and its tests.
    */
   lane: require('./lane'),
 };

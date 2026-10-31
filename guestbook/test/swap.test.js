@@ -12,7 +12,6 @@ const assert = require('node:assert');
 const nodeCrypto = require('crypto');
 
 const { ml_kem768_x25519: xwing } = require('../../src/vendor/exports/@noble/post-quantum/hybrid.js');
-const clipair = require('../../src/clipair');
 const { invite: inv, swap } = require('../src');
 
 const randomBytes = (n) => new Uint8Array(nodeCrypto.randomBytes(n));
@@ -98,14 +97,14 @@ test('a changed message anywhere in the handshake ends it', async () => {
 test('cards: a tampered, replayed or private one is refused', async () => {
   const { a, b } = await handshake();
   const card = swap.sealCard(a.session, ALICE_CARD);
-  assert.throws(() => swap.openCard(b.session, flip(card.length - 3)(card)), (e) => e.code === 'EBTPAIR_TAG');
+  assert.throws(() => swap.openCard(b.session, flip(card.length - 3)(card)), (e) => e.code === 'ESWAP_TAG');
   swap.openCard(b.session, card);
-  assert.throws(() => swap.openCard(b.session, card), (e) => e.code === 'EBTPAIR_REPLAY');
+  assert.throws(() => swap.openCard(b.session, card), (e) => e.code === 'ESWAP_REPLAY');
 
   const privateText = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----';
   assert.throws(() => swap.sealCard(a.session, { name: 'x', keys: [{ format: 'ssh', text: privateText }] }));
   /* a sender that skips sealCard's check: the receiver refuses it too */
-  const raw = clipair.seal(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [{ format: 'ssh', text: privateText }] })));
+  const raw = swap.sealFrame(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [{ format: 'ssh', text: privateText }] })));
   const frame = new Uint8Array(2 + raw.length);
   frame.set([swap.T.CARD, swap.VERSION], 0);
   frame.set(raw, 2);
@@ -144,11 +143,11 @@ test('goodbye: sealed on the cards\' counter - a card then a goodbye in order; a
   const bye = swap.sealBye(a.session, 'done');
   assert.deepEqual(swap.openMessage(b.session, card), { kind: 'card', card: ALICE_CARD });
   assert.deepEqual(swap.openMessage(b.session, bye), { kind: 'bye', reason: 'done' });
-  assert.throws(() => swap.openMessage(b.session, bye), (e) => e.code === 'EBTPAIR_REPLAY');
+  assert.throws(() => swap.openMessage(b.session, bye), (e) => e.code === 'ESWAP_REPLAY');
   /* one sealed under another swap's keys */
   const other = await handshake();
   other.a.session.sendCtr = 9; /* ahead of ours, so only its key can refuse it */
-  assert.throws(() => swap.openMessage(b.session, swap.sealBye(other.a.session, 'leaving')), (e) => e.code === 'EBTPAIR_TAG');
+  assert.throws(() => swap.openMessage(b.session, swap.sealBye(other.a.session, 'leaving')), (e) => e.code === 'ESWAP_TAG');
   assert.throws(() => swap.sealBye(a.session, 'whenever'), /one of done, leaving/);
   assert.deepEqual(swap.openMessage(a.session, swap.sealBye(b.session, 'leaving')), { kind: 'bye', reason: 'leaving' });
 });
@@ -182,7 +181,7 @@ test('ROTATING QR: the token turns over every 15 s; this window\'s and the last 
 test('a swap is a trade: an empty card is refused when sealed and when opened', async () => {
   const { a, b } = await handshake();
   assert.throws(() => swap.sealCard(a.session, { name: 'x', keys: [] }), /at least one key/);
-  const raw = clipair.seal(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [] })));
+  const raw = swap.sealFrame(a.session, new TextEncoder().encode(JSON.stringify({ name: 'x', keys: [] })));
   const frame = new Uint8Array(2 + raw.length);
   frame.set([swap.T.CARD, swap.VERSION], 0);
   frame.set(raw, 2);

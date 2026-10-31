@@ -164,8 +164,8 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
 
     /**
      * One request's reports, in order. A pipe that can put several in one write
-     * (the Bluetooth pipe, cli/transport-ble.js KIND_REPORTS) gets them all at
-     * once; any other pipe gets them one write each, exactly as write() would.
+     * (pipe.writeMany) gets them all at once; any other pipe gets them one write
+     * each, exactly as write() would.
      * Each one is padded and length-checked by toReport() on its own.
      */
     async writeMany(iface, list) {
@@ -190,35 +190,16 @@ function createPipeTransport({ name, pipe, EventEmitter }) {
     urgentWaiting() {
       return laneOf(transport).urgentWaiting();
     },
-    /** the pipe's link counts (Bluetooth), or null */
-    linkStats() {
-      return pipe.linkStats || null;
-    },
-    /** this computer's id on the Edge wire: the pipe's Part T pairing id, when it has one */
-    deviceId() {
-      return pipe.pairingId || null;
-    },
-    /** the lane: idle (nothing running or waiting), and since when */
-    laneState() {
-      return laneOf(transport).state();
-    },
-    /**
-     * Let the link go and stay ready: the next write connects again (the
-     * Bluetooth pipe says hello first). A pipe that cannot does nothing.
-     */
-    async release(why) {
-      if (typeof pipe.release === 'function') await pipe.release(why);
-    },
     request(opts) {
       return laneOf(transport)(() => transport.requestNow(opts));
     },
     async requestNow({ iface, data, timeoutMs = 3000, match = null }) {
       return new Promise((resolve, reject) => {
         /*
-         * The reply clock starts once the write has gone out. A Bluetooth pipe
-         * may reconnect inside a write (a dropped link, a phone app restart:
-         * about 4 s on the Pixel, 2026-10-05) - a clock started before it ran
-         * out while the request had not left yet. Listening starts first all
+         * The reply clock starts once the write has gone out. A pipe may
+         * (re)connect inside a write (the Bluetooth pipe did, about 4 s on the
+         * Pixel, 2026-10-05) - a clock started before it ran out while the
+         * request had not left yet. Listening starts first all
          * the same: a reply can beat the write's acknowledgement.
          */
         let timer = null;

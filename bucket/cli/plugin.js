@@ -108,7 +108,7 @@ function setup(imports, register) {
       /*
        * SYNC OVER THE USER'S SERVER (ok-edge plan M2): join this bucket identity's room on the server the user runs
        * (ok-edge mcp-server/ - the key's proof, no code), then trade with every device of the identity online there,
-       * one after another, as the cli pair's trade does side by side. Frames are sealed between the devices
+       * one after another, as the --service does. Frames are sealed between the devices
        * (room.js); the server passes ciphertext.
        */
       if (sub === 'sync') {

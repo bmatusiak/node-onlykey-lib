@@ -7,7 +7,7 @@
  * The app holds the hard key on USB; this is a pipe with transport-hid's contract (start, stop,
  * isRunning, write, on 'stream' / 'close', device, interfaces) whose reports travel over the app's
  * local socket (desktop/serve.js). So everything above it - the transport plugin, the device, Edge's
- * wire channel to the host - is the same code as on USB and over Bluetooth.
+ * wire channel to the host - is the same code as on USB.
  *
  * Trust: the app's desktop.json in the shared home (desktop/trust.js) - its socket and its token;
  * the hello carries the token. The write is echoed (dir IN) here, as every pipe echoes its own writes

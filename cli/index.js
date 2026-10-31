@@ -31,10 +31,12 @@
  * onlykey-gpg-agent (cli/gpg-key.js over the vendored openpgp fork,
  * cli/gpg-agent.js and cli/assuan.js on Node built-ins).
  *
- * TWO BUSES. By default a USB key over node-hid; with --ble a phone running
- * ok-rn, over Bluetooth LE (cli/transport-ble.js). The option is global, so
- * every device command - agent and gpg-agent included - takes it unchanged:
- * the bus is below the transport, and nothing above it knows which one it is.
+ * WHICH KEY. By default a USB key over node-hid - or, while the ok-edge desktop
+ * app runs, the key it holds (--desktop insists on it); --soft-key the app's
+ * soft key booted here. The option is global, so every device command - agent
+ * and gpg-agent included - takes it unchanged: the pipe is below the
+ * transport, and nothing above it knows which one it is. (The phone over
+ * Bluetooth LE, --ble, was removed 2026-10-30 pending a redesign.)
  *
  * WHAT IT DOES NOT DO. There is no firmware update path - that is
  * deliberately not something this program can do - and no backup or
@@ -112,13 +114,11 @@ const classicSlotName = (n) => (n <= 6 ? `${n}a` : `${n - 6}b`);
  * Which key, and over which bus - the global options every device command
  * shares, as io.start() takes them.
  *
- * --ble reaches a phone running ok-rn over Bluetooth LE (cli/transport-ble.js)
- * instead of a USB key over node-hid; --address picks the phone. Kept in one
- * place because three things must agree on it: the command opening the key,
- * the agent's per-burst reopen (sharedDevice), and the command lines this
- * program writes for gpg to start later (deviceArgs) - a gpg-agent started
- * by gpg with the USB default while the home was made over --ble would ask a
- * key that is not there.
+ * Kept in one place because three things must agree on it: the command
+ * opening the key, the agent's per-burst reopen (sharedDevice), and the
+ * command lines this program writes for gpg to start later (deviceArgs) - a
+ * gpg-agent started by gpg with the USB default while the home was made with
+ * --path to one key of two would ask the other.
  */
 /*
  * THE DESKTOP APP FIRST (Brad, 2026-10-23: "if desktop is open and cli is not using --desktop but
@@ -129,12 +129,11 @@ const classicSlotName = (n) => (n <= 6 ? `${n}a` : `${n - 6}b`);
  */
 /*
  * WHICH KEY (Brad, 2026-10-25: "the CLI will try to do the work if no desktop app is found, and then it tries to use
- * hardkey by default, unless --ble or --soft-key is used"): the desktop app when it runs - it does the work with the key
- * it has open; else --ble the phone, --soft-key the desktop app's own soft key booted here (cli/transport-softkey.js,
- * the testnet's with --test-mode), or a hard key on USB.
+ * hardkey by default, unless --ble or --soft-key is used"; --ble removed 2026-10-30): the desktop app when it runs - it
+ * does the work with the key it has open; else --soft-key the desktop app's own soft key booted here
+ * (cli/transport-softkey.js, the testnet's with --test-mode), or a hard key on USB.
  */
 function deviceOpts(opts) {
-  if (opts.ble) return { ble: true, address: opts.address };
   if (opts.desktop) return { desktop: true };
   if (!opts.path && require('../desktop/trust').liveTrust()) return { desktop: true, auto: true };
   if (opts['soft-key']) return { softKey: true, softKeyNet: process.argv.includes('--test-mode') ? 'test' : 'live' };
@@ -143,7 +142,6 @@ function deviceOpts(opts) {
 
 /** The same choice as command-line arguments, for a program this one starts later (plain stays plain: it chooses again). */
 function deviceArgs(opts) {
-  if (opts.ble) return ['--ble', ...(opts.address ? ['--address', opts.address] : [])];
   if (opts.desktop) return ['--desktop'];
   if (opts['soft-key']) return ['--soft-key'];
   return opts.path ? ['--path', opts.path] : [];
@@ -161,7 +159,6 @@ async function withDevice(io, opts, fn) {
   try {
     const { device, okcrypto, config, transport } = app.services;
     const connected = await device.connect();
-    requireAnswered(connected.identity);
     return await fn({ device, okcrypto, config, transport, connected, identity: connected.identity });
   } finally {
     await app.destroy();
@@ -194,21 +191,6 @@ function requireUnlocked(identity, what, { firstUse = false } = {}) {
   throw new CliError(`The OnlyKey answered "${identity.raw}", which is not an unlocked key.`);
 }
 
-/*
- * A KEY THAT IS NOT THERE TO ANSWER (Brad, 2026-10-07: "the cli should see what
- * the issue is, so the ai agent can say"). ok-rn's soft key halts on its
- * inactivity lockout (CPU_RESTART) and stays gone until ok-rn restarts; its
- * Bluetooth bridge then answers the connect with "Error soft key stopped, …"
- * (okmsg kind 'stopped'). Every command stops right there with what to do,
- * instead of a request timing out later as "no reply on interface 2".
- */
-function requireAnswered(identity) {
-  if (!identity || identity.state !== 'error') return;
-  if (okmsg.errorKind(identity.raw) === 'stopped') {
-    throw new CliError('The soft key on the phone has stopped (ok-rn logged out by its inactivity lockout). Restart ok-rn on the phone and log in, then run this again.');
-  }
-}
-
 /**
  * The capability flags, split into what the key has and what it does not.
  *
@@ -236,7 +218,7 @@ COMMANDS.help = {
   async run(io) {
     io.out(`${NAME} v${PKG.version} - the OnlyKey command line, on node-onlykey-lib`);
     io.out('');
-    io.out(`Usage: ${NAME} <command> [arguments] [--path <hid path> | --ble [--address <phone>]] [--yes]`);
+    io.out(`Usage: ${NAME} <command> [arguments] [--path <hid path> | --desktop | --soft-key] [--yes]`);
     io.out('');
     io.out('Commands:');
     for (const [name, cmd] of Object.entries(COMMANDS)) {
@@ -246,8 +228,6 @@ COMMANDS.help = {
     io.out('');
     io.out('Options:');
     io.out(`  ${'--path <path>'.padEnd(14)} which OnlyKey, when more than one is plugged in`);
-    io.out(`  ${'--ble'.padEnd(14)} reach ok-edge mobile (a phone) over Bluetooth LE instead of a USB key`);
-    io.out(`  ${'--address <a>'.padEnd(14)} with --ble: the phone's address or Bluetooth name`);
     io.out(`  ${'--desktop'.padEnd(14)} reach the key through the ok-edge desktop app on this computer (plain does too, while it runs)`);
     io.out(`  ${'--mcp'.padEnd(14)} reach the ok-edge web app over MCP (not built yet)`);
     io.out(`  ${'--yes'.padEnd(14)} confirm a setting that cannot be undone (wipemode, backupkeymode, webcryptpolicy)`);
@@ -257,8 +237,7 @@ COMMANDS.help = {
     io.out('Secrets (password, gkey, totpkey, a PGP passphrase) are prompted for, or read as one');
     io.out('line from stdin when stdin is not a terminal - never taken as arguments. setkey also');
     io.out('takes its hex as an argument, as python\'s does, and prompts for it when left off.');
-    io.out('There is no firmware update, backup or restore command; over --ble a firmware update');
-    io.out('is refused by the transport itself.');
+    io.out('There is no firmware update, backup or restore command.');
     return 0;
   },
 };
@@ -333,27 +312,18 @@ COMMANDS.status = {
 /*
  * WHICH KEYS THIS COMPUTER CAN USE, to pick a target (Brad, 2026-10-08: "onlykey-js
  * devices helps us pick a target"; "normal onlykey-js devices will just be usb";
- * "--ble will just add bluetooth to the list"; "will ping and ask each device").
- * Not `pair list` (this computer's pairing records): every key found is ASKED -
+ * "will ping and ask each device"). Every key found is ASKED -
  * connected, the same OKCONNECT every command starts with, and its answer shown.
  * Read only: no press, no PIN, nothing written - a hard key plugged in is safe.
  * Each row ends with the argument that targets that key.
  */
 COMMANDS.devices = {
   mirrors: '(new)',
-  summary: 'the keys this computer can use, each asked what it is - USB; --ble adds the phones in reach; --json for programs',
-  options: { json: { type: 'boolean' }, seconds: { type: 'string' } },
-  /* it opens each key itself: no --path / --address of its own */
+  summary: 'the keys this computer can use on USB, each asked what it is; --json for programs',
+  options: { json: { type: 'boolean' } },
+  /* it opens each key itself: no --path of its own */
   async run(io, opts) {
     const dev = require('./devices');
-    /*
-     * --seconds (Brad, 2026-10-08): how long the Bluetooth search runs - shorter when the
-     * phones are close, longer for one far off. The Bluetooth search only, so it goes
-     * with --ble. On Linux the list is BlueZ's known phones, no search to time.
-     */
-    const seconds = opts.seconds === undefined ? dev.SCAN_SECONDS : Number(opts.seconds);
-    if (opts.seconds !== undefined && !opts.ble) throw usage('--seconds is how long the Bluetooth search runs - it goes with --ble');
-    if (!Number.isFinite(seconds) || seconds < 1 || seconds > 120) throw usage('--seconds takes a number from 1 to 120');
     /*
      * Text: each key printed as soon as it answered - one slow key must not hold the
      * list back. --json (Brad, 2026-10-08: "now we add --json for machinecode output"):
@@ -365,28 +335,24 @@ COMMANDS.devices = {
     const show = (row) => {
       rows.push({ n: rows.length + 1, ...row });
       if (opts.json) return;
-      io.out(`${String(rows.length).padStart(2)}. ${row.transport.padEnd(4)} ${row.name}${row.rssi !== null && row.rssi !== undefined ? ` (${row.rssi} dBm)` : ''} - ${row.verdict}`);
+      io.out(`${String(rows.length).padStart(2)}. ${row.transport.padEnd(4)} ${row.name} - ${row.verdict}`);
       io.out(`     ${row.details}`);
       io.out(`     ${row.arg}`);
     };
     const onError = (e) => io.err(`devices: ${e.message}`);
     /*
-     * Each transport in a child process of its own; this process loads no native
-     * add-on (cli/devices.js says why). A test hands in its bus, scan and pairing
-     * store (io.findUsb, io.scanPhones, io.pairingFor) and runs in one process.
+     * The USB bus in a child process of its own; this process loads no native
+     * add-on (cli/devices.js says why). A test hands in its bus (io.findUsb) and
+     * runs in one process.
      */
     if (io.findUsb) await dev.usbRows({ start: io.start, find: io.findUsb, onRow: show, onNote: note });
     else await dev.viaChild('usb', { onRow: show, onNote: note, onError });
-    if (opts.ble) {
-      if (io.scanPhones) await dev.bleRows({ start: io.start, scan: () => io.scanPhones({ seconds }), pairingFor: io.pairingFor || (() => false), onRow: show, onNote: note });
-      else await dev.viaChild('ble', { onRow: show, onNote: note, onError, args: [String(seconds)] });
-    }
     if (opts.json) {
       io.out(JSON.stringify(rows, null, 2));
       return rows.length ? 0 : 1;
     }
     if (!rows.length) {
-      io.out(opts.ble ? 'no OnlyKey on USB and no phone in reach' : 'no OnlyKey on USB (onlykey-js devices --ble adds the phones in reach)');
+      io.out('no OnlyKey on USB');
       return 1;
     }
     return 0;
@@ -1293,86 +1259,6 @@ function parseExpires(text) {
   return Number(m[1]) * (m[2] === 'y' ? 365 : 1) * 86400;
 }
 
-/*
- * PART T (onlykey-edge features/CLI-PAIR-SPEC.md): pair THIS computer
- * user with ok-rn over Bluetooth. Brad opens "Pair a computer" in ok-rn's
- * Bluetooth tab (a ~2-minute window); both sides show the same 6-digit code; he
- * checks it and approves on the phone. Commit-then-reveal: this side commits to
- * its key before it sees the phone's (src/clipair). The pairing is kept in this
- * user's owner-only ~/.onlykey-js/cli-pairing.json - another account on this
- * computer has none and gets silence until it pairs on its own.
- */
-COMMANDS.pair = {
-  mirrors: '(new)',
-  usage: '[list | forget]   (with --ble [--address <phone>])',
-  summary: 'Part T: pair this computer with ok-rn over Bluetooth (the phone shows the same 6-digit code); pair list | pair forget',
-  device: false,
-  /*
-   * NO --name (removed 2026-10-20). Every later command introduces this
-   * computer by its hostname, and the phone revokes a pairing that arrives
-   * under another name than it was made with. A `pair --name zbox` on the
-   * ZBOX made a pairing the A13 revoked on its first use, by design on the
-   * phone's side - the bug was that the CLI let anyone make it. The name is
-   * now the hostname, always: what `pair` records is what every command sends.
-   */
-  async run(io, opts, args = []) {
-    const store = require('./clipair-store');
-    /* pair list | pair forget (CLI.md §2, 2026-10-06 - was `pairing [--forget]`) */
-    if (args[0] === 'list') {
-      const all = store.list();
-      if (!all.length) { io.out(`no pairings for this user on ${store.computerName()} (onlykey-js --ble pair)`); return 0; }
-      /*
-       * One row per PHONE: its name, address and phone id. The pairing `id` is this
-       * computer user's own id - the same on every row - so it told nothing apart.
-       * A row that cannot work says so (audit F4): made under another computer name
-       * (the phone revokes it on first use), or filed under no address (nothing
-       * finds it).
-       */
-      const here = store.computerName();
-      for (const r of all) {
-        const phone = `${r.phoneName ? `${r.phoneName} ` : ''}${r.address || '(no address)'}`;
-        io.out(`${phone}  phone id ${String(r.phoneId || '?').slice(0, 8)}...  as ${r.name || '?'}  epoch ${r.epoch}  renewed ${new Date(r.renewedAt).toISOString().slice(0, 10)}`);
-        if (r.name && r.name !== here) io.out(`  WILL NOT WORK: made as "${r.name}", this computer is "${here}" - the phone revokes it on first use; pair again`);
-        if (!r.address) io.out('  WILL NOT WORK: filed under no phone address, so no command finds it; pair again');
-      }
-      return 0;
-    }
-    if (args[0] === 'forget') {
-      if (!opts.address) throw usage('pair forget takes the phone: --address <its address or Bluetooth name> (see pair list)');
-      const removed = store.removePairing(opts.address);
-      if (!removed.length) throw new CliError(`no pairing matches ${opts.address} - nothing forgotten (see onlykey-js pair list)`);
-      for (const r of removed) io.out(`forgot the pairing with ${r.phoneName ? `${r.phoneName} ` : ''}${r.address || ''} (remove this computer on the phone too)`);
-      return 0;
-    }
-    if (args.length) throw usage('pair | pair list | pair forget');
-    if (!opts.ble) throw usage('pair works over Bluetooth only: onlykey-js --ble [--address <phone>] pair');
-    /*
-     * The radio first (cli/bt-radio.js; Brad, 2026-10-20: "no support for bt4"): a pairing made
-     * on a radio that cannot hold it costs the phone its bond on the first failure. A radio that
-     * cannot be read is said, not refused.
-     */
-    const radio = await require('./bt-radio').checkRadio();
-    if (!radio.ok) throw new CliError(radio.message);
-    if (!radio.known) io.err(`onlykey-js: ${radio.message}`);
-    const pipe = require('./transport-ble').createBlePipe({ address: opts.address }); /* no pairing yet: the pairing messages themselves */
-    await pipe.start();
-    try {
-      const name = store.computerName();
-      io.out(`pairing ${name}: on the phone open Sync > Pair a computer - in ok-rn, Bluetooth > Pair a computer (it stays open about 2 minutes)`);
-      let result;
-      try {
-        result = await store.pairOverPipe(pipe, { name, out: (l) => io.out(l) });
-      } catch (e) {
-        throw new CliError(e.message);
-      }
-      const ph = result.phone;
-      io.out(`paired: ${name} with ${ph.name ? `${ph.name} ` : ''}${ph.address}; any --address form (its name, its address, or none when it is the only one) finds it, and from now on this user's Bluetooth commands to it are encrypted`);
-    } finally {
-      await pipe.stop();
-    }
-  },
-};
-
 COMMANDS.wipekey = {
   mirrors: 'wipekey',
   usage: '<RSA1-4|ECC1-16|HMAC1-2>',
@@ -1717,7 +1603,7 @@ const GPG_HOME_MARK = `# written by ${NAME} gpg init`;
 
 /*
  * What `gpg init` chose for a home - the signing and decryption keys and the
- * bus/phone (deviceArgs) - written once, in the home, and read by every
+ * key (deviceArgs) - written once, in the home, and read by every
  * agent started for it: gpg starts the agent later with none of our options,
  * and a person runs `gpg-agent --homedir H` by hand to watch it. Settings
  * only, nothing secret.
@@ -1734,9 +1620,8 @@ function readGpgSettings(homedir) {
 function deviceOptsFromArgs(args = []) {
   const o = {};
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--ble') o.ble = true;
-    else if (args[i] === '--address') o.address = args[++i];
-    else if (args[i] === '--path') o.path = args[++i];
+    /* a home made with --ble before 2026-10-30 names a bus that is gone: read back as plain */
+    if (args[i] === '--path') o.path = args[++i];
   }
   return o;
 }
@@ -1794,9 +1679,9 @@ function agentScript(homedir, windows, nodePath = process.env.NODE_PATH || null)
   const args = ['gpg-agent', '--homedir', homedir, '--daemon'];
   /*
    * NODE_PATH, when init ran with one: gpg starts this script with ITS
-   * environment, and the optional BLE package (@stoprocent/noble) is an
-   * optional peer that may live outside the lib (owner, 2026-10-03:
-   * ~/.onlykey-js/node_modules) - without it the agent's --ble cannot load.
+   * environment, and an optional peer (node-hid) may live outside the lib
+   * (owner, 2026-10-03: ~/.onlykey-js/node_modules) - without it the agent
+   * cannot load it.
    */
   /* nodePath: the one init ran with, kept in the settings so check --fix writes it back */
   if (windows) {
@@ -1904,7 +1789,7 @@ COMMANDS.gpg = {
         io.out(row('settings', `none - ${GPG_SETTINGS} is missing (made by an older ${NAME}); ${NAME} gpg init --force makes the home again`));
         return 1;
       }
-      /* NODE_PATH from the home, not from the shell that runs check: without it the agent's --ble cannot load */
+      /* NODE_PATH from the home, not from the shell that runs check: without it the agent cannot load an optional peer kept outside the lib */
       const script = agentScript(homedir, IS_WINDOWS_CLI, saved.nodePath || null);
       const files = [script, ...(script.extra || [])];
       const stale = files.filter((f) => old[f.name] !== f.text);
@@ -2133,7 +2018,7 @@ COMMANDS['gpg-agent'] = {
      */
     const saved = readGpgSettings(homedir) || {};
     opts = { ...opts, skey: opts.skey || saved.skey, dkey: opts.dkey || saved.dkey };
-    if (!opts.ble && !opts.path) Object.assign(opts, deviceOptsFromArgs(saved.device));
+    if (!opts.path) Object.assign(opts, deviceOptsFromArgs(saved.device));
     const skey = parseSkey(opts.skey || 'ECC32', '--skey', 'gpg-agent', { allowSlot: true });
     const dkey = parseSkey(opts.dkey || 'ECC32', '--dkey', 'gpg-agent', { allowSlot: true });
     const background = io.daemonChild !== undefined ? io.daemonChild : process.env[GPG_AGENT_CHILD] === '1';
@@ -2336,7 +2221,7 @@ const DEV = (() => {
  * the core's table through the `cli` service (cli/core.js); a folder left out of a
  * build is simply not listed (CLI.md §6).
  */
-const CLI_HELPERS = { row, usage, CliError, DeviceRefusal, parseExpires, deviceOpts, NAME, dev: DEV, withDevice, requireUnlocked, requireAnswered, deviceWrite, promptSecret, own };
+const CLI_HELPERS = { row, usage, CliError, DeviceRefusal, parseExpires, deviceOpts, NAME, dev: DEV, withDevice, requireUnlocked, deviceWrite, promptSecret, own };
 let booted = null;
 function bootCli() {
   if (!booted) {
@@ -2353,9 +2238,9 @@ function bootCli() {
  * @param {object} [io]
  * @param {(line: string) => void} [io.out]  one line of output
  * @param {(line: string) => void} [io.err]  one line of error
- * @param {(opts: {path?: string, ble?: boolean, address?: string}) => Promise<object>} [io.start]
- *   compose and open the stack; defaults to startDesktop - over node-hid, or
- *   over Bluetooth LE with --ble
+ * @param {(opts: {path?: string, desktop?: boolean, softKey?: boolean}) => Promise<object>} [io.start]
+ *   compose and open the stack; defaults to startDesktop - over node-hid, the
+ *   desktop app's socket, or the soft key booted here
  * @param {(question: string) => Promise<string>} [io.prompt]  read one secret;
  *   defaults to cli/prompt.js (hidden on a terminal, one stdin line otherwise)
  * @param {(file: string) => Promise<string>} [io.readFile]  read a key file
@@ -2392,10 +2277,8 @@ async function main(argv, io = {}) {
      */
     writeFile: io.writeFile
       || ((file, text) => require('fs').promises.writeFile(file, text, { flag: 'wx', mode: 0o600 })),
-    /* devices only: a test's stand-ins for the USB bus, the radio and the pairing store (never real keys in a test) */
+    /* devices only: a test's stand-in for the USB bus (never real keys in a test) */
     findUsb: io.findUsb,
-    scanPhones: io.scanPhones,
-    pairingFor: io.pairingFor,
     /* agent only: how long a foreground agent serves, and how a command runs under it. */
     untilStopped: io.untilStopped,
     runCommand: io.runCommand,
@@ -2419,10 +2302,8 @@ async function main(argv, io = {}) {
   const GLOBAL_OPTIONS = {
     help: { type: 'boolean', short: 'h' },
     path: { type: 'string' },
-    ble: { type: 'boolean' },
     desktop: { type: 'boolean' },
     mcp: { type: 'boolean' },
-    address: { type: 'string' },
     yes: { type: 'boolean' },
     /* a hard key's host asks its y/N in a desktop dialog, not on this terminal (cli/gui-prompt.js) */
     'gui-prompt': { type: 'boolean' },
@@ -2436,9 +2317,11 @@ async function main(argv, io = {}) {
   /*
    * --service: THIS COMPUTER'S ONE LONG-LIVED PROCESS (Brad, 2026-10-25: "for normal cli --service will be our
    * long-lived"; one service, not two): the Edge agent (edge agent) with the sync service in it, which watches this
-   * computer's buckets and trades them with the paired devices it reaches - and, in the key's server room, with every
-   * device of its identity online there (Brad, 2026-10-27). `onlykey-js [--ble] --service [--test-mode]
-   * [--server <url> | --no-server]` is `onlykey-js [--ble] edge [--test-mode] agent [--server <url> | --no-server]`.
+   * computer's buckets and trades them, in the key's server room, with every device of its identity online there
+   * (Brad, 2026-10-27) - the room is its only sync (Brad, 2026-10-30: the Bluetooth trade with cli-paired phones was
+   * removed pending a redesign). `onlykey-js --service [--test-mode] [--server <url> | --no-server]` is
+   * `onlykey-js edge [--test-mode] agent [--server <url> | --no-server]`, with the global key options (--path,
+   * --desktop, --soft-key, ...) kept in front.
    */
   {
     const at = argv.indexOf('--service');
@@ -2451,10 +2334,10 @@ async function main(argv, io = {}) {
       const agentArgs = [];
       for (let i = 0; i < rest.length; i++) {
         const a = rest[i];
-        if (a === '--path' || a === '--address') { globals.push(a, rest[i + 1]); i += 1; }
+        if (a === '--path') { globals.push(a, rest[i + 1]); i += 1; }
         else if (a === '--server' || a === '--no-server') { agentArgs.push(a); if (a === '--server') { agentArgs.push(rest[i + 1]); i += 1; } }
         else if (a.startsWith('--server=')) agentArgs.push('--server', a.slice('--server='.length));
-        else if (['--ble', '--desktop', '--yes', '--gui-prompt', '--soft-key'].includes(a) || a.startsWith('--path=') || a.startsWith('--address=')) globals.push(a);
+        else if (['--desktop', '--yes', '--gui-prompt', '--soft-key'].includes(a) || a.startsWith('--path=')) globals.push(a);
         else others.push(a);
       }
       argv = [...globals, 'edge', ...others, 'agent', ...agentArgs];
@@ -2465,8 +2348,8 @@ async function main(argv, io = {}) {
     let i = 0;
     while (i < argv.length) {
       const t = argv[i];
-      if (t === '--path' || t === '--address') { i += 2; continue; }
-      if (t === '--ble' || t === '--desktop' || t === '--mcp' || t === '--yes' || t === '--gui-prompt' || t === '--soft-key' || t === '--help' || t === '-h' || t.startsWith('--path=') || t.startsWith('--address=')) { i += 1; continue; }
+      if (t === '--path') { i += 2; continue; }
+      if (t === '--desktop' || t === '--mcp' || t === '--yes' || t === '--gui-prompt' || t === '--soft-key' || t === '--help' || t === '-h' || t.startsWith('--path=')) { i += 1; continue; }
       break;
     }
     const t = argv[i];
@@ -2547,28 +2430,16 @@ async function main(argv, io = {}) {
   /* every plugin's wrapper around the device start (Key Chain records the keys a command derives) */
   full.start = cli.wrapStart(full.start, { name, io, full });
   /*
-   * --path names a USB key and --address a phone: each without its bus, or
-   * both buses at once, is a command line that cannot mean what it says.
-   */
-  if (parsed.values.ble && parsed.values.path) {
-    full.err(`${NAME}: --path picks a USB key and --ble a phone; use one.`);
-    return 2;
-  }
-  if (parsed.values.address && !parsed.values.ble) {
-    full.err(`${NAME}: --address picks a phone for --ble; add --ble.`);
-    return 2;
-  }
-  /*
    * WHICH OK-EDGE APP (Brad, 2026-10-23: "ok-edge is 3 apps in 1 - mobile, desktop, webapp - with
-   * the cli talking to each one"). No flag: a hard key on USB, the CLI its own host. --ble: the
-   * mobile app over Bluetooth. --desktop: the desktop app on this machine, which holds its keys
-   * (its hard key on USB, its emulator soft key) and does the USB talking - an IPC socket, trusted
-   * through a file the app writes and the CLI reads, no pairing (ok-edge TODO B4b). --mcp: the web
-   * app over MCP, which needs the CLI pairing (TODO C5). One at a time; --mcp is named here so a
+   * the cli talking to each one"). No flag: a hard key on USB, the CLI its own host. --desktop: the
+   * desktop app on this machine, which holds its keys (its hard key on USB, its emulator soft key)
+   * and does the USB talking - an IPC socket, trusted through a file the app writes and the CLI
+   * reads, no pairing (ok-edge TODO B4b). --mcp: the web app over MCP (TODO C5). The mobile app over
+   * Bluetooth (--ble) was removed 2026-10-30 pending a redesign. One at a time; --mcp is named here so a
    * command line says which app it means before it is built, and says so plainly. Plain, with the
    * desktop app running, also goes through the app (deviceOpts).
    */
-  const apps = ['ble', 'desktop', 'mcp'].filter((k) => parsed.values[k]);
+  const apps = ['desktop', 'mcp'].filter((k) => parsed.values[k]);
   if (apps.length > 1) {
     full.err(`${NAME}: ${apps.map((k) => `--${k}`).join(' and ')} each pick an ok-edge app; use one.`);
     return 2;
@@ -2579,7 +2450,7 @@ async function main(argv, io = {}) {
    * holds the key and hosts it, and the CLI goes through it - plain does. --path would open the key
    * behind the app's back, so it is refused rather than fought over.
    */
-  if (parsed.values.path && !parsed.values.ble && require('../desktop/trust').liveTrust()) {
+  if (parsed.values.path && require('../desktop/trust').liveTrust()) {
     full.err(`${NAME}: the ok-edge desktop app is running - it holds the key and is its GUI; run without --path (the CLI goes through the app), or close the app first.`);
     return 2;
   }
@@ -2588,7 +2459,7 @@ async function main(argv, io = {}) {
     return 2;
   }
   if (parsed.values.mcp) {
-    full.err(`${NAME}: --mcp (the ok-edge web app over MCP, paired) is not built yet - ok-edge TODO C5.`);
+    full.err(`${NAME}: --mcp (the ok-edge web app over MCP) is not built yet - ok-edge TODO C5.`);
     return 2;
   }
   if (rest.length && !cmd.usage) {
@@ -2637,17 +2508,7 @@ async function main(argv, io = {}) {
      * One sentence for the person, the stack only when asked for. The pipe's
      * errors (no key, two keys, no node-hid) are written to be read as-is.
      */
-    /*
-     * A timeout over Bluetooth that followed the PHONE's refusal is that
-     * refusal: its gate diverted the write, so no reply was ever coming. Say
-     * why instead of "no reply within N ms" (transport-ble.js CMD_ERROR).
-     */
-    let shown = err;
-    if (parsed.values.ble && /no reply on interface/.test(String(err && err.message))) {
-      const refused = require('./transport-ble').refusal();
-      if (refused) shown = refused;
-    }
-    full.err(`${NAME}: ${shown && shown.message ? shown.message : shown}`);
+    full.err(`${NAME}: ${err && err.message ? err.message : err}`);
     if (err instanceof CliError && err.exitCode === 2 && cmd.usage) {
       full.err(`Usage: ${NAME} ${name} ${cmd.usage}`);
     }

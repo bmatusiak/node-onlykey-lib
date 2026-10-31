@@ -5,7 +5,7 @@
  * to use stdio").
  *
  * The CLI's order is: the desktop app when it runs (it does the work, with whatever key it has open); else a hard
- * key on USB; --ble the phone; --soft-key this. The app records where its soft key lives and which emulator build it
+ * key on USB; --soft-key this. The app records where its soft key lives and which emulator build it
  * loaded (ok-edge electron/desktop/okemu.js -> ~/.onlykey-js/softkey.json, per net), so this boots exactly that one -
  * never a second soft key - and only while the app is not running (two firmwares on one storage would corrupt it).
  *

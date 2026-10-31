@@ -1,5 +1,5 @@
 /*
- * This computer trades its bucket with a paired device (bucket/cli/trade.js): the kept bucket made the first time, the
+ * This computer trades its bucket with another device (bucket/cli/trade.js): the kept bucket made the first time, the
  * bucket key made once through the key and kept beside it (owner-only, never in the bucket), the trade's result in
  * the kept file; a device that does not trade is said plainly. Every test runs in a scratch root.
  */

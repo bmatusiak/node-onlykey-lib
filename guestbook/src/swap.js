@@ -31,19 +31,19 @@
  * scanner's by being in front of it (token), which is what "verified, in person" means. No
  * code to compare: the QR, seen with one's own eyes, is that check.
  *
- * THEN THE CARDS: one sealed frame each way (clipair's AES-256-GCM seal/open, counters that only
- * go up) carrying the public keys each person picked. Public only, both ways: a card with a
- * private key in it is refused when sealed and when opened.
+ * THEN THE CARDS: one sealed frame each way (AES-256-GCM, sealFrame/openFrame below, counters
+ * that only go up) carrying the public keys each person picked. Public only, both ways: a card
+ * with a private key in it is refused when sealed and when opened.
  *
- * Its own labels ("okrn-contact/v1/..."), so nothing here can be mistaken for clipair's
- * computer pairing, whose message shapes it borrows.
+ * Its own labels ("okrn-contact/v1/..."). The frame shape was borrowed from the computer
+ * pairing (src/clipair), which was removed 2026-10-30; the seal lives here now, unchanged.
  */
 
 const { ml_kem768_x25519: xwing } = require('../../src/vendor/exports/@noble/post-quantum/hybrid.js');
 const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { hmac } = require('../../src/vendor/exports/@noble/hashes/hmac.js');
 const { hkdf } = require('../../src/vendor/exports/@noble/hashes/hkdf.js');
-const clipair = require('../../src/clipair');
+const { gcm } = require('../../src/vendor/exports/@noble/ciphers/aes.js');
 const { idOf, tokensAt } = require('./invite');
 const { FORMATS, MAX_TEXT, refusePublicOnly } = require('./formats');
 
@@ -109,6 +109,31 @@ async function opened(identity, ct) {
   const ss = Uint8Array.from(await identity.decapsulate(ct));
   if (ss.length !== N) throw fail('ESWAP_DEVICE', `the OnlyKey answered ${ss.length} bytes, not a 32-byte secret`);
   return ss;
+}
+
+/* ------------------------------------------------------------ the sealed frames */
+
+const u32 = (n) => Uint8Array.of((n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255);
+const rd32 = (b, o) => ((b[o] << 24) >>> 0) + (b[o + 1] << 16) + (b[o + 2] << 8) + b[o + 3];
+/* the IV: the direction (so the two sides never share one under the same key), zeros, the counter */
+const iv = (dir, ctr) => concat(Uint8Array.of(dir), new Uint8Array(7), u32(ctr));
+
+/** Seal one message: [ctr 4][AES-256-GCM ct][tag 16]. Mutates the session's send counter. */
+function sealFrame(session, plaintext) {
+  if (session.sendCtr >= 0xffffffff) throw fail('ESWAP_CTR', 'session counter exhausted - swap again');
+  const ctr = session.sendCtr++;
+  return concat(u32(ctr), gcm(session.send, iv(session.dirSend, ctr)).encrypt(plaintext));
+}
+
+/** Open one frame, or throw. Only a counter higher than the last one is taken. */
+function openFrame(session, frame) {
+  if (!(frame instanceof Uint8Array) || frame.length < 4 + 16) throw fail('ESWAP_FRAME', 'frame too short');
+  const ctr = rd32(frame, 0);
+  if (ctr <= session.recvCtr) throw fail('ESWAP_REPLAY', `frame ${ctr} is not after ${session.recvCtr} (replayed or reordered)`);
+  let pt;
+  try { pt = gcm(session.recv, iv(session.dirRecv, ctr)).decrypt(frame.slice(4)); } catch { throw fail('ESWAP_TAG', 'frame failed authentication'); }
+  session.recvCtr = ctr;
+  return pt;
 }
 
 /* ------------------------------------------------------------ the shower (shows the QR) */
@@ -227,14 +252,14 @@ function sealCard(session, card) {
   const plain = te.encode(JSON.stringify(checkCard(card)));
   /* the link frames a message with a 16-bit length (CTAP-BLE): a card must fit one */
   if (plain.length > MAX_CARD) throw fail('ESWAP_CARD', `the picked keys are ${plain.length} bytes; one swap carries at most ${MAX_CARD} - pick fewer`);
-  return concat(header(T.CARD), clipair.seal(session, plain));
+  return concat(header(T.CARD), sealFrame(session, plain));
 }
 
 /** Open the other phone's card; refused if tampered, replayed, malformed or carrying a private key. */
 function openCard(session, msg) {
   const frame = body(msg, T.CARD, undefined, 'card');
   let card;
-  try { card = JSON.parse(td.decode(clipair.open(session, frame))); } catch (e) {
+  try { card = JSON.parse(td.decode(openFrame(session, frame))); } catch (e) {
     if (e && e.code) throw e;
     throw fail('ESWAP_CARD', 'the card is not readable');
   }
@@ -250,7 +275,7 @@ function openCard(session, msg) {
  */
 function sealBye(session, reason) {
   if (!BYE_REASONS.includes(reason)) throw new Error(`a goodbye is one of ${BYE_REASONS.join(', ')}`);
-  return concat(header(T.BYE), clipair.seal(session, te.encode(JSON.stringify({ bye: reason }))));
+  return concat(header(T.BYE), sealFrame(session, te.encode(JSON.stringify({ bye: reason }))));
 }
 
 /** The other phone's next sealed message: {kind: 'card', card} or {kind: 'bye', reason}. */
@@ -258,7 +283,7 @@ function openMessage(session, msg) {
   if (msg instanceof Uint8Array && msg[0] === T.CARD) return { kind: 'card', card: openCard(session, msg) };
   const frame = body(msg, T.BYE, undefined, 'goodbye');
   let m;
-  try { m = JSON.parse(td.decode(clipair.open(session, frame))); } catch (e) {
+  try { m = JSON.parse(td.decode(openFrame(session, frame))); } catch (e) {
     if (e && e.code) throw e;
     throw fail('ESWAP_MSG', 'the goodbye is not readable');
   }
@@ -271,4 +296,5 @@ module.exports = {
   showerStart, showerOnOpen, showerOnReveal, showerOnConfirm,
   scannerStart, scannerOnKeys, scannerOnDone,
   sealCard, openCard, checkCard, sealBye, openMessage,
+  sealFrame, openFrame,
 };

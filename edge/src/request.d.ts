@@ -21,8 +21,7 @@ export function build({ reason, scopes, lifetime, continueOf, nonce }: {
 /**
  * The app side, first: is it a well-formed request, and new? seen: the nonces already taken
  * (a Set the app keeps). -> {ok} or {ok: false, reason: 'malformed' | 'replayed'}. An app DROPS
- * these - it answers nothing. Who asks was settled before: the paired computer's encrypted
- * session (the phone's vendor bridge).
+ * these - it answers nothing. Who asks was settled before, by the channel (see above).
  */
 export function verify(msg: any, { seen }?: {}): {
     ok: boolean;

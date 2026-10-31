@@ -11,9 +11,9 @@
  *   await budget.receipt(link, { code: 'OK', message: 'signed it' });
  *   await budget.end();
  *
- * - The request goes through `channel` (send(EDGE_REQUEST) -> the app's
- *   answer: Bluetooth to ok-rn first, the Worker mailbox later). Who asks is the
- *   cli pair - no agent key (Brad, 2026-10-08: "so the claude key thing is
+ * - The request goes through `channel` (send(EDGE_REQUEST) -> the host's
+ *   answer: the desktop app's local socket, or this computer's local host for a
+ *   key on USB). No agent key (Brad, 2026-10-08: "so the claude key thing is
  *   overkill"). The answer is NOT taken on its word:
  *   the budget's opening is read back from the key and checked
  *   (grants.verifyBudgetOpening) against the scopes, reason and lifetime this
@@ -25,7 +25,7 @@
  *   instead of sending an operation that would wait for a press nobody gives.
  * - use() refuses while this budget owes a receipt (EEDGE_TX 'receipt-owed').
  * - No Edge on this key: request() rejects EEDGE_UNSUPPORTED.
- * - The app answers nothing to a computer it has not paired (onlykey-js pair):
+ * - A host that drops a request (malformed, replayed) answers nothing:
  *   EEDGE_NO_ANSWER.
  * - continue(id) ends the old budget first (4.7a: only an ended budget is
  *   continued; the app refuses a live one with 'still_live').
@@ -316,8 +316,8 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
     const c = request.check(msg);
     if (!c.ok) throw fail('EEDGE_INVALID', `edge: ${c.reason}`);
     const answer = await channel.send(msg);
-    /* nothing back: the app DROPS a request it will not read - this computer is not paired, or the request was replayed */
-    if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is this computer paired with it (onlykey-js pair)?');
+    /* nothing back: the host DROPS a request it will not read - a replayed one */
+    if (!answer) throw fail('EEDGE_NO_ANSWER', 'edge: the host answered nothing - it drops a request it will not read (replayed), or it is not up to date');
     if (!answer.ok) {
       const refusal = answer.refusal || 'declined';
       throw fail('EEDGE_REFUSED', `edge: the budget was refused - ${refusal}${answer.detail ? ` (${answer.detail})` : ''}`, { refusal });
@@ -440,7 +440,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       const out = [];
       for (let from = 0, guard = 0; from !== null && guard < 10000; guard += 1) {
         const a = await channel.send(await syncLib.buildGive({ signer: peerSigner, deviceId, from }));
-        if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?');
+        if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the host answered nothing - is it open, logged in and up to date?');
         if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone gave no copy - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
         const { fromHex } = require('../../src/bytes');
         for (const [l, h, r] of a.links || []) out.push({ link: fromHex(l), head: fromHex(h), reveal: r ? fromHex(r) : null });
@@ -463,7 +463,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       const syncLib = require('./sync');
       const { fromHex } = require('../../src/bytes');
       const a = await channel.send(await syncLib.buildGive({ signer: peerSigner, deviceId, from: 0xffffffff }));
-      if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the phone answered nothing - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?');
+      if (!a) throw fail('EEDGE_NO_ANSWER', 'edge: the host answered nothing - is it open, logged in and up to date?');
       if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone gave no seals - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
       return {
         /* a seal is [seq, head, sig] - and [seq, head, sig, sigPq] for the NEWEST only: one hybrid anchor per copy ("B", chain.verifyCheckpointP256) */
@@ -495,7 +495,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       const { toHex: hex } = require('../../src/bytes');
       const ask = async (msg, what) => {
         const a = await channel.send(msg);
-        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to ${what} - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?`);
+        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the host answered nothing to ${what} - is it open, logged in and up to date?`);
         if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the log - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
         return a;
       };
@@ -525,7 +525,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       const { toHex: hex } = require('../../src/bytes');
       const ask = async (msg, what) => {
         const a = await channel.send(msg);
-        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the phone answered nothing to ${what} - is ok-rn open and logged in, and this computer paired with it (onlykey-js pair)?`);
+        if (!a) throw fail('EEDGE_NO_ANSWER', `edge: the host answered nothing to ${what} - is it open, logged in and up to date?`);
         if (!a.ok) throw fail('EEDGE_REFUSED', `edge: the phone refused the sync - ${a.refusal}${a.detail ? ` (${a.detail})` : ''}`, { refusal: a.refusal });
         return a;
       };

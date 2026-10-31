@@ -1,25 +1,19 @@
 'use strict';
 
 /**
- * `onlykey-js devices [--ble]` - the parts the command and its child processes use
+ * `onlykey-js devices` - the parts the command and its child process use
  * (Brad, 2026-10-08: "onlykey-js devices helps us pick a target").
  *
- * WHY CHILD PROCESSES. node-hid (USB) and noble (Bluetooth, Windows) are native
- * add-ons with threads of their own. Asking a USB key and then starting a noble scan
- * in the same Node process crashed Node in native code ("Check failed:
- * (array_buffer_allocator) != nullptr", Brad's run and mine, 2026-10-08); with noble
- * moved out, the parent still segfaulted now and then while it waited for the phones
- * - node-hid had closed its keys seconds before. Neither crashes when its process ends
- * right after its work. So each transport runs as a child (this file, run directly:
- * `usb` or `ble`) that prints one JSON row per line and exits; the parent loads no
- * native add-on and shows the rows as they come. A test hands in its own bus and scan
- * and runs everything in one process.
+ * WHY A CHILD PROCESS. node-hid is a native add-on with threads of its own, and a
+ * parent that went on working seconds after node-hid had closed its keys segfaulted
+ * now and then in native code (2026-10-08). It does not crash when its process ends
+ * right after its work. So the USB transport runs as a child (this file, run
+ * directly: `usb`) that prints one JSON row per line and exits; the parent loads no
+ * native add-on and shows the rows as they come. A test hands in its own bus and
+ * runs everything in one process.
  */
-const okmsg = require('../src/protocol/okmsg');
 
 const ASK_MS = 25000;
-/* the Bluetooth search's default: the A13 advertises slower than the Pixel and was missed once in 6 s (2026-10-08) */
-const SCAN_SECONDS = 10;
 
 /** Open one key, connect, read its answer, release - bounded, so one silent key does not stall the list. */
 async function askKey(start, target) {
@@ -47,9 +41,6 @@ async function askKey(start, target) {
  * the text line (details) and the --json fields.
  */
 function describe(identity) {
-  if (identity.state === 'error' && okmsg.errorKind(identity.raw) === 'stopped') {
-    return { verdict: 'not connectable', state: 'stopped', details: 'the soft key stopped (ok-rn\'s inactivity lockout) - restart ok-rn and log in' };
-  }
   const facts = {
     state: identity.state || 'unknown',
     model: identity.model || null,
@@ -106,34 +97,6 @@ async function usbRows({ start, find, onRow, onNote }) {
 }
 
 /**
- * The phones in reach: a paired one is asked, an unpaired one is listed with how to
- * pair (never opened - opening it would start a pairing). -> rows through onRow;
- * notes through onNote
- */
-async function bleRows({ start, scan, pairingFor, onRow, onNote }) {
-  let phones = [];
-  try {
-    phones = await scan();
-  } catch (e) {
-    onNote(`ble: ${e.message}`);
-  }
-  for (const p of phones) {
-    const address = String(p.address).toUpperCase();
-    const key = address.replace(/[:-]/g, '');
-    const arg = `--ble --address ${address}`;
-    const base = { transport: 'ble', name: p.name || 'a phone', rssi: p.rssi === null || p.rssi === undefined ? null : p.rssi, target: { ble: true, address }, arg };
-    if (!pairingFor(key)) {
-      onRow({ ...base, paired: false, verdict: 'not paired', details: `this computer has no pairing with it - onlykey-js pair ${arg}` });
-      continue;
-    }
-    let answer;
-    try { answer = describe(await askKey(start, { ble: true, address: p.address })); } catch (e) { answer = silent(e); }
-    onRow({ ...base, paired: true, ...answer });
-  }
-  if (!phones.length) onNote('ble: no phone in reach - ok-rn must be open and logged in (it is not on Bluetooth while logged out)');
-}
-
-/**
  * Run one transport in a child process (this file) and hand its rows and notes on as
  * they come. -> resolves when the child has ended
  */
@@ -159,27 +122,18 @@ function viaChild(which, { onRow, onNote, onError, args = [] }) {
   });
 }
 
-module.exports = { ASK_MS, SCAN_SECONDS, askKey, describe, silent, usbRows, bleRows, viaChild };
+module.exports = { ASK_MS, askKey, describe, silent, usbRows, viaChild };
 
-/* a child: one transport alone (`usb` or `ble`), one JSON line per row or note, then it ends */
+/* a child: one transport alone (`usb`), one JSON line per row or note, then it ends */
 if (require.main === module) {
   const say = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
   const start = (opts) => require('./desktop').startDesktop(opts);
   const which = process.argv[2];
-  const work = which === 'usb'
-    ? usbRows({
-      start,
-      find: () => { const hid = require('./transport-hid'); return hid.findOnlyKeys(hid.loadNodeHid()).vendor; },
-      onRow: (row) => say({ row }),
-      onNote: (note) => say({ note }),
-    })
-    : bleRows({
-      start,
-      /* the parent's --seconds, else SCAN_SECONDS */
-      scan: () => require('./transport-ble').scanPhones({ seconds: Number(process.argv[3]) || SCAN_SECONDS }),
-      pairingFor: (key) => require('./clipair-store').pairingFor(key),
-      onRow: (row) => say({ row }),
-      onNote: (note) => say({ note }),
-    });
-  work.then(() => process.exit(0), (e) => { say({ note: `${which}: ${e.message}` }); process.exit(1); });
+  if (which !== 'usb') { say({ note: `devices: no transport "${which}" (usb is the only one)` }); process.exit(1); }
+  usbRows({
+    start,
+    find: () => { const hid = require('./transport-hid'); return hid.findOnlyKeys(hid.loadNodeHid()).vendor; },
+    onRow: (row) => say({ row }),
+    onNote: (note) => say({ note }),
+  }).then(() => process.exit(0), (e) => { say({ note: `${which}: ${e.message}` }); process.exit(1); });
 }

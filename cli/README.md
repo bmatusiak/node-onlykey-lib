@@ -112,7 +112,7 @@ the same key on any machine. The self-signatures of a key dated 0 are dated 1 -
 GnuPG takes a signature at 0 as undated and then verifies the person's own
 key's signatures as `[uncertain]` (measured; lib-agent's keys have that fault).
 v2 is `--skey derived-v2` / `--dkey derived-v2`. What init chose - the keys, the
-bus (`--ble --address …` or `--path`) and `NODE_PATH` - is written once, into
+key (`--path`, `--desktop` or `--soft-key`) and `NODE_PATH` - is written once, into
 the home's `onlykey-agent.json`, and every agent for that home reads it: the
 one gpg starts, and `gpg-agent` run by hand to watch it (`--homedir` defaults
 to `~/.gnupg/onlykey`, as for init; an option given still wins for that run).
@@ -153,7 +153,7 @@ without the folder the command is simply not there. It also decodes the soft key
 
 `onlykey-js edge setup | budget | continue | end | status | exec | receipt | watch | sync | blocks |
 agent`, and `--test-mode` for the testnet: an AI agent signs under a budget the person approved
-on the phone, each use bound to its request and receipted. Another plugin, used the same way: the
+in the ok-edge desktop app (or on this terminal, for a key on USB), each use bound to its request and receipted. Another plugin, used the same way: the
 core never requires `edge/`. Every option, and what each command may do: `onlykey-edge/CLI.md`.
 The protocol and its rules: `ok-rn/android/okemu/plugins/edge/SPEC.md`.
 
@@ -198,137 +198,13 @@ that says what to do.
 from any Node script: `[host, transport/usb, session, device, okcrypto]` over
 that pipe, transport opened.
 
-## `--ble`: a phone running ok-rn, over Bluetooth LE
+## Bluetooth: removed (2026-10-30)
 
-    onlykey-js --ble status
-    onlykey-js --ble --address "Pixel 6a" getlabels      # or --address 24:29:34:86:EA:AF
-    onlykey-js --ble agent me@example.com                # ssh, served from the phone
-    onlykey-js --ble gpg init "Me <me@example.com>"      # the home's agent uses --ble too
-
-ok-rn's soft key publishes the OnlyKey **vendor** interface as a GATT service
-(`0c0ffab0-...`, request `...ffab1` write, response `...ffab2` notify), so
-`--ble` swaps only the pipe: `cli/transport-ble.js` under
-`plugins/transport/ble`, everything above it the code a USB key runs. The
-option is global - every device command takes it, including `agent`,
-`gpg init` (the home's `onlykey-agent.json` keeps `--ble`, since gpg starts
-the agent later with none of our options) and `gpg-agent` (`--daemon` passes it to the
-background agent). `--address` takes the phone's address or Bluetooth name;
-without it, the one paired phone advertising FIDO (0xFFFD) is used.
-`--path` with `--ble`, or `--address` without it, is refused.
-
-On the wire each 64-byte report is one CTAP-over-BLE message
-(`83 00 40` + report), one write when the MTU allows (the phone negotiates
-517), 20-byte fragments otherwise. **Firmware update is refused** by the pipe.
-
-It needs one more optional peer, per platform, exactly like `node-hid`:
-
-| platform | stack | install |
-| --- | --- | --- |
-| Windows | WinRT, through the noble fork (`@stoprocent/noble` 2.8.0-bm.2, N-API prebuilds, nothing compiled on install) | `npm install github:bmatusiak/noble-ble#d16fc663a0169d69c7f6a467974ce8d2c799d006` |
-| Linux | BlueZ's own GATT API over D-Bus, through `dbus-next` | `npm install dbus-next` |
-
-An app that syncs over Bluetooth lists them as its own dependencies - the ok-edge
-desktop app does (its `optionalDependencies`), so the lib inside it reaches the
-phone; the lib keeps them optional peers, so the web app and ok-rn download nothing
-native.
-
-Pair the phone first: in Settings on Windows, with
-`scripts/ble-linux-connect.sh` on Linux (below). Why not noble on Linux: its
-default backend is raw HCI (root, and blind to BlueZ's bonds), and its D-Bus
-backend waits forever on a phone that is already connected - which, with its
-classic keyboard up, it always is. What the Linux path does instead:
-
-- finds the vendor characteristics **by UUID under whatever device path BlueZ
-  put them** (the Pi's phone lived at the path of a private address it was
-  first seen on), and treats them as usable only when that device is
-  `Connected` **and** `ServicesResolved` - BlueZ exports a bonded device's
-  cached GATT table while LE is down, and the classic keyboard keeps
-  `Connected` true with no LE link at all;
-- otherwise sets `PreferredBearer = le` and calls `Connect()` **inside an LE
-  discovery session** - without one the kernel scans for the phone's identity
-  address only, and the phone advertises from rotating private addresses;
-- never calls `Device1.Disconnect()`, which would drop the keyboard too.
-
-Measured 2026-09-29, Pixel 6a with ok-rn, soft key unlocked (v3.1.0-testc):
-
-| | Windows (NITRO16, WinRT) | Raspberry Pi 4 (BlueZ 5.82) |
-| --- | --- | --- |
-| found / connected / subscribed | 64-754 / ~110 / 1.0-2.6 s from start | LE connect 0.7 s, GATT resolved 1.8 s later |
-| `fwversion`, fresh link | 2.9 s | 2.8 s |
-| `status` / `getlabels` / `capabilities` / `agent` key | 2.9 / 3.1 / 1.5 / 3.5 s | 1.0 / 1.4 / 1.0 / 1.2 s (LE link already up) |
-
-**One computer at a time.** ok-rn answers only the central that connected to
-it LAST, and forgets it when any central disconnects. So after another
-computer has used the phone, a Linux host whose LE link stayed up gets no
-answer ("no reply on interface ... within 3000ms"); drop just that LE link
-(`sudo hcitool ledc <handle>`, the handle from `hcitool con`; the classic
-keyboard stays up) and the next command connects afresh. Windows makes a new
-link per command and does not hit this.
-
-## Bluetooth on Linux: `scripts/ble-linux-connect.sh`
-
-The ok-rn phone app is a soft key that can also be reached over Bluetooth LE.
-It is a classic Bluetooth keyboard AND an LE vendor pipe to the same computer
-at once, as it is on Windows. On Windows, pairing once in Settings is all the
-preparation it needs. On Linux (BlueZ) the host needs a few things first, and
-the script does them, explaining each:
-
-    scripts/ble-linux-connect.sh "Pixel 6a"           check, pair if needed, prefer LE
-    scripts/ble-linux-connect.sh "Pixel 6a" --fix     also the one-time host fixes (sudo)
-    scripts/ble-linux-connect.sh "Pixel 6a" --repair  pair again (forget this computer on the phone first)
-
-The steps:
-- **Adapter.** Not rfkill-blocked, and powered.
-- **bluetoothd config.** It stays **dual-mode** (`ControllerMode = le` would stop the
-  keyboard) and runs with **`Experimental = true`**. That flag is what gives BlueZ
-  `Device1.PreferredBearer`, the only way to make a connect go LE instead of classic,
-  as WinRT does.
-- **The bond.** Paired by **numeric comparison**: accept the same number on the
-  phone. A Just Works pair ended up bonded on one side only.
-- **Bluetooth 5.0 or newer.** Check with `node cli/bt-radio.js` (Linux reads
-  `btmgmt info`, Windows the radio's LMP version); `onlykey-js --ble pair` and
-  this script refuse an older radio with the same words. Why (ZBOX, Intel
-  `8087:07dc`, Bluetooth 4.0, 2026-10-20): the phone pairs with Secure
-  Connections, and the classic-link key that makes needs AES-CCM encryption on
-  the classic link, a Bluetooth 4.1 feature. The kernel refused every classic
-  connect (`Invalid security: Missing AES-CCM usage`), the phone's keyboard
-  never connected and retried every 15 s, and the LE link onlykey-js uses
-  answered only now and then. With `SecureConnections = off` (main.conf, plus
-  `btmgmt sc off`) a 4.0 radio could be paired - classic first, then a second,
-  LE pairing with a passkey typed into the phone - but every failed attempt
-  made Android drop the whole bond. A USB Bluetooth 5 adapter is the answer;
-  the Pi 4 (5.0) and NITRO16 (5.4) work with one ordinary pairing.
-- **BlueZ 5.87's Ranging plugin (RAP) can block the LE link.** On the ZBOX
-  (2026-10-20) every connect to the Pixel logged `rap profile accept failed`;
-  the LE link came up but its services never resolved ("connected but its
-  services never resolved"), or the phone's hello went unanswered - through a
-  phone reboot, a cleared GATT cache and a bluetoothd restart. Starting
-  bluetoothd without that plugin fixed it at once (onlykey-js does not use
-  ranging):
-
-      sudo mkdir -p /etc/systemd/system/bluetooth.service.d
-      printf '[Service]\nExecStart=\nExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=rap\n' | sudo tee /etc/systemd/system/bluetooth.service.d/no-rap.conf
-      sudo systemctl daemon-reload && sudo systemctl restart bluetooth && bluetoothctl power on
-
-  Check: `ps -o args= -C bluetoothd` shows `--noplugin=rap`, and its log says
-  `Excluding (cli) rap`.
-- **`Cache = no` under `[GATT]` in /etc/bluetooth/main.conf.** ok-rn registers
-  its Bluetooth services again each time the app restarts; BlueZ's default
-  (`Cache = always`) kept the bonded phone's old layout, and after every app
-  restart the box failed with "services never resolved" until bluetoothd was
-  restarted (ZBOX + Pixel, 2026-10-20, three times in a row). With `Cache = no`
-  BlueZ reads the services on each connect (a few hundred ms) and the first
-  connect after an app restart works:
-
-      sudo sed -i 's/^#Cache = always/Cache = no/' /etc/bluetooth/main.conf && sudo systemctl restart bluetooth && bluetoothctl power on
- Also on that desktop: a phone that is not Trusted
-  makes Blueman ask "Authorization request … Human Interface Device Service"
-  on every connect; unanswered, they pile up. The script sets Trusted.
-- **The device.** Trusted, with `PreferredBearer = le`.
-
-Proven on a Raspberry Pi 4 (Debian 13, BlueZ 5.82) against a Pixel 6a:
-2026-09-29. The pairing path was run by hand, and the script's check path on the
-paired phone.
+`--ble` / `--address` (a phone running ok-edge mobile, over Bluetooth LE), the
+`pair` command (the 6-digit cli pair that encrypted that link) and the
+`--service`'s Bluetooth bucket trade were removed on 2026-10-30, pending a
+redesign of the computer-phone link. The key's server room is the service's
+sync now (`onlykey-js --service`). Git history keeps the old code.
 
 ## Tests
 
@@ -336,9 +212,7 @@ paired phone.
 command through `main(argv, io)` over the fake firmware - the writes pinned
 frame by frame, message, slot, field and payload, as well as by what they
 print; `test/cli-transport-hid.test.js` drives the pipe through a fake
-node-hid module; `test/cli-transport-ble.test.js` drives the Bluetooth pipe
-through a fake noble and a fake BlueZ (in the states the Pi was found in),
-each with a fake ok-rn phone in front of the fake firmware; `test/ssh-agent.test.js` serves the agent on a real socket
+node-hid module; `test/ssh-agent.test.js` serves the agent on a real socket
 (a named pipe on Windows) over the fake firmware's K132 derivation and talks
 to it as ssh does; `test/gpg-agent.test.js` does the same for `gpg init` (with a
 stand-in gpg) and `gpg-agent` (speaking Assuan as gpg does). None can reach a real device: `io.prompt` and `io.readFile`
