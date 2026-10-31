@@ -38,6 +38,21 @@ export function loginCard(c: {
         cap: number;
     };
 };
+export function agentCard(c: any): {
+    v: number;
+    kind: string;
+    label: string;
+    created: any;
+    expires: any;
+    derive: {
+        ssh: string;
+        gpg: string;
+    };
+    committer: {
+        name: string;
+        email: string;
+    } | null;
+};
 /** The 32 bytes the key certifies for a thing of this kind (the card's canonical JSON; a nametag its hash). */
 export function subjectOf(kind: any, thing: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /**

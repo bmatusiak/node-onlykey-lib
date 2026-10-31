@@ -579,6 +579,27 @@ function setup(imports, register) {
       return c.verify(rec, ownerKeysNow.ownerKey, ownerKeysNow.ownerKeyPq);
     },
 
+    /**
+     * AN AGENT IDENTITY, certified at a press (edge/src/agents.js): its creation info - label, created, expires, its
+     * derivation labels, the committer - signed once and never changed. -> the record kept in `edge-agents`.
+     */
+    async certifyAgent(info, { onPress, timeoutMs } = {}) {
+      const { certify: c } = require('../src');
+      const thing = c.agentCard(info);
+      const cert = await edge.certify(c.subjectOf('agent', thing), { onPress, timeoutMs });
+      if (cert.approval !== 1) throw new Error('Edge: an agent identity is certified only by a press');
+      return c.record('agent', thing, cert);
+    },
+
+    /** An agent identity's REVOCATION, certified at a press: it stays listed, archived, and is refused to agents for good. */
+    async certifyRevoke({ label, created }, { onPress, timeoutMs } = {}) {
+      const { certify: c } = require('../src');
+      const thing = { label: String(label), created };
+      const cert = await edge.certify(c.subjectOf('revoke', thing), { onPress, timeoutMs });
+      if (cert.approval !== 1) throw new Error('Edge: a revocation is certified only by a press');
+      return c.record('revoke', thing, cert);
+    },
+
     /* may a budget with these scopes open under this card? (certify.budgetAllowed - the hosts enforce it; the key, later) */
     budgetAllowed(rec, scopes) {
       const { certify: c } = require('../src');

@@ -12,6 +12,8 @@ module.exports = {
   grants: require('./grants'),
   /* what the owner key certifies (a nametag, a login card, an agent identity) and how a host checks it */
   certify: require('./certify'),
+  /* the agent identities: a certified list in the identity bucket, picked by label */
+  agents: require('./agents'),
   receipts: require('./receipts'),
   copy: require('./copy'),
   /* B7: what a use was and whether it stands out - the phone's Live view and onlykey-js edge watch */

@@ -66,10 +66,36 @@ function loginCard(c) {
   return { v: 1, kind: 'login-card', device, identity, site: c.site, derives, signs: { slot: 201, label, cap: s.cap } };
 }
 
+/*
+ * AN AGENT IDENTITY'S CREATION INFO (Brad, 2026-10-30: "we sign the creation info for the certs including time-creation /
+ * expire and label/name (that cant change), then generate the pubcerts, and store it to sync"; "identities provide the
+ * derivation labels that the agent can ask for"). Canonical: label (unique in the list, fixed for good), created and
+ * expires (seconds; 0 = never), the derivation labels by kind ({ssh: 'ssh://user@host', gpg: '<user id>'}), the committer.
+ * The public certificates are made from it afterwards (the gpg one with this created time) and travel beside it.
+ */
+const LABEL_MAX = 64;
+function agentCard(c) {
+  const label = String(c && c.label || '').trim();
+  if (!label || [...label].length > LABEL_MAX || !/^[ -~]+$/.test(label)) throw new TypeError(`certify: an agent identity's label is 1 to ${LABEL_MAX} printable characters`);
+  const u32 = (n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
+  if (!u32(c.created) || c.created === 0) throw new TypeError('certify: an agent identity names when it was created (seconds)');
+  if (!u32(c.expires)) throw new TypeError('certify: an agent identity\'s expires is seconds after created (0 = never)');
+  const d = c.derive || {};
+  const derive = {};
+  if (d.ssh !== undefined) { if (!/^ssh:\/\/\S+$/.test(String(d.ssh))) throw new TypeError('certify: derive.ssh is ssh://user@host'); derive.ssh = String(d.ssh); }
+  if (d.gpg !== undefined) { if (!String(d.gpg).trim()) throw new TypeError('certify: derive.gpg is a user ID'); derive.gpg = String(d.gpg); }
+  if (!Object.keys(derive).length) throw new TypeError('certify: an agent identity provides at least one derivation label');
+  const committer = c.committer ? { name: String(c.committer.name), email: String(c.committer.email) } : null;
+  return { v: 1, kind: 'agent', label, created: c.created, expires: c.expires, derive, committer };
+}
+
 /** The 32 bytes the key certifies for a thing of this kind (the card's canonical JSON; a nametag its hash). */
 function subjectOf(kind, thing) {
   if (kind === 'nametag') return grants.nametagHash(thing);
   if (kind === 'login-card') return crypto.sha256(utf8ToBytes(TAGS[kind] + JSON.stringify(loginCard(thing))));
+  if (kind === 'agent') return crypto.sha256(utf8ToBytes(TAGS[kind] + JSON.stringify(agentCard(thing))));
+  /* a revocation names the identity it ends: its label and its created time (the two that make it that one) */
+  if (kind === 'revoke') return crypto.sha256(utf8ToBytes(TAGS[kind] + JSON.stringify({ label: String(thing.label), created: thing.created })));
   throw new TypeError(`certify: no subject builder for "${kind}" yet`);
 }
 
@@ -83,7 +109,8 @@ const fromStored = (c) => Object.fromEntries(Object.entries(c).map(([k, v]) => [
  * @param {string} kind @param {object} thing @param {object} certification edge.certify()'s answer
  */
 function record(kind, thing, certification) {
-  return { v: 1, kind, thing: kind === 'login-card' ? loginCard(thing) : thing, certification: toStored(certification) };
+  const canonical = kind === 'login-card' ? loginCard(thing) : kind === 'agent' ? agentCard(thing) : thing;
+  return { v: 1, kind, thing: canonical, certification: toStored(certification) };
 }
 
 /**
@@ -128,4 +155,4 @@ function budgetAllowed(rec, scopes) {
 }
 const keyEnforces = false;
 
-module.exports = { TAGS, ACCEPTS, loginCard, subjectOf, record, verify, budgetAllowed, keyEnforces, toStored, fromStored };
+module.exports = { TAGS, ACCEPTS, loginCard, agentCard, subjectOf, record, verify, budgetAllowed, keyEnforces, toStored, fromStored };
