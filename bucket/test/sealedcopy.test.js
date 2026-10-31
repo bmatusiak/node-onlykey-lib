@@ -108,3 +108,22 @@ test('a bucket kept as rows on the device comes back whole; another secret, anot
   const id = Object.keys(all).find((x) => x !== o.id);
   assert.equal(sealed.bucketFromRows({ ...all, [id]: all[o.id] }, keys, { owner: 'abc' }), null, 'a moved row was taken');
 });
+
+test('locate: a change on the server names the stores it touches here; a unit not here yet is counted, the heads row skipped', async () => {
+  const server = rowStore();
+  const phone = filled();
+  await sealed.syncWith(phone, keys, server, { randomBytes: rnd, heads: { aaaaaaaaaaaaaaaa: 1 } });
+  const web = bucket.create({ owner: 'abc' });
+  await sealed.syncWith(web, keys, server, { randomBytes: rnd });
+  /* the phone changes the guest book and adds a store the web app never had; its put is what the room announces */
+  const before = await server.table();
+  bucket.kv(phone, 'guestbook').setItem('myname', 'Pixel 6a');
+  bucket.kv(phone, 'passwords').setItem('one', 'x');
+  await sealed.syncWith(phone, keys, server, { randomBytes: rnd, heads: { aaaaaaaaaaaaaaaa: 2 } });
+  const after = await server.table();
+  const announced = Object.fromEntries(Object.entries(after).filter(([id, tag]) => before[id] !== tag));
+  assert.deepEqual(sealed.locate(web, keys, announced), { stores: ['guestbook'], unknown: 1 });
+  /* once the web app has synced, the same announcement touches nothing */
+  await sealed.syncWith(web, keys, server, { randomBytes: rnd });
+  assert.deepEqual(sealed.locate(web, keys, announced), { stores: [], unknown: 0 });
+});

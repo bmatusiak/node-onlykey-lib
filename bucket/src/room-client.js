@@ -110,6 +110,14 @@ function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 
         case 'gone':
           for (const [id, p] of pending) if (p.to === m.to) { pending.delete(id); p.reject(new Error(`the device ${m.to} is not in the room`)); }
           return;
+        case 'sealed-changed':
+          /*
+           * ANOTHER DEVICE PUT ROWS INTO THE SEALED COPY (Brad, 2026-10-30: "the same thing for the reverse, if the app
+           * becomes stale and mcp is newer, then it should reflect"): their keyed ids and tags, nothing readable - this
+           * device finds which of its stores they are (sealedcopy.locate) and syncs. An event, never a poll.
+           */
+          if (m.rows && typeof m.rows === 'object') emit('sealed-changed', { from: m.from || null, rows: m.rows });
+          return;
         case 'frame': {
           const body = room.openFrame(key, { room: me.id, from: m.from, to: you }, m.body);
           if (!body) return; /* not sealed by a device of this identity for this one: dropped, unanswered */

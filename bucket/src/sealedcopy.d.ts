@@ -133,6 +133,19 @@ export function syncWith(bucket: {
         };
     };
 }>;
+export function locate(bucket: {
+    stores: any;
+}, keys: {
+    tableKey: Uint8Array;
+    unitKey: Uint8Array;
+}, rows: {
+    [x: string]: string;
+}, { rules }?: {
+    rules?: any;
+}): {
+    stores: string[];
+    unknown: number;
+};
 export function ownerId(keys: any): string;
 export function sealOwner(owner: any, keys: any, randomBytes: any): {
     id: string;

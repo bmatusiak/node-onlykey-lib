@@ -232,4 +232,25 @@ function bucketFromRows(rows, keys, { owner, rules = {} }) {
   return b;
 }
 
-module.exports = { keysOf, headsId, table, plan, sealRows, openRows, sealHeads, openHeads, syncWith, ownerId, sealOwner, bucketFromRows };
+/**
+ * WHICH OF THIS BUCKET'S STORES A CHANGE ON THE SERVER TOUCHES (the room's 'sealed-changed': another device's put, as
+ * ids and tags): a row whose tag differs from this side's is newer there - its store named when this side has that unit;
+ * a unit this side does not have yet cannot be named before it is fetched (its id is keyed), so it is counted. The
+ * heads row is the Edge logs' newest links, not a store. -> {stores: string[] (sorted), unknown: number}
+ * @param {{stores: Object}} bucket @param {{tableKey: Uint8Array, unitKey: Uint8Array}} keys
+ * @param {Object<string, string>} rows id -> tag, as the server announced them
+ */
+function locate(bucket, keys, rows, { rules = {} } = {}) {
+  const t = table(bucket, keys, { rules });
+  const h = headsId(keys);
+  const stores = new Set();
+  let unknown = 0;
+  for (const [id, tag] of Object.entries(rows || {})) {
+    if (id === h || t.rows[id] === tag) continue;
+    const w = t.where[id];
+    if (w) stores.add(w[0]); else unknown += 1;
+  }
+  return { stores: [...stores].sort(), unknown };
+}
+
+module.exports = { keysOf, headsId, table, plan, sealRows, openRows, sealHeads, openHeads, syncWith, locate, ownerId, sealOwner, bucketFromRows };
