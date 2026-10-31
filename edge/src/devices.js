@@ -100,7 +100,15 @@ function classify({ log, ownerKey, ownerKeyPq, known = [], merged = [] }) {
     records: log.records || [], publicKey: Uint8Array.from(log.publicKey), publicKeyPq: log.publicKeyPq ? Uint8Array.from(log.publicKeyPq) : null,
     checkpoint: log.checkpoint, anchors: merged,
   });
-  let kind = st || log.card ? 'forged' : 'unproven';
+  /*
+   * A STATEMENT FROM BEFORE CERTIFY (the retired no-press STATEMENT, 2026-10-30) carries no seq - no CERTIFY link names
+   * it - so today's check cannot verify it, and that is not a forgery: the log is UNPROVEN, merged and shown, never
+   * counted as yours (Brad: unnamed devices' logs are accepted; 2026-10-31: the web app held 1141 + 227 links of live
+   * key 1 and the Pixel apart as "not made with your OnlyKey"). A certified statement or a card that does not verify
+   * still is forged - the alarm.
+   */
+  const legacyStatement = Boolean(st) && typeof st.seq !== 'number';
+  let kind = (st && !legacyStatement) || log.card ? 'forged' : 'unproven';
   if (owned) kind = known.some((k) => String(k.deviceId).toLowerCase() === id) ? 'mine-known' : 'mine-new';
   return { class: kind, deviceId: id, nametag: namedOwned ? st.nametag : null, check };
 }

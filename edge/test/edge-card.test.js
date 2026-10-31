@@ -66,6 +66,15 @@ test('membership: an UNNAMED device with this owner\'s card is yours; no proof a
   /* the card moved onto another device's log: it names other checkpoint keys */
   const other = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey(), ownerSecret: owner }));
   assert.equal(devices.classify({ log: await logOf(other, { card }), ownerKey, ownerKeyPq }).class, 'forged');
+  /*
+   * a statement from before certify (no seq: no CERTIFY link names it) cannot be checked today - unproven, merged, not
+   * an alarm (2026-10-31: the web app held live key 1's and the Pixel's old logs apart as forged)
+   */
+  const plain = await logOf(mine);
+  const legacy = { deviceId: plain.deviceId, publicKey: plain.publicKey, publicKeyPq: plain.publicKeyPq, nametag: 'live key 1', signature: new Uint8Array(64).fill(1), signaturePq: new Uint8Array(3309).fill(2) };
+  assert.equal(devices.classify({ log: { ...plain, statement: legacy }, ownerKey, ownerKeyPq }).class, 'unproven', 'an old-format statement');
+  /* a certified statement (it has its seq) that does not verify is still forged */
+  assert.equal(devices.classify({ log: { ...plain, statement: { ...legacy, seq: 3 } }, ownerKey, ownerKeyPq }).class, 'forged', 'a certified statement that does not verify');
 });
 
 test('an offer without a nametag: the checkpoint keys travel on their own, with the card; the old statement-only shape still reads', async () => {
