@@ -578,6 +578,7 @@ function setup(imports, register) {
       if (withCheckpoint) {
         checkpoint = checkpointOf(rs[3 + pq], rs.slice(4 + pq));
         checkpoint.head = await headAt(checkpoint.seq);
+        noteCheckpoint(checkpoint);
       }
       return {
         deviceId, publicKey, publicKeyPq, approval: a[0], seq: get32(a, 1), subject: a.slice(5, 37),
@@ -684,7 +685,7 @@ function setup(imports, register) {
       const h = await edge.head(opts);
       if (!(caps & CAPS.CERTIFY_HEADPROOF)) {
         const rs = await call(SUB.CHECKPOINT, null, { ...opts, reports: 2 + reportsFor(chain.ML_DSA65.SIG) });
-        return checkpointOf(rs[0], rs.slice(1));
+        return noteCheckpoint(checkpointOf(rs[0], rs.slice(1)));
       }
       /*
        * PROVE_HEAD: this host's welded head; the key confirms it (both checkpoint signatures) only when it is its own -
@@ -692,7 +693,7 @@ function setup(imports, register) {
        */
       if (!h.head) throw Object.assign(new Error('Edge: this host holds no copy to prove the head from - load the copy first'), { code: 'ENOHEAD' });
       const rs = await call(SUB.PROVE_HEAD, concat([u32(h.seq === null ? SEQ_NONE : h.seq), h.head]), { ...opts, reports: 2 + reportsFor(chain.ML_DSA65.SIG) });
-      return checkpointOf(rs[0], rs.slice(1));
+      return noteCheckpoint(checkpointOf(rs[0], rs.slice(1)));
     },
 
     /**
@@ -720,6 +721,11 @@ function setup(imports, register) {
         if (!h.head) throw noCheckpoint('top-ends-before-the-ring');
       }
       return edge.checkpoint(opts);
+    },
+
+    /** The newest checkpoint this connection saw with its head ({seq, head, signature, signaturePq}), or null - for the card's top. */
+    newestCheckpoint() {
+      return newest && (!track || newest.dev === track.dev) ? newest.cp : null;
     },
 
     /**
@@ -763,6 +769,7 @@ function setup(imports, register) {
       const checkpoint = checkpointOf(rs[1], rs.slice(2));
       /* a key that never reveals its head signs the grant link's head; the host welds it */
       if (caps & CAPS.CERTIFY_HEADPROOF) checkpoint.head = await headAt(checkpoint.seq);
+      noteCheckpoint(checkpoint);
       return {
         grantId: get32(g, 0),
         uses: get16(g, 4),
@@ -794,7 +801,7 @@ function setup(imports, register) {
       const rs = await call(SUB.RECEIPT, concat([u32(refSeq), Uint8Array.of(code), msgHash]), { ...opts, reports: withCheckpoint ? 2 + reportsFor(chain.ML_DSA65.SIG) : 1 });
       const after = await headAfter(seqHead(rs[0]));
       if (!withCheckpoint) return after;
-      return { ...after, checkpoint: { ...checkpointOf(rs[0], rs.slice(1)), head: after.head } };
+      return { ...after, checkpoint: noteCheckpoint({ ...checkpointOf(rs[0], rs.slice(1)), head: after.head }) };
     },
 
 
@@ -1006,6 +1013,15 @@ function setup(imports, register) {
   let caps = 0;
   let capsRead = false;
   let track = null;
+  /*
+   * THE NEWEST CHECKPOINT this connection saw with its head - a receipt's, a certify's, a budget start's or a proven
+   * head - for the card's top (certify.top): whichever host makes the request, the newest one is kept here.
+   */
+  let newest = null;
+  function noteCheckpoint(cp) {
+    if (cp && cp.head && cp.head.some((x) => x) && (!newest || cp.seq >= newest.cp.seq || newest.dev !== (track && track.dev))) newest = { dev: track && track.dev, cp };
+    return cp;
+  }
   function remember(seq, head) {
     track.heads.set(seq, head);
     if (track.heads.size > TRACKED) track.heads.delete(Math.min(...track.heads.keys()));

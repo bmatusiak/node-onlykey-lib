@@ -168,3 +168,14 @@ test('warm-up on a host that already holds the head: it proves it, the top is no
   const proven = await e.warmUp(null);
   assert.equal(await verifies(e, proven), true);
 });
+
+test('the newest checkpoint is kept for the card\'s top: a receipt\'s, then a certify\'s', async () => {
+  const { e } = key();
+  await e.pickup(0, 1);
+  assert.equal(e.newestCheckpoint(), null);
+  const r = await e.receipt(0, 0, new Uint8Array(32));
+  assert.equal(e.newestCheckpoint().seq, r.seq);
+  const c = await e.certify(new Uint8Array(32).fill(2));
+  assert.equal(e.newestCheckpoint().seq, c.seq);
+  assert.equal(await verifies(e, e.newestCheckpoint()), true);
+});
