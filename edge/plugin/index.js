@@ -696,6 +696,33 @@ function setup(imports, register) {
     },
 
     /**
+     * WARM UP (Brad, 2026-10-31: "for warmup prove the head, if the host has the chain or a checkpoint within 1024
+     * links"; it only turns Edge on): a host that holds the key's head already proves it; one that does not (a new
+     * browser, the chain past the key's 8-link ring) takes a card's top (certify.top) - the key's checkpoint and the
+     * links after it - checks it against the key's checkpoint keys, welds its links on, the key's ring for the rest,
+     * and proves the head that reaches. No press. -> the proven checkpoint {seq, head, signature, signaturePq}; null for
+     * an empty chain. No top, a top that does not stand, or one whose links end before the ring: EDGE_NO_CHECKPOINT
+     * ("certify to start" - a certify makes a fresh checkpoint).
+     */
+    async warmUp(top, opts) {
+      const noCheckpoint = (why) => Object.assign(new Error(`Edge: this device needs a checkpoint (${why}) - certify to start`), { code: 'EDGE_NO_CHECKPOINT', why });
+      let h = await edge.head(opts);
+      if (h.seq === null) return null;
+      if (!h.head && caps & CAPS.CERTIFY_HEADPROOF) {
+        if (!top) throw noCheckpoint('no-top');
+        const { certify } = require('../src');
+        const { publicKey, deviceId } = await edge.publicKey(opts);
+        const v = certify.verifyTop(top, { deviceId, publicKey, publicKeyPq: await edge.publicKeyPq('checkpoint'), keySeq: h.seq });
+        if (!v.ok) throw noCheckpoint(v.reason);
+        edge.knownHead(v.checkpoint.seq, v.checkpoint.head, deviceId);
+        for (const l of v.links) edge.knownHead(chain.decodeLink(l.link).seq, l.head, deviceId);
+        h = await edge.head(opts);
+        if (!h.head) throw noCheckpoint('top-ends-before-the-ring');
+      }
+      return edge.checkpoint(opts);
+    },
+
+    /**
      * Ask for a budget. The key waits for a PHYSICAL press (no press, no
      * budget), so the wait is long: `timeoutMs` defaults to 30 s, past the
      * key's own 25 s. `onPress` is called once the request is on the key, for

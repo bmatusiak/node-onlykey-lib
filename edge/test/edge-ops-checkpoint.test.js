@@ -9,7 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const setup = require('../plugin');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
-const { chain, grants } = require('../src');
+const { chain, grants, certify } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 
 const key = (o = {}) => { const t = fakeKey({ secret: p256.utils.randomSecretKey(), ...o }); return { t, e: edgeOver(t) }; };
@@ -111,4 +111,60 @@ test('over WebAuthn: the two kept ML-DSA signatures of a CERTIFY land where USB 
   const r = await e.receipt(0, 0, new Uint8Array(32));
   assert.equal(kept.length, 0);
   assert.equal(await verifies(e, r.checkpoint), true);
+});
+
+/*
+ * WARM-UP FROM A CARD'S TOP: host A (this device, with the chain) keeps the newest checkpoint and the links after it
+ * (certify.top); a fresh host B - the chain past the key's 8-link ring - warms Edge from that top, no press.
+ */
+async function hostWithTop(after = 3, more = 6) {
+  const { t } = key({ ring: 8 });
+  const a = edgeOver(t);
+  await a.pickup(0, 1);
+  const { checkpoint } = await a.receipt(0, 0, new Uint8Array(32));
+  for (let i = 0; i < after; i += 1) t.edgeRecord();
+  const links = (await a.pickup(checkpoint.seq + 1, after)).map((l) => l.link);
+  for (let i = 0; i < more; i += 1) t.edgeRecord();
+  return { t, top: certify.top(checkpoint, links), checkpoint };
+}
+
+test('warm-up: a fresh host past the ring warms from the card\'s top, proves the head and opens a budget', async () => {
+  const { t, top } = await hostWithTop();
+  const b = edgeOver(t);
+  const before = await b.head();
+  assert.equal(before.head, null, 'B cannot weld the key\'s head: the ring starts after anything it holds');
+  const proven = await b.warmUp(top);
+  const h = await b.head();
+  assert.equal(proven.seq, h.seq);
+  assert.deepEqual([...proven.head], [...h.head], 'the proven head is the one B now welds');
+  assert.equal(await verifies(b, proven), true);
+  /* the budget gate: a copy that starts at the proven head (copy.anchor) */
+  const g = await b.grants.create({ copy: { anchor: { seq: proven.seq, head: proven.head }, links: [] }, scopes: [{ op: 1, slot: 2, cap: 1 }], reasonHash: new Uint8Array(32) });
+  assert.ok(g.grantId > 0, 'a budget opened on the warmed host');
+});
+
+test('warm-up refuses what does not stand: no top, a forged one, one that ends before the ring', async () => {
+  const { t, top } = await hostWithTop();
+  await assert.rejects(edgeOver(t).warmUp(null), (e) => e.code === 'EDGE_NO_CHECKPOINT' && e.why === 'no-top');
+  const forged = JSON.parse(JSON.stringify(top));
+  forged.checkpoint.head = forged.checkpoint.head.replace(/^./, (c) => (c === '0' ? '1' : '0'));
+  await assert.rejects(edgeOver(t).warmUp(forged), (e) => e.code === 'EDGE_NO_CHECKPOINT' && e.why === 'checkpoint-signature');
+  const far = await hostWithTop(3, 12);
+  await assert.rejects(edgeOver(far.t).warmUp(far.top), (e) => e.code === 'EDGE_NO_CHECKPOINT' && e.why === 'top-ends-before-the-ring');
+});
+
+test('the 1024 limit: a top whose checkpoint is more than 1024 links behind the key\'s head does not stand', async () => {
+  const { t, top } = await hostWithTop();
+  const e = edgeOver(t);
+  const { publicKey, deviceId } = await e.publicKey();
+  const keys = { deviceId, publicKey, publicKeyPq: await e.publicKeyPq('checkpoint') };
+  assert.equal(certify.verifyTop(top, { ...keys, keySeq: top.checkpoint.seq + certify.TOP_REACH }).ok, true);
+  assert.equal(certify.verifyTop(top, { ...keys, keySeq: top.checkpoint.seq + certify.TOP_REACH + 1 }).reason, 'too-far-back');
+});
+
+test('warm-up on a host that already holds the head: it proves it, the top is not needed', async () => {
+  const { e } = key();
+  await e.pickup(0, 1);
+  const proven = await e.warmUp(null);
+  assert.equal(await verifies(e, proven), true);
 });

@@ -10,6 +10,7 @@ export const ACCEPTS: Readonly<{
     agent: (1 | 2)[];
     revoke: 1[];
 }>;
+export const TOP_REACH: 1024;
 /**
  * A login card, canonical: the fields in one fixed order, hex lower-case, the derive labels sorted - so every host that
  * rebuilds it gets the same bytes. Throws on a malformed one.
@@ -66,6 +67,57 @@ export function record(kind: string, thing: object, certification: object): {
     certification: {
         [k: string]: any;
     };
+};
+/**
+ * The top as a card keeps it (hex). checkpoint: {seq, head, signature, signaturePq} with the head this host welded;
+ * links: the raw links after it, oldest first.
+ * @param {{seq: number, head: Uint8Array, signature: Uint8Array, signaturePq: Uint8Array}} checkpoint
+ * @param {Uint8Array[]} links
+ */
+export function top(checkpoint: {
+    seq: number;
+    head: Uint8Array;
+    signature: Uint8Array;
+    signaturePq: Uint8Array;
+}, links?: Uint8Array[]): {
+    checkpoint: {
+        seq: number;
+        head: string;
+        signature: string;
+        signaturePq: string;
+    };
+    links: string[];
+};
+/**
+ * Does this top stand? Both checkpoint signatures under the key's checkpoint keys (READ from the key, never from the
+ * card), every link welding on from the checkpoint's head in order, and the checkpoint at most TOP_REACH links behind
+ * the key's head. -> {ok: true, checkpoint, newest: {seq, head}, links: [{link, head}]} | {ok: false, reason}
+ * @param {object} t a card's top @param {{deviceId: Uint8Array, publicKey: Uint8Array, publicKeyPq: Uint8Array, keySeq: number}} key
+ */
+export function verifyTop(t: object, key: {
+    deviceId: Uint8Array;
+    publicKey: Uint8Array;
+    publicKeyPq: Uint8Array;
+    keySeq: number;
+}): {
+    ok: boolean;
+    reason: any;
+} | {
+    ok: boolean;
+    checkpoint: {
+        seq: any;
+        head: Uint8Array<ArrayBuffer>;
+        signature: Uint8Array<ArrayBuffer>;
+        signaturePq: Uint8Array<ArrayBuffer>;
+    };
+    newest: {
+        seq: any;
+        head: Uint8Array<ArrayBuffer>;
+    };
+    links: {
+        link: Uint8Array<ArrayBuffer>;
+        head: Uint8Array<ArrayBuffer>;
+    }[];
 };
 /**
  * Is this record certified by MY owner keys, for exactly this thing, with an approval its kind accepts - and (a login

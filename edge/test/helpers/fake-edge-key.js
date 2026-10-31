@@ -49,8 +49,9 @@ const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUppe
  * and the RECEIPT/SETTLE/LOSS answers), CHECKPOINT unknown, PROVE_HEAD {seq, head} confirms a head the host welded.
  * headproof: false - the firmware before it.
  * opsCheckpoint (default with headproof): HEAD byte 59 bit 2 - RECEIPT and CERTIFY end with a checkpoint (head hidden).
+ * ring: the links PICKUP still answers, newest first (the firmware's 8); null - every link (the default).
  */
-function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true, opsCheckpoint = headproof } = {}) {
+function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true, opsCheckpoint = headproof, ring = null } = {}) {
   /* each fake key its own Edge key - SECRET by default */
   const myPub = p256.getPublicKey(secret, false).slice(1);
   const myDevice = chain.deviceIdOf(myPub);
@@ -88,6 +89,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
     append({ op: codes.OP.GRANT_END, decision: how, slot: 0, flags: 0, grantId: id, subject: new Uint8Array(32) });
   };
   const hidden = (h) => (headproof ? new Uint8Array(32) : h);
+  /* HEAD's oldest held link */
+  const oldest = () => (ring ? Math.max(0, held.length - ring) : 0);
   const checkpoint = (show = !headproof) => {
     const seq = held.length - 1;
     const sig = chain.signCheckpoint({ deviceId: myDevice, seq, head }, secret);
@@ -116,7 +119,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, (headproof ? 1 : 0) | (opsCheckpoint ? 2 : 0), refusedTx, 0]));
+        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(oldest()), ...ids.flatMap(u32), mask, owed.length, 0, (headproof ? 1 : 0) | (opsCheckpoint ? 2 : 0), refusedTx, 0]));
       } else if (sub === 0x04) {
         /* PUBKEY {which}: 0 the checkpoint key, 1 the owner key - nothing signed */
         emit(report([...(arg[0] ? p256.getPublicKey(ownerSecret, false).slice(1) : myPub)]));
@@ -145,7 +148,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       } else if (sub === 0x02) {
         const from = arg[0] | (arg[1] << 8);
         for (let s = from; s < from + arg[4]; s++) {
-          if (!held[s]) return emit(status(0x09));
+          if (!held[s] || s < oldest()) return emit(status(0x09));
         }
         for (let s = from; s < from + arg[4]; s++) {
           emit(report([...held[s].link]));

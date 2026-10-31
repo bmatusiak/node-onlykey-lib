@@ -27,6 +27,7 @@
 const crypto = require('../../src/crypto/provider');
 const { utf8ToBytes, toHex, fromHex } = require('../../src/bytes');
 const grants = require('./grants');
+const chain = require('./chain');
 
 const TAGS = Object.freeze({
   nametag: 'OKEDGE-NAMETAG-v1',
@@ -113,6 +114,62 @@ function record(kind, thing, certification) {
   return { v: 1, kind, thing: canonical, certification: toStored(certification) };
 }
 
+/*
+ * THE TOP (Brad, 2026-10-31: "provide it the top of the head between a checkpoint to the head, for edge to unlock
+ * itself ... the top of the head needs to be carried in the login card"): the newest checkpoint the key signed (a
+ * receipt's, a certify's, a budget start's or a proven head) and the links after it, as far as this host's copy goes.
+ * A card carries it beside the owner-signed part (rec.top), so it is rebuilt on every sync without a press; verify()
+ * below never reads it. A host that never used the key warms Edge from it (edge.warmUp): the key's own signatures
+ * stand behind the checkpoint, the links weld on from its head, and the key confirms the head they reach.
+ */
+/* how far back a top's checkpoint may be from the key's head, in links ("the 1024 limits how far back a checkpoint may be") */
+const TOP_REACH = 1024;
+
+/**
+ * The top as a card keeps it (hex). checkpoint: {seq, head, signature, signaturePq} with the head this host welded;
+ * links: the raw links after it, oldest first.
+ * @param {{seq: number, head: Uint8Array, signature: Uint8Array, signaturePq: Uint8Array}} checkpoint
+ * @param {Uint8Array[]} links
+ */
+function top(checkpoint, links = []) {
+  if (!checkpoint || !(checkpoint.head instanceof Uint8Array) || checkpoint.head.length !== 32) throw new TypeError('certify.top: a checkpoint with the 32-byte head this host welded');
+  if (links.length > TOP_REACH) throw new RangeError(`certify.top: at most ${TOP_REACH} links after the checkpoint, not ${links.length}`);
+  return {
+    checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature), signaturePq: toHex(checkpoint.signaturePq) },
+    links: links.map((l) => toHex(l)),
+  };
+}
+
+/**
+ * Does this top stand? Both checkpoint signatures under the key's checkpoint keys (READ from the key, never from the
+ * card), every link welding on from the checkpoint's head in order, and the checkpoint at most TOP_REACH links behind
+ * the key's head. -> {ok: true, checkpoint, newest: {seq, head}, links: [{link, head}]} | {ok: false, reason}
+ * @param {object} t a card's top @param {{deviceId: Uint8Array, publicKey: Uint8Array, publicKeyPq: Uint8Array, keySeq: number}} key
+ */
+function verifyTop(t, key) {
+  const fail = (reason) => ({ ok: false, reason });
+  try {
+    if (!t || !t.checkpoint || !Array.isArray(t.links)) return fail('no-top');
+    const cp = { seq: t.checkpoint.seq, head: fromHex(t.checkpoint.head), signature: fromHex(t.checkpoint.signature), signaturePq: fromHex(t.checkpoint.signaturePq) };
+    if (!Number.isInteger(cp.seq) || cp.seq < 0 || cp.head.length !== 32) return fail('malformed');
+    if (!Number.isInteger(key.keySeq) || cp.seq > key.keySeq) return fail('ahead-of-key');
+    if (key.keySeq - cp.seq > TOP_REACH) return fail('too-far-back');
+    if (!chain.verifyCheckpoint({ deviceId: key.deviceId, seq: cp.seq, head: cp.head }, cp.signature, key.publicKey, cp.signaturePq, key.publicKeyPq)) return fail('checkpoint-signature');
+    let at = { seq: cp.seq, head: cp.head };
+    const links = [];
+    for (const hex of t.links) {
+      const link = fromHex(hex);
+      if (chain.decodeLink(link).seq !== at.seq + 1) return fail('links-out-of-order');
+      at = { seq: at.seq + 1, head: chain.weld(at.head, link) };
+      links.push({ link, head: at.head });
+    }
+    if (at.seq > key.keySeq) return fail('ahead-of-key');
+    return { ok: true, checkpoint: cp, newest: at, links };
+  } catch {
+    return fail('malformed');
+  }
+}
+
 /**
  * Is this record certified by MY owner keys, for exactly this thing, with an approval its kind accepts - and (a login
  * card) by the device it names? -> boolean (false on anything malformed).
@@ -155,4 +212,4 @@ function budgetAllowed(rec, scopes) {
 }
 const keyEnforces = false;
 
-module.exports = { TAGS, ACCEPTS, loginCard, agentCard, subjectOf, record, verify, budgetAllowed, keyEnforces, toStored, fromStored };
+module.exports = { TAGS, ACCEPTS, TOP_REACH, loginCard, agentCard, subjectOf, record, top, verifyTop, verify, budgetAllowed, keyEnforces, toStored, fromStored };
