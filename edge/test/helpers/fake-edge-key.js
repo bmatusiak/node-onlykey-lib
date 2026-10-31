@@ -48,8 +48,9 @@ const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUppe
  * headproof (default): the firmware since CERTIFY_HEADPROOF - HEAD byte 59 = 1, the head never revealed (zeros in HEAD, PICKUP
  * and the RECEIPT/SETTLE/LOSS answers), CHECKPOINT unknown, PROVE_HEAD {seq, head} confirms a head the host welded.
  * headproof: false - the firmware before it.
+ * opsCheckpoint (default with headproof): HEAD byte 59 bit 2 - RECEIPT and CERTIFY end with a checkpoint (head hidden).
  */
-function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true } = {}) {
+function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true, opsCheckpoint = headproof } = {}) {
   /* each fake key its own Edge key - SECRET by default */
   const myPub = p256.getPublicKey(secret, false).slice(1);
   const myDevice = chain.deviceIdOf(myPub);
@@ -115,7 +116,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, headproof ? 1 : 0, refusedTx, 0]));
+        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(0), ...ids.flatMap(u32), mask, owed.length, 0, (headproof ? 1 : 0) | (opsCheckpoint ? 2 : 0), refusedTx, 0]));
       } else if (sub === 0x04) {
         /* PUBKEY {which}: 0 the checkpoint key, 1 the owner key - nothing signed */
         emit(report([...(arg[0] ? p256.getPublicKey(ownerSecret, false).slice(1) : myPub)]));
@@ -132,6 +133,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         emit(report([...p256.getPublicKey(ownerSecret, false).slice(1)]));
         emit(report([...p256.sign(digest, ownerSecret, { prehash: false, lowS: false })]));
         for (const r of reports(signPq(digest, ownerPq.secretKey))) emit(r);
+        if (opsCheckpoint) checkpoint(false);
       } else if (sub === 0x03) {
         if (headproof) return emit(status(0x0a));
         checkpoint();
@@ -157,7 +159,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         owed = owed.filter((q) => q !== ref);
         /* as the firmware's complete_fulfilled: nothing owed, every live budget whose uses are all made ends itself */
         if (!owed.length) for (const id of [...live]) { const b = budgets.get(id); if (b && b.used >= b.uses) endBudget(id, codes.END.COMPLETED); }
-        emit(seqHead());
+        if (opsCheckpoint) checkpoint(false);
+        else emit(seqHead());
       } else if (sub === 0x22) {
         /* R13a: a token over head + the request's subject; the fake keeps it (a real key checks it at the sign) */
         if (owed.length) { refusedTx = Math.min(255, refusedTx + 1); return emit(status(0x0c)); }

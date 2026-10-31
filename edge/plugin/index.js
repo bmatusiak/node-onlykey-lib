@@ -63,7 +63,14 @@ const HELD = 8;
  * onto a head it already holds (its copy, or the chain's genesis), and every request that names the head (a TX start,
  * a budget, a resume, PROVE_HEAD) is the proof that it holds the chain. Older firmware: 0, today's behaviour.
  */
-const CAPS = Object.freeze({ CERTIFY_HEADPROOF: 0x01 });
+/*
+ * OPS_CHECKPOINT (Brad, 2026-10-31: receipts and certify are checkpoints; "to warm up edge, we need a checkpoint"):
+ * RECEIPT and CERTIFY end with a checkpoint - the key's signatures over (seq, head), the head not shown - like a
+ * budget's start (GRANT_CREATE) already does, and over WebAuthn MORE gives up to two deferred ML-DSA signatures.
+ */
+const CAPS = Object.freeze({ CERTIFY_HEADPROOF: 0x01, OPS_CHECKPOINT: 0x02 });
+/* every bit this library knows - HEAD's byte 59 with any other bit set is not a HEAD this library reads */
+const KNOWN_CAPS = CAPS.CERTIFY_HEADPROOF | CAPS.OPS_CHECKPOINT;
 /* how many computed heads the tracker keeps, by seq - the key's ring is 8 links */
 const TRACKED = 32;
 
@@ -104,7 +111,9 @@ function hexHead(bytes) {
 function isHeadReply(r) {
   /* bytes 61-63 zero (v1: every key takes TX start {token, intent}); byte 59 the capability bits (CAPS) */
   if (r.length < 64 || r[61] | r[62] | r[63]) return false;
-  return r[56] < 16 && r[57] <= 1 && r[58] === 0 && r[59] <= 1;
+  /* byte 59 as a mask of known bits: a key with a newer bit this library also knows is still read (a "<= 1" here
+   * rejected every HEAD of a key that set OPS_CHECKPOINT, and every call waited out its timeout) */
+  return r[56] < 16 && r[57] <= 1 && r[58] === 0 && (r[59] & ~KNOWN_CAPS) === 0;
 }
 const allZero = (b) => b.every((x) => x === 0);
 
@@ -195,7 +204,7 @@ function setup(imports, register) {
    * the one callNow applies over USB and Bluetooth. okcrypto is reached through app.services, only here: a host
    * that never uses the tunnel needs no okcrypto for Edge.
    */
-  async function tunnelCall(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null } = {}) {
+  async function tunnelCall(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null, pqAt = null } = {}) {
     const okcrypto = imports.app && imports.app.services && imports.app.services.okcrypto;
     if (!okcrypto || typeof okcrypto.tunnelRequest !== 'function') {
       throw Object.assign(new Error('Edge over WebAuthn needs okcrypto with a supplied ctap (the web app)'), { code: 'NO_VENDOR_INTERFACE' });
@@ -248,11 +257,20 @@ function setup(imports, register) {
       if (accept && !accept(bytes, got)) throw new Error(`Edge: reply ${got.length + 1} of request ${sub} is not its shape (${hexHead(bytes)})`);
       got.push(bytes);
     }
-    /* short by exactly an ML-DSA-65 signature: the key kept it for SUB.MORE, one answer of its own */
-    if (got.length < reports && reports - got.length === reportsFor(chain.ML_DSA65.SIG)) {
-      const more = await okcrypto.tunnelRequest(OKEDGE, SUB.MORE, [], { expectBytes: chain.ML_DSA65.SIG, timeoutMs });
-      if (more.text !== undefined) throw new Error(`Edge: the key sent no signature for request ${sub} ("${more.text}")`);
-      got.push(...units(more.data));
+    /*
+     * Short by whole ML-DSA-65 signatures: the key kept each for SUB.MORE, one answer apiece, oldest first. pqAt names
+     * the report each starts at in the USB order (a CERTIFY keeps its owner signature and its checkpoint's); without
+     * it the one kept signature is the reply's last.
+     */
+    const pqReports = reportsFor(chain.ML_DSA65.SIG);
+    const missing = reports - got.length;
+    const at = pqAt || [reports - pqReports];
+    if (missing > 0 && missing === at.length * pqReports) {
+      for (const i of at) {
+        const more = await okcrypto.tunnelRequest(OKEDGE, SUB.MORE, [], { expectBytes: chain.ML_DSA65.SIG, timeoutMs });
+        if (more.text !== undefined) throw new Error(`Edge: the key sent no signature for request ${sub} ("${more.text}")`);
+        got.splice(i, 0, ...units(more.data).slice(0, pqReports));
+      }
     }
     if (got.length < reports) throw new Error(`Edge: request ${sub} answered ${got.length} of ${reports} reports`);
     return got;
@@ -314,13 +332,13 @@ function setup(imports, register) {
    * shape can be checked are checked; a report that fails is someone else's,
    * or late.
    */
-  function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null } = {}) {
+  function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null, pqAt = null } = {}) {
     /* how long each key request takes, for a caller that asks (edge.onTiming; the agent's OKEDGE_TIMES) */
     const began = Date.now();
     const timed = (p) => (edge && typeof edge.onTiming === 'function'
       ? p.then((v) => { edge.onTiming(sub, Date.now() - began, true); return v; }, (e) => { edge.onTiming(sub, Date.now() - began, false); throw e; })
       : p);
-    if (transport.tunnelOnly) return timed(tunnelCall(sub, args, { reports, timeoutMs, text, accept }));
+    if (transport.tunnelOnly) return timed(tunnelCall(sub, args, { reports, timeoutMs, text, accept, pqAt }));
     /*
      * EACH REQUEST SAID AS IT STARTS AND ENDS (edge.onRequest; Brad, 2026-10-29: the phone shows what the key is doing,
      * as the web app does - "a refresh is just a trigger for the operation, the sheet shows what's happening"). Only on
@@ -538,7 +556,9 @@ function setup(imports, register) {
      * CERTIFY a subject the host built (grants.certifyDigest; Brad, 2026-10-30: "it can be used to certify things used by
      * the blockchain lib, so its generic"): the key waits for the press (or a budget's CERTIFY scope pays it, after its
      * TX start), writes the certification's link, and signs with the owner key and its ML-DSA-65 twin, naming that link.
-     * -> {deviceId, publicKey, publicKeyPq, approval, seq, subject, ownerKey, ownerKeyPq, signature, signaturePq}
+     * -> {deviceId, publicKey, publicKeyPq, approval, seq, subject, ownerKey, ownerKeyPq, signature, signaturePq,
+     *     checkpoint} - checkpoint {seq, head, signature, signaturePq} after the certification's link (OPS_CHECKPOINT
+     *     firmware; head is this host's weld, null when it holds no copy), else null
      */
     async certify(subject, { onPress, timeoutMs = 30000 } = {}) {
       const sub = Uint8Array.from(subject);
@@ -549,11 +569,20 @@ function setup(imports, register) {
       const ownerKeyPq = await edge.publicKeyPq('owner');
       /* the answer is this certification's: an approval byte, then this subject (a late report of another request is not) */
       const accept = (bytes, got) => got.length !== 0 || ((bytes[0] === 1 || bytes[0] === 2) && sameBytes(bytes.slice(5, 37), sub));
-      const rs = await pressed(SUB.CERTIFY, sub, { reports: 3 + reportsFor(chain.ML_DSA65.SIG), timeoutMs, accept }, onPress);
+      const pq = reportsFor(chain.ML_DSA65.SIG);
+      const withCheckpoint = (caps & CAPS.OPS_CHECKPOINT) !== 0;
+      const reports = 3 + pq + (withCheckpoint ? 2 + pq : 0);
+      const rs = await pressed(SUB.CERTIFY, sub, { reports, timeoutMs, accept, pqAt: withCheckpoint ? [3, 3 + pq + 2] : null }, onPress);
       const [a, k, sg] = rs;
+      let checkpoint = null;
+      if (withCheckpoint) {
+        checkpoint = checkpointOf(rs[3 + pq], rs.slice(4 + pq));
+        checkpoint.head = await headAt(checkpoint.seq);
+      }
       return {
         deviceId, publicKey, publicKeyPq, approval: a[0], seq: get32(a, 1), subject: a.slice(5, 37),
-        ownerKey: k.slice(0, 64), ownerKeyPq, signature: sg.slice(0, 64), signaturePq: concat(rs.slice(3)).slice(0, chain.ML_DSA65.SIG),
+        ownerKey: k.slice(0, 64), ownerKeyPq, signature: sg.slice(0, 64), signaturePq: concat(rs.slice(3, 3 + pq)).slice(0, chain.ML_DSA65.SIG),
+        checkpoint,
       };
     },
 
@@ -727,13 +756,18 @@ function setup(imports, register) {
      * File the receipt for an owed use (any of the key's up to 4, R16; the key
      * refuses another - EdgeError 'no-receipt-waiting'). msgHash =
      * receipts.messageHash(message); the message never goes to the key.
-     * -> {seq, head} after the receipt link: the head the next txStart() passes (R13a).
+     * -> {seq, head} after the receipt link: the head the next txStart() passes (R13a); on OPS_CHECKPOINT firmware
+     * also checkpoint {seq, head, signature, signaturePq} - the key's signatures over that link's head.
      */
     async receipt(refSeq, code, msgHash, opts) {
       /* a code object here became 0 - OK - for every receipt (codes.receiptByte, 2026-10-07) */
       if (!Number.isInteger(code) || code < 0 || code > 0xff) throw new TypeError(`edge: a receipt code is a byte, got ${typeof code === 'object' ? JSON.stringify(code) : code}`);
-      const [r] = await call(SUB.RECEIPT, concat([u32(refSeq), Uint8Array.of(code), msgHash]), opts);
-      return headAfter(seqHead(r));
+      if (!capsRead) await edge.head(opts);
+      const withCheckpoint = (caps & CAPS.OPS_CHECKPOINT) !== 0;
+      const rs = await call(SUB.RECEIPT, concat([u32(refSeq), Uint8Array.of(code), msgHash]), { ...opts, reports: withCheckpoint ? 2 + reportsFor(chain.ML_DSA65.SIG) : 1 });
+      const after = await headAfter(seqHead(rs[0]));
+      if (!withCheckpoint) return after;
+      return { ...after, checkpoint: { ...checkpointOf(rs[0], rs.slice(1)), head: after.head } };
     },
 
 
@@ -961,7 +995,6 @@ function setup(imports, register) {
     const prev = f.seq === 0 || f.op === codes.OP.CONTINUE ? chain.genesis(deviceId) : track.heads.get(f.seq - 1);
     /* a link whose head this host already holds (where its copy ends): that head, when it welds from nothing it holds */
     if (!prev) return track.heads.get(f.seq) || null;
-    if (!prev) return null;
     const h = chain.weld(prev, link);
     remember(f.seq, h);
     return h;
