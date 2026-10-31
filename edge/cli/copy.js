@@ -161,7 +161,35 @@ function follows(prev, r) {
   if (!prev) return true;
   const p = seqOf(prev);
   if (f.seq <= p) return false;
+  /* a head this computer could not weld (the key never reveals it): nothing to weld from, so not this copy's next link */
+  if (f.seq === p + 1 && (!prev.head || !r.head)) return false;
   return f.seq !== p + 1 || sameBytes(chain.weld(prev.head, r.link), r.head);
+}
+
+/* this key's login card's top (certify.top) in the identity bucket's edge-cards, or null */
+function cardTopOf(deviceId) {
+  if (!logs || !bucketHome.hasIdentityBucket(logs.id, logs.net)) return null;
+  const store = logs.net === 'test' ? 'edge-cards-test' : 'edge-cards';
+  const text = bucketHome.kv(bucketHome.identityAt(logs.id, logs.net, store)).entries()[toHex(deviceId).toLowerCase()];
+  try { return (text && JSON.parse(text).top) || null; } catch { return null; }
+}
+
+/*
+ * WARM UP FIRST (Brad, 2026-10-31: "to warm up edge, we need a checkpoint"; the Windows ship rehearsal on key 2: a
+ * computer that never held the chain, the key past its 8-link ring - the ring's links came with no heads and saving the
+ * copy threw "Cannot read properties of null"). A key that never reveals its head, and a computer that cannot weld it:
+ * this key's login card's top from the identity bucket (the apps file it with each log) - the lib checks it against the
+ * key's checkpoint keys, welds it on and proves the head, no press. Without one nothing is read or stored.
+ */
+async function warmIfCold(edge, deviceId, h) {
+  if (h.seq === null || h.head || !(h.caps & 1) || typeof edge.warmUp !== 'function') return h;
+  try {
+    await edge.warmUp(cardTopOf(deviceId));
+  } catch (e) {
+    if (e && e.code !== 'EDGE_NO_CHECKPOINT') throw e;
+    throw Object.assign(new Error(`this computer cannot follow the key's chain past its ring (${e.why}) - it needs a checkpoint: the login card's top in this identity's bucket (the app files it), or a certify to start`), { code: 'EDGE_NO_CHECKPOINT', why: e.why });
+  }
+  return edge.head();
 }
 
 /* the verdict, in words: verified / gap / tampered (fork, rollback, edited) */
@@ -200,7 +228,7 @@ async function sync(edge, home, { status = false, history = null } = {}) {
    * we wait, and if we can stop waiting for no reason"): what the key does (its keys, its links, its checkpoint) apart
    * from what this computer does (the check) - each with its time, so a wait shows which it is. No window: as before.
    */
-  const { publicKey, deviceId, publicKeyPq, c, h } = await FEED.step('the key: its public keys and head', async () => {
+  const { publicKey, deviceId, publicKeyPq, c, h: h0 } = await FEED.step('the key: its public keys and head', async () => {
     const pk = await edge.publicKey();
     /* the ML-DSA-65 twin of the checkpoint key: every checkpoint and seal of this chain is checked under both */
     const pq = await edge.publicKeyPq('checkpoint');
@@ -209,6 +237,7 @@ async function sync(edge, home, { status = false, history = null } = {}) {
     seedHead(edge, kept, pk.deviceId);
     return { publicKey: pk.publicKey, deviceId: pk.deviceId, publicKeyPq: pq, c: kept, h: await edge.head() };
   });
+  const h = h0.seq === null || h0.head ? h0 : await FEED.step('the key: warming up from the login card\'s top', () => warmIfCold(edge, deviceId, h0));
   const keySeq = h.seq === null ? -1 : h.seq;
   const ringFrom = h.oldest === null ? keySeq + 1 : h.oldest;
   const candidate = { ...c, links: [...c.links], publicKey, publicKeyPq };
