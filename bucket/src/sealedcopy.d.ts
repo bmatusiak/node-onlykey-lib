@@ -125,6 +125,13 @@ export function syncWith(bucket: {
     };
     conflicts: any[];
     refused: string[];
+    stores: {
+        [x: string]: {
+            units: number;
+            got: number;
+            put: number;
+        };
+    };
 }>;
 export function ownerId(keys: any): string;
 export function sealOwner(owner: any, keys: any, randomBytes: any): {

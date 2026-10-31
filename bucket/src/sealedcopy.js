@@ -161,7 +161,7 @@ function openHeads(blob, keys) {
  * @param {{tableKey: Uint8Array, unitKey: Uint8Array}} keys keysOf(bucket key)
  * @param {{table: () => Promise<Object<string, string>>, get: (ids: string[]) => Promise<Object<string, string>>, put: (rows: Object<string, {tag: string, blob: string}>) => Promise<void>}} store
  * @param {{rules?: Object, randomBytes: (n: number) => Uint8Array, heads?: Object<string, number>|null}} opts
- * @returns {Promise<{got: number, put: number, taken: Object<string, number>, conflicts: Array, refused: string[]}>}
+ * @returns {Promise<{got: number, put: number, taken: Object<string, number>, conflicts: Array, refused: string[], stores: Object<string, {units: number, got: number, put: number}>}>}
  */
 async function syncWith(bucket, keys, store, { rules = {}, randomBytes, heads = null } = {}) {
   const theirs = await store.table();
@@ -184,7 +184,18 @@ async function syncWith(bucket, keys, store, { rules = {}, randomBytes, heads = 
     if (theirs[h.id] !== h.tag) rows[h.id] = { tag: h.tag, blob: h.blob };
   }
   if (Object.keys(rows).length) await store.put(rows);
-  return { got: p.get.length, put: Object.keys(rows).length, taken, conflicts, refused };
+  /*
+   * PER STORE, WHAT THE SERVER HOLDS NOW (Brad, 2026-10-30: "can it show that it has been synced to the mcp? so i know
+   * whats remote"): once the put went through, every unit this side holds is on the server - the units that differed
+   * were just sent, the rest already matched. got / put say how many of a store's units moved in this round.
+   */
+  const after = table(bucket, keys, { rules });
+  const stores = {};
+  const of = (name) => (stores[name] = stores[name] || { units: 0, got: 0, put: 0 });
+  for (const [name] of Object.values(after.where)) of(name).units += 1;
+  for (const id of p.get) { const w = after.where[id]; if (w) of(w[0]).got += 1; }
+  for (const id of put) { const w = after.where[id]; if (w) of(w[0]).put += 1; }
+  return { got: p.get.length, put: Object.keys(rows).length, taken, conflicts, refused, stores };
 }
 
 /*

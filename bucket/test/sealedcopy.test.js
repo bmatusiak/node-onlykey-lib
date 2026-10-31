@@ -37,9 +37,12 @@ test('a fresh device catches up from the server: the same bucket, and a second s
   const phone = filled();
   const up = await sealed.syncWith(phone, keys, server, { randomBytes: rnd });
   assert.equal(up.put, 2);
+  /* per store, what the server holds now and what moved (the Sync tab's "on the MCP server" line) */
+  assert.deepEqual(up.stores, { guestbook: { units: 1, got: 0, put: 1 }, keychain: { units: 1, got: 0, put: 1 } });
   const fresh = bucket.create({ owner: 'abc' });
   const down = await sealed.syncWith(fresh, keys, server, { randomBytes: rnd });
   assert.equal(down.got, 2);
+  assert.deepEqual(down.stores, { guestbook: { units: 1, got: 1, put: 0 }, keychain: { units: 1, got: 1, put: 0 } });
   assert.equal(bucket.kv(fresh, 'guestbook').getItem('myname'), 'Pixel Tester');
   assert.equal(replicate.stateOf(fresh).hash, replicate.stateOf(phone).hash, 'not the same bucket');
   const again = await sealed.syncWith(fresh, keys, server, { randomBytes: rnd });
