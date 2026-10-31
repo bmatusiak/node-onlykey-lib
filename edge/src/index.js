@@ -16,6 +16,7 @@ module.exports = {
   agents: require('./agents'),
   receipts: require('./receipts'),
   copy: require('./copy'),
+  forks: require('./forks'),
   /* B7: what a use was and whether it stands out - the phone's Live view and onlykey-js edge watch */
   /* B7 stage 2: the agent's signed words about a use (reason, receipt message, a refused TX start) */
   note: require('./note'),
