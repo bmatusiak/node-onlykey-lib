@@ -21,9 +21,10 @@
  *   mine-new    the owner signature verifies, the fingerprint is new: "A device made with your
  *               OnlyKey appeared - is it yours?" (yes: a hard key restored from the backup,
  *               say; no: someone else holds your OnlyKey secret - a LEAK)
- *   forged      not signed by your owner key, or the statement does not name the key that
- *               signed the chain: never merged, kept as evidence against the computer that
- *               sent it
+ *   unproven    no label that verifies (none, one from before certify, one naming another chain):
+ *               the label is dropped, the log is shown UNNAMED. Not a forgery and not a gate -
+ *               since 2026-10-31 there is no "forged" class: "the whole point is to plugin my key
+ *               and see the history" (Brad); a log merges when its own chain checks (`check`)
  *
  * Separately, `check` is the chain itself under that device's own checkpoint key
  * (sync.anchorCheck): ok, or an alarm (bad-checkpoint, rollback, changed, tampered).
@@ -101,14 +102,13 @@ function classify({ log, ownerKey, ownerKeyPq, known = [], merged = [] }) {
     checkpoint: log.checkpoint, anchors: merged,
   });
   /*
-   * A STATEMENT FROM BEFORE CERTIFY (the retired no-press STATEMENT, 2026-10-30) carries no seq - no CERTIFY link names
-   * it - so today's check cannot verify it, and that is not a forgery: the log is UNPROVEN, merged and shown, never
-   * counted as yours (Brad: unnamed devices' logs are accepted; 2026-10-31: the web app held 1141 + 227 links of live
-   * key 1 and the Pixel apart as "not made with your OnlyKey"). A certified statement or a card that does not verify
-   * still is forged - the alarm.
+   * A LABEL NEVER GATES THE HISTORY (Brad, 2026-10-31: "the whole point is to plugin my key and see the history - the
+   * warning blocker that makes me sign the device into the blockchain breaks that rule"; "the merge part is offline
+   * verification"): a nametag or card that does not verify (one from before certify, one moved from another chain) is
+   * dropped - the log is UNPROVEN, shown UNNAMED - and the log merges when its own chain checks (`check`). Only that
+   * check keeps a log apart.
    */
-  const legacyStatement = Boolean(st) && typeof st.seq !== 'number';
-  let kind = (st && !legacyStatement) || log.card ? 'forged' : 'unproven';
+  let kind = 'unproven';
   if (owned) kind = known.some((k) => String(k.deviceId).toLowerCase() === id) ? 'mine-known' : 'mine-new';
   return { class: kind, deviceId: id, nametag: namedOwned ? st.nametag : null, check };
 }

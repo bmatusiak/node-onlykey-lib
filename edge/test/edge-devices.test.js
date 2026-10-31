@@ -42,28 +42,28 @@ test('a log made with your OnlyKey from a device you do NOT know: mine-new (a ha
   assert.equal(r.nametag, 'hard key');
 });
 
-test('a log NOT made with your OnlyKey, or a statement naming another key: forged - never merged, kept as evidence', async () => {
+test('a log NOT made with your OnlyKey, or a statement naming another key: the label is dropped - unproven, shown UNNAMED, not a gate (2026-10-31)', async () => {
   const owner = await myOwner();
   const stranger = await device({ ownerSecret: p256.utils.randomSecretKey() });
-  assert.equal(devices.classify({ log: stranger.log, ...owner }).class, 'forged', 'another owner key');
+  assert.equal(devices.classify({ log: stranger.log, ...owner }).class, 'unproven', 'another owner key');
   const a = await device();
   const b = await device();
   const swapped = { ...a.log, statement: b.log.statement };
-  assert.equal(devices.classify({ log: swapped, ...owner }).class, 'forged', 'a real statement of ANOTHER device of yours, put on this chain');
+  assert.equal(devices.classify({ log: swapped, ...owner }).class, 'unproven', 'a real statement of ANOTHER device of yours, put on this chain');
 });
 
-test('the hybrid: a statement without its ML-DSA-65 half, or naming another ML-DSA-65 checkpoint key, is not "mine"', async () => {
+test('the hybrid: a statement without its ML-DSA-65 half, or naming another ML-DSA-65 checkpoint key, is not "mine" - its label is dropped (unproven)', async () => {
   const owner = await myOwner();
   const { log } = await device();
   assert.equal(devices.classify({ log, ...owner }).class, 'mine-new');
   const { signaturePq: _s, ...noSigPq } = log.statement;
-  assert.equal(devices.classify({ log: { ...log, statement: noSigPq }, ...owner }).class, 'forged', 'no ML-DSA-65 signature');
+  assert.equal(devices.classify({ log: { ...log, statement: noSigPq }, ...owner }).class, 'unproven', 'no ML-DSA-65 signature');
   const { publicKeyPq: _k, ...noKeyPq } = log.statement;
-  assert.equal(devices.classify({ log: { ...log, statement: noKeyPq }, ...owner }).class, 'forged', 'no ML-DSA-65 checkpoint key named');
+  assert.equal(devices.classify({ log: { ...log, statement: noKeyPq }, ...owner }).class, 'unproven', 'no ML-DSA-65 checkpoint key named');
   const other = await device();
-  assert.equal(devices.classify({ log: { ...log, publicKeyPq: other.log.publicKeyPq }, ...owner }).class, 'forged', 'the log is checked under another ML-DSA-65 key than the statement names');
+  assert.equal(devices.classify({ log: { ...log, publicKeyPq: other.log.publicKeyPq }, ...owner }).class, 'unproven', 'the log is checked under another ML-DSA-65 key than the statement names');
   /* checked without this device's owner ML-DSA-65 key: nothing is mine */
-  assert.equal(devices.classify({ log, ownerKey: owner.ownerKey }).class, 'forged', 'no owner ML-DSA-65 key');
+  assert.equal(devices.classify({ log, ownerKey: owner.ownerKey }).class, 'unproven', 'no owner ML-DSA-65 key');
 });
 
 test('the chain is checked under that device\'s own key: a tampered link is an alarm even on a device of yours', async () => {
