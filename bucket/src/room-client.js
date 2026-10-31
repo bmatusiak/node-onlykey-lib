@@ -175,8 +175,9 @@ function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 
       },
       /*
        * THE SERVER'S SEALED COPY OF THIS BUCKET (bucket/src/sealedcopy.js; Phase 3): the room's rows as a row store for
-       * sealedcopy.syncWith - ids and tags, sealed units the server cannot read. on: false when this server keeps no
-       * copy for the identity (its allowlist): the table is empty and a put is refused.
+       * sealedcopy.syncWith - ids and tags, sealed units the server cannot read. on: false only from a server older than
+       * the tiers (2026-10-30), which kept copies for an allow-list alone. tier(): what the last table answer said - {tier:
+       * 'free' | 'lifetime', purgeAt: ms | null} (free: dropped after its window without a touch) - or null before one.
        */
       sealed(op, fields = {}, { timeoutMs: t = 30000 } = {}) {
         return new Promise((res, rej) => {
@@ -190,9 +191,16 @@ function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 
         });
       },
       sealedStore() {
+        let tier = null;
+        const table = async () => {
+          const r = await api.sealed('table');
+          if (r.tier) tier = { tier: r.tier, purgeAt: r.purgeAt ?? null };
+          return r;
+        };
         return {
-          async on() { return Boolean((await api.sealed('table')).on); },
-          async table() { return (await api.sealed('table')).rows || {}; },
+          async on() { return Boolean((await table()).on); },
+          async table() { return (await table()).rows || {}; },
+          tier() { return tier; },
           async get(ids) { return ids.length ? (await api.sealed('get', { ids })).rows || {} : {}; },
           async put(rows) { const r = await api.sealed('put', { rows }); if (!r.ok) throw new Error(`the server did not keep the rows: ${r.why || 'refused'}`); },
         };
