@@ -29,6 +29,16 @@ test('a login card certified at a press: a link on the chain, and the record ver
   assert.equal(await e.verifyRecord(rec), true);
   /* JSON round trip: what the bucket keeps still verifies */
   assert.equal(await e.verifyRecord(JSON.parse(JSON.stringify(rec))), true);
+  /* the certify's checkpoint is the card's top (at the certify's own link), not part of the certification */
+  assert.equal(rec.certification.checkpoint, undefined);
+  assert.equal(rec.top.checkpoint.seq, after.seq);
+  assert.deepEqual(rec.top.links, []);
+  const kept = JSON.parse(JSON.stringify(rec));
+  const { publicKey, deviceId } = await e.publicKey();
+  assert.equal(certify.verifyTop(kept.top, { deviceId, publicKey, publicKeyPq: await e.publicKeyPq('checkpoint'), keySeq: after.seq }).ok, true);
+  /* a new host warms Edge from the card it found in the bucket */
+  const proven = await edgeOver(t).warmUp(kept.top);
+  assert.equal(proven.seq, after.seq);
 });
 
 test('a changed card, another device\'s card, or another owner\'s - not this owner\'s', async () => {

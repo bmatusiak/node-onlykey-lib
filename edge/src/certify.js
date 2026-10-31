@@ -111,7 +111,11 @@ const fromStored = (c) => Object.fromEntries(Object.entries(c).map(([k, v]) => [
  */
 function record(kind, thing, certification) {
   const canonical = kind === 'login-card' ? loginCard(thing) : kind === 'agent' ? agentCard(thing) : thing;
-  return { v: 1, kind, thing: canonical, certification: toStored(certification) };
+  /* the checkpoint OPS_CHECKPOINT firmware adds is not the certification's: a login card carries it as its top */
+  const { checkpoint, ...cert } = certification;
+  const rec = { v: 1, kind, thing: canonical, certification: toStored(cert) };
+  if (kind === 'login-card' && checkpoint && checkpoint.head) rec.top = top(checkpoint);
+  return rec;
 }
 
 /*
