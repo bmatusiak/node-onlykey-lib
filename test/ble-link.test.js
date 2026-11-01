@@ -398,7 +398,8 @@ test('pickBluezDevice: a known phone is found by its address when BlueZ cached n
 test('socket messages: HERE and WHERE - the server\'s name, asked again', () => {
   const d = sock.createDecoder();
   assert.deepEqual(d.push(sock.encodeHere({ host: 'box.ble' })), { kind: 'here', host: 'box.ble' });
-  assert.deepEqual(d.push(sock.encodeWhere()), { kind: 'where' });
+  assert.deepEqual(d.push(sock.encodeWhere()), { kind: 'where', open: false });
+  assert.deepEqual(d.push(sock.encodeWhere({ open: true })), { kind: 'where', open: true });
 });
 
 test('createSocketLink: a WebSocket-shaped class - OPEN on construction, open on OPENED, messages both ways, closes', () => {
@@ -430,6 +431,7 @@ test('createSocketLink: a WebSocket-shaped class - OPEN on construction, open on
   s.down('the Bluetooth link went');
   assert.equal(closed.code, 1006);
   assert.equal(s.host, null, 'the server\'s name is forgotten with the link');
+  /* nothing open on this side after the link went: WHERE says so */
   s.where();
-  assert.deepEqual(sent.at(-1), { kind: 'where' });
+  assert.deepEqual(sent.at(-1), { kind: 'where', open: false });
 });

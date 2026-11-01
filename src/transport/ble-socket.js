@@ -11,7 +11,9 @@
  *   HERE    server -> phone   {host}: the server's name - sent when the link comes up, and asked for with WHERE. The
  *                             login proof signs the host its challenge is for (room.js joinBytes, room-client takes it
  *                             from the url), so the phone dials ble://<host>, the server's own name.
- *   WHERE   phone -> server   {}: say HERE again (the app restarted while the link stayed up)
+ *   WHERE   phone -> server   {open}: say HERE again (the app restarted while the link stayed up, or the target was
+ *                             set); `open` is whether the phone has a socket open - false, the server's socket for
+ *                             this link is a dead one (the app's JS started over under a link that stayed up) and goes
  *   OPEN    phone -> server   {room}: dial /ws/<room>, as `new WebSocket(url)` does
  *   OPENED  server -> phone   {host}: the socket is up
  *   TEXT    both ways         one whole message (UTF-8)
@@ -49,8 +51,8 @@ const json = (kind, value) => withKind(kind, utf8ToBytes(JSON.stringify(value)))
 
 /** HERE: the server's name, for the phone's url and its login proof. */
 const encodeHere = ({ host }) => json(KIND.HERE, { host: String(host) });
-/** WHERE: the phone asks for HERE again. */
-const encodeWhere = () => json(KIND.WHERE, {});
+/** WHERE: the phone asks for HERE again, saying whether it has a socket open. */
+const encodeWhere = ({ open = false } = {}) => json(KIND.WHERE, { open: Boolean(open) });
 /** OPEN: the phone dials its identity's room. */
 const encodeOpen = ({ room }) => json(KIND.OPEN, { room: String(room) });
 /** OPENED: the server's answer - the socket is up. */
@@ -70,7 +72,7 @@ function encodeText(text) {
 
 /**
  * The receiving end: 0x86 payloads in, socket events out -
- *   {kind:'here', host} | {kind:'where'} | {kind:'open', room} | {kind:'opened', host} | {kind:'text', text} |
+ *   {kind:'here', host} | {kind:'where', open} | {kind:'open', room} | {kind:'opened', host} | {kind:'text', text} |
  *   {kind:'close', code, reason} | null (a PART held, or a payload that is not one of these: dropped, as noise is on any
  *   link).
  */
@@ -100,7 +102,7 @@ function createDecoder() {
           return { kind: 'text', text: bytesToUtf8(whole) };
         }
         case KIND.HERE: { const v = parse(body); return v && typeof v.host === 'string' ? { kind: 'here', host: v.host } : null; }
-        case KIND.WHERE: return { kind: 'where' };
+        case KIND.WHERE: { const v = parse(body) || {}; return { kind: 'where', open: v.open !== false }; }
         case KIND.OPEN: { const v = parse(body); return v && typeof v.room === 'string' ? { kind: 'open', room: v.room } : null; }
         case KIND.OPENED: { const v = parse(body); return v && typeof v.host === 'string' ? { kind: 'opened', host: v.host } : null; }
         case KIND.CLOSE: { const v = parse(body) || {}; parts = []; held = 0; return { kind: 'close', code: Number(v.code) || 1000, reason: String(v.reason || '') }; }
@@ -168,8 +170,8 @@ function createSocketLink({ sendFrame }) {
     get host() { return host; },
     /** fn(host) each time the server says its name (HERE) */
     onHere(fn) { hereListeners.add(fn); return () => hereListeners.delete(fn); },
-    /** ask the server for HERE again */
-    where() { out(encodeWhere()); },
+    /** ask the server for HERE again (and say whether a socket is open on this side) */
+    where() { out(encodeWhere({ open: Boolean(current) })); },
     /** one 0x86 payload from the link */
     push(payload) {
       const ev = dec.push(payload);
