@@ -73,7 +73,7 @@ function atLeast(v, min) {
 function load(names, { dir, release = {} } = {}) {
   if (!names.length) return [];
   if (!dir) throw new Error('plugins were asked for, but no plugins folder was given (OKEMU_PLUGINS_DIR)');
-  return names.map((name) => {
+  const loaded = names.map((name) => {
     const pdir = path.join(dir, name);
     const manifestPath = path.join(pdir, 'plugin.js');
     if (!fs.existsSync(manifestPath)) {
@@ -89,6 +89,15 @@ function load(names, { dir, release = {} } = {}) {
     }
     return { ...m, dir: pdir };
   });
+  /*
+   * A PLUGIN THAT BUILDS ON ANOTHER names it (`requires`): vendor_bridge uses ctap_bridge's configurable site as its
+   * rpId (2026-10-31) - built without it, the firmware would not link, or would link a site nobody can set.
+   */
+  for (const m of loaded) {
+    const missing = (m.requires || []).filter((r) => !names.includes(r));
+    if (missing.length) throw new Error(`plugin "${m.name}" requires ${missing.join(', ')} in the same build (OKEMU_PLUGINS)`);
+  }
+  return loaded;
 }
 
 function copyTree(from, to) {
