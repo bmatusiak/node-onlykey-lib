@@ -843,8 +843,12 @@ async function openBluezLink({ dbus, target, known = [], onData, onDisconnect, t
 
     /* Subscribe before any write: replies can beat the write's acknowledgement. */
     const rspProps = await iface(vendor.rsp, I_PROPS);
+    const isOff = (changed, k) => changed[k] && (('value' in changed[k]) ? changed[k].value === false : changed[k] === false);
     const onChanged = (ifaceName, changed) => {
-      if (ifaceName !== I_CHAR || !changed || !changed.Value) return;
+      if (ifaceName !== I_CHAR || !changed) return;
+      /* the subscription gone (the phone's GATT server started again): nothing it sends arrives - the link is over */
+      if (isOff(changed, 'Notifying')) { onDisconnect('the phone stopped our subscription (its app restarted?)'); return; }
+      if (!changed.Value) return;
       const v = changed.Value;
       onData(v && typeof v === 'object' && 'value' in v && 'signature' in v ? v.value : v);
     };
@@ -853,10 +857,21 @@ async function openBluezLink({ dbus, target, known = [], onData, onDisconnect, t
     const devProps = await iface(vendor.device, I_PROPS);
     const onDevChanged = (ifaceName, changed) => {
       if (ifaceName !== I_DEVICE || !changed) return;
-      const off = (k) => changed[k] && (('value' in changed[k]) ? changed[k].value === false : changed[k] === false);
-      if (off('ServicesResolved') || off('Connected')) onDisconnect('the LE link went down');
+      if (isOff(changed, 'ServicesResolved') || isOff(changed, 'Connected')) onDisconnect('the LE link went down');
     };
     devProps.on('PropertiesChanged', onDevChanged);
+    /*
+     * THE PHONE'S SERVICE GOING WHILE THE LINK STAYS (the box + Pixel, 2026-11-01): the app restarted, so its GATT server
+     * was made again - Android kept the LE link up (Connected and ServicesResolved stayed true), BlueZ dropped the old
+     * service's objects and listed new ones, and this link went on writing to and listening on the old ones: nothing the
+     * phone said arrived, for good. The old characteristics removed = this link is over; its holder opens a new one.
+     */
+    const om = await iface('/', I_OM);
+    const onRemoved = (path) => {
+      if (path === vendor.req || path === vendor.rsp) onDisconnect('the phone\'s service went (its app restarted?)');
+    };
+    if (om && typeof om.on === 'function') om.on('InterfacesRemoved', onRemoved);
+    const offRemoved = () => { if (om && typeof om.removeListener === 'function') om.removeListener('InterfacesRemoved', onRemoved); };
     const rsp = await iface(vendor.rsp, I_CHAR);
     try {
       await rsp.StartNotify();
@@ -865,6 +880,7 @@ async function openBluezLink({ dbus, target, known = [], onData, onDisconnect, t
       if (!/InProgress|Already notifying/i.test(dbusWhat(err))) {
         rspProps.removeListener('PropertiesChanged', onChanged);
         devProps.removeListener('PropertiesChanged', onDevChanged);
+        offRemoved();
         throw bleError('ESUBSCRIBE', `could not subscribe to ${name}'s replies: ${dbusWhat(err)}`, err);
       }
     }
@@ -902,6 +918,7 @@ async function openBluezLink({ dbus, target, known = [], onData, onDisconnect, t
       async close() {
         rspProps.removeListener('PropertiesChanged', onChanged);
         devProps.removeListener('PropertiesChanged', onDevChanged);
+        offRemoved();
         try { await rsp.StopNotify(); } catch { /* link already gone */ }
         try {
           await (await iface(vendor.device, I_BEARER_LE)).Disconnect();

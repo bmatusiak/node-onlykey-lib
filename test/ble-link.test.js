@@ -282,6 +282,24 @@ test('linux: the LE link already up - no Connect(), the room socket both ways, n
   assert.ok(!order.includes('Disconnect'), 'never Device1.Disconnect: that would drop the classic keyboard too');
 });
 
+test('linux: the phone app restarting (its GATT service made again, the LE link kept) ends the link, so its holder opens a new one', async () => {
+  const { tree, rpa } = piTree({ live: true });
+  const dbus = fakeDbus({ tree });
+  dbus.addGatt(rpa);
+  const link = linuxLink(dbus);
+  const downs = [];
+  link.on('down', (why) => downs.push(why));
+  await link.open();
+  dbus.removeGatt(rpa);
+  await tick();
+  assert.equal(link.isUp(), false);
+  assert.match(downs[0] || '', /service went/);
+  dbus.addGatt(rpa);
+  await link.open();
+  assert.equal(link.isUp(), true, 'opened again on the new service');
+  await link.close();
+});
+
 test('linux: classic-only (the keyboard), cached GATT - PreferredBearer le, Connect(), then the table resolves', async () => {
   const { tree, rpa } = piTree({ preferredBearer: 'bredr' });
   const dbus = fakeDbus({ tree });

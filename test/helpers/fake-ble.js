@@ -294,7 +294,11 @@ function fakeDbus({ tree, firmware = null, connect = 'ok', gattUnder = null, pho
   function iface(path, name) {
     const node = tree[path];
     if (name === 'org.freedesktop.DBus.ObjectManager') {
+      /* its signals (InterfacesRemoved) from the one emitter of '/' - a test drops a service with removeGatt() */
+      const om = emitter('/');
       return {
+        on: (ev, fn) => om.on(ev, fn),
+        removeListener: (ev, fn) => om.removeListener(ev, fn),
         async GetManagedObjects() {
           calls.push(['GetManagedObjects']);
           const out = {};
@@ -368,7 +372,15 @@ function fakeDbus({ tree, firmware = null, connect = 'ok', gattUnder = null, pho
   };
   bus.disconnect = () => { calls.push(['bus.disconnect']); };
 
-  return { systemBus: () => bus, Variant, calls, phone, tree, addGatt, linkUp };
+  /* the phone's GATT server made again (its app restarted, the LE link kept): the old service's objects removed */
+  function removeGatt(devPath) {
+    for (const p of Object.keys(tree).filter((k) => k.startsWith(`${devPath}/service00a7`))) {
+      delete tree[p];
+      emitter('/').emit('InterfacesRemoved', p, [CHAR]);
+    }
+  }
+
+  return { systemBus: () => bus, Variant, calls, phone, tree, addGatt, linkUp, removeGatt };
 }
 
 /** The Pi as it was found on 2026-09-29, before any LE connect. */
