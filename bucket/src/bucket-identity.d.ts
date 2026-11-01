@@ -39,11 +39,15 @@ export function bucketKeyLabel(identityPublicKey: any): string;
  * @returns {Promise<Uint8Array>} the 64-byte certificate signature
  */
 export function certify(okcrypto: any, identityPublicKey: any, bucketPublicKey: any, opts?: {}): Promise<Uint8Array>;
-/** Is this bucket key certified by this bucket identity? Never throws: false on anything malformed. */
-export function verifyCertificate({ identityPublicKey, bucketPublicKey, certificate }: {
+/**
+ * Is this bucket key certified by this bucket identity - by a kept certificate, or (login given) by the login proof for
+ * that host and nonce? Never throws: false on anything malformed.
+ */
+export function verifyCertificate({ identityPublicKey, bucketPublicKey, certificate, login }: {
     identityPublicKey: any;
     bucketPublicKey: any;
     certificate: any;
+    login: any;
 }): boolean;
 /** Sign with the bucket key, host-side, no press. */
 export function sign(bucketKey: any, purpose: any, bytes: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
@@ -51,7 +55,7 @@ export function sign(bucketKey: any, purpose: any, bytes: any): Uint8Array<Array
  * Is this signed by a bucket key of this bucket identity? The certificate and the signature both, or false.
  * @param {{identityPublicKey: Uint8Array, bucketPublicKey: Uint8Array, certificate: Uint8Array, purpose: string, bytes: Uint8Array, signature: Uint8Array}} o
  */
-export function verify({ identityPublicKey, bucketPublicKey, certificate, purpose, bytes, signature }: {
+export function verify({ identityPublicKey, bucketPublicKey, certificate, login, purpose, bytes, signature }: {
     identityPublicKey: Uint8Array;
     bucketPublicKey: Uint8Array;
     certificate: Uint8Array;
@@ -59,3 +63,9 @@ export function verify({ identityPublicKey, bucketPublicKey, certificate, purpos
     bytes: Uint8Array;
     signature: Uint8Array;
 }): boolean;
+/**
+ * The bucket identity signs this login, on the key (a press on production, or the login budget's sign).
+ * @returns {Promise<Uint8Array>} the 64-byte login proof - carried where a certificate goes, with `login`
+ */
+export function signLogin(okcrypto: any, identityPublicKey: any, bucketPublicKey: any, login: any, opts?: {}): Promise<Uint8Array>;
+export function loginDigest(identityPublicKey: any, bucketPublicKey: any, login: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;

@@ -32,27 +32,35 @@ export function join(me: {
     name: string;
     kind: string;
 }): {
-    t: string;
-    identityPublicKey: string;
-    bucketPublicKey: string;
-    certificate: string;
     signature: string;
     device: {
         id: string;
         name: string;
         kind: string;
     };
+    login?: {
+        host: string;
+        nonce: string;
+    } | undefined;
+    t: string;
+    identityPublicKey: string;
+    bucketPublicKey: string;
+    certificate: string;
 };
 /**
  * The server checks a join. Never throws.
  * @param {string} room the identity id the connection asked for
  * @param {object} msg the device's join
  * @param {{nonce: Uint8Array, host: string}} asked this connection's challenge and the server's own host
- * @returns {{ok: true, identity: string, device: {id: string, name: string, kind: string}} | {ok: false}}
+ * @param {{requireLogin?: boolean}} [opts] requireLogin: only a login proof for THIS challenge enters - the key was
+ *   present at this join (a kept certificate does not)
+ * @returns {{ok: true, identity: string, device: {id: string, name: string, kind: string}, login: boolean} | {ok: false}}
  */
 export function checkJoin(room: string, msg: object, asked: {
     nonce: Uint8Array;
     host: string;
+}, { requireLogin }?: {
+    requireLogin?: boolean;
 }): {
     ok: true;
     identity: string;
@@ -61,6 +69,7 @@ export function checkJoin(room: string, msg: object, asked: {
         name: string;
         kind: string;
     };
+    login: boolean;
 } | {
     ok: false;
 };

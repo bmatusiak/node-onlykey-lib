@@ -27,10 +27,14 @@ export function computerSide({ bucket, me, randomBytes, rules }: {
         v: number;
         identity: any;
         proof: {
+            signature: string;
+            login?: {
+                host: string;
+                nonce: string;
+            } | undefined;
             identityPublicKey: string;
             bucketPublicKey: string;
             certificate: string;
-            signature: string;
         };
         state: {
             hash: string;
@@ -139,9 +143,13 @@ export function prove(me: {
     certificate: Uint8Array;
     id: string;
 }, nonce: any, side: any): {
+    signature: string;
+    login?: {
+        host: string;
+        nonce: string;
+    } | undefined;
     identityPublicKey: string;
     bucketPublicKey: string;
     certificate: string;
-    signature: string;
 };
 export function checks(proof: any, nonce: any, side: any, id: any): boolean;

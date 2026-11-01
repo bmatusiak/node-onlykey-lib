@@ -38,7 +38,7 @@ const PING_MS = 25000;
 /**
  * @param {{url: string, me: {id: string, identityPublicKey: Uint8Array, bucketKey: object, certificate: Uint8Array},
  *   device: {id: string, name: string, kind: string}, WebSocket: any, randomBytes: (n: number) => Uint8Array,
- *   timeoutMs?: number}} o
+ *   timeoutMs?: number, login?: ((asked: {host: string, nonce: Uint8Array}) => Promise<Uint8Array>) | null}} o
  */
 /*
  * login({host, nonce}) -> the login proof (bucket-identity signLogin): asked when the server's challenge comes, so the
