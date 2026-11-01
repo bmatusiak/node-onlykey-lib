@@ -9,7 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const setup = require('../plugin');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
-const { chain, grants, certify } = require('../src');
+const { chain, grants, certify, codes } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 
 const key = (o = {}) => { const t = fakeKey({ secret: p256.utils.randomSecretKey(), ...o }); return { t, e: edgeOver(t) }; };
@@ -62,9 +62,9 @@ function overTunnel(t) {
   return { e: edge, kept };
 }
 
-test('HEAD names OPS_CHECKPOINT beside CERTIFY_HEADPROOF', async () => {
+test('HEAD names OPS_CHECKPOINT and LOSS_ANCHOR beside CERTIFY_HEADPROOF', async () => {
   const { e } = key();
-  assert.equal((await e.head()).caps, 3);
+  assert.equal((await e.head()).caps, 7);
 });
 
 test('a RECEIPT ends with a checkpoint over the head after its link (head not shown)', async () => {
@@ -178,4 +178,43 @@ test('the newest checkpoint is kept for the card\'s top: a receipt\'s, then a ce
   const c = await e.certify(new Uint8Array(32).fill(2));
   assert.equal(e.newestCheckpoint().seq, c.seq);
   assert.equal(await verifies(e, e.newestCheckpoint()), true);
+});
+
+/*
+ * A LOST LINK NEVER STRANDS A KEY (LOSS_ANCHOR; Brad, 2026-10-31: "we certify that we know about the missing block so we
+ * can continue"): a host whose copy ends before the key's ring cannot weld the head - the warm-up says where the copy
+ * ends and where the ring starts; the person's pressed LOSS of the range between names it in the chain, and its
+ * checkpoint shows the head after it, signed - the host goes on from there: proves the head and opens a budget.
+ */
+test('LOSS_ANCHOR: the range a copy cannot reach, accepted at a press, gives the head to go on from', async () => {
+  const far = await hostWithTop(3, 12);
+  const b = edgeOver(far.t);
+  const cold = await b.warmUp(far.top).then(() => null, (e) => e);
+  assert.equal(cold && cold.why, 'top-ends-before-the-ring');
+  assert.ok(cold.copyEnds < cold.ringFrom - 1, `a gap between the copy (#${cold.copyEnds}) and the ring (#${cold.ringFrom})`);
+  let pressedAsked = false;
+  const after = await b.loss({ from: cold.copyEnds + 1, to: cold.ringFrom - 1, onPress: () => { pressedAsked = true; } });
+  assert.ok(pressedAsked, 'the LOSS asked for its press');
+  const h = await b.head();
+  assert.equal(after.seq, h.seq, 'the LOSS is the key\'s newest link');
+  assert.deepEqual([...after.head], [...h.head], 'the host now welds the head the LOSS showed');
+  assert.equal(await verifies(b, after.checkpoint), true);
+  const [l] = await b.pickup(after.seq, 1);
+  const f = chain.decodeLink(l.link);
+  assert.equal(f.op, codes.OP.LOSS);
+  assert.equal(f.grantId, cold.copyEnds + 1, 'the LOSS names where the lost range starts');
+  /* and the host goes on: the head proven, a budget from a copy anchored there */
+  const proven = await b.checkpoint();
+  assert.equal(proven.seq, after.seq);
+  const g = await b.grants.create({ copy: { anchor: { seq: after.seq, head: after.head }, links: [] }, scopes: [{ op: 1, slot: 2, cap: 1 }], reasonHash: new Uint8Array(32) });
+  assert.ok(g.grantId > 0, 'a budget opened past the lost range');
+});
+
+test('LOSS on firmware without LOSS_ANCHOR answers as before: seq, no head', async () => {
+  const { t, e } = key({ lossAnchor: false });
+  await e.pickup(0, 1);
+  t.edgeRecord();
+  const r = await e.loss({ from: 1, to: 1 });
+  assert.equal(r.checkpoint, undefined);
+  assert.equal(r.seq, (await e.head()).seq);
 });

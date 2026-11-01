@@ -68,9 +68,15 @@ const HELD = 8;
  * RECEIPT and CERTIFY end with a checkpoint - the key's signatures over (seq, head), the head not shown - like a
  * budget's start (GRANT_CREATE) already does, and over WebAuthn MORE gives up to two deferred ML-DSA signatures.
  */
-const CAPS = Object.freeze({ CERTIFY_HEADPROOF: 0x01, OPS_CHECKPOINT: 0x02 });
+/*
+ * LOSS_ANCHOR (Brad, 2026-10-31: "we certify that we know about the missing block so we can continue"; "so a lost link
+ * never strands a key again: yes, using loss"): LOSS ends with a checkpoint that SHOWS the head after the LOSS link,
+ * signed. A link no host holds strands every host - the heads after it cannot be welded, and a certify's checkpoint
+ * hides the head; the person's pressed LOSS names the lost range in the chain for good and gives the head to go on from.
+ */
+const CAPS = Object.freeze({ CERTIFY_HEADPROOF: 0x01, OPS_CHECKPOINT: 0x02, LOSS_ANCHOR: 0x04 });
 /* every bit this library knows - HEAD's byte 59 with any other bit set is not a HEAD this library reads */
-const KNOWN_CAPS = CAPS.CERTIFY_HEADPROOF | CAPS.OPS_CHECKPOINT;
+const KNOWN_CAPS = CAPS.CERTIFY_HEADPROOF | CAPS.OPS_CHECKPOINT | CAPS.LOSS_ANCHOR;
 /* how many computed heads the tracker keeps, by seq - the key's ring is 8 links */
 const TRACKED = 32;
 
@@ -311,7 +317,9 @@ function setup(imports, register) {
       if (opts && opts.newLink) {
         const [h] = await callNow(SUB.HEAD, null, { accept: isHeadReply });
         const before = get32(h, 0);
-        opts = { ...opts, accept: aboveSeq(before === SEQ_NONE ? null : before) };
+        /* the FIRST report names the new link; the ones after it (a checkpoint's signatures) are its own */
+        const above = aboveSeq(before === SEQ_NONE ? null : before);
+        opts = { ...opts, accept: (bytes, got) => (got && got.length ? true : above(bytes)) };
       }
       const pending = callNow(sub, args, opts); /* written synchronously */
       if (onPress) onPress(); /* the request is on the key: now ask for the press */
@@ -708,7 +716,9 @@ function setup(imports, register) {
     async warmUp(top, opts) {
       /* with where the copy ends and where the key is, when known: how far apart they are is what decides the way back */
       const noCheckpoint = (why, at = {}) => Object.assign(
-        new Error(`Edge: this device needs a checkpoint (${why}${at.copyEnds != null ? `: the copy ends at #${at.copyEnds}, the key is at #${at.keySeq} and keeps its last links from #${at.ringFrom}` : ''}) - certify to start`),
+        new Error(`Edge: this device needs a checkpoint (${why}${at.copyEnds != null ? `: the copy ends at #${at.copyEnds}, the key is at #${at.keySeq} and keeps its last links from #${at.ringFrom}` : ''}) - ${
+          /* past the copy, every link's head is out of reach: a LOSS of them (a press) gives the head to go on from (LOSS_ANCHOR) */
+          at.copyEnds != null && caps & CAPS.LOSS_ANCHOR ? `accept #${at.copyEnds + 1}-#${at.keySeq} as lost (a press) to go on` : 'certify to start'}`),
         { code: 'EDGE_NO_CHECKPOINT', why, ...at });
       let h = await edge.head(opts);
       if (h.seq === null) return null;
@@ -930,9 +940,22 @@ function setup(imports, register) {
      */
     async loss({ from, to, onPress, timeoutMs = 30000 } = {}) {
       if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) throw new RangeError(`Edge: a loss is #from..#to, not ${from}..${to}`);
-      const pending = pressed(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs, newLink: true }, onPress);
-      const [r] = await pending;
-      return headAfter(seqHead(r));
+      if (!capsRead) await edge.head();
+      const anchored = (caps & CAPS.LOSS_ANCHOR) !== 0;
+      const rs = await pressed(SUB.LOSS, concat([u32(from), u32(to)]), { timeoutMs, newLink: true, ...(anchored ? { reports: 2 + reportsFor(chain.ML_DSA65.SIG) } : {}) }, onPress);
+      if (!anchored) return headAfter(seqHead(rs[0]));
+      /*
+       * THE HEAD TO GO ON FROM (LOSS_ANCHOR): the key's checkpoint after the LOSS link, the head shown - checked against
+       * the key's checkpoint keys (both halves) before this host takes it as where its copy continues.
+       */
+      const cp = checkpointOf(rs[0], rs.slice(1));
+      const { publicKey, deviceId } = await edge.publicKey();
+      const publicKeyPq = await edge.publicKeyPq('checkpoint');
+      if (!cp.head.some((x) => x) || !chain.verifyCheckpoint({ deviceId, seq: cp.seq, head: cp.head }, cp.signature, publicKey, cp.signaturePq, publicKeyPq)) {
+        throw Object.assign(new Error('Edge: the LOSS checkpoint does not verify - the head after it is not taken'), { code: 'EDGE_LOSS_UNVERIFIED' });
+      }
+      edge.knownHead(cp.seq, cp.head, deviceId);
+      return { seq: cp.seq, head: cp.head, checkpoint: noteCheckpoint(cp) };
     },
 
     /**

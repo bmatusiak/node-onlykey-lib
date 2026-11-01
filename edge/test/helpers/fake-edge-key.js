@@ -49,9 +49,10 @@ const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUppe
  * and the RECEIPT/SETTLE/LOSS answers), CHECKPOINT unknown, PROVE_HEAD {seq, head} confirms a head the host welded.
  * headproof: false - the firmware before it.
  * opsCheckpoint (default with headproof): HEAD byte 59 bit 2 - RECEIPT and CERTIFY end with a checkpoint (head hidden).
+ * lossAnchor (default with opsCheckpoint): HEAD byte 59 bit 4 - LOSS ends with a checkpoint that shows the head.
  * ring: the links PICKUP still answers, newest first (the firmware's 8); null - every link (the default).
  */
-function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true, opsCheckpoint = headproof, ring = null } = {}) {
+function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true, opsCheckpoint = headproof, lossAnchor = opsCheckpoint, ring = null } = {}) {
   /* each fake key its own Edge key - SECRET by default */
   const myPub = p256.getPublicKey(secret, false).slice(1);
   const myDevice = chain.deviceIdOf(myPub);
@@ -119,7 +120,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(oldest()), ...ids.flatMap(u32), mask, owed.length, 0, (headproof ? 1 : 0) | (opsCheckpoint ? 2 : 0), refusedTx, 0]));
+        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(oldest()), ...ids.flatMap(u32), mask, owed.length, 0, (headproof ? 1 : 0) | (opsCheckpoint ? 2 : 0) | (lossAnchor ? 4 : 0), refusedTx, 0]));
       } else if (sub === 0x04) {
         /* PUBKEY {which}: 0 the checkpoint key, 1 the owner key - nothing signed */
         emit(report([...(arg[0] ? p256.getPublicKey(ownerSecret, false).slice(1) : myPub)]));
@@ -234,7 +235,8 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
         const next = to + 1;
         if (next <= held.length - 1 && next >= held.length - 8) subject.set(H(held[next].link).slice(0, 28), 4);
         append({ op: codes.OP.LOSS, decision: 1, flags: 1, grantId: from, subject });
-        emit(seqHead());
+        if (lossAnchor) checkpoint(true);
+        else emit(seqHead());
       } else {
         /* any other sub-op, 0x15 too (AGENT_ADD, retired 2026-10-08 - Brad: "lets cut it out"): EDGE_UNKNOWN_REQUEST, as the firmware */
         emit(status(0x0a));
