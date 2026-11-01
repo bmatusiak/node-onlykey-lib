@@ -2,6 +2,8 @@
 
 *To: the OnlyKey Team. From: Brad. Draft, 2026-09-28.*
 
+> **Status (2026-11-01 review): OPEN.** The library side is done: ok-edge - phone, desktop and web - the kit, the emulator and the firmware builder all pin node-onlykey-lib, with about 1830 tests. Open: the letter's two questions to the OnlyKey Team.
+
 Hi OnlyKey Team,
 
 The OnlyKey protocol and crypto are currently implemented several times over:
@@ -17,13 +19,13 @@ One example: FIDO2 transit v2 is already implemented three separate times: in th
 
 I've been building **node-onlykey-lib** as a single JavaScript implementation to end that drift:
 
-- **One tested library.** It has over 900 tests, including vectors frozen from your implementations. A version matrix tests it against every firmware release from v0.2-beta.8 to the upcoming 3.1.0.
+- **One tested library.** It has about 1830 tests, including vectors frozen from your implementations. A version matrix tests it against every firmware release from v0.2-beta.8 to the upcoming 3.1.0.
 - **Each app keeps its own transport.** That's chrome.hid in the desktop app, WebAuthn in the browser and USB on Android. Only the protocol and crypto are shared.
 - **Adopting it is a plugin swap.** Adapters keep each app's current API.
 - **One vendored crypto set.** @noble and openpgp live in one place, where they're audited and upgraded once for everything.
 - **It follows your work.** A watch script lists every new protocol commit in your repos, so the library keeps up while you keep building.
 
-The phone app and the test kit already run on it. The web app is moving onto it next.
+ok-edge - phone, desktop and web - the kit, the emulator and the firmware builder all pin it.
 
 ## Two questions
 
