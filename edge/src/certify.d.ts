@@ -130,6 +130,13 @@ export function verify(rec: {
     thing: object;
     certification: object;
 }, ownerKey: Uint8Array, ownerKeyPq: Uint8Array): boolean;
+export function budgetAllowed(rec: any, scopes: any): {
+    ok: boolean;
+    why: any;
+} | {
+    ok: boolean;
+    why?: undefined;
+};
 /**
  * MAY THIS BUDGET OPEN? (Brad, 2026-10-30: Edge auto-presses only what is inside a certified card picked from the list.)
  * Every scope inside the card: a derive scope on one of its labels (cap 1), a sign scope on slot 201 with its label and
@@ -138,15 +145,7 @@ export function verify(rec: {
  * @param {{thing: object}} rec a verified login-card record @param {Array<object>} scopes as grants.encodeScopes takes them
  * -> {ok: true} | {ok: false, why}
  */
-export function budgetAllowed(rec: {
-    thing: object;
-}, scopes: Array<object>): {
-    ok: boolean;
-    why: any;
-} | {
-    ok: boolean;
-    why?: undefined;
-};
+export function deriveHash(d: any): string;
 export const keyEnforces: false;
 export function toStored(c: any): {
     [k: string]: any;

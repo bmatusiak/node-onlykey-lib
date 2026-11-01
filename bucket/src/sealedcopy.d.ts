@@ -90,7 +90,7 @@ export function openHeads(blob: any, keys: any): any;
  * @param {{tableKey: Uint8Array, unitKey: Uint8Array}} keys keysOf(bucket key)
  * @param {{table: () => Promise<Object<string, string>>, get: (ids: string[]) => Promise<Object<string, string>>, put: (rows: Object<string, {tag: string, blob: string}>) => Promise<void>}} store
  * @param {{rules?: Object, randomBytes: (n: number) => Uint8Array, heads?: Object<string, number>|null}} opts
- * @returns {Promise<{got: number, put: number, taken: Object<string, number>, conflicts: Array, refused: string[]}>}
+ * @returns {Promise<{got: number, put: number, taken: Object<string, number>, conflicts: Array, refused: string[], stores: Object<string, {units: number, got: number, put: number}>}>}
  */
 export function syncWith(bucket: {
     stores: Object;
@@ -133,17 +133,25 @@ export function syncWith(bucket: {
         };
     };
 }>;
+/**
+ * WHICH OF THIS BUCKET'S STORES A CHANGE ON THE SERVER TOUCHES (the room's 'sealed-changed': another device's put, as
+ * ids and tags): a row whose tag differs from this side's is newer there - its store named when this side has that unit;
+ * a unit this side does not have yet cannot be named before it is fetched (its id is keyed), so it is counted. The
+ * heads row is the Edge logs' newest links, not a store. -> {stores: string[] (sorted), unknown: number}
+ * @param {{stores: Object}} bucket @param {{tableKey: Uint8Array, unitKey: Uint8Array}} keys
+ * @param {Object<string, string>} rows id -> tag, as the server announced them
+ */
 export function locate(bucket: {
-    stores: any;
+    stores: Object;
 }, keys: {
     tableKey: Uint8Array;
     unitKey: Uint8Array;
 }, rows: {
     [x: string]: string;
 }, { rules }?: {
-    rules?: any;
+    rules?: {} | undefined;
 }): {
-    stores: string[];
+    stores: any[];
     unknown: number;
 };
 export function ownerId(keys: any): string;

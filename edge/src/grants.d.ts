@@ -147,3 +147,4 @@ export function isDerivedCode(slot: any): boolean;
 export function identityLabel(name: any): Uint8Array<ArrayBufferLike>;
 export function scopeLabel(s: any): Uint8Array<ArrayBufferLike> | null;
 export function deriveLabel(text: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
+export function labelBytes(label: any): Uint8Array<ArrayBufferLike> | null;

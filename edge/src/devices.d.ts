@@ -22,8 +22,8 @@ export function classify({ log, ownerKey, ownerKeyPq, known, merged }: {
         statement: any;
         card: any;
     };
-    ownerKey: Uint8Array | null;
-    ownerKeyPq: Uint8Array | null;
+    ownerKey: Uint8Array;
+    ownerKeyPq: Uint8Array;
     known?: {
         deviceId: string;
     }[] | undefined;
