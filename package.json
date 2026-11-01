@@ -14,6 +14,7 @@
     "./protocol": "./src/protocol/index.js",
     "./transport": "./src/transport/index.js",
     "./transport/webauthn": "./src/transport/webauthn.js",
+    "./transport/vendor-bridge": "./src/transport/vendor-bridge.js",
     "./device": "./src/device/index.js",
     "./keychain": "./keychain/src/index.js",
     "./edge": "./edge/src/index.js",

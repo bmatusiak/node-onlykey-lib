@@ -23,8 +23,8 @@
  * Answer: reports [0xFD][index | 0x80 last] - the first [len u16 LE] then data from byte 4, the rest data from byte 2.
  * A refusal is a text report, "Error vendor_bridge ...".
  */
-const okmsg = require('./okmsg');
-const { IFACE } = require('./msg');
+const okmsg = require('../protocol/okmsg');
+const { IFACE } = require('../protocol/msg');
 
 const OKVENDORBRIDGE = 0xfd;
 const CHUNK = 58;
