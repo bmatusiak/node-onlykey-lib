@@ -199,3 +199,64 @@ test('login: the opening handed to the host survives JSON - its grant hash is th
   const subject = (scopes) => hex(grants.grantSubject({ scopes, reasonHash: z, genesis: z, lifetime: 2 }));
   assert.equal(subject(kept), subject(asked[0]), 'the kept opening does not hash to the grant');
 });
+
+/*
+ * THE CARD LEARNS THE LOGIN (Brad, 2026-11-01: "it has 2 uses, not 4 - the receipts are not counted as a use"; "the login
+ * plan should calculate how many and what to use from when it did the login"; "login flow and budget use count need to
+ * match"): a manual login records what it asked of the key; the card names exactly that; its budget asks exactly that and
+ * spends every use - and when the login and the card drift apart, the login says the card is stale.
+ */
+const KEY_HASH = hex(sha256(utf8(BUCKET_KEY)));
+/* the login as it runs from now on: the bucket key's derive, then the identity's one signature (the login proof) */
+const loginOnce = (ok) => async () => {
+  await ok.deriveSecret(BUCKET_KEY);
+  await ok.agent.sign(SIGN_LABEL, new Uint8Array(32).fill(3));
+  return 'in';
+};
+
+test('the card learns the login: a manual login is recorded, the card names exactly it, its budget spends every use', async () => {
+  const ok = fakeOkcrypto();
+  const edge = fakeEdge();
+  const identity = await compose(ok, edge);
+  const first = await identity.login(loginOnce(ok), {});
+  assert.equal(first.manual, 'no login card');
+  assert.deepEqual(first.record, { derives: [KEY_HASH], signs: 1, other: 0 });
+  assert.ok(ok.sent.every((x) => !x.paid), 'a manual login pays nothing');
+  assert.deepEqual(identity.loginRecord(), { derives: [KEY_HASH], signs: 1, other: 0 });
+  const card = await cardOf(identity);
+  assert.deepEqual(card.thing.derives, [KEY_HASH]);
+  assert.equal(card.thing.signs.cap, 1);
+  const r = await identity.login(loginOnce(ok), { card });
+  assert.equal(r.paid, 2, 'one derive and one sign: 2 uses');
+  assert.equal(r.stale, false);
+  assert.deepEqual(edge.calls.find((c) => c.grant).grant, [[codes.OP.DERIVE, 128, 1, KEY_HASH], [codes.OP.SIGN, 201, 1, hex(SIGN_LABEL)]]);
+  assert.ok(!edge.calls.some((c) => c.revoke), 'every use spent: the key ends the budget itself');
+});
+
+test('the card and the login drift: an extra request or an unused one makes the card stale; unused uses are ended', async () => {
+  const ok = fakeOkcrypto();
+  const edge = fakeEdge();
+  const identity = await compose(ok, edge);
+  await identity.login(loginOnce(ok), {});
+  const card = await cardOf(identity);
+  /* the login asks one thing more (an update added a derive): paid as before, the extra asked on its own, stale */
+  const more = await identity.login(async () => { await loginOnce(ok)(); await ok.deriveSecret(BUCKET); }, { card });
+  assert.equal(more.paid, 2);
+  assert.equal(more.stale, true);
+  assert.equal(ok.sent[ok.sent.length - 1].paid, false, 'the request the card does not name asks on its own');
+  /* the login asks one thing less: the unused use is ended, stale */
+  const less = await identity.login(async () => { await ok.deriveSecret(BUCKET_KEY); }, { card });
+  assert.equal(less.paid, 1);
+  assert.equal(less.stale, true);
+  assert.ok(edge.calls.some((c) => c.revoke === less.budget.grantId), 'the unused use was not ended');
+});
+
+test('a login that hangs ends its budget at the watchdog', async () => {
+  const ok = fakeOkcrypto();
+  const edge = fakeEdge();
+  const identity = await compose(ok, edge);
+  await identity.login(loginOnce(ok), {});
+  const card = await cardOf(identity);
+  await assert.rejects(identity.login(() => new Promise(() => {}), { card, watchdogMs: 50 }), (e) => e.code === 'LOGIN_TIMEOUT');
+  assert.ok(edge.calls.some((c) => c.revoke !== undefined), 'the hung login\'s budget was not ended');
+});

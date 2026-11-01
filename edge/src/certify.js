@@ -57,12 +57,17 @@ function loginCard(c) {
   if (!isHex(device, 32)) throw new TypeError('certify: a login card names its device id (16 bytes, hex)');
   if (!isHex(identity, 64)) throw new TypeError('certify: a login card names its bucket identity public key (32 bytes, hex)');
   if (typeof c.site !== 'string' || !c.site) throw new TypeError('certify: a login card names the key\'s site');
-  const derives = [...new Set((c.derives || []).map(String))].sort();
+  /*
+   * A derive is named by its label text, or by the label's hash (64 hex) - what a login RECORDED (the key's request
+   * carries only the hash; Brad, 2026-11-01: "the login plan should calculate how many and what to use from when it did
+   * the login"). A login that signs nothing records signs cap 0.
+   */
+  const derives = [...new Set((c.derives || []).map((d) => (isHex(String(d).toLowerCase(), 64) ? String(d).toLowerCase() : String(d))))].sort();
   if (!derives.length || derives.length > 3 || derives.some((d) => !d)) throw new TypeError('certify: a login card names 1 to 3 derive labels');
   const s = c.signs || {};
   const label = String(s.label || '').toLowerCase();
-  if (s.slot !== 201 || !isHex(label, 64) || !Number.isInteger(s.cap) || s.cap < 1 || s.cap > 8) {
-    throw new TypeError('certify: a login card\'s signs are {slot: 201, label (32 bytes hex), cap 1..8}');
+  if (s.slot !== 201 || !isHex(label, 64) || !Number.isInteger(s.cap) || s.cap < 0 || s.cap > 8) {
+    throw new TypeError('certify: a login card\'s signs are {slot: 201, label (32 bytes hex), cap 0..8}');
   }
   return { v: 1, kind: 'login-card', device, identity, site: c.site, derives, signs: { slot: 201, label, cap: s.cap } };
 }
@@ -199,12 +204,17 @@ function verify(rec, ownerKey, ownerKeyPq) {
  * @param {{thing: object}} rec a verified login-card record @param {Array<object>} scopes as grants.encodeScopes takes them
  * -> {ok: true} | {ok: false, why}
  */
+/* a derive label as the key sees it: its hash, hex - a card names text or the hash, a scope `derive` text or `label` */
+const deriveHash = (d) => (isHex(String(d).toLowerCase(), 64) ? String(d).toLowerCase() : toHex(grants.deriveLabel(d)));
+const scopeDeriveHash = (s) => (s.label !== undefined ? toHex(grants.labelBytes(s.label) || new Uint8Array(0)) : toHex(grants.deriveLabel(s.derive)));
+
 function budgetAllowed(rec, scopes) {
   let card;
   try { card = loginCard(rec && rec.thing); } catch (e) { return { ok: false, why: e.message }; }
+  const onCard = new Set(card.derives.map(deriveHash));
   for (const s of scopes || []) {
     if (s.op === 17 && s.slot === 128) {
-      if (!card.derives.includes(String(s.derive)) || s.cap !== 1) return { ok: false, why: `derive "${s.derive}" is not on the card` };
+      if (!onCard.has(scopeDeriveHash(s)) || s.cap !== 1) return { ok: false, why: `derive "${s.derive || scopeDeriveHash(s)}" is not on the card` };
     } else if (s.op === 1 && s.slot === 201) {
       const label = s.label instanceof Uint8Array ? toHex(s.label) : String(s.label || '').toLowerCase();
       if (label !== card.signs.label || s.cap > card.signs.cap) return { ok: false, why: 'the sign is not the card\'s, or more than its cap' };
@@ -216,4 +226,4 @@ function budgetAllowed(rec, scopes) {
 }
 const keyEnforces = false;
 
-module.exports = { TAGS, ACCEPTS, TOP_REACH, loginCard, agentCard, subjectOf, record, top, verifyTop, verify, budgetAllowed, keyEnforces, toStored, fromStored };
+module.exports = { TAGS, ACCEPTS, TOP_REACH, loginCard, agentCard, subjectOf, record, top, verifyTop, verify, budgetAllowed, deriveHash, keyEnforces, toStored, fromStored };

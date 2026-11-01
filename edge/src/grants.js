@@ -373,5 +373,5 @@ module.exports = {
   NAMETAG_MAX, nametagHash, APPROVAL, certifyDigest, verifyCertification, verifyStatement,
   MAX_USES, grantGenesis, reveal, checkSelfPress, checkSpends,
   encodeScopes, grantSubject, requestSubject, txToken, intentOf, verifyBudgetOpening, DEFAULT_LIFETIME_MINUTES,
-  isDerivedCode, identityLabel, scopeLabel, deriveLabel,
+  isDerivedCode, identityLabel, scopeLabel, deriveLabel, labelBytes,
 };

@@ -65,6 +65,8 @@ function setup(imports, register) {
   let held = null;
   let loading = null;
   let generation = 0;
+  /* what the last manual login asked of the key: {identity, derives (label hashes), signs, other} - the card's list */
+  let lastRecord = null;
 
   const changed = () => { try { events.emit('change', held); } catch { /* a listener's error is not identity's */ } };
 
@@ -206,17 +208,31 @@ function setup(imports, register) {
      * identity's signatures on slot 201 (its label, cap 2). -> the card (edge/src/certify.js loginCard), or null with no
      * identity loaded, no site (a key that names none has no bucket) or no Edge.
      */
+    /*
+     * THE CARD LEARNS THE LOGIN (Brad, 2026-11-01: "it has 2 uses, not 4 - the receipts are not counted as a use"; "the
+     * login plan should calculate how many and what to use from when it did the login"; "login flow and budget use
+     * count need to match"): a login with no card records what it asked of the key (login(): `record`) - each derive by
+     * its label's hash, the identity's signatures by count - and the card names exactly that; its budget then asks
+     * exactly that, every use spent, nothing left to end. With no record yet (a host that has not logged in manually
+     * this session), the requests a login is known to make.
+     */
     async loginCard() {
       const edge = app.services && app.services.edge;
       const h = held;
       if (!h || !h.site || !edge || typeof edge.publicKey !== 'function') return null;
       const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
       const { deviceId } = await edge.publicKey();
+      const rec = lastRecord && lastRecord.identity === h.id ? lastRecord : null;
       return {
         device: hex(deviceId), identity: hex(h.publicKey), site: h.site,
-        derives: [bucketIdentity.bucketLabel(h.publicKey), bucketIdentity.bucketKeyLabel(h.publicKey)],
-        signs: { slot: 201, label: hex(sha256(utf8(bucketIdentity.IDENTITY_LABEL))), cap: 2 },
+        derives: rec && rec.derives.length ? rec.derives : [bucketIdentity.bucketLabel(h.publicKey), bucketIdentity.bucketKeyLabel(h.publicKey)],
+        signs: { slot: 201, label: hex(sha256(utf8(bucketIdentity.IDENTITY_LABEL))), cap: rec ? rec.signs : 2 },
       };
+    },
+
+    /* what the last manual login asked of the key (login's record) - for the card offer: null when none this session */
+    loginRecord() {
+      return lastRecord && held && lastRecord.identity === held.id ? { derives: [...lastRecord.derives], signs: lastRecord.signs, other: lastRecord.other } : null;
     },
 
     /* certify this device's login card at a press -> the record to keep with the bucket (edge.certifyLoginCard) */
@@ -227,14 +243,54 @@ function setup(imports, register) {
       return edge.certifyLoginCard(card, { onPress });
     },
 
-    async login(fn, { card = null, reason = 'log in', onPress, ttlMinutes = 2, onOpened, onUse } = {}) {
+    async login(fn, { card = null, reason = 'log in', onPress, ttlMinutes = 2, onOpened, onUse, watchdogMs = 120000 } = {}) {
       const edge = app.services && app.services.edge;
+      const { MSG: MSGS } = require('../../src/protocol/msg');
+      const hexOf = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+      const identityLabel = hexOf(sha256(utf8(bucketIdentity.IDENTITY_LABEL)));
+      /* a request a login makes, as the key sees it: a touchless derive by its label hash, or the identity's signature */
+      const requestOf = (msg, slot, payload) => {
+        if (msg === 0xfc && slot === 128 && payload.length === 33 && payload[0] === 1) return { derive: hexOf(payload.subarray(1)) };
+        if (msg === MSGS.OKSIGN && slot === 201 && payload.length > 32 && hexOf(payload.subarray(payload.length - 32)) === identityLabel) return { sign: true };
+        if (msg === 0xfc || msg === MSGS.OKSIGN) return { other: true };
+        return null;
+      };
+      /* fn under a watchdog: a login that hangs does not keep its budget live for its lifetime (Budget 1070) */
+      const run = () => {
+        let t;
+        return Promise.race([
+          Promise.resolve().then(fn),
+          new Promise((_, no) => { t = setTimeout(() => no(Object.assign(new Error(`identity: the login did not finish in ${watchdogMs / 1000} s - its budget is ended`), { code: 'LOGIN_TIMEOUT' })), watchdogMs); if (t.unref) t.unref(); }),
+        ]).finally(() => clearTimeout(t));
+      };
       /*
        * THE BUDGET ONLY INSIDE A VERIFIED CARD OF THIS DEVICE (Brad, 2026-10-30: "a manual multi press flow for initial
        * login decryption"; then 1 press with the card): no card, a card for another device or identity, or one the
        * owner keys do not verify - the login runs as it always did, each request asking its own code. No silent mix.
        */
-      const manual = async (why) => ({ result: await fn(), budget: null, paid: 0, manual: why });
+      /*
+       * A MANUAL LOGIN IS RECORDED: what it asks of the key, in order - each derive by its label hash, the identity's
+       * signatures, anything else a login should not ask - paying nothing (the hook answers null). The card offered
+       * after it names exactly this (loginCard).
+       */
+      const manual = async (why) => {
+        const rec = { identity: held && held.id, derives: [], signs: 0, other: 0 };
+        const canRecord = typeof okcrypto.setUseHook === 'function';
+        const was = canRecord ? okcrypto.setUseHook((msg, slot, payload) => {
+          const r = requestOf(msg, slot, payload);
+          if (r && r.derive && !rec.derives.includes(r.derive)) rec.derives.push(r.derive);
+          else if (r && r.sign) rec.signs += 1;
+          else if (r && r.other) rec.other += 1;
+          return null;
+        }) : null;
+        try {
+          const result = await fn();
+          if (canRecord && rec.identity && (rec.derives.length || rec.signs)) lastRecord = rec;
+          return { result, budget: null, paid: 0, manual: why, record: { derives: [...rec.derives], signs: rec.signs, other: rec.other } };
+        } finally {
+          if (canRecord) okcrypto.setUseHook(was);
+        }
+      };
       if (!card) return manual('no login card');
       if (!edge || typeof edge.grant !== 'function' || typeof okcrypto.setUseHook !== 'function') return manual('no Edge');
       const want = await identity.loginCard();
@@ -246,13 +302,16 @@ function setup(imports, register) {
       const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
       const signLabel = sha256(utf8(bucketIdentity.IDENTITY_LABEL));
       const signs = card.thing.signs.cap;
-      const scopes = card.thing.derives.map((d) => ({ op: OP.DERIVE, slot: 128, cap: 1, derive: d }));
-      scopes.push({ op: OP.SIGN, slot: 201, cap: signs, label: signLabel });
+      /* the card's derives by text or by the recorded hash - a hash is the scope's label (grants.scopeLabel) */
+      const isHash = (d) => /^[0-9a-f]{64}$/.test(String(d));
+      const bytesOf = (h) => Uint8Array.from(String(h).match(/../g), (x) => parseInt(x, 16));
+      const scopes = card.thing.derives.map((d) => (isHash(d) ? { op: OP.DERIVE, slot: 128, cap: 1, label: bytesOf(d) } : { op: OP.DERIVE, slot: 128, cap: 1, derive: d }));
+      if (signs > 0) scopes.push({ op: OP.SIGN, slot: 201, cap: signs, label: signLabel });
       /* the gate (certify.budgetAllowed): the hosts enforce that a budget stays inside the card; the key, later */
       const allowed = edge.budgetAllowed(card, scopes);
       if (!allowed.ok) return manual(`the budget is not inside the card: ${allowed.why}`);
       /* what the budget may still pay: each derive once by its label hash, the identity's signatures up to `signs` */
-      const left = new Map(scopes.filter((s) => s.op === OP.DERIVE).map((s) => [hex(sha256(utf8(s.derive))), 1]));
+      const left = new Map(scopes.filter((s) => s.op === OP.DERIVE).map((s) => [s.label !== undefined ? hex(s.label) : hex(sha256(utf8(s.derive))), 1]));
       let signsLeft = signs;
       const h = await edge.head();
       /* a host that holds no copy of the chain has no head to prove (the key never reveals it): manual, as a new host */
@@ -268,10 +327,16 @@ function setup(imports, register) {
       /* the scopes as a host keeps them (JSON): a label as its hex, which grants.scopeLabel reads back as the same bytes */
       if (onOpened) await onOpened(budget, { reason, scopes: scopes.map((s) => (s.label ? { ...s, label: hex(s.label) } : s)), lifetime: ttlMinutes });
       let paid = 0;
+      /* requests this login made that the card does not name - they asked on their own, and the card is out of date */
+      let extra = 0;
+      const total = left.size + signs;
       const was = okcrypto.setUseHook((msg, slot, payload) => {
         const derive = msg === 0xfc && slot === 128 && payload.length === 33 && payload[0] === 1 && left.get(hex(payload.subarray(1))) > 0;
         const sign = msg === MSG.OKSIGN && slot === 201 && signsLeft > 0 && payload.length > 32 && hex(payload.subarray(payload.length - 32)) === hex(signLabel);
-        if (!derive && !sign) return null;
+        if (!derive && !sign) {
+          if (requestOf(msg, slot, payload)) extra += 1;
+          return null;
+        }
         let at = null;
         return {
           async before() {
@@ -289,11 +354,17 @@ function setup(imports, register) {
         };
       });
       try {
-        return { result: await fn(), budget, paid };
+        const result = await run();
+        /*
+         * THE CARD STILL MATCHES THE LOGIN, OR IT IS STALE: every use spent and nothing asked beside it - the key ended the
+         * budget at its last receipt. Otherwise the login and its card have drifted (an update changed the login): the
+         * host offers a new card, made from this login's record.
+         */
+        return { result, budget, paid, stale: paid < total || extra > 0 };
       } finally {
         okcrypto.setUseHook(was);
         /* the uses the login did not need end with it: a login budget never outlives its login */
-        if (left.size + signs > paid) await edge.revoke(budget.grantId).catch(() => undefined);
+        if (total > paid) await edge.revoke(budget.grantId).catch(() => undefined);
       }
     },
 
