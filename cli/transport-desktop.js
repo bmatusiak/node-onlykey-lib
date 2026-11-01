@@ -1,17 +1,19 @@
 'use strict';
 
 /**
- * cli/transport-desktop.js - the key, reached through the ok-edge desktop app on this machine
- * (`onlykey-js --desktop`, and plain `onlykey-js` while the app runs; ok-edge TODO B4b).
+ * cli/transport-desktop.js - the key, reached through an app that holds it (`onlykey-js --desktop`, and plain
+ * `onlykey-js` while the desktop app runs; ok-edge TODO B4b) - and, since 2026-11-01, a phone's key through the room
+ * on a local mcp-server (`--ble`, ok-edge plan B4).
  *
- * The app holds the hard key on USB; this is a pipe with transport-hid's contract (start, stop,
- * isRunning, write, on 'stream' / 'close', device, interfaces) whose reports travel over the app's
- * local socket (desktop/serve.js). So everything above it - the transport plugin, the device, Edge's
- * wire channel to the host - is the same code as on USB.
+ * The app holds the key; this is a pipe with transport-hid's contract (start, stop, isRunning, write, on 'stream' /
+ * 'close', device, interfaces) whose reports travel as desktop/protocol.js messages to the app's key session
+ * (desktop/session.js). So everything above it - the transport plugin, the device, Edge's wire channel to the host -
+ * is the same code as on USB.
  *
- * Trust: the app's desktop.json in the shared home (desktop/trust.js) - its socket and its token;
- * the hello carries the token. The write is echoed (dir IN) here, as every pipe echoes its own writes
- * (cli/transport-hid.js); the app forwards only the key's own reports (dir OUT).
+ * THE CHANNEL is the one thing that differs: by default the desktop app's local socket, its gate the token in
+ * desktop.json (desktop/trust.js) carried by the hello; or one given (`channel`), e.g. the room on a local mcp-server
+ * (bucket/src/room-agent.js), its gate the room's accepted agent. The write is echoed (dir IN) here, as every pipe
+ * echoes its own writes (cli/transport-hid.js); the app forwards only the key's own reports (dir OUT).
  */
 
 const net = require('net');
@@ -21,68 +23,104 @@ const { HELLO_MS, send, readLines, toB64, fromB64 } = require('../desktop/protoc
 
 const desktopError = (code, message) => Object.assign(new Error(message), { code });
 
+/*
+ * A CHANNEL: what the pipe needs of a carrier, once it is open -
+ *   send(obj)          one protocol message out
+ *   onMessage(fn)      each message in
+ *   onClose(fn)        the carrier went
+ *   close()            let it go
+ *   hello              the first message to send (the desktop's carries its token)
+ *   name               who holds the key, for errors ('the desktop app', 'the phone')
+ */
+
+/* the desktop app's local socket, opened (rejects when it cannot be reached) */
+function socketChannel({ record, root, connect }) {
+  const r = record || trust.liveTrust(root);
+  if (!r) return Promise.reject(desktopError('ENODESKTOP', 'the ok-edge desktop app is not running on this computer (no live desktop.json in ~/.onlykey-js)'));
+  const s = connect(r.socket);
+  return new Promise((resolve, reject) => {
+    s.once('error', (e) => reject(desktopError('EDESKTOP', `could not reach the desktop app (${e && e.message})`)));
+    s.once('connect', () => {
+      const msgs = new Set();
+      const closes = new Set();
+      readLines(s, (m) => { for (const f of [...msgs]) f(m); });
+      s.on('close', () => { for (const f of [...closes]) f(); });
+      resolve({
+        send: (obj) => send(s, obj),
+        onMessage: (f) => msgs.add(f),
+        onClose: (f) => closes.add(f),
+        close: () => s.end(),
+        hello: { t: 'hello', v: trust.VERSION, token: r.token },
+        name: 'the desktop app',
+      });
+    });
+  });
+}
+
 /**
  * @param {object} [o]
  * @param {object} [o.record] the app's trust record (default: the live desktop.json)
  * @param {string} [o.root] the shared home (tests)
  * @param {(path: string) => import('net').Socket} [o.connect]
+ * @param {() => Promise<object>} [o.channel] another carrier (see A CHANNEL above) - in place of the local socket
  */
-function createDesktopPipe({ record, root, connect = (p) => net.connect(p) } = {}) {
+function createDesktopPipe({ record, root, connect = (p) => net.connect(p), channel = null } = {}) {
   const listeners = new Set();
   const closeListeners = new Set();
-  let sock = null;
+  let chan = null;
   let ready = null; /* { device, interfaces } once accepted */
+  let name = 'the desktop app';
   const emit = (ev) => { for (const l of [...listeners]) l(ev); };
 
   return {
     async start() {
-      if (sock && ready) return { started: true, path: 'desktop' };
-      const r = record || trust.liveTrust(root);
-      if (!r) throw desktopError('ENODESKTOP', 'the ok-edge desktop app is not running on this computer (no live desktop.json in ~/.onlykey-js)');
-      const s = connect(r.socket);
+      if (chan && ready) return { started: true, path: 'desktop' };
+      const c = await (channel ? channel() : socketChannel({ record, root, connect }));
+      name = c.name || name;
       await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { s.destroy(); reject(desktopError('EDESKTOP', 'the desktop app did not answer the hello')); }, HELLO_MS);
-        s.once('error', (e) => { clearTimeout(timer); reject(desktopError('EDESKTOP', `could not reach the desktop app (${e && e.message})`)); });
-        s.once('connect', () => send(s, { t: 'hello', v: trust.VERSION, token: r.token }));
-        readLines(s, (m) => {
+        const timer = setTimeout(() => { c.close(); reject(desktopError('EDESKTOP', `${name} did not answer the hello`)); }, HELLO_MS);
+        c.onMessage((m) => {
           if (m.t === 'ready' && !ready) {
             clearTimeout(timer);
             ready = { device: m.device || null, interfaces: Array.isArray(m.interfaces) ? m.interfaces : [] };
             resolve();
           } else if (m.t === 'refused') {
             clearTimeout(timer);
-            reject(desktopError('EDESKTOP', `the desktop app refused: ${m.why}`));
+            reject(desktopError('EDESKTOP', `${name} refused: ${m.why}`));
           } else if (m.t === 'report') {
             emit({ iface: m.iface, dir: DIR.OUT, bytes: fromB64(m.b64) });
           } else if (m.t === 'close' || m.t === 'error') {
-            const err = new Error(`the desktop app: ${m.why}`);
+            const err = new Error(`${name}: ${m.why}`);
             if (m.t === 'close') for (const l of [...closeListeners]) l(err);
           }
         });
-        s.on('close', () => {
+        c.onClose(() => {
           const was = Boolean(ready);
-          sock = null;
+          chan = null;
           ready = null;
-          if (was) for (const l of [...closeListeners]) l(new Error('the desktop app closed the connection'));
+          clearTimeout(timer);
+          if (was) for (const l of [...closeListeners]) l(new Error(`${name} closed the connection`));
+          else reject(desktopError('EDESKTOP', `${name} closed the connection before it was ready`));
         });
+        c.send(c.hello);
       });
-      sock = s;
+      chan = c;
       return { started: true, path: 'desktop' };
     },
 
     async stop() {
-      const s = sock;
-      sock = null;
+      const c = chan;
+      chan = null;
       ready = null;
-      if (s) s.end();
+      if (c) c.close();
     },
 
-    isRunning() { return Boolean(sock && ready); },
+    isRunning() { return Boolean(chan && ready); },
 
     async write(iface, bytes) {
-      if (!sock || !ready) throw desktopError('ENOTOPEN', 'the desktop app is not connected');
+      if (!chan || !ready) throw desktopError('ENOTOPEN', `${name} is not connected`);
       const frame = Uint8Array.from(bytes);
-      send(sock, { t: 'write', iface, b64: toB64(frame) });
+      chan.send({ t: 'write', iface, b64: toB64(frame) });
       emit({ iface, dir: DIR.IN, bytes: frame });
       return frame.length + 1;
     },
@@ -97,7 +135,7 @@ function createDesktopPipe({ record, root, connect = (p) => net.connect(p) } = {
     /** the key the app holds, as it described it */
     get device() { return ready ? ready.device : null; },
     interfaces() { return ready ? ready.interfaces : []; },
-    /** this pipe goes through the desktop app (register.js: the app is the host) */
+    /** this pipe goes through an app that holds the key (register.js: the app is the host) */
     desktop: true,
   };
 }

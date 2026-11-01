@@ -26,15 +26,17 @@
  * the key and mutes nothing.
  *
  * One CLI at a time: a second hello is refused "busy" (the key has one conversation).
+ *
+ * THE CONVERSATION ITSELF IS desktop/session.js (2026-11-01, plan B4): the phone runs the same one over the room on a
+ * local mcp-server. This file is the desktop's carrier around it - the local socket, and its gate: the token in
+ * desktop.json (the CLI and the app are the same user on this machine).
  */
 
 const net = require('net');
 const fs = require('fs');
-const { DIR } = require('../src/transport/contract');
-const wire = require('../edge/src/wire');
-const { TYPE: NOTE_TYPE } = require('../edge/src/note');
 const trust = require('./trust');
-const { HELLO_MS, send, readLines, toB64, fromB64 } = require('./protocol');
+const { createKeySession } = require('./session');
+const { HELLO_MS, send, readLines } = require('./protocol');
 
 /**
  * @param {object} o
@@ -52,116 +54,29 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
   const where = socket || trust.socketPath(root);
   let server = null;
   let record = null;
-  let client = null; /* the one CLI connected and accepted */
-  let muted = false;
-  /*
-   * THE CLI GETS ONLY ITS OWN CONVERSATION (box, 2026-10-24: a ship's budget step read 'answered ""' 29 ms
-   * after connecting). The app's page reads the key too, between CLI conversations; the reply to its last
-   * read can arrive just after a new CLI is accepted, and the CLI took it for the answer to its connect.
-   * So a CLI is sent the key's reports only from its own first write on.
-   */
-  let spoke = false;
-  /* a CLI write is waiting for the app to hand the key over: nothing that arrives meanwhile answers it */
-  let handing = false;
-  let hostQueue = Promise.resolve();
-  const asm = { current: wire.createAssembler() };
-  const ensureKey = openKey || (async () => { if (!pipe.isRunning()) await pipe.start(); });
-
-  /* the key's reports to the CLI - the key's own (dir OUT), never the echo of a write */
-  const offStream = pipe.on('stream', (ev) => {
-    if (!client || muted || !spoke || handing || ev.dir !== DIR.OUT) return;
-    send(client, { t: 'report', iface: ev.iface, b64: toB64(ev.bytes) });
-  });
-  const offClose = pipe.on('close', (err) => {
-    if (client) send(client, { t: 'close', why: (err && err.message) || 'the key went away' });
-  });
-
-  /* one host message, answered in pieces as the phone answers */
-  function answerHost(message, to) {
-    const isNote = message && message.type === NOTE_TYPE;
-    hostQueue = hostQueue.then(async () => {
-      const n = message && message.wire && message.wire.net === 'test' ? 'test' : 'live';
-      if (!isNote) muted = true;
-      let answer = null;
-      try {
-        answer = await hostFor(n).send(message, {});
-      } catch (e) {
-        log(`host: ${e && e.message}`);
-        answer = { ok: false, refusal: 'invalid', detail: `the desktop app could not answer: ${e && e.message}` };
-      } finally {
-        muted = false;
-      }
-      if (!answer || to !== client) return;
-      for (const frame of wire.encode(wire.KIND.ANSWER, wire.answerEnvelope(message, answer, { dev: 'desktop', net: n }))) {
-        send(to, { t: 'report', iface: 2, b64: toB64(frame) });
-      }
-    });
-    return hostQueue;
-  }
+  const session = createKeySession({ pipe, openKey, hostFor, dev: 'desktop', holder: 'the desktop app', log, onClient });
+  const sockets = new Set();
 
   function onConnection(sock) {
     let accepted = false;
+    const c = { send: (obj) => send(sock, obj), gone: () => sock.destroyed };
+    sockets.add(sock);
     const helloTimer = setTimeout(() => { if (!accepted) sock.destroy(); }, HELLO_MS);
     sock.on('error', () => {});
-    sock.on('close', () => {
-      clearTimeout(helloTimer);
-      if (client === sock) { client = null; asm.current = wire.createAssembler(); onClient(false); }
-    });
+    sock.on('close', () => { clearTimeout(helloTimer); sockets.delete(sock); session.close(c); });
     readLines(sock, async (m) => {
       if (!accepted) {
         if (m.t !== 'hello' || !trust.tokenMatches(record, m.token)) {
-          send(sock, { t: 'refused', why: 'not this app\'s token (desktop.json) - the CLI and the app must be the same user on this machine' });
+          send(sock, { t: 'refused', why: "not this app's token (desktop.json) - the CLI and the app must be the same user on this machine" });
           sock.end();
           return;
         }
-        /* a client whose connection is gone is no client (its close came while it was being accepted - below) */
-        if (client && client.destroyed) { client = null; asm.current = wire.createAssembler(); onClient(false); }
-        if (client) { send(sock, { t: 'refused', why: 'busy: another onlykey-js is talking to the key through the desktop app' }); sock.end(); return; }
-        try {
-          await ensureKey();
-        } catch (e) {
-          send(sock, { t: 'refused', why: `the desktop app has no key open: ${e && e.message}` });
-          sock.end();
-          return;
-        }
-        /*
-         * GONE WHILE THE KEY WAS MADE READY (the Windows desktop, 2026-10-25: the key restarting after a restore, the CLI
-         * gave up meanwhile; its close found no client to clear, then it was made the client - and every later CLI was
-         * refused "busy" until the app restarted)
-         */
-        if (sock.destroyed) return;
-        accepted = true;
+        accepted = await session.open(c);
         clearTimeout(helloTimer);
-        client = sock;
-        spoke = false;
-        onClient(true);
-        asm.current = wire.createAssembler();
-        const d = pipe.device || null;
-        send(sock, {
-          t: 'ready',
-          device: d ? { path: d.path, product: d.product, serialNumber: d.serialNumber } : null,
-          interfaces: typeof pipe.interfaces === 'function' ? pipe.interfaces() : [],
-        });
+        if (!accepted) sock.end();
         return;
       }
-      if (m.t !== 'write') return;
-      const bytes = fromB64(m.b64);
-      if (m.iface === 2 && wire.isEdgeRequestFrame(bytes)) {
-        const got = asm.current.push(bytes);
-        if (got && !got.error && got.kind === wire.KIND.REQUEST) answerHost(got.message, sock);
-        return;
-      }
-      try {
-        /* the app hands the key over first (pipe.beforeWrite: its own reads finished, the key quiet) - what arrives meanwhile is not this CLI's */
-        if (typeof pipe.beforeWrite === 'function') {
-          handing = true;
-          try { await pipe.beforeWrite(); } finally { handing = false; }
-        }
-        spoke = true;
-        await pipe.write(m.iface, bytes);
-      } catch (e) {
-        send(sock, { t: 'error', why: (e && e.message) || String(e) });
-      }
+      await session.message(c, m);
     });
   }
 
@@ -179,10 +94,9 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
     },
     /** stop listening, drop the CLI, remove desktop.json (if still ours) */
     async stop() {
-      offStream();
-      offClose();
-      if (client) client.destroy();
-      client = null;
+      session.stop();
+      for (const sk of sockets) sk.destroy();
+      sockets.clear();
       if (record) trust.removeTrust(record, root);
       record = null;
       if (server) await new Promise((resolve) => server.close(() => resolve()));
@@ -190,8 +104,8 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
       if (process.platform !== 'win32') { try { fs.unlinkSync(where); } catch (_) { /* gone */ } }
     },
     /** the host's queue settles (tests) */
-    idle: () => hostQueue,
-    get connected() { return Boolean(client); },
+    idle: () => session.idle(),
+    get connected() { return session.connected; },
   };
 }
 
