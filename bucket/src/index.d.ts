@@ -5,6 +5,7 @@ declare const _exports: {
     trade: typeof import("./trade");
     room: typeof import("./room");
     roomClient: typeof import("./room-client");
+    roomAgent: typeof import("./room-agent");
     sealedCopy: typeof import("./sealedcopy");
     FORMAT: "onlykey-bucket";
     SEALED_FORMAT: "onlykey-bucket-sealed";

@@ -132,6 +132,17 @@ function connectRoom({ url, me: given, device, WebSocket: WS, randomBytes, timeo
         case 'gone':
           for (const [id, p] of pending) if (p.to === m.to) { pending.delete(id); p.reject(new Error(`the device ${m.to} is not in the room`)); }
           return;
+        /*
+         * AN AGENT ON THIS DEVICE'S KEY (the room's accepted agent - a computer's onlykey-js; ok-edge plan B4): its key
+         * session messages (desktop/protocol.js's) - this device runs desktop/session.js on its key and answers with
+         * keyReply. key-gone: that agent left, or the owner blocked it - its session is over.
+         */
+        case 'key':
+          if (typeof m.from === 'string' && m.m && typeof m.m === 'object') emit('key', { from: m.from, name: String(m.name || ''), m: m.m });
+          return;
+        case 'key-gone':
+          emit('key-gone', { from: String(m.from || '') });
+          return;
         case 'sealed-changed':
           /*
            * ANOTHER DEVICE PUT ROWS INTO THE SEALED COPY (Brad, 2026-10-30: "the same thing for the reverse, if the app
@@ -179,6 +190,8 @@ function connectRoom({ url, me: given, device, WebSocket: WS, randomBytes, timeo
         });
       },
       /* one answer to the agents' side of the room, and the room's reply ({ev: 'ok' | 'agents', ...}) */
+      /** one key-session message back to the agent that sent it (the room passes it to that agent's sockets) */
+      keyReply(to, m) { try { send({ t: 'key-re', to, m }); } catch { /* closing */ } },
       mcp(op, fields = {}, { timeoutMs: t = 15000 } = {}) {
         return new Promise((res, rej) => {
           const re = ++mcpSeq;
