@@ -21,7 +21,7 @@
  *
  * Request: reports [FF FF FF FF][0xFD][index | 0x80 on the last][58 bytes of: length u16 LE . credential ID].
  * Answer: reports [0xFD][index | 0x80 last] - the first [len u16 LE] then data from byte 4, the rest data from byte 2.
- * A refusal is a text report, "Error vendor_bridge ...".
+ * A refusal is a text report, "Error VB ..." (no site, request, order).
  */
 const okmsg = require('../protocol/okmsg');
 const { IFACE } = require('../protocol/msg');
@@ -72,7 +72,7 @@ function createVendorBridgeCtap(transport, { timeoutMs = 60000 } = {}) {
           const r = event.data;
           if (r[0] !== OKVENDORBRIDGE) {
             const t = okmsg.text(r);
-            if (/^Error vendor_bridge/.test(t)) done(reject, Object.assign(new Error(`vendor-bridge: the key said "${t}"`), { code: 'EKEYREFUSED', keyText: t }));
+            if (/^Error VB /.test(t)) done(reject, Object.assign(new Error(`vendor-bridge: the key said "${t}"`), { code: 'EKEYREFUSED', keyText: t }));
             return; /* another conversation's report cannot be here (the lane); a stray is not ours */
           }
           const index = r[1] & 0x7f;
