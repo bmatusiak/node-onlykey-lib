@@ -31,6 +31,7 @@
  * Only the room's joined devices hear them or answer - the identity's own key proved each one at its join.
  */
 const room = require('./room');
+const { fromHex } = require('../../src/bytes');
 
 const PING_MS = 25000;
 
@@ -39,7 +40,12 @@ const PING_MS = 25000;
  *   device: {id: string, name: string, kind: string}, WebSocket: any, randomBytes: (n: number) => Uint8Array,
  *   timeoutMs?: number}} o
  */
-function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 15000 }) {
+/*
+ * login({host, nonce}) -> the login proof (bucket-identity signLogin): asked when the server's challenge comes, so the
+ * key signs THIS connection's nonce (a press, or the login budget's sign) - the join then carries it in place of a kept
+ * certificate. The join's wait covers the press (the server gives a join 30 s).
+ */
+function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 15000, login = null }) {
   const base = new URL(url);
   const host = base.host;
   const wsUrl = `${base.protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/ws/${me.id}`;
@@ -65,7 +71,8 @@ function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 
       for (const [, p] of mcpPending) p.reject(new Error(why));
       mcpPending.clear();
     };
-    const joinTimer = setTimeout(() => { reject(new Error(`${host}: no answer to the join within ${timeoutMs} ms`)); try { ws.close(); } catch { /* closed */ } }, timeoutMs);
+    const waitMs = login ? Math.max(timeoutMs, 40000) : timeoutMs;
+    const joinTimer = setTimeout(() => { reject(new Error(`${host}: no answer to the join within ${waitMs} ms`)); try { ws.close(); } catch { /* closed */ } }, waitMs);
 
     ws.onmessage = async (ev) => {
       let m;
@@ -84,9 +91,14 @@ function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 
           emit('mcp', rest);
           return;
         }
-        case 'challenge':
-          send(room.join(me, { nonce: m.nonce, host }, device));
+        case 'challenge': {
+          if (!login) { send(room.join(me, { nonce: m.nonce, host }, device)); return; }
+          const asked = { host: host.toLowerCase(), nonce: fromHex(m.nonce) };
+          let proof;
+          try { proof = await login(asked); } catch (e) { clearTimeout(joinTimer); reject(e); try { ws.close(); } catch { /* closed */ } return; }
+          send(room.join({ ...me, certificate: proof, login: asked }, { nonce: m.nonce, host }, device));
           return;
+        }
         case 'joined':
           clearTimeout(joinTimer);
           you = m.you;

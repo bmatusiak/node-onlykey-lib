@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { ed25519, x25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 const bid = require('../src/bucket-identity');
+const trade = require('../src/trade');
 const room = require('../src/room');
 const { connectRoom } = require('../src/room-client');
 
@@ -29,7 +30,7 @@ async function identity(seed) {
   const { publicKey, id } = await bid.readIdentity(key);
   const bucketKey = await bid.deriveBucketKeyAt(key, publicKey, 'okt.example');
   const certificate = await bid.certify(key, publicKey, bucketKey.publicKey);
-  return { id, identityPublicKey: publicKey, bucketKey, certificate };
+  return { id, identityPublicKey: publicKey, bucketKey, certificate, key };
 }
 
 /* the server, as mcp-server/src/index.js behaves, in memory; `seen` keeps every frame body it passed */
@@ -190,5 +191,30 @@ test('the agents: their messages reach every device; the owner\'s answers get th
   const waiting = b.mcp('slow', {}, { timeoutMs: 5000 });
   b.close();
   await assert.rejects(waiting, /closed|did not answer/);
+  a.close();
+});
+
+/*
+ * THE LOGIN PROOF AT THE JOIN (Brad, 2026-11-01: "the login plan needs to check mcp to challenge the identity"): the
+ * client asks login({host, nonce}) when the server's challenge comes - the key signs THIS connection's nonce - and joins
+ * with it in place of a kept certificate; a peer's trade proof carrying a login proof checks against its host and nonce.
+ */
+test('a device joins with a login proof made for the server challenge; a trade checks the same proof', async () => {
+  const me = await identity('backup A');
+  const { FakeWS } = fakeServer();
+  const asked = [];
+  const a = await connectRoom({ url: URL_, me: { ...me, certificate: null }, device: dev('zbox', 'desktop'), WebSocket: FakeWS, randomBytes: rnd,
+    login: async (q) => { asked.push(q); return bid.signLogin(me.key, me.identityPublicKey, me.bucketKey.publicKey, q); } });
+  assert.equal(asked.length, 1, 'the login proof was asked once, for this connection');
+  assert.equal(asked[0].host, new URL(URL_).host.toLowerCase());
+  assert.equal(asked[0].nonce.length, 32);
+  /* the same proof as a trade proof: checks against its own host and nonce, not against another */
+  const login = asked[0];
+  const proofMe = { ...me, certificate: await bid.signLogin(me.key, me.identityPublicKey, me.bucketKey.publicKey, login), login };
+  const n = rnd(32);
+  const p = trade.prove(proofMe, n, 'computer');
+  assert.equal(trade.checks(p, n, 'computer', me.id), true);
+  const moved = { ...p, login: { ...p.login, host: 'elsewhere.example' } };
+  assert.equal(trade.checks(moved, n, 'computer', me.id), false);
   a.close();
 });

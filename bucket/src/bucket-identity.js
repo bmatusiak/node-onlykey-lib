@@ -117,9 +117,34 @@ async function certify(okcrypto, identityPublicKey, bucketPublicKey, opts = {}) 
   return Uint8Array.from(sig).slice(0, 64);
 }
 
-/** Is this bucket key certified by this bucket identity? Never throws: false on anything malformed. */
-function verifyCertificate({ identityPublicKey, bucketPublicKey, certificate }) {
+/*
+ * THE LOGIN PROOF (Brad, 2026-11-01: "the login plan needs to check mcp to challenge the identity"; "so the desktop
+ * checks itself over its local mcp"): at each login the bucket identity signs, ON THE KEY, the bucket key it will use
+ * together with the server's challenge - the host it answers on and the nonce it gave this connection. One signature:
+ * the proof to the app that the key holds the identity, the proof to the server that the key was present at THIS join,
+ * and a fresh certificate for the bucket key that anyone holding (host, nonce) checks. The kept certificate (certify,
+ * made once) is what it replaces: a device that kept one could enter with no key at all.
+ * login: {host, nonce} - the nonce as bytes (32). The host is the server's, never the key's rpId.
+ */
+const loginDigest = (identityPublicKey, bucketPublicKey, login) =>
+  H('OKROOM-LOGIN-v1', identityPublicKey, bucketPublicKey, utf8(`${String(login.host).toLowerCase()}|`), login.nonce);
+
+/**
+ * The bucket identity signs this login, on the key (a press on production, or the login budget's sign).
+ * @returns {Promise<Uint8Array>} the 64-byte login proof - carried where a certificate goes, with `login`
+ */
+async function signLogin(okcrypto, identityPublicKey, bucketPublicKey, login, opts = {}) {
+  const sig = await okcrypto.agent.sign(labelHash(IDENTITY_LABEL), loginDigest(identityPublicKey, bucketPublicKey, login), { ...opts, ...AGENT, keyType: ED25519 });
+  return Uint8Array.from(sig).slice(0, 64);
+}
+
+/**
+ * Is this bucket key certified by this bucket identity - by a kept certificate, or (login given) by the login proof for
+ * that host and nonce? Never throws: false on anything malformed.
+ */
+function verifyCertificate({ identityPublicKey, bucketPublicKey, certificate, login }) {
   try {
+    if (login) return ed25519.verify(Uint8Array.from(certificate), loginDigest(identityPublicKey, bucketPublicKey, login), Uint8Array.from(identityPublicKey));
     return ed25519.verify(Uint8Array.from(certificate), certDigest(identityPublicKey, bucketPublicKey), Uint8Array.from(identityPublicKey));
   } catch {
     return false;
@@ -147,13 +172,13 @@ function sign(bucketKey, purpose, bytes) {
  * Is this signed by a bucket key of this bucket identity? The certificate and the signature both, or false.
  * @param {{identityPublicKey: Uint8Array, bucketPublicKey: Uint8Array, certificate: Uint8Array, purpose: string, bytes: Uint8Array, signature: Uint8Array}} o
  */
-function verify({ identityPublicKey, bucketPublicKey, certificate, purpose, bytes, signature }) {
+function verify({ identityPublicKey, bucketPublicKey, certificate, login, purpose, bytes, signature }) {
   try {
-    return verifyCertificate({ identityPublicKey, bucketPublicKey, certificate })
+    return verifyCertificate({ identityPublicKey, bucketPublicKey, certificate, login })
       && ed25519.verify(Uint8Array.from(signature), purposeDigest(purpose, Uint8Array.from(bytes)), Uint8Array.from(bucketPublicKey));
   } catch {
     return false;
   }
 }
 
-module.exports = { bucketLabel, IDENTITY_LABEL,isBucketIdentityId, identityIdOf, readIdentity, deriveBucketKeyAt, BUCKET_KEY_VERSION, bucketKeyLabel, certify, verifyCertificate, sign, verify };
+module.exports = { bucketLabel, IDENTITY_LABEL,isBucketIdentityId, identityIdOf, readIdentity, deriveBucketKeyAt, BUCKET_KEY_VERSION, bucketKeyLabel, certify, verifyCertificate, sign, verify, signLogin, loginDigest };

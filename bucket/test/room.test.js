@@ -28,7 +28,7 @@ async function device(seed) {
   const { publicKey, id } = await bid.readIdentity(key);
   const bucketKey = await bid.deriveBucketKeyAt(key, publicKey, 'okt.example');
   const certificate = await bid.certify(key, publicKey, bucketKey.publicKey);
-  return { id, identityPublicKey: publicKey, bucketKey, certificate };
+  return { id, identityPublicKey: publicKey, bucketKey, certificate, key };
 }
 
 test('a device of the identity joins its room with a proof over the host and nonce', async () => {
@@ -36,7 +36,7 @@ test('a device of the identity joins its room with a proof over the host and non
   const { nonce, message } = room.challenge(rnd);
   assert.equal(message.t, 'challenge');
   const msg = room.join(me, { nonce: message.nonce, host: HOST }, PHONE);
-  assert.deepEqual(room.checkJoin(me.id, msg, { nonce, host: HOST }), { ok: true, identity: me.id, device: PHONE });
+  assert.deepEqual(room.checkJoin(me.id, msg, { nonce, host: HOST }), { ok: true, identity: me.id, device: PHONE, login: false });
   /* the host is compared as a host: case does not matter */
   assert.equal(room.checkJoin(me.id, msg, { nonce, host: HOST.toUpperCase() }).ok, true);
 });
@@ -68,4 +68,31 @@ test('every wrong join is the same plain refusal', async () => {
   for (const m of [null, {}, { ...good, t: 'hello' }, { ...good, signature: 'zz' }, { ...good, certificate: good.certificate.slice(2) }]) {
     assert.deepEqual(room.checkJoin(me.id, m, asked), no);
   }
+});
+
+/*
+ * THE LOGIN PROOF (Brad, 2026-11-01: "the login plan needs to check mcp to challenge the identity"): the identity signs,
+ * on the key, the bucket key with THIS server's host and nonce - the key was present at this join. A server that asks
+ * for it (requireLogin) refuses a kept certificate, a proof for another nonce or host, and a proof by another identity.
+ */
+test('a login proof for this challenge enters, and only for this challenge', async () => {
+  const me = await device('backup A');
+  const { nonce, message } = room.challenge(rnd);
+  const asked = { host: HOST, nonce };
+  const proof = await bid.signLogin(me.key, me.identityPublicKey, me.bucketKey.publicKey, asked);
+  const msg = room.join({ ...me, certificate: proof, login: asked }, { nonce: message.nonce, host: HOST }, PHONE);
+  assert.deepEqual(room.checkJoin(me.id, msg, { nonce, host: HOST }, { requireLogin: true }), { ok: true, identity: me.id, device: PHONE, login: true });
+  /* the proof is a certificate anyone with the host and nonce checks */
+  assert.equal(bid.verifyCertificate({ identityPublicKey: me.identityPublicKey, bucketPublicKey: me.bucketKey.publicKey, certificate: proof, login: asked }), true);
+  /* another connection's nonce, another host, the kept certificate where a login is required: refused */
+  const other = room.challenge(rnd);
+  assert.deepEqual(room.checkJoin(me.id, msg, { nonce: other.nonce, host: HOST }, { requireLogin: true }), { ok: false });
+  assert.deepEqual(room.checkJoin(me.id, msg, { nonce, host: 'other.example' }, { requireLogin: true }), { ok: false });
+  const kept = room.join(me, { nonce: message.nonce, host: HOST }, PHONE);
+  assert.deepEqual(room.checkJoin(me.id, kept, { nonce, host: HOST }, { requireLogin: true }), { ok: false });
+  /* a login proof that names this challenge but was signed for another bucket key: refused */
+  const stranger = await device('backup B');
+  const wrong = await bid.signLogin(me.key, me.identityPublicKey, stranger.bucketKey.publicKey, asked);
+  const forged = room.join({ ...me, certificate: wrong, login: asked }, { nonce: message.nonce, host: HOST }, PHONE);
+  assert.deepEqual(room.checkJoin(me.id, forged, { nonce, host: HOST }, { requireLogin: true }), { ok: false });
 });

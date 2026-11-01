@@ -60,6 +60,8 @@ function join(me, asked, device) {
     identityPublicKey: toHex(me.identityPublicKey),
     bucketPublicKey: toHex(me.bucketKey.publicKey),
     certificate: toHex(me.certificate),
+    /* a login proof (bucket-identity signLogin) says which challenge it answers; a kept certificate carries none */
+    ...(me.login ? { login: { host: String(me.login.host).toLowerCase(), nonce: toHex(me.login.nonce) } } : {}),
     signature: toHex(bid.sign(me.bucketKey, 'join', joinBytes(asked.host, fromHex(asked.nonce)))),
     device,
   };
@@ -77,20 +79,28 @@ function deviceOf(d) {
  * @param {string} room the identity id the connection asked for
  * @param {object} msg the device's join
  * @param {{nonce: Uint8Array, host: string}} asked this connection's challenge and the server's own host
- * @returns {{ok: true, identity: string, device: {id: string, name: string, kind: string}} | {ok: false}}
+ * @param {{requireLogin?: boolean}} [opts] requireLogin: only a login proof for THIS challenge enters - the key was
+ *   present at this join (a kept certificate does not)
+ * @returns {{ok: true, identity: string, device: {id: string, name: string, kind: string}, login: boolean} | {ok: false}}
  */
-function checkJoin(room, msg, asked) {
+function checkJoin(room, msg, asked, { requireLogin = false } = {}) {
   try {
     if (!msg || msg.t !== 'join' || !hex(msg.identityPublicKey, 32) || !hex(msg.bucketPublicKey, 32)) return REFUSED;
     if (!hex(msg.certificate, 64) || !hex(msg.signature, 64)) return REFUSED;
     const device = deviceOf(msg.device);
     const identityPublicKey = fromHex(msg.identityPublicKey);
     if (!device || bid.identityIdOf(identityPublicKey) !== room) return REFUSED;
+    /* a login proof answers THIS connection: its host and nonce are the server's own, or it is refused like any bad proof */
+    let login = null;
+    if (msg.login) {
+      if (String(msg.login.host) !== String(asked.host).toLowerCase() || msg.login.nonce !== toHex(asked.nonce)) return REFUSED;
+      login = { host: asked.host, nonce: asked.nonce };
+    } else if (requireLogin) return REFUSED;
     const ok = bid.verify({
-      identityPublicKey, bucketPublicKey: fromHex(msg.bucketPublicKey), certificate: fromHex(msg.certificate),
+      identityPublicKey, bucketPublicKey: fromHex(msg.bucketPublicKey), certificate: fromHex(msg.certificate), login,
       purpose: 'join', bytes: joinBytes(asked.host, asked.nonce), signature: fromHex(msg.signature),
     });
-    return ok ? { ok: true, identity: room, device } : REFUSED;
+    return ok ? { ok: true, identity: room, device, login: !!login } : REFUSED;
   } catch {
     return REFUSED;
   }

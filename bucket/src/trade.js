@@ -59,6 +59,8 @@ function prove(me, nonce, side) {
     identityPublicKey: enc(me.identityPublicKey),
     bucketPublicKey: enc(me.bucketKey.publicKey),
     certificate: enc(me.certificate),
+    /* a login proof says which challenge it answered (bucket-identity signLogin); a kept certificate carries none */
+    ...(me.login ? { login: { host: String(me.login.host).toLowerCase(), nonce: enc(me.login.nonce) } } : {}),
     signature: enc(bid.sign(me.bucketKey, 'proof', proofBytes(nonce, side, me.id))),
   };
 }
@@ -70,6 +72,7 @@ function checks(proof, nonce, side, id) {
     if (bid.identityIdOf(identityPublicKey) !== id) return false;
     return bid.verify({
       identityPublicKey, bucketPublicKey: dec(proof.bucketPublicKey), certificate: dec(proof.certificate),
+      login: proof.login ? { host: String(proof.login.host), nonce: dec(proof.login.nonce) } : undefined,
       purpose: 'proof', bytes: proofBytes(nonce, side, id), signature: dec(proof.signature),
     });
   } catch {
