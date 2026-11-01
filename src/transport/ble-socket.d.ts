@@ -1,4 +1,4 @@
-/** The frame command every socket message travels under (cli/ble-link.js, the phone's src/bleSocket.ts). */
+/** The frame command every socket message travels under (cli/ble-link.js, the phone's src/bleRoom.ts). */
 export const CMD_SOCKET: 134;
 export const KIND: Readonly<{
     OPEN: 1;
@@ -6,13 +6,21 @@ export const KIND: Readonly<{
     TEXT: 3;
     PART: 4;
     CLOSE: 5;
+    HERE: 6;
+    WHERE: 7;
 }>;
 export const PART_MAX: 2400;
+/** HERE: the server's name, for the phone's url and its login proof. */
+export function encodeHere({ host }: {
+    host: any;
+}): Uint8Array<any>;
+/** WHERE: the phone asks for HERE again. */
+export function encodeWhere(): Uint8Array<any>;
 /** OPEN: the phone dials its identity's room. */
 export function encodeOpen({ room }: {
     room: any;
 }): Uint8Array<any>;
-/** OPENED: the server's answer - the host its challenge is for. */
+/** OPENED: the server's answer - the socket is up. */
 export function encodeOpened({ host }: {
     host: any;
 }): Uint8Array<any>;
@@ -25,22 +33,16 @@ export function encodeClose({ code, reason }?: {
 }): Uint8Array<any>;
 /**
  * The receiving end: 0x86 payloads in, socket events out -
- *   {kind:'open', room} | {kind:'opened', host} | {kind:'text', text} | {kind:'close', code, reason} | null (a PART
- *   held, or a payload that is not one of these: dropped, as noise is on any link).
+ *   {kind:'here', host} | {kind:'where'} | {kind:'open', room} | {kind:'opened', host} | {kind:'text', text} |
+ *   {kind:'close', code, reason} | null (a PART held, or a payload that is not one of these: dropped, as noise is on any
+ *   link).
  */
 export function createDecoder(): {
     push(payload: any): {
         kind: string;
         text: string;
+        host?: undefined;
         room?: undefined;
-        host?: undefined;
-        code?: undefined;
-        reason?: undefined;
-    } | {
-        kind: string;
-        room: any;
-        text?: undefined;
-        host?: undefined;
         code?: undefined;
         reason?: undefined;
     } | {
@@ -52,10 +54,61 @@ export function createDecoder(): {
         reason?: undefined;
     } | {
         kind: string;
+        text?: undefined;
+        host?: undefined;
+        room?: undefined;
+        code?: undefined;
+        reason?: undefined;
+    } | {
+        kind: string;
+        room: any;
+        text?: undefined;
+        host?: undefined;
+        code?: undefined;
+        reason?: undefined;
+    } | {
+        kind: string;
         code: number;
         reason: string;
         text?: undefined;
-        room?: undefined;
         host?: undefined;
+        room?: undefined;
     } | null;
+};
+/**
+ * THE PHONE'S END: a WebSocket-shaped class for room-client's connectRoom ({WebSocket}), over one Bluetooth link's 0x86
+ * messages - so the room client runs unchanged over the radio. The holder sends with `sendFrame(payload)` (one 0x86
+ * payload) and feeds every 0x86 payload that arrives to `push(payload)`, and `down(reason)` when the link goes.
+ *
+ *   const s = createSocketLink({ sendFrame });
+ *   s.host                       the server's name once HERE came (null before); onHere(fn) tells when
+ *   connectRoom({ url: `ble://${s.host}`, WebSocket: s.WebSocket, ... })
+ *
+ * @param {{sendFrame: (payload: Uint8Array) => any}} o
+ */
+export function createSocketLink({ sendFrame }: {
+    sendFrame: (payload: Uint8Array) => any;
+}): {
+    WebSocket: {
+        new (url: any): {
+            url: string;
+            readyState: number;
+            onopen: any;
+            onmessage: any;
+            onclose: any;
+            onerror: any;
+            send(text: any): void;
+            close(code?: number, reason?: string): void;
+            closed(code: any, reason: any): void;
+        };
+    };
+    readonly host: any;
+    /** fn(host) each time the server says its name (HERE) */
+    onHere(fn: any): () => boolean;
+    /** ask the server for HERE again */
+    where(): void;
+    /** one 0x86 payload from the link */
+    push(payload: any): void;
+    /** the link went: the socket closes as a dropped websocket does (1006), and the server's name is forgotten */
+    down(reason?: string): void;
 };

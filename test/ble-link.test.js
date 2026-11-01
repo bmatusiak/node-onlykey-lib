@@ -374,3 +374,44 @@ test('pickBluezDevice: a known phone is found by its address when BlueZ cached n
   objects['/org/bluez/hci0/dev_24_29_34_86_EA_AF']['org.bluez.Device1'].Paired = false;
   assert.throws(() => pickBluezDevice(objects, null, ['24:29:34:86:EA:AF']), /No paired phone/);
 });
+
+/* ------------------------------------------------------------ the phone's end */
+
+test('socket messages: HERE and WHERE - the server\'s name, asked again', () => {
+  const d = sock.createDecoder();
+  assert.deepEqual(d.push(sock.encodeHere({ host: 'box.ble' })), { kind: 'here', host: 'box.ble' });
+  assert.deepEqual(d.push(sock.encodeWhere()), { kind: 'where' });
+});
+
+test('createSocketLink: a WebSocket-shaped class - OPEN on construction, open on OPENED, messages both ways, closes', () => {
+  const sent = [];
+  const s = sock.createSocketLink({ sendFrame: (p) => sent.push(sock.createDecoder().push(p) || { kind: 'part' }) });
+  const heard = [];
+  s.onHere((h) => heard.push(h));
+  assert.equal(s.host, null);
+  s.push(sock.encodeHere({ host: 'box.ble' }));
+  assert.equal(s.host, 'box.ble');
+  assert.deepEqual(heard, ['box.ble']);
+  const ws = new s.WebSocket('ws://box.ble/ws/abc');
+  assert.deepEqual(sent.at(-1), { kind: 'open', room: 'abc' });
+  assert.equal(ws.readyState, 0);
+  assert.throws(() => ws.send('x'), /not open/);
+  const events = [];
+  ws.onopen = () => events.push('open');
+  ws.onmessage = (e) => events.push(`msg:${e.data}`);
+  ws.onclose = (e) => events.push(`close:${e.code}`);
+  s.push(sock.encodeOpened({ host: 'box.ble' }));
+  for (const p of sock.encodeText('{"t":"challenge"}')) s.push(p);
+  ws.send('{"t":"join"}');
+  assert.deepEqual(sent.at(-1), { kind: 'text', text: '{"t":"join"}' });
+  /* a second socket replaces the first: the first hears its close */
+  const ws2 = new s.WebSocket('ws://box.ble/ws/def');
+  assert.deepEqual(events, ['open', 'msg:{"t":"challenge"}', 'close:1000']);
+  let closed = null;
+  ws2.onclose = (e) => { closed = e; };
+  s.down('the Bluetooth link went');
+  assert.equal(closed.code, 1006);
+  assert.equal(s.host, null, 'the server\'s name is forgotten with the link');
+  s.where();
+  assert.deepEqual(sent.at(-1), { kind: 'where' });
+});

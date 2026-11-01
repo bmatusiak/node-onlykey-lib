@@ -8,9 +8,12 @@
  * frame command 0x86 (cli/ble-link.js fragments them to the link's MTU; the phone's native GATT layer passes the
  * command through unread). Each 0x86 message starts with a KIND byte:
  *
+ *   HERE    server -> phone   {host}: the server's name - sent when the link comes up, and asked for with WHERE. The
+ *                             login proof signs the host its challenge is for (room.js joinBytes, room-client takes it
+ *                             from the url), so the phone dials ble://<host>, the server's own name.
+ *   WHERE   phone -> server   {}: say HERE again (the app restarted while the link stayed up)
  *   OPEN    phone -> server   {room}: dial /ws/<room>, as `new WebSocket(url)` does
- *   OPENED  server -> phone   {host}: the socket is up; `host` is the name the server's challenge is for - the login
- *                             proof signs it (room.js joinBytes), so the phone must use the server's own
+ *   OPENED  server -> phone   {host}: the socket is up
  *   TEXT    both ways         one whole message (UTF-8)
  *   PART    both ways         a piece of a message too long for one frame; the pieces, in order, then a TEXT with
  *                             the rest make the message
@@ -25,9 +28,9 @@
 
 const { utf8ToBytes, bytesToUtf8 } = require('../bytes');
 
-/** The frame command every socket message travels under (cli/ble-link.js, the phone's src/bleSocket.ts). */
+/** The frame command every socket message travels under (cli/ble-link.js, the phone's src/bleRoom.ts). */
 const CMD_SOCKET = 0x86;
-const KIND = Object.freeze({ OPEN: 1, OPENED: 2, TEXT: 3, PART: 4, CLOSE: 5 });
+const KIND = Object.freeze({ OPEN: 1, OPENED: 2, TEXT: 3, PART: 4, CLOSE: 5, HERE: 6, WHERE: 7 });
 /*
  * HOW MUCH ONE FRAME CARRIES: CTAP-over-BLE allows 128 continuations (sequence 0x00-0x7f) - the phone's framer
  * (CtapBleFramer.kt) refuses to send more and drops a message that has more. At the smallest MTU (23: a 20-byte
@@ -44,9 +47,13 @@ function withKind(kind, body) {
 }
 const json = (kind, value) => withKind(kind, utf8ToBytes(JSON.stringify(value)));
 
+/** HERE: the server's name, for the phone's url and its login proof. */
+const encodeHere = ({ host }) => json(KIND.HERE, { host: String(host) });
+/** WHERE: the phone asks for HERE again. */
+const encodeWhere = () => json(KIND.WHERE, {});
 /** OPEN: the phone dials its identity's room. */
 const encodeOpen = ({ room }) => json(KIND.OPEN, { room: String(room) });
-/** OPENED: the server's answer - the host its challenge is for. */
+/** OPENED: the server's answer - the socket is up. */
 const encodeOpened = ({ host }) => json(KIND.OPENED, { host: String(host) });
 /** CLOSE: either end; a websocket close's code and reason. */
 const encodeClose = ({ code = 1000, reason = '' } = {}) => json(KIND.CLOSE, { code: Number(code) || 1000, reason: String(reason || '') });
@@ -63,8 +70,9 @@ function encodeText(text) {
 
 /**
  * The receiving end: 0x86 payloads in, socket events out -
- *   {kind:'open', room} | {kind:'opened', host} | {kind:'text', text} | {kind:'close', code, reason} | null (a PART
- *   held, or a payload that is not one of these: dropped, as noise is on any link).
+ *   {kind:'here', host} | {kind:'where'} | {kind:'open', room} | {kind:'opened', host} | {kind:'text', text} |
+ *   {kind:'close', code, reason} | null (a PART held, or a payload that is not one of these: dropped, as noise is on any
+ *   link).
  */
 function createDecoder() {
   let parts = [];
@@ -91,6 +99,8 @@ function createDecoder() {
           held = 0;
           return { kind: 'text', text: bytesToUtf8(whole) };
         }
+        case KIND.HERE: { const v = parse(body); return v && typeof v.host === 'string' ? { kind: 'here', host: v.host } : null; }
+        case KIND.WHERE: return { kind: 'where' };
         case KIND.OPEN: { const v = parse(body); return v && typeof v.room === 'string' ? { kind: 'open', room: v.room } : null; }
         case KIND.OPENED: { const v = parse(body); return v && typeof v.host === 'string' ? { kind: 'opened', host: v.host } : null; }
         case KIND.CLOSE: { const v = parse(body) || {}; parts = []; held = 0; return { kind: 'close', code: Number(v.code) || 1000, reason: String(v.reason || '') }; }
@@ -100,4 +110,90 @@ function createDecoder() {
   };
 }
 
-module.exports = { CMD_SOCKET, KIND, PART_MAX, encodeOpen, encodeOpened, encodeText, encodeClose, createDecoder };
+/**
+ * THE PHONE'S END: a WebSocket-shaped class for room-client's connectRoom ({WebSocket}), over one Bluetooth link's 0x86
+ * messages - so the room client runs unchanged over the radio. The holder sends with `sendFrame(payload)` (one 0x86
+ * payload) and feeds every 0x86 payload that arrives to `push(payload)`, and `down(reason)` when the link goes.
+ *
+ *   const s = createSocketLink({ sendFrame });
+ *   s.host                       the server's name once HERE came (null before); onHere(fn) tells when
+ *   connectRoom({ url: `ble://${s.host}`, WebSocket: s.WebSocket, ... })
+ *
+ * @param {{sendFrame: (payload: Uint8Array) => any}} o
+ */
+function createSocketLink({ sendFrame }) {
+  const dec = createDecoder();
+  let current = null;
+  let host = null;
+  const hereListeners = new Set();
+  const out = (payload) => { try { const r = sendFrame(payload); if (r && r.catch) r.catch(() => {}); } catch { /* the link says it went */ } };
+
+  class BleWebSocket {
+    constructor(url) {
+      this.url = String(url);
+      this.readyState = 0;
+      this.onopen = null;
+      this.onmessage = null;
+      this.onclose = null;
+      this.onerror = null;
+      const room = this.url.split('/ws/')[1] || '';
+      /* one socket per link: a new one replaces the one before (its close told here, the server closes its side) */
+      if (current) current.closed(1000, 'replaced');
+      current = this;
+      out(encodeOpen({ room }));
+    }
+
+    send(text) {
+      if (this.readyState !== 1) throw new Error('the Bluetooth socket is not open');
+      for (const p of encodeText(text)) out(p);
+    }
+
+    close(code = 1000, reason = '') {
+      if (this.readyState >= 2) return;
+      out(encodeClose({ code, reason }));
+      this.closed(code, reason);
+    }
+
+    /* the socket is gone (its own close, the server's, or the link): once, as a websocket's close event */
+    closed(code, reason) {
+      if (this.readyState === 3) return;
+      this.readyState = 3;
+      if (current === this) current = null;
+      if (this.onclose) this.onclose({ code, reason });
+    }
+  }
+
+  return {
+    WebSocket: BleWebSocket,
+    get host() { return host; },
+    /** fn(host) each time the server says its name (HERE) */
+    onHere(fn) { hereListeners.add(fn); return () => hereListeners.delete(fn); },
+    /** ask the server for HERE again */
+    where() { out(encodeWhere()); },
+    /** one 0x86 payload from the link */
+    push(payload) {
+      const ev = dec.push(payload);
+      if (!ev) return;
+      if (ev.kind === 'here') {
+        host = ev.host;
+        for (const fn of [...hereListeners]) { try { fn(host); } catch { /* a listener's own trouble */ } }
+        return;
+      }
+      const s = current;
+      if (!s) return;
+      if (ev.kind === 'opened') { s.readyState = 1; if (s.onopen) s.onopen({}); }
+      else if (ev.kind === 'text') { if (s.readyState === 1 && s.onmessage) s.onmessage({ data: ev.text }); }
+      else if (ev.kind === 'close') s.closed(ev.code, ev.reason);
+    },
+    /** the link went: the socket closes as a dropped websocket does (1006), and the server's name is forgotten */
+    down(reason = 'the Bluetooth link went') {
+      host = null;
+      if (current) current.closed(1006, reason);
+    },
+  };
+}
+
+module.exports = {
+  CMD_SOCKET, KIND, PART_MAX, encodeHere, encodeWhere, encodeOpen, encodeOpened, encodeText, encodeClose, createDecoder,
+  createSocketLink,
+};
