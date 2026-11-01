@@ -24,7 +24,9 @@ test('help lists edge; no okedge, edge-agent, pairing or pair', async () => {
   const r = await run(['help']);
   assert.match(r.text, /^\s*edge\s/m);
   for (const gone of ['okedge', 'edge-agent', 'pairing', 'pair']) assert.doesNotMatch(r.text, new RegExp(`^\\s*${gone}\\s`, 'm'), gone);
-  assert.doesNotMatch(r.text, /--ble|--address/);
+  /* --address was the cli-paired link's; --ble is the phone through its room (cli/ble-room.js) */
+  assert.doesNotMatch(r.text, /--address/);
+  assert.match(r.text, /--ble +reach the phone's key/);
 });
 
 test('pairing, pair and edge-agent are unknown commands', async () => {

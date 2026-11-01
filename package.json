@@ -51,6 +51,7 @@
     "./cli/desktop": "./cli/desktop.js",
     "./cli/transport-hid": "./cli/transport-hid.js",
     "./cli/ble-link": "./cli/ble-link.js",
+    "./cli/ble-room": "./cli/ble-room.js",
     "./cli/bt-radio": "./cli/bt-radio.js",
     "./cli/edge-agent": "./edge/cli/agent.js",
     "./cli/index": "./cli/index.js",

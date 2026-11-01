@@ -198,13 +198,26 @@ that says what to do.
 from any Node script: `[host, transport/usb, session, device, okcrypto]` over
 that pipe, transport opened.
 
-## Bluetooth: removed (2026-10-30)
+## Bluetooth: the phone's key through its room (`--ble`, 2026-11-01)
 
-`--ble` / `--address` (a phone running ok-edge mobile, over Bluetooth LE), the
-`pair` command (the 6-digit cli pair that encrypted that link) and the
-`--service`'s Bluetooth bucket trade were removed on 2026-10-30, pending a
-redesign of the computer-phone link. The key's server room is the service's
-sync now (`onlykey-js --service`). Git history keeps the old code.
+`onlykey-js --ble <command>` reaches the key a phone running ok-edge holds. The
+CLI does not talk Bluetooth: this computer runs a local mcp-server with `--ble`
+(ok-edge `mcp-server/src/localhost/main.js`), the phone links to it and joins
+its identity's room there with the login proof, and the CLI (`cli/ble-room.js`)
+
+1. asks the server which room the phone is in (`GET /ble`, this computer only;
+   `ONLYKEY_LOCAL_MCP` overrides `http://127.0.0.1:8790`),
+2. comes into that room as an agent with this user's agent key
+   (`~/.onlykey-js/agent-key`, owner-only, made on first use;
+   `bucket/src/room-agent.js`),
+3. on first use prints `>>> accept "<computer> (onlykey-js)" on the phone: the
+   Edge tab, Agents` and waits for the owner's accept (2 minutes),
+4. then talks to the phone's key session (`desktop/session.js`, run by the app)
+   through `cli/transport-desktop.js` - the same pipe as `--desktop`.
+
+A blocked computer is refused at once. The older direct link (`--address`, the
+6-digit `pair` command, the `--service`'s Bluetooth bucket trade) went on
+2026-10-30 and is not coming back; git history keeps it.
 
 ## Tests
 

@@ -33,10 +33,11 @@
  *
  * WHICH KEY. By default a USB key over node-hid - or, while the ok-edge desktop
  * app runs, the key it holds (--desktop insists on it); --soft-key the app's
- * soft key booted here. The option is global, so every device command - agent
+ * soft key booted here; --ble the phone's key, through the room it joined over
+ * Bluetooth on this computer's mcp-server (cli/ble-room.js). The option is global, so every device command - agent
  * and gpg-agent included - takes it unchanged: the pipe is below the
- * transport, and nothing above it knows which one it is. (The phone over
- * Bluetooth LE, --ble, was removed 2026-10-30 pending a redesign.)
+ * transport, and nothing above it knows which one it is. (The direct, cli-paired
+ * Bluetooth link went 2026-10-30; --ble came back 2026-11-01 through the room.)
  *
  * WHAT IT DOES NOT DO. There is no firmware update path - that is
  * deliberately not something this program can do - and no backup or
@@ -129,12 +130,13 @@ const classicSlotName = (n) => (n <= 6 ? `${n}a` : `${n - 6}b`);
  */
 /*
  * WHICH KEY (Brad, 2026-10-25: "the CLI will try to do the work if no desktop app is found, and then it tries to use
- * hardkey by default, unless --ble or --soft-key is used"; --ble removed 2026-10-30): the desktop app when it runs - it
- * does the work with the key it has open; else --soft-key the desktop app's own soft key booted here
+ * hardkey by default, unless --ble or --soft-key is used"): --ble the phone's key through its room (cli/ble-room.js);
+ * else the desktop app when it runs - it does the work with the key it has open; else --soft-key the desktop app's own soft key booted here
  * (cli/transport-softkey.js, the testnet's with --test-mode), or a hard key on USB.
  */
 function deviceOpts(opts) {
   if (opts.desktop) return { desktop: true };
+  if (opts.ble) return { ble: true };
   if (!opts.path && require('../desktop/trust').liveTrust()) return { desktop: true, auto: true };
   if (opts['soft-key']) return { softKey: true, softKeyNet: process.argv.includes('--test-mode') ? 'test' : 'live' };
   return { path: opts.path };
@@ -143,6 +145,7 @@ function deviceOpts(opts) {
 /** The same choice as command-line arguments, for a program this one starts later (plain stays plain: it chooses again). */
 function deviceArgs(opts) {
   if (opts.desktop) return ['--desktop'];
+  if (opts.ble) return ['--ble'];
   if (opts['soft-key']) return ['--soft-key'];
   return opts.path ? ['--path', opts.path] : [];
 }
@@ -218,7 +221,7 @@ COMMANDS.help = {
   async run(io) {
     io.out(`${NAME} v${PKG.version} - the OnlyKey command line, on node-onlykey-lib`);
     io.out('');
-    io.out(`Usage: ${NAME} <command> [arguments] [--path <hid path> | --desktop | --soft-key] [--yes]`);
+    io.out(`Usage: ${NAME} <command> [arguments] [--path <hid path> | --desktop | --ble | --soft-key] [--yes]`);
     io.out('');
     io.out('Commands:');
     for (const [name, cmd] of Object.entries(COMMANDS)) {
@@ -229,6 +232,7 @@ COMMANDS.help = {
     io.out('Options:');
     io.out(`  ${'--path <path>'.padEnd(14)} which OnlyKey, when more than one is plugged in`);
     io.out(`  ${'--desktop'.padEnd(14)} reach the key through the ok-edge desktop app on this computer (plain does too, while it runs)`);
+    io.out(`  ${'--ble'.padEnd(14)} reach the phone's key: the phone joined this computer's mcp-server over Bluetooth, the owner accepts this computer in the app`);
     io.out(`  ${'--mcp'.padEnd(14)} reach the ok-edge web app over MCP (not built yet)`);
     io.out(`  ${'--yes'.padEnd(14)} confirm a setting that cannot be undone (wipemode, backupkeymode, webcryptpolicy)`);
     io.out(`  ${'-h, --help'.padEnd(14)} this list`);
@@ -1620,8 +1624,9 @@ function readGpgSettings(homedir) {
 function deviceOptsFromArgs(args = []) {
   const o = {};
   for (let i = 0; i < args.length; i++) {
-    /* a home made with --ble before 2026-10-30 names a bus that is gone: read back as plain */
     if (args[i] === '--path') o.path = args[++i];
+    /* the phone's key: through its room since 2026-11-01 (a home made with the older direct link means the same phone) */
+    else if (args[i] === '--ble') o.ble = true;
   }
   return o;
 }
@@ -2303,6 +2308,8 @@ async function main(argv, io = {}) {
     help: { type: 'boolean', short: 'h' },
     path: { type: 'string' },
     desktop: { type: 'boolean' },
+    /* the phone's key, through its room on this computer's mcp-server (cli/ble-room.js) */
+    ble: { type: 'boolean' },
     mcp: { type: 'boolean' },
     yes: { type: 'boolean' },
     /* a hard key's host asks its y/N in a desktop dialog, not on this terminal (cli/gui-prompt.js) */
@@ -2337,7 +2344,7 @@ async function main(argv, io = {}) {
         if (a === '--path') { globals.push(a, rest[i + 1]); i += 1; }
         else if (a === '--server' || a === '--no-server') { agentArgs.push(a); if (a === '--server') { agentArgs.push(rest[i + 1]); i += 1; } }
         else if (a.startsWith('--server=')) agentArgs.push('--server', a.slice('--server='.length));
-        else if (['--desktop', '--yes', '--gui-prompt', '--soft-key'].includes(a) || a.startsWith('--path=')) globals.push(a);
+        else if (['--desktop', '--ble', '--yes', '--gui-prompt', '--soft-key'].includes(a) || a.startsWith('--path=')) globals.push(a);
         else others.push(a);
       }
       argv = [...globals, 'edge', ...others, 'agent', ...agentArgs];
@@ -2349,7 +2356,7 @@ async function main(argv, io = {}) {
     while (i < argv.length) {
       const t = argv[i];
       if (t === '--path') { i += 2; continue; }
-      if (t === '--desktop' || t === '--mcp' || t === '--yes' || t === '--gui-prompt' || t === '--soft-key' || t === '--help' || t === '-h' || t.startsWith('--path=')) { i += 1; continue; }
+      if (t === '--desktop' || t === '--ble' || t === '--mcp' || t === '--yes' || t === '--gui-prompt' || t === '--soft-key' || t === '--help' || t === '-h' || t.startsWith('--path=')) { i += 1; continue; }
       break;
     }
     const t = argv[i];
@@ -2435,11 +2442,11 @@ async function main(argv, io = {}) {
    * desktop app on this machine, which holds its keys (its hard key on USB, its emulator soft key)
    * and does the USB talking - an IPC socket, trusted through a file the app writes and the CLI
    * reads, no pairing (ok-edge TODO B4b). --mcp: the web app over MCP (TODO C5). The mobile app over
-   * Bluetooth (--ble) was removed 2026-10-30 pending a redesign. One at a time; --mcp is named here so a
+   * Bluetooth: --ble, through the room it joined on this computer's mcp-server (cli/ble-room.js). One at a time; --mcp is named here so a
    * command line says which app it means before it is built, and says so plainly. Plain, with the
    * desktop app running, also goes through the app (deviceOpts).
    */
-  const apps = ['desktop', 'mcp'].filter((k) => parsed.values[k]);
+  const apps = ['desktop', 'ble', 'mcp'].filter((k) => parsed.values[k]);
   if (apps.length > 1) {
     full.err(`${NAME}: ${apps.map((k) => `--${k}`).join(' and ')} each pick an ok-edge app; use one.`);
     return 2;
@@ -2454,7 +2461,7 @@ async function main(argv, io = {}) {
     full.err(`${NAME}: the ok-edge desktop app is running - it holds the key and is its GUI; run without --path (the CLI goes through the app), or close the app first.`);
     return 2;
   }
-  if ((parsed.values.desktop || parsed.values.mcp) && parsed.values.path) {
+  if ((parsed.values.desktop || parsed.values.ble || parsed.values.mcp) && parsed.values.path) {
     full.err(`${NAME}: --path picks a USB key for this CLI; with --${apps[0]} the ok-edge app holds the keys.`);
     return 2;
   }

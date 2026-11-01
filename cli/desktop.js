@@ -21,7 +21,8 @@
  * The other pipes go under the same transport/usb: `desktop: true` is the key
  * the ok-edge desktop app holds, over its local socket (./transport-desktop.js),
  * and `softKey: true` the desktop app's own soft key booted in this process
- * (./transport-softkey.js). Nothing above the transport changes, which is what
+ * (./transport-softkey.js), and `ble: true` the phone's key through the room it joined over Bluetooth on this
+ * computer's mcp-server (./ble-room.js, the desktop pipe on another channel). Nothing above the transport changes, which is what
  * lets every command (agent and gpg-agent included) take any of them.
  *
  * WHY A HELPER. Every Node consumer - this CLI now, the test kit's hardware
@@ -38,6 +39,7 @@
  * @param {() => object} [opts.loadHid]  returns node-hid; injectable
  * @param {boolean} [opts.desktop] the key the ok-edge desktop app holds
  * @param {boolean} [opts.softKey]  the desktop app's soft key, booted here
+ * @param {boolean} [opts.ble]     the phone's key, through its room on this computer's mcp-server
  * @param {'live'|'test'} [opts.softKeyNet]  which soft key: the live one or the testnet's
  * @param {object} [opts.config]   further plugins.config, merged under the pipe
  * @returns {Promise<object>} the started Rectify app with the transport OPEN;
@@ -45,7 +47,7 @@
  */
 'use strict';
 
-function startDesktop({ pipe, path, loadHid, desktop = false, softKey = false, softKeyNet = 'live', config = {} } = {}) {
+function startDesktop({ pipe, path, loadHid, desktop = false, softKey = false, softKeyNet = 'live', ble = false, config = {} } = {}) {
   const Rectify = require('@bmatusiak/rectify');
   /*
    * The pipe is built lazily per bus: a desktop-app or soft-key run must not
@@ -53,7 +55,9 @@ function startDesktop({ pipe, path, loadHid, desktop = false, softKey = false, s
    * in that is the wrong key's business).
    */
   /* desktop: the key the ok-edge desktop app holds, over its local socket (cli/transport-desktop.js) */
-  const makePipe = () => (desktop ? require('./transport-desktop').createDesktopPipe()
+  /* ble: the same pipe, its channel the phone's room (./ble-room.js); what the owner must do is said on stderr */
+  const makePipe = () => (ble ? require('./transport-desktop').createDesktopPipe({ channel: require('./ble-room').phoneChannel({ say: (l) => process.stderr.write(`${l}\n`) }) })
+    : desktop ? require('./transport-desktop').createDesktopPipe()
     : softKey ? require('./transport-softkey').createSoftKeyPipe({ net: softKeyNet })
       : require('./transport-hid').createHidPipe({ path, loadHid }));
   const plugins = [

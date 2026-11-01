@@ -61,10 +61,15 @@ test('devices --json: one array on stdout - the same facts as fields, numbered, 
   assert.equal(rows[1].state, 'unlocked');
 });
 
-test('devices --ble and --seconds are gone (2026-10-30): a usage error, nothing opened', async () => {
-  for (const argv of [['devices', '--ble'], ['devices', '--seconds', '4'], ['--ble', 'status'], ['--address', 'x', 'status']]) {
+test('devices --seconds and --address are gone (2026-10-30): a usage error, nothing opened', async () => {
+  for (const argv of [['devices', '--seconds', '4'], ['--address', 'x', 'status']]) {
     const r = await run(argv, { usb: [{ path: 'hid-1', pipe: () => { throw new Error('opened a key'); } }] });
     assert.equal(r.code, 2, argv.join(' '));
     assert.deepEqual(r.opened, [], argv.join(' '));
   }
+});
+
+test('--ble (since 2026-11-01) picks the phone through its room (cli/ble-room.js), never a USB key', async () => {
+  const r = await run(['--ble', 'status'], { usb: [{ path: 'hid-1', pipe: () => { throw new Error('opened a key'); } }] });
+  assert.deepEqual(r.opened, [{ ble: true }]);
 });
