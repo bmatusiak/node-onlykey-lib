@@ -251,6 +251,24 @@ test('the card and the login drift: an extra request or an unused one makes the 
   assert.ok(edge.calls.some((c) => c.revoke === less.budget.grantId), 'the unused use was not ended');
 });
 
+test('a stale card login is recorded: the next card names what it asked, and the login on that card is not stale', async () => {
+  const ok = fakeOkcrypto();
+  const edge = fakeEdge();
+  /* after a restart: no manual login this session, so the card is made from the default list */
+  const identity = await compose(ok, edge);
+  assert.equal(identity.loginRecord(), null);
+  const old = await cardOf(identity);
+  const r = await identity.login(loginOnce(ok), { card: old });
+  assert.equal(r.stale, true);
+  assert.deepEqual(identity.loginRecord(), { derives: [KEY_HASH], signs: 1, other: 0 });
+  const card = await cardOf(identity);
+  assert.deepEqual(card.thing.derives, [KEY_HASH]);
+  assert.equal(card.thing.signs.cap, 1);
+  const next = await identity.login(loginOnce(ok), { card });
+  assert.equal(next.paid, 2);
+  assert.equal(next.stale, false);
+});
+
 test('a login that hangs ends its budget at the watchdog', async () => {
   const ok = fakeOkcrypto();
   const edge = fakeEdge();

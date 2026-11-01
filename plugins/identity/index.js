@@ -291,14 +291,17 @@ function setup(imports, register) {
        * signatures, anything else a login should not ask - paying nothing (the hook answers null). The card offered
        * after it names exactly this (loginCard).
        */
+      const newRecord = () => ({ identity: held && held.id, derives: [], signs: 0, other: 0 });
+      const note = (rec, r) => {
+        if (r && r.derive && !rec.derives.includes(r.derive)) rec.derives.push(r.derive);
+        else if (r && r.sign) rec.signs += 1;
+        else if (r && r.other) rec.other += 1;
+      };
       const manual = async (why) => {
-        const rec = { identity: held && held.id, derives: [], signs: 0, other: 0 };
+        const rec = newRecord();
         const canRecord = typeof okcrypto.setUseHook === 'function';
         const was = canRecord ? okcrypto.setUseHook((msg, slot, payload) => {
-          const r = requestOf(msg, slot, payload);
-          if (r && r.derive && !rec.derives.includes(r.derive)) rec.derives.push(r.derive);
-          else if (r && r.sign) rec.signs += 1;
-          else if (r && r.other) rec.other += 1;
+          note(rec, requestOf(msg, slot, payload));
           return null;
         }) : null;
         try {
@@ -348,7 +351,13 @@ function setup(imports, register) {
       /* requests this login made that the card does not name - they asked on their own, and the card is out of date */
       let extra = 0;
       const total = left.size + signs;
+      /*
+       * A CARD LOGIN IS RECORDED TOO (box, 2026-11-01: a card made after a restart had no manual record to name, took the
+       * default list, and every login on it came out stale): what it asked, paid or not - a stale card's successor names it.
+       */
+      const rec = newRecord();
       const was = okcrypto.setUseHook((msg, slot, payload) => {
+        note(rec, requestOf(msg, slot, payload));
         const derive = msg === 0xfc && slot === 128 && payload.length === 33 && payload[0] === 1 && left.get(hex(payload.subarray(1))) > 0;
         const sign = msg === MSG.OKSIGN && slot === 201 && signsLeft > 0 && payload.length > 32 && hex(payload.subarray(payload.length - 32)) === hex(signLabel);
         if (!derive && !sign) {
@@ -378,7 +387,9 @@ function setup(imports, register) {
          * budget at its last receipt. Otherwise the login and its card have drifted (an update changed the login): the
          * host offers a new card, made from this login's record.
          */
-        return { result, budget, paid, stale: paid < total || extra > 0 };
+        const stale = paid < total || extra > 0;
+        if (stale && rec.identity && (rec.derives.length || rec.signs)) lastRecord = rec;
+        return { result, budget, paid, stale };
       } finally {
         okcrypto.setUseHook(was);
         /* the uses the login did not need end with it: a login budget never outlives its login */
