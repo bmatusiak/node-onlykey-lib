@@ -51,8 +51,14 @@ function frames(credentialId) {
  * @param {{timeoutMs?: number}} [o] - how long one request may wait for its answer (a press, a CTAP operation pending)
  */
 function createVendorBridgeCtap(transport, { timeoutMs = 60000 } = {}) {
+  /* the requests waiting for an answer: cancel() ends them (the key unplugged - its answer is not coming) */
+  const pending = new Set();
   return {
     vendorBridge: true,
+    /** End every request still waiting, with ECANCELED: the key is gone, so none waits out its timeout. */
+    cancel(why = 'the key went away') {
+      for (const end of [...pending]) end(Object.assign(new Error(`vendor-bridge: ${why}`), { code: 'ECANCELED' }));
+    },
     async getAssertion(params, opts = {}) {
       const allow = params.get(3);
       const id = allow && allow[0] && (allow[0].get ? allow[0].get('id') : allow[0].id);
@@ -65,7 +71,9 @@ function createVendorBridgeCtap(transport, { timeoutMs = 60000 } = {}) {
         let data = null;
         let got = 0;
         let next = 0;
-        const done = (fn, v) => { clearTimeout(timer); off(); fn(v); };
+        const done = (fn, v) => { clearTimeout(timer); off(); pending.delete(cancel); fn(v); };
+        const cancel = (e) => done(reject, e);
+        pending.add(cancel);
         const timer = setTimeout(() => done(reject, Object.assign(new Error(`vendor-bridge: no answer in ${wait} ms`), { code: 'ETIMEDOUT' })), wait);
         const off = transport.on('report', (event) => {
           if (event.iface !== IFACE.VENDOR) return;
