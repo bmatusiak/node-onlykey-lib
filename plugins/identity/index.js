@@ -41,7 +41,8 @@
  *   identity.forget(why?)
  *   identity.on('change', fn)   (held | null)
  *   identity.on('forgotten', fn) (why | null)
- * held: {id, publicKey, site, parts: {<service>: part}, verified: null | {how: 'signature' | 'bucket', at}, at}
+ * held: {id, publicKey, site, parts: {<service>: part}, verified: null | {how: 'signature' | 'bucket' | 'login', at}, at}
+ *   identity.proveLogin(asked, bucketPublicKey) -> proof   (the login proof over the MCP's challenge - one sign)
  */
 'use strict';
 
@@ -123,6 +124,23 @@ function setup(imports, register) {
 
     current() {
       return held;
+    },
+
+    /*
+     * THE LOGIN PROOF, MADE AND CHECKED HERE (Brad, 2026-11-01: "the login plan needs to check mcp to challenge the
+     * identity"; "the desktop checks itself over its local mcp"): the key signs the bucket key with the MCP's challenge
+     * (bucket-identity signLogin) - one signature that proves the identity to this host, to the MCP, and certifies the
+     * bucket key for this join. Checked against the held identity's key before it is handed out; the identity is then
+     * proven ('login'). asked: {host, nonce} as the room client gives it. -> the 64-byte proof.
+     */
+    async proveLogin(asked, bucketPublicKey, opts = {}) {
+      const h = held || await identity.load(opts);
+      const proof = await bucketIdentity.signLogin(okcrypto, h.publicKey, bucketPublicKey, asked, opts);
+      if (!bucketIdentity.verifyCertificate({ identityPublicKey: h.publicKey, bucketPublicKey, certificate: proof, login: asked })) {
+        throw Object.assign(new Error('identity: this key did not prove the login - its signature over the MCP\'s challenge does not verify'), { code: 'IDENTITY_NOT_PROVEN' });
+      }
+      identity.proven('login', h);
+      return proof;
     },
 
     async verify(opts = {}) {

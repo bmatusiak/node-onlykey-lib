@@ -158,3 +158,17 @@ test('proveByRows: the rows this device keeps for the identity open with the key
   assert.equal(out.held.verified.how, 'bucket');
   assert.equal(bucket.kv(out.bucket, 'guestbook').getItem('myname'), 'Pixel');
 });
+
+test('proveLogin: the key signs the bucket key with the MCP challenge; checked, the identity is proven', async () => {
+  const bid = require('../bucket/src/bucket-identity');
+  const key = fakeKey();
+  const identity = compose(key);
+  await identity.load();
+  const bucketPublicKey = new Uint8Array(32).fill(4);
+  const asked = { host: '127.0.0.1:8790', nonce: new Uint8Array(32).fill(6) };
+  const proof = await identity.proveLogin(asked, bucketPublicKey);
+  assert.equal(proof.length, 64);
+  assert.equal(identity.current().verified.how, 'login');
+  assert.equal(bid.verifyCertificate({ identityPublicKey: identity.current().publicKey, bucketPublicKey, certificate: proof, login: asked }), true);
+  assert.equal(bid.verifyCertificate({ identityPublicKey: identity.current().publicKey, bucketPublicKey, certificate: proof, login: { ...asked, host: 'other:1' } }), false);
+});
