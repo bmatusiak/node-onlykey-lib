@@ -96,3 +96,15 @@ test('a login proof for this challenge enters, and only for this challenge', asy
   const forged = room.join({ ...me, certificate: wrong, login: asked }, { nonce: message.nonce, host: HOST }, PHONE);
   assert.deepEqual(room.checkJoin(me.id, forged, { nonce, host: HOST }, { requireLogin: true }), { ok: false });
 });
+
+/* the desktop's own local MCP: no proof at all - but still this room's identity, a device, a join */
+test('an open room takes a join with no proof, only for its own identity and a well-formed device', async () => {
+  const me = await device('backup A');
+  const { nonce, message } = room.challenge(rnd);
+  const bare = room.join({ ...me, certificate: new Uint8Array(0) }, { nonce: message.nonce, host: HOST }, PHONE);
+  assert.deepEqual(room.checkJoin(me.id, bare, { nonce, host: HOST }, { open: true }), { ok: true, identity: me.id, device: PHONE, login: false });
+  assert.deepEqual(room.checkJoin(me.id, bare, { nonce, host: HOST }), { ok: false }, 'not open: the proof is asked');
+  const stranger = await device('backup B');
+  assert.deepEqual(room.checkJoin(stranger.id, bare, { nonce, host: HOST }, { open: true }), { ok: false }, 'another room');
+  assert.deepEqual(room.checkJoin(me.id, { ...bare, device: { id: 'x', name: '', kind: 'nope' } }, { nonce, host: HOST }, { open: true }), { ok: false });
+});

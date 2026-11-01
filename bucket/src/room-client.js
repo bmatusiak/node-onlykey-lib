@@ -32,11 +32,12 @@
  */
 const room = require('./room');
 const { fromHex } = require('../../src/bytes');
+const { ed25519 } = require('../../src/vendor/exports/@noble/curves/ed25519.js');
 
 const PING_MS = 25000;
 
 /**
- * @param {{url: string, me: {id: string, identityPublicKey: Uint8Array, bucketKey: object, certificate: Uint8Array},
+ * @param {{url: string, me: {id: string, identityPublicKey: Uint8Array, bucketKey?: object | null, certificate?: Uint8Array},
  *   device: {id: string, name: string, kind: string}, WebSocket: any, randomBytes: (n: number) => Uint8Array,
  *   timeoutMs?: number, login?: ((asked: {host: string, nonce: Uint8Array}) => Promise<Uint8Array>) | null}} o
  */
@@ -45,7 +46,16 @@ const PING_MS = 25000;
  * key signs THIS connection's nonce (a press, or the login budget's sign) - the join then carries it in place of a kept
  * certificate. The join's wait covers the press (the server gives a join 30 s).
  */
-function connectRoom({ url, me, device, WebSocket: WS, randomBytes, timeoutMs = 15000, login = null }) {
+/*
+ * No bucket key (me.bucketKey null): AN OPEN ROOM's join - the desktop's own local MCP, which asks no proof (room.js
+ * checkJoin open). A throwaway key signs the join and seals the frames, so nothing of the key is asked; any other room
+ * refuses it, as it carries no certificate.
+ */
+function connectRoom({ url, me: given, device, WebSocket: WS, randomBytes, timeoutMs = 15000, login = null }) {
+  const me = given.bucketKey ? given : (() => {
+    const secretKey = randomBytes(32);
+    return { ...given, bucketKey: { secretKey, publicKey: ed25519.getPublicKey(secretKey) }, certificate: new Uint8Array(0) };
+  })();
   const base = new URL(url);
   const host = base.host;
   const wsUrl = `${base.protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/ws/${me.id}`;

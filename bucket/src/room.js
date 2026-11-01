@@ -79,17 +79,21 @@ function deviceOf(d) {
  * @param {string} room the identity id the connection asked for
  * @param {object} msg the device's join
  * @param {{nonce: Uint8Array, host: string}} asked this connection's challenge and the server's own host
- * @param {{requireLogin?: boolean}} [opts] requireLogin: only a login proof for THIS challenge enters - the key was
- *   present at this join (a kept certificate does not)
+ * @param {{requireLogin?: boolean, open?: boolean}} [opts] requireLogin: only a login proof for THIS challenge enters -
+ *   the key was present at this join (a kept certificate does not). open: NO PROOF AT ALL - the desktop's own local MCP
+ *   (Brad, 2026-11-01: "the local mcp has no auth, but it still will communicate with the desktop app for the planner and
+ *   budget calls"): a well-formed join for this room's identity, from a well-formed device, enters; nothing is verified.
+ *   Only for a server no one else reaches (127.0.0.1, its own app).
  * @returns {{ok: true, identity: string, device: {id: string, name: string, kind: string}, login: boolean} | {ok: false}}
  */
-function checkJoin(room, msg, asked, { requireLogin = false } = {}) {
+function checkJoin(room, msg, asked, { requireLogin = false, open = false } = {}) {
   try {
     if (!msg || msg.t !== 'join' || !hex(msg.identityPublicKey, 32) || !hex(msg.bucketPublicKey, 32)) return REFUSED;
-    if (!hex(msg.certificate, 64) || !hex(msg.signature, 64)) return REFUSED;
     const device = deviceOf(msg.device);
     const identityPublicKey = fromHex(msg.identityPublicKey);
     if (!device || bid.identityIdOf(identityPublicKey) !== room) return REFUSED;
+    if (open) return { ok: true, identity: room, device, login: false };
+    if (!hex(msg.certificate, 64) || !hex(msg.signature, 64)) return REFUSED;
     /* a login proof answers THIS connection: its host and nonce are the server's own, or it is refused like any bad proof */
     let login = null;
     if (msg.login) {

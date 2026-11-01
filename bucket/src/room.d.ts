@@ -52,15 +52,19 @@ export function join(me: {
  * @param {string} room the identity id the connection asked for
  * @param {object} msg the device's join
  * @param {{nonce: Uint8Array, host: string}} asked this connection's challenge and the server's own host
- * @param {{requireLogin?: boolean}} [opts] requireLogin: only a login proof for THIS challenge enters - the key was
- *   present at this join (a kept certificate does not)
+ * @param {{requireLogin?: boolean, open?: boolean}} [opts] requireLogin: only a login proof for THIS challenge enters -
+ *   the key was present at this join (a kept certificate does not). open: NO PROOF AT ALL - the desktop's own local MCP
+ *   (Brad, 2026-11-01: "the local mcp has no auth, but it still will communicate with the desktop app for the planner and
+ *   budget calls"): a well-formed join for this room's identity, from a well-formed device, enters; nothing is verified.
+ *   Only for a server no one else reaches (127.0.0.1, its own app).
  * @returns {{ok: true, identity: string, device: {id: string, name: string, kind: string}, login: boolean} | {ok: false}}
  */
 export function checkJoin(room: string, msg: object, asked: {
     nonce: Uint8Array;
     host: string;
-}, { requireLogin }?: {
+}, { requireLogin, open }?: {
     requireLogin?: boolean;
+    open?: boolean;
 }): {
     ok: true;
     identity: string;
