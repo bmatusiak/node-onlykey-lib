@@ -706,7 +706,10 @@ function setup(imports, register) {
      * ("certify to start" - a certify makes a fresh checkpoint).
      */
     async warmUp(top, opts) {
-      const noCheckpoint = (why) => Object.assign(new Error(`Edge: this device needs a checkpoint (${why}) - certify to start`), { code: 'EDGE_NO_CHECKPOINT', why });
+      /* with where the copy ends and where the key is, when known: how far apart they are is what decides the way back */
+      const noCheckpoint = (why, at = {}) => Object.assign(
+        new Error(`Edge: this device needs a checkpoint (${why}${at.copyEnds != null ? `: the copy ends at #${at.copyEnds}, the key is at #${at.keySeq} and keeps its last links from #${at.ringFrom}` : ''}) - certify to start`),
+        { code: 'EDGE_NO_CHECKPOINT', why, ...at });
       let h = await edge.head(opts);
       if (h.seq === null) return null;
       if (!h.head && caps & CAPS.CERTIFY_HEADPROOF) {
@@ -718,7 +721,10 @@ function setup(imports, register) {
         edge.knownHead(v.checkpoint.seq, v.checkpoint.head, deviceId);
         for (const l of v.links) edge.knownHead(chain.decodeLink(l.link).seq, l.head, deviceId);
         h = await edge.head(opts);
-        if (!h.head) throw noCheckpoint('top-ends-before-the-ring');
+        if (!h.head) {
+          const ends = v.links.length ? chain.decodeLink(v.links[v.links.length - 1].link).seq : v.checkpoint.seq;
+          throw noCheckpoint('top-ends-before-the-ring', { copyEnds: ends, keySeq: h.seq, ringFrom: h.oldest });
+        }
       }
       return edge.checkpoint(opts);
     },
