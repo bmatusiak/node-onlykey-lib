@@ -125,6 +125,17 @@ test('forget: nothing held, and a read in flight is not kept for the next key', 
   assert.deepEqual(changes, ['held', 'held', 'none']);
 });
 
+test('forget tells its why to forgotten listeners, held or not (a key unplugged ends the login)', async () => {
+  const identity = compose(fakeKey());
+  const told = [];
+  identity.on('forgotten', (why) => told.push(why));
+  identity.forget('unplugged');
+  await identity.load();
+  identity.forget();
+  assert.deepEqual(told, ['unplugged', null]);
+  assert.equal(identity.current(), null);
+});
+
 test('proveByRows: the rows this device keeps for the identity open with the key secret - proven; another secret or another owner is refused', async () => {
   const sealedCopy = require('../bucket/src/sealedcopy');
   const key = fakeKey();

@@ -28,6 +28,9 @@
  *
  * WHEN IT IS FORGOTTEN. The host says so - forget() - when the key locks, is unplugged or another key is picked; the
  * next load() reads the key again. load({force: true}) reads again on purpose (This Key's "read the key again").
+ * Each forget is told to 'forgotten' listeners with its why (e.g. 'unplugged'), held or not: a host's login follows the
+ * key's identity, so a key that went away takes the login with it (Brad, 2026-10-31: "identity plugin is suppose to
+ * control this state, if i unplug, it suppose to clear the identity").
  *
  *   identity.load(opts?)        -> held             (one read for every caller at once; held after)
  *   identity.current()          -> held | null      (no request)
@@ -37,6 +40,7 @@
  *   identity.requireVerified()  -> held, or throws
  *   identity.forget(why?)
  *   identity.on('change', fn)   (held | null)
+ *   identity.on('forgotten', fn) (why | null)
  * held: {id, publicKey, site, parts: {<service>: part}, verified: null | {how: 'signature' | 'bucket', at}, at}
  */
 'use strict';
@@ -307,8 +311,9 @@ function setup(imports, register) {
       return held;
     },
 
-    forget() {
+    forget(why) {
       generation += 1;
+      try { events.emit('forgotten', why == null ? null : why); } catch { /* a listener's error is not identity's */ }
       if (held === null) return;
       held = null;
       changed();
