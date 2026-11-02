@@ -313,8 +313,9 @@ function moveHomeFiles(home) {
 }
 
 /**
- * How this computer shows in a server room (bucket sync --server, the --service): one id for good, kept beside the
- * buckets, and the machine's name.
+ * How this computer shows in a server room: one id for good, kept beside the buckets, and the machine's name - the
+ * computer's MEMBER's (desktop/member.js: the desktop app while it is open, else `--service`; S5b, 2026-11-02), so the
+ * room sees one device whichever of the two serves. The one-shot `bucket sync` joins as a device of its own.
  */
 function thisDevice() {
   const f = path.join(root(), 'device.json');
@@ -325,7 +326,7 @@ function thisDevice() {
     fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
     fs.writeFileSync(f, `${JSON.stringify({ id })}\n`, { mode: 0o600 });
   }
-  return { id, name: os.hostname().slice(0, 64) || 'computer', kind: 'cli' };
+  return { id, name: os.hostname().slice(0, 64) || 'computer', kind: 'desktop' };
 }
 
 module.exports = { FILE, writeText, setRoot, root, edgeAt, at, read, update, kv, clear, moveOldFiles, identityFile, identityAt, keptIdentities, hasIdentityBucket, keepIdentityBucket, moveIdentityBucket, thisDevice };

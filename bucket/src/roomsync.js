@@ -26,7 +26,7 @@
  *     rules, randomBytes, answerMs (a trade message's time to answer; 120 s)
  *     selfId()      -> this device's id in the room ('' before it has one)
  *     tell: {pulse(), checked(stores), traded(taken, items), last(withName, line), items(bucket)}   what the host shows
- *   -> {wire(room, hooks, joinedAs), changed(), rooms()}    joinedAs: the proof material the room was joined with
+ *   -> {wire(room, hooks, joinedAs), changed(), inQueue(fn), rooms()}    joinedAs: the proof material the room was joined with
  *     hooks: {tag, peers(room), sealed(news), newer(stores, unknown)}   per room: '[room]' / '[room ble]' ...
  */
 
@@ -192,7 +192,13 @@ function createRoomSync({ open, me, save, handleTrade, rules, randomBytes, selfI
     say(`${hooks.tag} the sealed copy (${why}): got ${res.got}, put ${res.put}${count(res.taken) ? ` - took ${JSON.stringify(res.taken)}` : ''}`);
   }
 
-  return { wire, changed, rooms: () => wired };
+  /*
+   * work of the host's in the same queue, between trades and rounds (bucket/cli/roomservice.js takes in what the file got
+   * from other writers there - never under a trade that is using the bucket)
+   */
+  const inQueue = (fn) => queue(fn, (e) => say(`room sync: ${String(e?.message ?? e)}`));
+
+  return { wire, changed, inQueue, rooms: () => wired };
 }
 
 module.exports = { createRoomSync };

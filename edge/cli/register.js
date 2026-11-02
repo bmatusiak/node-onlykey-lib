@@ -740,161 +740,169 @@ module.exports = function register(COMMANDS, h) {
          * app's) cannot run the Edge agent, but its bucket still syncs - the device is opened for the sync alone, and
          * the reason the agent is not here is said.
          */
-        let st;
-        let agentOff = null;
-        try {
-          st = await openStack(io, opts, h, { serve: true, dev, wait });
-        } catch (e) {
-          if (e.code !== 'ENOAGENTID') throw e;
-          agentOff = e.message;
-          /*
-           * the stack's own connection was just closed (openStack's catch), but through the desktop app its close can
-           * reach the app after this new hello - which the app then refuses "busy" (the Windows desktop, 2026-10-25):
-           * a few tries, a moment apart
-           */
-          const openOnce = async () => {
-            for (let n = 0; ; n++) {
-              try {
-                return await openDevice(io, opts, h, { dev, wait });
-              } catch (e2) {
-                if (n >= 4 || !/busy/.test(String(e2 && e2.message))) throw e2;
-                await new Promise((r) => setTimeout(r, 700));
+        const openService = async () => {
+          try {
+            return { st: await openStack(io, opts, h, { serve: true, dev, wait }), agentOff: null };
+          } catch (e) {
+            if (e.code !== 'ENOAGENTID') throw e;
+            const agentOff = e.message;
+            /*
+             * the stack's own connection was just closed (openStack's catch), but through the desktop app its close can
+             * reach the app after this new hello - which the app then refuses "busy" (the Windows desktop, 2026-10-25):
+             * a few tries, a moment apart
+             */
+            const openOnce = async () => {
+              for (let n = 0; ; n++) {
+                try {
+                  return await openDevice(io, opts, h, { dev, wait });
+                } catch (e2) {
+                  if (n >= 4 || !/busy/.test(String(e2 && e2.message))) throw e2;
+                  await new Promise((r) => setTimeout(r, 700));
+                }
               }
-            }
-          };
-          /*
-           * NOTHING HELD BETWEEN TRADES (the Windows desktop, 2026-10-25): through the desktop app one CLI at a time,
-           * and a service holding the key refused every other onlykey-js "busy" - a ship included. The sync needs the
-           * key only to make this computer's bucket key, once (bucket/cli/trade.js takes a function for it): the key is
-           * opened then, and let go.
-           */
-          const d = await openOnce();
-          const say = d.say;
-          await Promise.resolve(d.app.destroy()).catch(() => undefined);
-          const okcryptoBriefly = async () => {
-            const k = await openOnce();
-            return { okcrypto: k.okcrypto, close: () => Promise.resolve(k.app.destroy()).catch(() => undefined) };
-          };
-          st = { say, okcrypto: okcryptoBriefly, home: d.home, close: async () => {} };
-        }
-        try {
-          const { svc } = st;
+            };
+            /*
+             * NOTHING HELD BETWEEN TRADES (the Windows desktop, 2026-10-25): through the desktop app one CLI at a time,
+             * and a service holding the key refused every other onlykey-js "busy" - a ship included. The sync needs the
+             * key only to make this computer's bucket key, once (bucket/cli/trade.js takes a function for it), and for a
+             * join's login proof: the key is opened then, and let go.
+             */
+            const d = await openOnce();
+            const say = d.say;
+            await Promise.resolve(d.app.destroy()).catch(() => undefined);
+            const okcryptoBriefly = async () => {
+              const k = await openOnce();
+              return { okcrypto: k.okcrypto, close: () => Promise.resolve(k.app.destroy()).catch(() => undefined) };
+            };
+            return { st: { say, okcrypto: okcryptoBriefly, openOnce, home: d.home, close: async () => {} }, agentOff };
+          }
+        };
+        /* what the service says once it serves: its keys and its control, or why there is no agent */
+        const sayReady = (st, agentOff) => {
           if (agentOff) {
             io.out(`no Edge agent here: ${agentOff}`);
             io.out('ready - the sync service runs; Ctrl-C to stop');
-          } else {
-            io.out(h.row('ssh key', svc.sshLine));
-            if (svc.fingerprint) io.out(h.row('gpg key', svc.fingerprint));
-            if (svc.certArmored) {
-              /* a key this computer has not kept anything for yet has no identity home until now (the box's testnet, 2026-10-25) */
-              fs.mkdirSync(st.home, { recursive: true, mode: 0o700 });
-              fs.writeFileSync(path.join(st.home, 'agent-gpg.asc'), svc.certArmored);
-              io.out(h.row('gpg cert', path.join(st.home, 'agent-gpg.asc')));
-            }
-            io.out(h.row('control', svc.controlPath));
-            io.out(`ready - ${edgeCmd('budget / exec / receipt')} use this service; Ctrl-C to stop`);
+            return;
           }
-          /*
-           * AND THE SYNC SERVICE (bucket/cli/service.js; Brad, 2026-10-25: "--service will be our long-lived"): this
-           * computer's kept buckets watched, and traded in the key's server room - when they change (the desktop app writes
-           * the same files), on a slow timer, and once now. The room is its only sync (Brad, 2026-10-30: the Bluetooth
-           * trade with cli-paired phones was removed pending a redesign). Whatever key this service uses (a key on USB,
-           * the soft key or the desktop app - Brad, 2026-10-25: "cli without desktop == --service, and --soft-key also runs
-           * the service while it's alive"), it is asked for the bucket key once (bucket/cli/trade.js makeMe, the same
-           * backup's key); later trades use the kept proof material and need none.
-           */
-          const bucketSvc = !noSync && !noServer ? (() => {
-            const { tradeWith, tradeTimeoutMs } = require('../../bucket/cli/trade');
-            const bucketHome = require('../../bucket/cli/home');
-            const bucketDir = path.join(bucketHome.root(), 'buckets', NET === 'test' ? 'test' : 'live');
-            const n = (o) => Object.values(o || {}).reduce((x, y) => x + y, 0);
-            /*
-             * THE KEY'S SERVER ROOM (Brad, 2026-10-27: "--service" joins the key's server): this identity's room on the
-             * server the key names (its ctap_bridge site; --server for another, --no-server for none), held open while
-             * the service runs - the web app and the phones meet this computer there. Joined with the key's proof
-             * (room.js); every device of the identity online is traded with, and a device that comes online starts a
-             * trade at once. Lost: joined again at the next trade (the slow timer). This side starts the trades; a trade
-             * another device starts is not answered yet (room.serve unset).
-             */
-            let roomP = null;
-            const roomOpen = () => {
-              if (!roomP) {
-                roomP = (async () => {
-                  let url = serverOpt;
-                  if (!url) {
-                    const r = typeof st.okcrypto.keySite === 'function' ? await st.okcrypto.keySite().catch(() => null) : null;
-                    url = r && r.on && r.site ? `https://${r.site}` : null;
-                  }
-                  if (!url) return null;
-                  if (typeof globalThis.WebSocket !== 'function') throw new Error('this Node has no WebSocket - Node 22 or later');
-                  const host = new URL(url).host;
-                  const { meFor } = require('../../bucket/cli/trade');
-                  const { connectRoom } = require('../../bucket/src/room-client');
-                  const me = await meFor({ okcrypto: st.okcrypto, net: NET, say: st.say });
-                  const randomBytes = (k) => new Uint8Array(require('crypto').randomBytes(k));
-                  const room = await connectRoom({ url, me, device: bucketHome.thisDevice(), WebSocket: globalThis.WebSocket, randomBytes });
-                  room.on('peer', (e) => { if (e.up) void svcBucket.trade(`${e.up.name} came online on ${host}`); });
-                  room.on('close', () => { roomP = null; st.say(`sync: left the room on ${host} (joined again at the next trade)`); });
-                  st.say(`sync: in this identity's room on ${host}${room.peers().length ? ` - ${room.peers().map((p) => p.name).join(', ')} online` : ''}`);
-                  return { room, host, id: me.id };
-                })().catch((e) => { roomP = null; st.say(`sync: the server's room was not joined (${e.message})`); return null; });
-              }
-              return roomP;
-            };
-            /* each device online in the room, one after another - the room's request is the trade's send */
-            const tradeRoom = async () => {
-              const r = await roomOpen();
-              if (!r) return [];
-              const out = [];
-              for (const p of r.room.peers()) {
-                let first = true;
-                const send = (m) => { const t = tradeTimeoutMs(m, first); first = false; return r.room.request(p.id, m, { timeoutMs: t }); };
-                try {
-                  out.push({ name: `${p.name} on ${r.host}`, ...(await tradeWith({ send, okcrypto: st.okcrypto, net: NET, say: st.say, id: r.id })) });
-                } catch (e) {
-                  out.push({ name: `${p.name} on ${r.host}`, traded: false, why: e.message });
-                }
-              }
-              return out;
-            };
-            const svcBucket = require('../../bucket/cli/service').startBucketService({
-              dir: bucketDir,
-              say: st.say,
-              lockFile: path.join(bucketHome.root(), 'sync.json'),
-              who: process.env.OKEDGE_SYNC_WHO || `onlykey-js --service (pid ${process.pid})`,
-              tradeOnce: async () => {
-                /* each other device of this identity online in the room */
-                const results = await tradeRoom();
-                if (!results.length) return { traded: false, why: 'no other device of this identity is in the server room' };
-                const ok = results.filter((r) => r.traded);
-                if (!ok.length) return { traded: false, why: results.map((r) => `${r.name}: ${r.why}`).join('; ') };
-                return {
-                  traded: true,
-                  same: ok.every((r) => r.same),
-                  settled: ok.every((r) => r.settled !== false),
-                  taken: { all: ok.reduce((x, r) => x + n(r.taken), 0) },
-                  gave: { all: ok.reduce((x, r) => x + n(r.gave), 0) },
-                };
-              },
-            });
-            void svcBucket.trade('the service started');
-            return svcBucket;
-          })() : null;
-          /*
-           * STOP, ASKED OVER THE CONTROL SOCKET (owner-only, as every request): the same close as Ctrl-C - the copy brought
-           * to the key's head, the key let go. Windows has no signal another process can send that Node catches, so a
-           * ship that started this service ends it this way (edge-control.js shipService).
-           */
-          let stopAsked = null;
-          if (st.svc && st.svc.handlers) st.svc.handlers.stop = async () => { setTimeout(() => stopAsked && stopAsked(), 50); return { stopping: true }; };
-          await Promise.race([new Promise((resolve) => { stopAsked = resolve; }), io.untilStopped ? io.untilStopped() : new Promise((resolve) => {
-            process.once('SIGINT', resolve);
-            process.once('SIGTERM', resolve);
-          })]);
-          if (bucketSvc) bucketSvc.stop();
+          const { svc } = st;
+          io.out(h.row('ssh key', svc.sshLine));
+          if (svc.fingerprint) io.out(h.row('gpg key', svc.fingerprint));
+          if (svc.certArmored) {
+            /* a key this computer has not kept anything for yet has no identity home until now (the box's testnet, 2026-10-25) */
+            fs.mkdirSync(st.home, { recursive: true, mode: 0o700 });
+            fs.writeFileSync(path.join(st.home, 'agent-gpg.asc'), svc.certArmored);
+            io.out(h.row('gpg cert', path.join(st.home, 'agent-gpg.asc')));
+          }
+          io.out(h.row('control', svc.controlPath));
+          io.out(`ready - ${edgeCmd('budget / exec / receipt')} use this service; Ctrl-C to stop`);
+        };
+        /*
+         * STOP, ASKED OVER THE CONTROL SOCKET (owner-only, as every request): the same close as Ctrl-C - the copy brought
+         * to the key's head, the key let go. Windows has no signal another process can send that Node catches, so a
+         * ship that started this service ends it this way (edge-control.js shipService).
+         */
+        let stopAsked = () => {};
+        const stopped = new Promise((resolve) => { stopAsked = resolve; });
+        const hearStop = (st) => {
+          if (st.svc && st.svc.handlers) st.svc.handlers.stop = async () => { setTimeout(() => stopAsked(), 50); return { stopping: true }; };
+        };
+        const untilStop = () => Promise.race([stopped, io.untilStopped ? io.untilStopped() : new Promise((resolve) => {
+          process.once('SIGINT', resolve);
+          process.once('SIGTERM', resolve);
+        })]);
+
+        /* --no-sync (a ship's own service) or --no-server: the key and the budget only - never this computer's member */
+        if (noSync || noServer) {
+          const { st, agentOff } = await openService();
+          try {
+            sayReady(st, agentOff);
+            hearStop(st);
+            await untilStop();
+            return 0;
+          } finally {
+            await st.close();
+          }
+        }
+
+        /*
+         * THIS COMPUTER'S MEMBER (the structure track S5b; Brad, 2026-11-02: the desktop app and --service are one
+         * device in the room - "if the --service is taken over from the desktop, it shows up as 1 device? right?"): one of
+         * them at a time serves this computer (desktop/member.js - the desktop app first). While the app is open this
+         * service STANDS BY and holds nothing - no key, no room; when the app quits or dies it serves: the key opened, the
+         * Edge agent, and this computer in the identity's room (bucket/cli/roomservice.js - trades both ways, the server's
+         * sealed copy, the kept buckets watched; the room is its only sync since 2026-10-30). When the app comes back it
+         * steps down again. Its device id and look are the app's (home.js thisDevice).
+         *
+         * KEY REQUESTS: opening the key when it serves; the bucket key once ever (kept); one login proof per join (the
+         * takeover's, then each the person asks for after a drop - never on a timer). Trades ask the key nothing.
+         */
+        const say = (l) => io.out(l);
+        const keyKind = opts['soft-key'] ? 'soft key' : 'hard key';
+        const randomBytes = (k) => new Uint8Array(require('crypto').randomBytes(k));
+        let current = null;
+        const serve = async () => {
+          const { st, agentOff } = await openService();
+          current = { st, room: null };
+          sayReady(st, agentOff);
+          hearStop(st);
+          /* the key for one request: the stack's own, or opened and let go again when the stack holds none (no agent) */
+          const withKey = async (fn) => {
+            if (st.app) return fn(st.app, st.okcrypto);
+            const d = await st.openOnce();
+            try { return await fn(d.app, d.okcrypto); } finally { await Promise.resolve(d.app.destroy()).catch(() => undefined); }
+          };
+          const room = require('../../bucket/cli/roomservice').createRoomService({
+            okcrypto: st.okcrypto,
+            net: NET,
+            keyKind,
+            say: st.say,
+            randomBytes,
+            /* --server <url>, else the key's own site (ctap_bridge, okcrypto.keySite) - the server the apps use */
+            url: async () => serverOpt || withKey(async (app, ok) => {
+              const r = typeof ok.keySite === 'function' ? await ok.keySite().catch(() => null) : null;
+              return r && r.on && r.site ? `https://${r.site}` : null;
+            }),
+            /* the app's login (Brad, 2026-11-02: "like the app"): the key signs this connection's challenge */
+            login: (asked, bucketPublicKey) => withKey((app) => app.services.identity.proveLogin(asked, bucketPublicKey, {
+              confirm: ({ digits } = {}) => st.say(digits && digits.length ? `sync: confirm on the OnlyKey (the login proof): enter ${digits.join(' ')}` : 'sync: press the OnlyKey (the login proof)'),
+            })),
+            /* the Try again: never the key on a timer - the person says when (a dialog with --gui-prompt, else this terminal) */
+            onNeedsKey: (why) => {
+              void personConfirm(opts)('log in to the server again? the key signs its challenge [y/N] ', { details: `sync: ${why}` })
+                .then((yes) => {
+                  if (yes && current && current.room === room) return room.rejoin();
+                  st.say('sync: not joined - the next start or takeover asks again');
+                  return undefined;
+                })
+                .catch(() => undefined);
+            },
+            onReplaced: () => st.say('sync: this computer is in the room from the desktop app now'),
+          });
+          current.room = room;
+          await room.start().catch((e) => st.say(`sync: not started - ${e.message}`));
+        };
+        const standDown = async (by) => {
+          const c = current;
+          current = null;
+          if (!c) return;
+          if (c.room) await c.room.stop();
+          await c.st.close();
+          if (by) say(`standing by - ${by} serves this computer; nothing is held here until it ends`);
+        };
+        const member = require('../../desktop/member').createMember({
+          who: `onlykey-js --service (pid ${process.pid})`,
+          priority: 'service',
+          log: say,
+          onServe: () => serve().catch((e) => { say(`the service did not start: ${e.message}`); stopAsked(); }),
+          onStandBy: (by) => standDown(by),
+        });
+        await member.start();
+        try {
+          await untilStop();
           return 0;
         } finally {
-          await st.close();
+          await member.stop();
+          await standDown(null);
         }
       }
 

@@ -34,8 +34,12 @@ function setup(imports, register) {
   const file = () => path.join(home.root(), home.FILE);
   const bucketKey = async (okcrypto) => okcrypto.deviceVault.key('bucket');
   const randomBytes = (n) => new Uint8Array(require('crypto').randomBytes(n));
-  /* how this computer shows in a room (home.js thisDevice - the --service uses the same) */
-  const thisDevice = () => home.thisDevice();
+  /*
+   * how this one-shot command shows in a room: a device of its own for the run - this computer's id (home.js
+   * thisDevice) is its MEMBER's (the desktop app or --service, desktop/member.js), and a second join of that id would
+   * replace the member in the room (4409)
+   */
+  const oneShotDevice = () => ({ id: require('crypto').randomBytes(8).toString('hex'), name: `${home.thisDevice().name} (bucket sync)`, kind: 'cli' });
 
   const BUCKET = {
     mirrors: '(new)',
@@ -116,7 +120,7 @@ function setup(imports, register) {
         const say = (l) => io.out(l);
         return withDevice(io, opts, async ({ okcrypto }) => {
           const me = await meFor({ okcrypto, net, say });
-          const room = await connectRoom({ url, me, device: thisDevice(), WebSocket: globalThis.WebSocket, randomBytes });
+          const room = await connectRoom({ url, me, device: oneShotDevice(), WebSocket: globalThis.WebSocket, randomBytes });
           try {
             const host = new URL(url).host;
             /* the server's sealed copy first (bucket/cli/sealed.js): it answers with nobody else online */

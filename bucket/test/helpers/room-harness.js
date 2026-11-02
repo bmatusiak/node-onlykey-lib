@@ -37,6 +37,8 @@ async function identity(seed) {
 /* the room as the mcp-server keeps it, in memory: the join, and the identity's sealed copy (rows by id) */
 function fakeServer() {
   const sealed = new Map();
+  /* the devices joined now, per room and device id: a second join of an id replaces the first (core/room.js: 4409) */
+  const joined = new Map();
   const rowsOf = (r) => { if (!sealed.has(r)) sealed.set(r, new Map()); return sealed.get(r); };
   /* one room socket: deliver(message) is the server's word to the device; text() what the device sent */
   function roomSocket(roomId, deliver, onClose) {
@@ -50,6 +52,10 @@ function fakeServer() {
           const c = room.checkJoin(roomId, m, { nonce, host: HOST });
           if (!c.ok) { deliver({ t: 'refused' }); onClose(); return; }
           device = c.device;
+          const key = `${roomId}|${device.id}`;
+          const old = joined.get(key);
+          joined.set(key, () => onClose(4409));
+          if (old) old();
           deliver({ t: 'joined', you: device.id, peers: [] });
           return;
         }
@@ -70,11 +76,11 @@ function fakeServer() {
     constructor(url) {
       this.readyState = 1;
       const roomId = new URL(url).pathname.split('/').pop();
-      this.side = roomSocket(roomId, (m) => this.onmessage && this.onmessage({ data: JSON.stringify(m) }), () => this.close());
+      this.side = roomSocket(roomId, (m) => this.onmessage && this.onmessage({ data: JSON.stringify(m) }), (code) => this.close(code));
       setImmediate(() => this.onopen && this.onopen({}));
     }
     send(text) { this.side.text(text); }
-    close() { if (this.readyState === 3) return; this.readyState = 3; setImmediate(() => this.onclose && this.onclose({ code: 1000 })); }
+    close(code = 1000) { if (this.readyState === 3) return; this.readyState = 3; setImmediate(() => this.onclose && this.onclose({ code })); }
   }
   /*
    * the room over Bluetooth: the phone's end (createSocketLink) sends 0x86 payloads; this server end decodes them, opens
