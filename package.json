@@ -68,6 +68,7 @@
     "./webcrypto/text": "./src/webcrypto/text.js",
     "./desktop/serve": "./desktop/serve.js",
     "./desktop/session": "./desktop/session.js",
+    "./desktop/member": "./desktop/member.js",
     "./desktop/trust": "./desktop/trust.js",
     "./cli/transport-desktop": "./cli/transport-desktop.js",
     "./edge/cli/local-host": "./edge/cli/local-host.js",

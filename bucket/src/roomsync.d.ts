@@ -11,5 +11,6 @@ export function createRoomSync({ open, me, save, handleTrade, rules, randomBytes
 }): {
     wire: (r: any, hooks: any, joinedAs: any) => void;
     changed: () => void;
+    inQueue: (fn: any) => Promise<void>;
     rooms: () => Map<any, any>;
 };
