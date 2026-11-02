@@ -11,8 +11,6 @@
  *                                                           its intent welded into the link (R13b); --receipt files
  *                                                           the receipt too when it succeeded (prints the next head)
  *   edge receipt <seq> [--code OK] --msg "…"                 file the receipt; prints the next head
- *   edge sync [--status]                                    one phone at a time: its log into this PC's copy, and every other
- *                                                           device's log this PC holds offered to it (held until approved)
  *   edge status | end                                       the budget, its head, receipts owed | end it
  *   edge watch [--once]                                     follow the key's links live (read-only)
  *
@@ -164,14 +162,6 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
       out(`receipt filed for #${seq}`);
       out(`head = ${r.head}`);
       return 0;
-    }
-    if (cmd === 'sync') {
-      /* APP.md: phase 1 reads the key into this PC's copy; phase 2 offers that copy to the phone, which holds it until the person approves the merge (2026-10-08) */
-      const status = args.includes('--status');
-      const only = args.includes('--pull-only') ? 'pull' : args.includes('--push-only') ? 'push' : undefined;
-      const r = await ask('sync', { status, ...(only ? { only } : {}) }, { timeoutMs: 120000 });
-      for (const l of require('./copy').lines(r, { status })) out(l);
-      return r.verdict.kind === 'tampered' ? 1 : 0;
     }
     if (cmd === 'end') {
       const r = await ask('end');

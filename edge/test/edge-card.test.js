@@ -86,18 +86,3 @@ test('membership: an UNNAMED device with this owner\'s card is yours; no proof a
   /* a certified statement (it has its seq) that does not verify: dropped too - only the chain check keeps a log apart */
   assert.equal(devices.classify({ log: { ...plain, statement: { ...legacy, seq: 3 } }, ownerKey, ownerKeyPq }).class, 'unproven', 'a certified statement that does not verify');
 });
-
-test('an offer without a nametag: the checkpoint keys travel on their own, with the card; the old statement-only shape still reads', async () => {
-  const { sync, request } = require('../src');
-  const signer = request.peerSignerFromSecret(p256.utils.randomSecretKey());
-  const e = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey() }));
-  const card = await e.certifyLoginCard(await cardFor(e));
-  const log = await logOf(e);
-  const sid = new Uint8Array(8).fill(1);
-  const msg = await sync.buildOffer({ signer, deviceId: log.deviceId, sid: Buffer.from(sid).toString('hex'), chain: log.deviceId, linkParts: 0, checkpoint: log.checkpoint, card, keys: log });
-  assert.equal(msg.payload.statement, undefined);
-  assert.equal(sync.verify(msg).ok, true, 'an offer with keys and a card verifies');
-  const st = await e.statement('green');
-  const old = await sync.buildOffer({ signer, deviceId: log.deviceId, sid: Buffer.from(sid).toString('hex'), chain: log.deviceId, linkParts: 0, checkpoint: log.checkpoint, statement: st });
-  assert.equal(sync.verify(old).ok, true, 'a statement-only offer still verifies');
-});

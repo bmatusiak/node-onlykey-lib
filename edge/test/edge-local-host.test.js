@@ -105,9 +105,9 @@ test('the terminal y/N leaves stdin paused - a command exits once it is done', a
   }
 });
 
-test('what only a phone has is refused at once: a sync, a ping', async () => {
+test('what only a phone has is refused at once: a ping', async () => {
   const { host } = await setup();
-  for (const type of ['EDGE_SYNC_HAVE', 'ping']) {
+  for (const type of ['ping']) {
     const a = await host.send({ type, v: 1, nonce: '11'.repeat(16) });
     assert.equal(a.ok, false);
     assert.match(a.detail, /no phone on this link/);

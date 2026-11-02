@@ -73,10 +73,8 @@ function statementOf(home, deviceIdHex) {
 
 /**
  * A HARD KEY'S LOG, READY TO OFFER to the other devices of its identity (Brad, 2026-10-24: "each team
- * knows the budget history if using the same key identity"). A phone's log is kept to offer by the pull
- * of edge sync (agent.js: its statement + its checkpoint -> copy.keepLog); a hard key has no phone to
- * pull, so this computer does the same with the SAME function, from the key's own statement (its name,
- * setName) and its checkpoint now. keepLog's checks decide - the statement names this device, the chain
+ * knows the budget history if using the same key identity"): this computer keeps the key's log with its own
+ * statement (its name, setName) and its checkpoint now - copy.keepLog, the same function every log goes through. keepLog's checks decide - the statement names this device, the chain
  * verifies, every use is complete - and say why not.
  * @returns {Promise<{kept: boolean, why?: string}>}
  */

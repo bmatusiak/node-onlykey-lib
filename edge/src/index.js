@@ -26,7 +26,7 @@ module.exports = {
   client: require('./client'),
   /* step 2: EDGE_REQUEST over the Bluetooth vendor channel (OKEDGE_REQUEST 0xF7, kept by the phone for the app) */
   wire: require('./wire'),
-  /* onlykey-js edge sync: the phone's log into a computer's copy, and other devices' logs offered to the phone, held there until approved (BLOCKS.md) */
+  /* merging copies of a chain (a fork reported, never chosen) and checking another device's against its checkpoint - what edge sync left (removed 2026-11-02) */
   sync: require('./sync'),
   devices: require('./devices'),
   /* a pure Bluetooth link test: the phone echoes, testing mode only (onlykey-js edge ping) */

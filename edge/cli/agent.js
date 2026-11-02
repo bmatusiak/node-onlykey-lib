@@ -332,7 +332,7 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
  * sign code (221), told apart by label (R11a); sizes come from the request
  * (D4, at most 300 together).
  */
-function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null, home = null }) {
+function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null }) {
   /*
    * identity: name another identity in the ssh scope (edge budget --identity) - for
    * rule-10 tests with an identity the phone marks as test. Such a budget cannot
@@ -404,96 +404,6 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
       return { links, head: agent.budget() ? agent.budget().head() : null };
     },
     receipt: async ({ seq, code, message }) => ({ head: await agent.receipt(seq, { code: code || 'OK', message }) }),
-    /* edge sync, phase 1: the PC's own copy - reads only (R8), no press; --status changes nothing */
-    /*
-     * only: 'pull' | 'push' | undefined (both) - edge sync --all (Brad, 2026-10-11: "pull from all
-     * devices,, (dont update them) then on the host,, after we have both sync state in the host,
-     * merging them into the host then we push to both devices"). PULL reads this phone into the
-     * PC's copy (its key, a gap filled from its history, its seals, openings, notes and
-     * statement) and writes nothing to the phone. PUSH writes: the phone's own links it lacks,
-     * and every other device's log this PC holds, offered (held there until approved).
-     */
-    sync: async ({ status, phone = true, only }) => {
-      if (!edge) throw new Error('this agent service has no Edge key to sync from');
-      /* the key's identity home (register.js openDevice), never the net's: B3.0, one identity, one store */
-      if (!home) throw new Error('this agent service was started without the identity home of its key - nothing to sync into');
-      const where = home;
-      const copy = require('./copy');
-      let r = await copy.sync(edge, where, { status: !!status });
-      if (status || !phone) return r;
-      const pull = only !== 'push';
-      const push = only !== 'pull';
-      /* a gap only the phone can fill (a late or reset computer): its own copy, checked against the key (copy.sync) */
-      if (pull && r.verdict.kind === 'gap') {
-        try {
-          const history = await client.copyFromPhone(copy.peerSigner(where), { deviceId: Buffer.from(r.deviceId, 'hex') });
-          if (history.length) r = await copy.sync(edge, where, { history });
-        } catch (e) { r.historyError = e.message; }
-      }
-      /*
-       * Phase 2: this PC's copy fills the phone's - only a copy that verifies (R27).
-       * The phone HOLDS what it lacks until the person approves the merge from the
-       * Edge tab's banner (Brad, 2026-10-08) - no sheet pops up, no key press, no sync
-       * link. Any computer its host trusts may offer (peers dropped).
-       * Never repairs: a fork on the phone stops it, reported.
-       */
-      if (r.verdict.kind !== 'verified' && r.verdict.kind !== 'gap') {
-        r.phone = { skipped: `this PC's copy does not verify (${r.verdict.kind}) - nothing is offered` };
-        return r;
-      }
-      const signer = copy.peerSigner(where);
-      const c = copy.load(where, Buffer.from(r.deviceId, 'hex'));
-      /*
-       * Device logs only: the Key Chain list is not Edge's (Brad, 2026-10-08: "Move it out of
-       * Edge") - it is the Key Chain plugin's and syncs on its own.
-       */
-      if (push) {
-        try {
-          r.phone = await client.syncToPhone(signer, { deviceId: c.deviceId, records: c.links, name: require('os').hostname() });
-        } catch (e) {
-          r.phone = { refused: e.message };
-        }
-      }
-      /*
-       * The seals that cut this copy into JSON blocks (BLOCKS.md) - asked for on
-       * their own: reading them needs no approval, so a merge the person has not
-       * approved yet still brings them.
-       */
-      if (pull) try {
-        const given = await client.sealsFromPhone(signer, { deviceId: c.deviceId });
-        r.blocks = copy.keepSeals(where, c.deviceId, given);
-        if (given.openings && given.openings.length) r.openings = copy.keepOpenings(where, c.deviceId, given.openings);
-        if (given.notes) r.notes = copy.keepNotes(where, c.deviceId, given.notes);
-        /* this phone's own statement (its nametag) and checkpoint: what lets this computer offer its log to your other devices */
-        if (given.statement) {
-          const mine = copy.load(where, c.deviceId);
-          mine.statement = given.statement;
-          mine.checkpoint = await edge.checkpoint();
-          r.log = copy.keepLog(where, { deviceId: c.deviceId, publicKey: mine.publicKey, publicKeyPq: mine.publicKeyPq, records: mine.links, checkpoint: mine.checkpoint, statement: mine.statement });
-        } else {
-          r.log = { kept: false, why: 'the phone gave no nametag statement' };
-        }
-      } catch (e) {
-        r.blocksError = e.message;
-      }
-      /*
-       * Your other devices' logs this computer holds (from syncing each of them, one phone at a
-       * time - Brad, 2026-10-08: "sync should only be 1 device at a time"; a hard key's later):
-       * offered to this phone, which HOLDS each one until you approve the merge from its Edge
-       * tab's banner. The phone sorts them (devices.classify).
-       */
-      if (!push) return r;
-      r.offered = [];
-      for (const other of copy.logsToOffer(where, c.deviceId)) {
-        try {
-          const o = await client.offerToPhone(signer, { deviceId: c.deviceId, chain: other.deviceId, records: other.links, checkpoint: other.checkpoint, statement: other.statement, openings: other.openings || [], notes: other.notes || null, name: `${require('os').hostname()}` });
-          r.offered.push({ deviceId: Buffer.from(other.deviceId).toString('hex'), nametag: other.statement.nametag, ...o });
-        } catch (e) {
-          r.offered.push({ deviceId: Buffer.from(other.deviceId).toString('hex'), nametag: other.statement.nametag, error: e.message });
-        }
-      }
-      return r;
-    },
     end: async () => {
       const b = agent.budget();
       if (b) await b.end();

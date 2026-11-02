@@ -1,7 +1,6 @@
 /*
  * `onlykey-js edge blocks` (BLOCKS.md, Brad 2026-10-07): this PC's copy cut
- * at the key's seals into JSON blocks. The seals come from the phone (GIVE's last
- * batch, client.sealsFromPhone) and are kept beside the copy (copy.keepSeals);
+ * at the key's seals into JSON blocks. The seals are kept beside the copy (copy.keepSeals);
  * every block is checked against the key's public key kept at the last sync.
  */
 'use strict';
@@ -15,7 +14,6 @@ const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 const { toHex } = require('../../src/bytes');
 const chain = require('../src/chain');
 const block = require('../src/block');
-const client = require('../src/client');
 const { OP, DECISION } = require('../src/codes');
 const copy = require('../cli/copy');
 const { main } = require('../../cli/index');
@@ -49,33 +47,6 @@ async function run(argv) {
   const code = await main(argv, { out: (l) => out.push(l), err: (l) => err.push(l), start: () => { throw new Error('edge blocks opened a device'); } });
   return { code, out, err };
 }
-
-/*
- * The GIVE is signed with this computer's sync key (peer.key); the client itself takes no
- * signer since 2026-10-08 (Brad: "so the claude key thing is overkill"). What comes back:
- * the seals, and the owner statement (null when the phone sends none) - no anchors.
- */
-test('sealsFromPhone reads the phone\'s last-batch fields: the seals, and the statement when there is one', async () => {
-  const s = sealAt(3);
-  const peer = require('../src/request').peerSignerFromSecret(new Uint8Array(32).fill(2));
-  const sent = [];
-  const phone = { send: async (msg) => { sent.push(msg); return { ok: true, links: [], next: null, seals: [[s.seq, toHex(s.head), toHex(s.signature), toHex(s.signaturePq)]], seen: [] }; } };
-  const c = client.createEdgeClient({ edge: {}, channel: phone });
-  const got = await c.sealsFromPhone(peer, { deviceId: id });
-  assert.deepEqual(Object.keys(got).sort(), ['notes', 'openings', 'seals', 'statement']);
-  assert.equal(got.seals.length, 1);
-  assert.equal(got.seals[0].seq, 3);
-  assert.equal(toHex(got.seals[0].head), toHex(s.head));
-  assert.equal(toHex(got.seals[0].signature), toHex(s.signature));
-  assert.equal(toHex(got.seals[0].signaturePq), toHex(s.signaturePq), "the seal's ML-DSA-65 half comes with it");
-  assert.equal(got.statement, null, 'no statement from the phone');
-  assert.equal(sent[0].peer, toHex(peer.publicKey), 'the GIVE names this computer\'s sync key');
-  /* a phone that refuses, or answers nothing */
-  const refusing = client.createEdgeClient({ edge: {}, channel: { send: async () => ({ ok: false, refusal: 'busy' }) } });
-  await assert.rejects(refusing.sealsFromPhone(peer, { deviceId: id }), { code: 'EEDGE_REFUSED' });
-  const silent = client.createEdgeClient({ edge: {}, channel: { send: async () => null } });
-  await assert.rejects(silent.sealsFromPhone(peer, { deviceId: id }), (e) => e.code === 'EEDGE_NO_ANSWER' && /answered nothing/.test(e.message));
-});
 
 test('keepSeals merges by seq, and edge blocks lists the verified blocks without a phone', async () => {
   const home = homeWithCopy();

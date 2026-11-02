@@ -25,8 +25,7 @@
  *                       head and checked by the key plugin's grants.check before anything is sent
  *   - the openings:     kept with that copy (copy.keepOpenings), as the phone keeps them, so the next
  *                       budget's check can verify this one's opening
- * What only a phone has (pings, the phone's own copy and other devices' logs for `edge sync`)
- * is answered "no phone here" at once instead of a wait.
+ * What only a phone has (pings) is answered "no phone here" at once instead of a wait.
  *
  * The net needs no check of its own: the stores live in the net's own home (`--test-mode` = the
  * testnet's), and the agent refuses a record whose certificate is not this key's derived key

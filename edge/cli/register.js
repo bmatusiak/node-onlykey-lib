@@ -511,7 +511,7 @@ module.exports = function register(COMMANDS, h) {
         return sub ? 0 : 2;
       }
       /* an unknown subcommand is refused here, before anything connects to the key */
-      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'sync', 'blocks', 'clear', 'control', 'loss', 'migrate', 'name', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
+      const KNOWN = ['setup', 'agent', 'budget', 'continue', 'end', 'status', 'exec', 'receipt', 'watch', 'blocks', 'clear', 'control', 'loss', 'migrate', 'name', ...Object.keys((dev && dev.commands) || {}), ...(dev && dev.reset ? ['reset'] : [])];
       if (!KNOWN.includes(sub)) throw h.usage(`unknown edge command "${sub}" - ${edgeCmd('help')}`);
       /* a ship's step (its window named for its children): every `edge:` line said here also goes to the window, as said */
       if (sub !== 'control') FEED.teeErr(io);
@@ -683,7 +683,7 @@ module.exports = function register(COMMANDS, h) {
           io.out(JSON.stringify(found.flatMap((d) => d.blocks.map((b) => b.block)), null, 2));
           return found.every((d) => d.blocks.every((b) => b.ok)) ? 0 : 1;
         }
-        if (!found.length) io.out(`no copy yet - ${edgeCmd('sync')}`);
+        if (!found.length) io.out(`no copy yet - it is read from the key after any edge command with the key plugged in (${edgeCmd('status')})`);
         for (const d of found) {
           io.out(h.row(`key ${d.deviceId.slice(0, 16)}`, `${d.blocks.length} block(s), ${d.open} link(s) after the last seal${d.reason ? ` - ${d.reason}` : ''}`));
           for (const b of d.blocks) {

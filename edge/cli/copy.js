@@ -1,24 +1,19 @@
 'use strict';
 
 /**
- * `onlykey-js edge sync` (onlykey-edge BLOCKS.md): the PC keeps its OWN copy of the key's chain. It reads the links
- * the key still holds (PICKUP - a read the key answers unlocked, R8, so no press)
- * and keeps them only after the whole copy verifies against the key (R27).
+ * THIS COMPUTER'S COPY OF THE KEY'S CHAIN (onlykey-edge BLOCKS.md): it reads the links the key still holds (PICKUP - a
+ * read the key answers unlocked, R8, so no press) and keeps them only after the whole copy verifies against the key
+ * (R27). Read after every edge command with the key on USB (register.js pickUp) and when a budget opens (local-host).
  *
- * Reading the key moves nothing anywhere else. Phase 2 (sync.js, client.js) brings
- * a phone its own links (merged at once, no press) and offers it your other
- * devices' logs (HELD on the phone until approved from a banner); until 2026-10-08
- * that took a sheet + Yes + a press and the key kept anchors. It never moves
- * budgets, debts or "yours" marks,
- * and it REPORTS problems (a gap, a fork, tampering); it never repairs them - the
- * repairs stay on the phone.
+ * Reading the key moves nothing anywhere else: the copy reaches your other devices as the identity bucket's sealed rows,
+ * through the room (bucket sync - `onlykey-js edge sync` and its phone offers were removed 2026-11-02). It never moves
+ * budgets, debts or "yours" marks, and it REPORTS problems (a gap, a fork, tampering); it never repairs them.
  *
  * The copy: the CLI's bucket, the home's `copies` store, key = device id (16 hex):
  *   {deviceId, links: [{link, head, reveal?}] (hex), lastSeen: {seq, head} | null,
  *    publicKey, publicKeyPq, seals: [{seq, head, signature, signaturePq?}], checkpoint?, statement?}
- * One file per device: this phone's key, and since 2026-10-08 your OTHER devices' logs too
- * (each phone synced in turn, a hard key's later), each with that device's signed checkpoint and its
- * owner statement (nametag) - what this computer offers your phones to merge.
+ * One file per device: this key's, and your OTHER devices' logs too, each with that device's signed checkpoint and its
+ * owner statement (nametag).
  * publicKey is the key's Edge key as the key gave it at the last sync, publicKeyPq its
  * ML-DSA-65 twin. One hybrid anchor per copy ("B", 2026-10-10): the newest checkpoint and
  * the newest seal keep their ML-DSA-65 half and are checked with both; older seals keep
@@ -222,7 +217,7 @@ function seedHead(edge, kept, deviceId) {
  * edge: the Edge plugin (head, pickup, publicKey, publicKeyPq). -> a report; changes only the
  * PC's copy file, and only when what it would store verifies (no tampering).
  */
-async function sync(edge, home, { status = false, history = null } = {}) {
+async function sync(edge, home, { status = false } = {}) {
   /*
    * EACH PART ITS OWN STEP in a ship's progress window (progress-feed.js; Brad, 2026-10-29: "i'm trying to identify why
    * we wait, and if we can stop waiting for no reason"): what the key does (its keys, its links, its checkpoint) apart
@@ -242,35 +237,6 @@ async function sync(edge, home, { status = false, history = null } = {}) {
   const ringFrom = h.oldest === null ? keySeq + 1 : h.oldest;
   const candidate = { ...c, links: [...c.links], publicKey, publicKeyPq };
   let stopped = null;
-  /*
-   * THE PHONE'S HISTORY FILLS A GAP (2026-10-08, walking the setup flow): the key's ring holds
-   * only its newest links, so a computer that joins late - or whose copy was reset - began at
-   * the ring and could never check the chain from its genesis, so it never kept the phone's
-   * statement and never offered its log. `history`: the phone's own copy (client.copyFromPhone).
-   * Taken only as a run that follows from the start; assess() below then judges ALL of it
-   * against the KEY's head and ring - a link that does not weld onto the key's own chain makes
-   * the copy "does not verify", and nothing is kept.
-   */
-  /*
-   * A GAP IN THE MIDDLE IS FILLED THE SAME WAY (2026-10-11, the two-phone testnet walk): a copy that
-   * began at #0 and then missed links between two syncs (#4-#38 made while this computer was away)
-   * kept the gap for good - the fill ran only for a copy that did not start at #0 - so the log it
-   * offered to the other devices was incomplete and showed there as "not checked yet". The run
-   * from the phone's history replaces the copy's own links up to where it ends; assess() still
-   * judges all of it against the key.
-   */
-  if (history && history.length) {
-    const run = [];
-    for (const r of [...history].sort((x, y) => seqOf(x) - seqOf(y))) {
-      const prev = run[run.length - 1];
-      if (!prev ? seqOf(r) === 0 && follows(null, r) : seqOf(r) === seqOf(prev) + 1 && follows(prev, r)) run.push(r);
-      else if (prev && seqOf(r) <= seqOf(prev)) continue;
-      else break;
-    }
-    const after = run.length ? seqOf(run[run.length - 1]) : -1;
-    const rest = candidate.links.filter((r) => seqOf(r) > after);
-    if (run.length && (!rest.length || follows(run[run.length - 1], rest[0]))) candidate.links = [...run, ...rest];
-  }
   /*
    * --status reads too (reads change nothing, R8) and only skips the save: a copy
    * that has not read the newest links yet is behind, not tampered - judging it
@@ -344,62 +310,9 @@ async function sync(edge, home, { status = false, history = null } = {}) {
   };
 }
 
-/** Lines for the terminal. */
-function lines(r, { status = false } = {}) {
-  const out = [];
-  out.push(`key ${r.deviceId.slice(0, 16)}: head #${r.key.seq} (${r.key.head.slice(0, 12)}...), holds #${r.key.ringFrom}..#${r.key.seq}`);
-  out.push(`PC copy: ${r.copy.count - (status ? r.copy.added : 0)} link(s)${status ? (r.copy.added ? `, ${r.copy.added} to read (onlykey-js edge sync)` : ', up to date') : `, ${r.copy.added} new${r.copy.saved ? '' : ' - NOT kept'}`}`);
-  const v = r.verdict;
-  if (v.kind === 'verified') out.push(`verified through #${v.through}${v.lost && v.lost.length ? ` - ${v.lost.map((g) => (g.from === g.to ? `#${g.from}` : `#${g.from}-#${g.to}`)).join(', ')} accepted as lost (LOSS)` : ''}`);
-  else if (v.kind === 'unsigned') out.push(`not checked: the links weld to the key's head, but its signature (checkpoint, both halves) could not be checked - not called verified`);
-  else if (v.kind === 'gap') out.push(`gap: ${v.gaps.map((g) => (g.from === g.to ? `#${g.from}` : `#${g.from}-#${g.to}`)).join(', ')} - links no copy here holds (repairs are the phone's)`);
-  else out.push(`DOES NOT VERIFY at #${v.seq}: ${v.reason} - reported, nothing kept (repairs are the phone's)`);
-  if (r.stoppedAt !== null && r.stoppedAt !== undefined) out.push(`stopped at #${r.stoppedAt}: a reply that does not weld onto the copy`);
-  /* phase 2: what the phone took of its own chain (no sheet, no press, no link since 2026-10-08) */
-  const p = r.phone;
-  if (p && p.skipped) out.push(`phone: not offered - ${p.skipped}`);
-  else if (p && p.refused) out.push(`phone: ${p.refused}`);
-  else if (p && !p.count) out.push('phone: lacks nothing this PC holds');
-  else if (p) out.push(`phone: took ${p.count} link(s)`);
-  /* this phone's log, now on this computer too (keepLog) - and from here on every device of the identity */
-  if (r.log) out.push(r.log.kept ? `log: this phone's log is on this computer${r.log.missing ? ` (${r.log.missing.length} use(s) without their words)` : ''}` : `log: not kept - ${r.log.why}`);
-  /* the seals that cut the copy into JSON blocks (BLOCKS.md; read on their own, no press) */
-  if (r.blocks) out.push(`seals: ${r.blocks.seals} kept with this copy - onlykey-js edge blocks shows the blocks`);
-  else if (r.blocksError) out.push(`seals: not read - ${r.blocksError}`);
-  /* your other devices' logs this PC holds, given to the phone - it files a log whose signatures check, no question asked (2026-10-24) */
-  for (const o of r.offered || []) {
-    const who = `"${o.nametag}" (${o.deviceId.slice(0, 16)})`;
-    /* a phone that already has that checkpoint (merged, declined or kept as evidence) holds nothing again (2026-10-11) */
-    out.push(o.error ? `log of ${who}: not given - ${o.error}`
-      : o.held === false ? `log of ${who}: the phone already has it`
-        : `log of ${who}: ${o.count} link(s) given to the phone`);
-  }
-  return out;
-}
-
 /*
- * This computer's own sync key: <edge home>/peer.key, P-256 (made on first use, this
- * user only). It signs every sync message, so the phone knows which
- * computer offered a log. The agent that asks for budgets has no key of its own (since
- * 2026-10-08). No peer list on the key or the phone since 2026-10-08 (Brad: peers dropped) -
- * a computer its host trusts may offer logs, and the host holds them until the person
- * approves the merge.
- */
-function peerSigner(home) {
-  const { request } = require('../src');
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  const file = path.join(home, 'peer.key');
-  if (!fs.existsSync(file)) {
-    const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
-    fs.writeFileSync(file, toHex(p256.utils.randomSecretKey()) + '\n', { mode: 0o600 });
-  }
-  return request.peerSignerFromSecret(fromHex(fs.readFileSync(file, 'utf8').trim()));
-}
-
-/*
- * The phone's seals (GIVE's last
- * batch, client.sealsFromPhone), kept beside the copy. Merged by seq: the phone
- * may hold fewer than this PC already kept.
+ * A key's seals (the checkpoints that close each block), kept beside the copy. Merged by seq: a source may hold
+ * fewer than this computer already kept.
  */
 function keepSeals(home, deviceId, { seals = [] }) {
   const c = load(home, deviceId);
@@ -461,14 +374,6 @@ function keepLog(home, { deviceId, publicKey, publicKeyPq, records, checkpoint, 
   if (!c.statement || (statement.seq ?? -1) >= (c.statement.seq ?? -1)) c.statement = statement;
   save(home, c);
   return full.ok ? { kept: true } : { kept: true, missing: full.missing };
-}
-
-/** Every log this computer can offer, but the one of `exceptId` (the phone being synced): those with a checkpoint and a statement. */
-function logsToOffer(home, exceptId) {
-  const skip = exceptId ? keyOf(exceptId) : null;
-  return allJSON(home)
-    .filter((j) => j.v === 1 && j.checkpoint && j.statement && keyOf(fromHex(j.deviceId)) !== skip)
-    .map((j) => copyfile.fromJSON(j, fromHex(j.deviceId)));
 }
 
 /**
@@ -564,4 +469,4 @@ function nametagHistory() {
   return Object.values(namesKv().entries()).map((v) => { try { return JSON.parse(v); } catch (_) { return null; } }).filter((r) => r && r.statement);
 }
 
-module.exports = { sync, catchUp, adoptAll, lines, load, store, useIdentityBucket, peerSigner, keepSeals, keepLog, logsToOffer, blocks, keepOpenings, keepNotes, keepNametag, nametagHistory };
+module.exports = { sync, catchUp, adoptAll, load, store, useIdentityBucket, keepSeals, keepLog, blocks, keepOpenings, keepNotes, keepNametag, nametagHistory };
