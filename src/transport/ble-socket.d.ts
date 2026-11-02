@@ -14,8 +14,10 @@ export const PART_MAX: 2400;
 export function encodeHere({ host }: {
     host: any;
 }): Uint8Array<any>;
-/** WHERE: the phone asks for HERE again. */
-export function encodeWhere(): Uint8Array<any>;
+/** WHERE: the phone asks for HERE again, saying whether it has a socket open. */
+export function encodeWhere({ open }?: {
+    open?: boolean | undefined;
+}): Uint8Array<any>;
 /** OPEN: the phone dials its identity's room. */
 export function encodeOpen({ room }: {
     room: any;
@@ -33,7 +35,7 @@ export function encodeClose({ code, reason }?: {
 }): Uint8Array<any>;
 /**
  * The receiving end: 0x86 payloads in, socket events out -
- *   {kind:'here', host} | {kind:'where'} | {kind:'open', room} | {kind:'opened', host} | {kind:'text', text} |
+ *   {kind:'here', host} | {kind:'where', open} | {kind:'open', room} | {kind:'opened', host} | {kind:'text', text} |
  *   {kind:'close', code, reason} | null (a PART held, or a payload that is not one of these: dropped, as noise is on any
  *   link).
  */
@@ -42,6 +44,7 @@ export function createDecoder(): {
         kind: string;
         text: string;
         host?: undefined;
+        open?: undefined;
         room?: undefined;
         code?: undefined;
         reason?: undefined;
@@ -49,11 +52,13 @@ export function createDecoder(): {
         kind: string;
         host: any;
         text?: undefined;
+        open?: undefined;
         room?: undefined;
         code?: undefined;
         reason?: undefined;
     } | {
         kind: string;
+        open: boolean;
         text?: undefined;
         host?: undefined;
         room?: undefined;
@@ -64,6 +69,7 @@ export function createDecoder(): {
         room: any;
         text?: undefined;
         host?: undefined;
+        open?: undefined;
         code?: undefined;
         reason?: undefined;
     } | {
@@ -72,6 +78,7 @@ export function createDecoder(): {
         reason: string;
         text?: undefined;
         host?: undefined;
+        open?: undefined;
         room?: undefined;
     } | null;
 };
@@ -105,7 +112,7 @@ export function createSocketLink({ sendFrame }: {
     readonly host: any;
     /** fn(host) each time the server says its name (HERE) */
     onHere(fn: any): () => boolean;
-    /** ask the server for HERE again */
+    /** ask the server for HERE again (and say whether a socket is open on this side) */
     where(): void;
     /** one 0x86 payload from the link */
     push(payload: any): void;

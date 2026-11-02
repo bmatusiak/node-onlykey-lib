@@ -16,7 +16,8 @@
  *   await room.agents()                  {agents: [{id, name, state}], plans: [...]} - the room's list, for a device
  *                                        that joins later
  *   await room.setAgent(id, state)       the owner's word on an agent: 'accepted' | 'blocked' | 'removed'
- *   await room.planUpdate(planId, {state, results, receipts, why})   a plan's progress, back to its agent
+ *   await room.planClaim(planId)         this device runs the plan (the owner tapped Approve here) - refused when another did
+ *   await room.planUpdate(planId, {state, results, receipts, why})   a plan's progress, back to its agent (why '' clears it)
  *   room.close()
  *
  * It joins with room.js's proof (the bucket key over the server's host and a fresh nonce - the key alone, no code) and
@@ -205,8 +206,9 @@ function connectRoom({ url, me: given, device, WebSocket: WS, randomBytes, timeo
       },
       async agents() { const r = await api.mcp('agents'); return { agents: r.agents || [], plans: r.plans || [] }; },
       async setAgent(agent, state) { await api.mcp('agent', { agent, state }); },
+      async planClaim(plan) { await api.mcp('plan-claim', { plan }); },
       async planUpdate(plan, { state, results, receipts, why } = {}) {
-        await api.mcp('plan', { plan, ...(state ? { state } : {}), ...(results ? { results } : {}), ...(receipts ? { receipts } : {}), ...(why ? { why } : {}) });
+        await api.mcp('plan', { plan, ...(state ? { state } : {}), ...(results ? { results } : {}), ...(receipts ? { receipts } : {}), ...(typeof why === 'string' ? { why } : {}) });
       },
       /*
        * THE SERVER'S SEALED COPY OF THIS BUCKET (bucket/src/sealedcopy.js; Phase 3): the room's rows as a row store for
