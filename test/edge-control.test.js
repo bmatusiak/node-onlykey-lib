@@ -146,3 +146,53 @@ test('the CLI dispatches edge control and edge --claude-setup without opening a 
   assert.equal(await main(['edge', 'control', 'bogus'], a), 2);
   assert.equal(await main(['edge', '--claude-setup', '--nope'], a), 2);
 });
+
+/* a repo with a base commit and n unsigned commits after it */
+function repoWithCommits(n) {
+  const dir = tmp('okjs-ctl-repo-');
+  git(dir, 'init', '-q');
+  const c = (m) => git(dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', m);
+  c('base');
+  for (let i = 1; i <= n; i++) c(`work ${i}`);
+  return dir;
+}
+
+test('control ship --max N: a batch takes N signatures from the repos in order; a repo it does not reach is not pushed', async () => {
+  const home = tmp('okjs-ctl-home-');
+  const a = repoWithCommits(1);
+  const b = repoWithCommits(2);
+  try {
+    const plan = async (max) => {
+      const o = io();
+      assert.equal(await control.run({ io: o, opts: {}, argv: ['ship', `${a}:HEAD~1`, `${b}:HEAD~2`, '--plan', '--max', String(max)], net: 'live', home }), 0);
+      return o.lines;
+    };
+    assert.deepEqual(await plan(1), ['plan: 1 signature(s), 1 push(es)'], 'the first repo only');
+    assert.deepEqual(await plan(2), ['plan: 2 signature(s), 2 push(es)'], 'one from each, both pushed');
+    assert.deepEqual(await plan(10), ['plan: 3 signature(s), 2 push(es)'], 'everything: no more than there is');
+    const bad = io();
+    assert.equal(await control.run({ io: bad, opts: {}, argv: ['ship', a, '--plan', '--max', '0'], net: 'live', home }), 2);
+    assert.match(bad.errs.join('\n'), /--max takes a whole number of signatures, 1 or more/);
+  } finally {
+    for (const d of [home, a, b]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('control plan: who, what and how many, why, how long, and the work commit by commit - nothing asked of a key', async () => {
+  const home = tmp('okjs-ctl-home-');
+  const a = repoWithCommits(3);
+  try {
+    const o = io();
+    assert.equal(await control.run({ io: o, opts: { path: 'no-such-key' }, argv: ['plan', `${a}:HEAD~3`, '--max', '2'], net: 'test', home }), 0);
+    const said = o.lines.join('\n');
+    assert.match(said, /^THE PLAN \(testnet\) - the budget it asks, for your review:/);
+    assert.match(said, /  who: {6}/);
+    assert.match(said, /  what: {5}sign - 2 commit signature\(s\) \+ 1 push signature\(s\) = 3 use\(s\)/);
+    assert.match(said, /  why: {6}"sign 2 commit\(s\) and push: /);
+    assert.match(said, /  how long: 30 min/);
+    assert.match(said, /: sign [0-9a-f]{7} work 1\n.*: sign [0-9a-f]{7} work 2\n.*: push up to its last signed commit -> origin\//);
+    assert.match(said, /: 1 more for a later batch/);
+  } finally {
+    for (const d of [home, a]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});

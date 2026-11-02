@@ -354,7 +354,8 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
   /* token -> the exec's own gpg endpoint (closed with the exec) */
   const gpgEndpoints = new Map();
   return {
-    status: async () => agent.status(),
+    /* and WHO a budget here is for - the agent identity whose credentials are its scopes (edge control plan shows it) */
+    status: async () => ({ ...(await agent.status()), identity: { ssh: ssh.name, gpg: gpg ? gpg.name : null, fingerprint: gpg ? gpg.fingerprint : null } }),
     /* edge watch: read-only */
     feed: async ({ from = null, since = 0 }) => agent.feed({ from, since }),
     /* edge ping: a pure link test - the phone echoes (testing mode, encrypted only); no key, no budget */

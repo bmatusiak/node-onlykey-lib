@@ -122,6 +122,8 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     if (dev && dev.commands && Object.prototype.hasOwnProperty.call(dev.commands, cmd)) return await dev.commands[cmd](args, { out, err, ask });
     if (cmd === 'status') {
       const s = await ask('status');
+      /* who a budget here is for: the agent identity whose keys are its scopes */
+      if (s.identity) out(`identity: ${s.identity.ssh}${s.identity.gpg ? ` · gpg "${s.identity.gpg}"${s.identity.fingerprint ? ` (${s.identity.fingerprint})` : ''}` : ''}`);
       if (!s.budget) out('no budget');
       else {
         const used = s.spent === null || s.spent === undefined ? `${s.uses} uses` : `${s.spent} of ${s.uses} used, ${s.uses - s.spent} left`;

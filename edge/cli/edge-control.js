@@ -7,7 +7,8 @@
  *
  *   onlykey-js [--path <hid path>] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...
  *   onlykey-js … edge … control preview          everything pending: commits to sign, pushes, the request
- *   onlykey-js … edge … control ship [<repo>...] [--plan] [--reason "..."] [--head <h>]
+ *   onlykey-js … edge … control plan [<repo>...] [--max N]   the budget it would ask, for review: who, what, how many, why
+ *   onlykey-js … edge … control ship [<repo>...] [--max N] [--plan] [--reason "..."] [--head <h>]
  *   onlykey-js … edge … control status
  *   onlykey-js … edge … control settings         where its files are, and what they say
  *
@@ -36,6 +37,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync, spawn } = require('child_process');
+const { receipts } = require('../src');
 
 const CLI = path.join(__dirname, '..', '..', 'cli', 'index.js');
 const BATCH_FILE = 'control-batch.json';
@@ -55,7 +57,8 @@ function ranWhat(file, a) {
 const USAGE = [
   'onlykey-js [--path <hid path>] [--gui-prompt] edge [--test-mode] control note <repo>[:<base>[:<branch>]] ...',
   'onlykey-js … edge … control preview',
-  'onlykey-js … edge … control ship [<repo>...] [--plan] [--reason "..."] [--head <h>]',
+  'onlykey-js … edge … control plan [<repo>...] [--max N]',
+  'onlykey-js … edge … control ship [<repo>...] [--max N] [--plan] [--reason "..."] [--head <h>]',
   'onlykey-js … edge … control status | settings',
 ];
 
@@ -78,6 +81,14 @@ async function run({ io, opts, argv, net, home, dev = null }) {
   const flag = (name) => { const i = args.indexOf(name); if (i < 0) return false; args.splice(i, 1); return true; };
   const REASON = opt('--reason');
   const PLAN = flag('--plan');
+  /*
+   * --max N: A BATCH (Brad, 2026-11-02: "for testing, we sign in small batches at the start - 1, then 1 again, then 3
+   * twice ... then 10 twice, then the remaining full batch"): at most N commit signatures, taken from the repos in their
+   * order; each repo the batch reaches is pushed up to its last signed commit, and the next batch goes on from there.
+   */
+  const MAX_RAW = opt('--max');
+  const MAX = MAX_RAW === null ? null : Number(MAX_RAW);
+  if (MAX !== null && !(Number.isInteger(MAX) && MAX > 0)) { io.err('--max takes a whole number of signatures, 1 or more'); return 2; }
   let HEAD = opt('--head');
 
   const batchFile = path.join(home, BATCH_FILE);
@@ -174,10 +185,48 @@ async function run({ io, opts, argv, net, home, dev = null }) {
 
   /* ---------------------------------------------------------------- the request */
   let REPOS = [];
-  const totals = () => ({ gpg: REPOS.reduce((n, r) => n + unsigned(r).length, 0), ssh: REPOS.filter((r) => commits(r).length).length });
+  /*
+   * WHAT THIS BATCH TAKES FROM EACH REPO: its signatures (r.take, --max split in repo order) and whether it is pushed - a
+   * repo the batch reaches is pushed up to its last signed commit (r.partial when unsigned ones are left for the next
+   * batch); one whose unsigned commits it does not reach is left as it is.
+   */
+  function allocate() {
+    let left = MAX === null ? Infinity : MAX;
+    for (const r of REPOS) {
+      const u = unsigned(r).length;
+      r.take = Math.min(u, left);
+      left -= r.take;
+      r.push = commits(r).length > 0 && (u === 0 || r.take > 0);
+      r.partial = r.take < u;
+    }
+  }
+  const totals = () => { allocate(); return { gpg: REPOS.reduce((n, r) => n + r.take, 0), ssh: REPOS.filter((r) => r.push).length }; };
   const reasonText = (gpg) => REASON || (gpg
-    ? `sign ${gpg} commit(s) and push: ${REPOS.map((r) => `${r.name} (${unsigned(r).length})`).join(', ')}`
-    : `push: ${REPOS.map((r) => r.name).join(', ')}`);
+    ? `sign ${gpg} commit(s) and push: ${REPOS.filter((r) => r.take).map((r) => `${r.name} (${r.take})`).join(', ')}`
+    : `push: ${REPOS.filter((r) => r.push).map((r) => r.name).join(', ')}`);
+  /*
+   * THE PLAN, SHOWN BEFORE ANY BUDGET (Brad, 2026-11-02: "the planner is a generic tool to create budgets; budgets use
+   * agent identity as credential scope"): who (the agent identity whose keys are the scopes), what and how many, why and
+   * how long - and the work it covers, commit by commit. The budget asked is exactly this.
+   */
+  let STATUS_OUT = null;
+  function showPlan(t) {
+    const out = STATUS_OUT === null ? cli(['status'], 60000).out : STATUS_OUT;
+    const id = out.split('\n').find((l) => l.startsWith('identity: '));
+    say(`THE PLAN${net === 'test' ? ' (testnet)' : ''} - the budget it asks, for your review:`);
+    say(`  who:      ${id ? id.slice('identity: '.length) : "the agent identity the key's host keeps (edge status names it)"}`);
+    say(`  what:     sign - ${t.gpg} commit signature(s) + ${t.ssh} push signature(s) = ${t.gpg + t.ssh} use(s)`);
+    say(`  why:      "${reasonText(t.gpg)}"`);
+    say(`  how long: ${TTL} min`);
+    say('  the work:');
+    for (const r of REPOS) {
+      if (!r.take && !r.push) { say(`    ${r.name}: not in this batch (${unsigned(r).length} to sign later)`); continue; }
+      for (const c of unsigned(r).slice(0, r.take)) say(`    ${r.name}: sign ${c.hash.slice(0, 7)} ${c.subject.slice(0, 70)}`);
+      if (r.push) say(`    ${r.name}: push ${r.partial ? 'up to its last signed commit' : r.branch} -> origin/${r.branch}${r.also.length ? ` (+ ${r.also.join(', ')})` : ''}`);
+      const rest = unsigned(r).length - r.take;
+      if (rest > 0) say(`    ${r.name}: ${rest} more for a later batch`);
+    }
+  }
   function sheet({ gpg, ssh }) {
     say(VIA_APP ? '>>> In the ok-edge desktop app\'s window, a budget request for the key on USB:'
       : GUI ? '>>> In a window on this desktop, a budget request for the key on USB:'
@@ -194,7 +243,7 @@ async function run({ io, opts, argv, net, home, dev = null }) {
   function ready() {
     for (let attempt = 0; attempt < 2; attempt++) {
       const r = cli(['status']);
-      if (r.code === 0) return;
+      if (r.code === 0) { STATUS_OUT = r.out; return; }
       if (attempt || !HOOKS.ready) stop(`${where} does not answer: ${r.out.trim().split('\n').pop()}`);
       say(`${where}: running the ready hook`);
       hook('ready');
@@ -220,9 +269,9 @@ async function run({ io, opts, argv, net, home, dev = null }) {
    * Stopping without it left HEAD at the budget's opening head, and the resume line it printed was refused ("--head is
    * not the budget's head").
    */
-  const fileReceipt = (seq, msg) => {
+  const fileReceipt = (seq, msg, code = 'OK') => {
     for (let t = 1; t <= 3; t++) {
-      const h = (cli(['receipt', seq, '--msg', msg]).out.match(/head = ([0-9a-f]{64})/) || [])[1];
+      const h = (cli(['receipt', seq, '--code', code, '--msg', msg]).out.match(/head = ([0-9a-f]{64})/) || [])[1];
       if (h) { HEAD = h; return true; }
       say(`  receipt #${seq}: no answer (try ${t}), again`);
     }
@@ -247,15 +296,22 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     throw new Stop('cancelled in the progress window');
   };
   /*
-   * ONE PROCESS A USE (Brad, 2026-10-29: "fit it in the same process so we dont need to do things twice"): the exec files
-   * its own receipt (--receipt) before it lets the key go, and HEAD follows the head it prints. Only a receipt it left
-   * owed goes to its own `edge receipt` (fileReceipt, with its tries) - as every receipt did before.
+   * EACH USE'S RECEIPT CARRIES ITS RESULT (Brad, 2026-11-02: "the receipt contains the result like reject, success,
+   * warnings, and any additional data"; "because sometimes things fail"): the exec runs the command and leaves its
+   * receipt owed; this process reads what really happened from git (resultOf: the signed commit's hash, the refs the
+   * push moved) and files the receipt with it (receipts.resultMessage). A command that FAILED was filed by the exec
+   * itself (TARGET_UNREACHABLE, its exit code) - the ship stops there, HEAD following that receipt's head. With the
+   * ship's own service holding the key, a receipt is one request on its control socket.
    */
-  function spend(intent, ...command) {
+  function spend(intent, command, resultOf) {
     cancelIfAsked();
-    const r = cli(['exec', '--head', HEAD, '--intent', intent, '--receipt', intent, '--', ...command]);
-    const filed = /receipt filed for #\d+/.test(r.out) && !/receipt owed for #/.test(r.out) && r.out.match(/head = ([0-9a-f]{64})/g);
-    if (filed) { HEAD = filed.pop().slice(7); return r.out; }
+    const r = cli(['exec', '--head', HEAD, '--intent', intent, '--', ...command]);
+    const filed = /receipt filed for #\d+/.test(r.out) && r.out.match(/head = ([0-9a-f]{64})/g);
+    if (filed) {
+      HEAD = filed.pop().slice(7);
+      if (r.code !== 0) stop(`${intent}: the command failed - its receipt says so: ${r.out.trim().split('\n').slice(-2).join(' | ')}`);
+      return r.out;
+    }
     /*
      * IT RAN AND THE KEY WAS NOT NEEDED (key 1, 2026-10-29: a push to a folder remote - or https with a token - asks no
      * SSH signature): done, said so, the budget's use left unspent. A commit that should have been signed and was not is
@@ -271,13 +327,19 @@ async function run({ io, opts, argv, net, home, dev = null }) {
       if (failed) fileReceipt(failed, `FAILED: ${intent}`.slice(0, 200));
       stop(`${intent}: ${r.out.trim().split('\n').slice(-2).join(' | ')}`);
     }
-    if (fileReceipt(seq, intent)) return r.out;
+    if (r.code !== 0) stop(`${intent}: the command failed (exit ${r.code}) and its receipt #${seq} is owed: ${r.out.trim().split('\n').slice(-2).join(' | ')}`);
+    const result = resultOf(r.out);
+    if (fileReceipt(seq, receipts.resultMessage(result), result.code || 'OK')) return r.out;
     return stop(`receipt #${seq} would not file`);
   }
   function shipRepo(r) {
-    const todo = unsigned(r);
+    if (!r.take && !r.push) { say(`== ${r.name}: not in this batch`); return; }
+    const before = unsigned(r).length;
+    const todo = unsigned(r).slice(0, r.take);
     const ahead = commits(r).length;
-    say(`== ${r.name} (${r.branch}): ${ahead} to push, ${todo.length} to sign`);
+    say(`== ${r.name} (${r.branch}): ${todo.length} to sign${r.partial ? ` (${unsigned(r).length - todo.length} left for a later batch)` : ''}, then the push`);
+    /* the batch's last signed commit: what a partial batch pushes */
+    let lastSigned = null;
     if (todo.length) {
       /*
        * RE-SIGNED IN A WORKTREE OF ITS OWN (2026-10-24): the rebase ran in the repo itself, so its files
@@ -311,12 +373,22 @@ async function run({ io, opts, argv, net, home, dev = null }) {
           if (moved.code !== 0) stop(`${r.name}: could not move ${r.branch} to the signed commits: ${moved.out.trim()}`);
         };
         try {
+          let signedHere = 0;
           while (wtRebasing()) {
-            const subject = git(wt, 'log', '-1', '--format=%h %s').out.trim().slice(0, 60);
-            spend(`sign: ${r.name} ${subject}`, 'git', '-C', wt, 'commit', '--amend', '--no-edit', '-S');
-            say(`  signed ${subject}`);
-            signedCount += 1;
-            if (PROGRESS) PROGRESS.step(`signed ${signedCount} - ${r.name}: ${subject}`);
+            /* past the batch's share: the rest are replayed as they are, unsigned, for the next batch */
+            if (signedHere < todo.length) {
+              const was = todo[signedHere];
+              const subject = git(wt, 'log', '-1', '--format=%h %s').out.trim().slice(0, 60);
+              spend(`sign: ${r.name} ${subject}`, ['git', '-C', wt, 'commit', '--amend', '--no-edit', '-S'], () => ({
+                line: `signed ${r.name} ${subject}`,
+                fields: { repo: r.name, commit: git(wt, 'rev-parse', 'HEAD').out.trim(), was: was.hash, ts: new Date().toISOString() },
+              }));
+              lastSigned = git(wt, 'rev-parse', 'HEAD').out.trim();
+              signedHere += 1;
+              say(`  signed ${subject}`);
+              signedCount += 1;
+              if (PROGRESS) PROGRESS.step(`signed ${signedCount} - ${r.name}: ${subject}`);
+            }
             runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
           }
         } catch (e) {
@@ -335,13 +407,25 @@ async function run({ io, opts, argv, net, home, dev = null }) {
       } finally {
         git(r.repo, 'worktree', 'remove', '--force', wt);
       }
-      if (unsigned(r).length) stop(`${r.name}: commits still unsigned`);
+      /* exactly the commits this batch did not reach are still unsigned - any other count is a stop */
+      if (unsigned(r).length !== before - todo.length) stop(`${r.name}: ${unsigned(r).length} commit(s) unsigned, ${before - todo.length} expected after this batch`);
     }
-    if (!ahead) return;
+    if (!ahead || !r.push) return;
     const named = [r.branch, ...r.also].join(' + ');
-    /* a first push also sets the upstream, so the next ship's default base (@{u}) is there */
-    const out = spend(`push: ${r.name} ${named}`, 'git', '-C', r.repo, 'push', ...(r.base === 'root' ? ['-u'] : []), 'origin', r.branch, ...r.also.map((b) => `${r.branch}:${b}`));
-    for (const line of out.match(/\S+(?:\.\.\.?\S+)?\s+\S+ -> \S+/g) || ['pushed']) say(`  ${line}`);
+    /*
+     * A PARTIAL BATCH PUSHES UP TO ITS LAST SIGNED COMMIT (--max): the commits after it stay here, unsigned, for the next
+     * batch - never an unsigned commit pushed. A first push also sets the upstream, so the next ship's default base
+     * (@{u}) is there.
+     */
+    const what = r.partial && lastSigned
+      ? [`${lastSigned}:refs/heads/${r.branch}`, ...r.also.map((b) => `${lastSigned}:refs/heads/${b}`)]
+      : [r.branch, ...r.also.map((b) => `${r.branch}:${b}`)];
+    const refsOf = (o) => o.match(/\S+(?:\.\.\.?\S+)?\s+\S+ -> \S+/g) || [];
+    const out = spend(`push: ${r.name} ${named}${r.partial ? ' (this batch)' : ''}`, ['git', '-C', r.repo, 'push', ...(r.base === 'root' && !r.partial ? ['-u'] : []), 'origin', ...what], (o) => ({
+      line: `pushed ${r.name} ${named}`,
+      fields: { repo: r.name, remote: 'origin', refs: refsOf(o).join(', ') || 'up to date', ts: new Date().toISOString() },
+    }));
+    for (const line of refsOf(out).length ? refsOf(out) : ['pushed']) say(`  ${line}`);
     pushCount += 1;
     if (PROGRESS) PROGRESS.step(`pushed ${r.name} (${named})`);
   }
@@ -375,6 +459,12 @@ async function run({ io, opts, argv, net, home, dev = null }) {
       say(`batch:    ${batchFile}`);
       say(`settings: ${settingsFile}${fs.existsSync(settingsFile) ? '' : ' (none: ttl 30, no hooks)'}`);
       say(JSON.stringify({ ttl: Number(TTL), hooks: HOOKS }, null, 2));
+      return 0;
+    }
+    if (cmd === 'plan') {
+      REPOS = (args.length ? args : readBatch()).map(parseSpec);
+      if (!REPOS.length) { say(`nothing to plan: name repos, or note them first (${USAGE[0].replace(/ \.\.\.$/, '')})`); return 0; }
+      showPlan(totals());
       return 0;
     }
     if (cmd === 'ship') {

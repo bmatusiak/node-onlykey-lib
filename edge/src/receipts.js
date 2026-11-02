@@ -178,4 +178,44 @@ function pairReceipts(entries, messages = {}) {
   return { uses, orphans };
 }
 
-module.exports = { messageHash, receiptSubject, settleSubject, pairReceipts, keyDebts };
+/*
+ * A RECEIPT CARRIES THE USE'S RESULT (Brad, 2026-11-02: "when an agent is done with the press link, the receipt contains
+ * the result like reject, success, warnings, and any additional data, like fingerprints, hash, meta, ts"; "because
+ * sometimes things fail"). Only the agent knows whether the job worked, so it says so in the message it files - the code
+ * byte is the verdict (RECEIPT-CODES.md), the message one form every agent writes and every host reads:
+ *
+ *   <what happened, one line> | key=value; key=value; ...
+ *
+ * Within the message limit (note.js MAX_RECEIPT_MSG, 1024): the line is shortened first, a field never cut in half. A
+ * value loses the separators and line breaks so it reads back as written. The message is plain text the key hashes
+ * (messageHash) - a receipt filed with it verifies against its link the same way as any other.
+ */
+const RESULT_MAX = 1024;
+const clean = (v) => String(v).replace(/[\r\n|;=]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+function resultMessage({ line, fields = {} }) {
+  const pairs = Object.entries(fields).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${clean(k)}=${clean(v)}`);
+  let tail = pairs.length ? ` | ${pairs.join('; ')}` : '';
+  /* the fields first: a line can be shortened, a hash cannot */
+  while (tail.length > RESULT_MAX - 8 && pairs.length) { pairs.pop(); tail = pairs.length ? ` | ${pairs.join('; ')}` : ''; }
+  const room = RESULT_MAX - tail.length;
+  let head = clean(line);
+  if (head.length > room) head = `${head.slice(0, Math.max(0, room - 1))}…`;
+  return `${head}${tail}`;
+}
+
+/** -> {line, fields} from a message resultMessage wrote; any other text is all line */
+function readResult(message) {
+  const text = String(message);
+  const at = text.indexOf(' | ');
+  if (at < 0) return { line: text, fields: {} };
+  const fields = {};
+  for (const pair of text.slice(at + 3).split('; ')) {
+    const eq = pair.indexOf('=');
+    if (eq > 0) fields[pair.slice(0, eq)] = pair.slice(eq + 1);
+  }
+  return { line: text.slice(0, at), fields };
+}
+
+module.exports = { messageHash, receiptSubject, settleSubject, pairReceipts, keyDebts, resultMessage, readResult, RESULT_MAX };
