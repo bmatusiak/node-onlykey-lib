@@ -28,7 +28,7 @@ const path = require('path');
 const crypto = require('crypto');
 const trust = require('../desktop/trust');
 
-/* the local mcp-server: its default port (main.js), or ONLYKEY_LOCAL_MCP */
+/* the local mcp-server: ONLYKEY_LOCAL_MCP, else the one that says it runs (desktop/trust.js local-mcp.json), else its default port (main.js) */
 const LOCAL_MCP = 'http://127.0.0.1:8790';
 /* a person answering on the phone */
 const ACCEPT_MS = 120000;
@@ -85,9 +85,11 @@ function untilAccepted(agent, name, say, acceptMs) {
  * this computer's agent, waits for the owner's accept, and opens the phone's key session.
  * @param {{url?: string, root?: string, name?: string, say?: (line: string) => void, fetch?: Function, WebSocket?: any, acceptMs?: number}} [o]
  */
-function phoneChannel({ url = process.env.ONLYKEY_LOCAL_MCP || LOCAL_MCP, root, name = `${os.hostname()} (onlykey-js)`, say = () => {}, fetch: fetchFn = globalThis.fetch, WebSocket: WS = globalThis.WebSocket, acceptMs = ACCEPT_MS } = {}) {
+function phoneChannel({ url, root, name = `${os.hostname()} (onlykey-js)`, say = () => {}, fetch: fetchFn = globalThis.fetch, WebSocket: WS = globalThis.WebSocket, acceptMs = ACCEPT_MS } = {}) {
   const { connectAgent } = require('../bucket/src/room-agent');
   return async () => {
+    /* asked when the channel opens: the server may have started (and taken its port) after this was made */
+    if (!url) url = process.env.ONLYKEY_LOCAL_MCP || (trust.readLocalMcp(root) || {}).url || LOCAL_MCP;
     const phone = await wherePhone(url, fetchFn);
     const agent = await connectAgent({ url, room: phone.room, agentKey: agentKey(root), name, WebSocket: WS });
     try {

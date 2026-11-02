@@ -114,4 +114,47 @@ function tokenMatches(record, offered) {
   return crypto.timingSafeEqual(Buffer.from(offered), Buffer.from(record.token));
 }
 
-module.exports = { VERSION, FILE, homeRoot, trustFile, socketPath, writeTrust, readTrust, liveTrust, removeTrust, tokenMatches, alive };
+/*
+ * THE LOCAL MCP ON THIS MACHINE (local-mcp.json beside desktop.json; ok-edge plan B4's follow-up, 2026-11-01: the box's
+ * headless server ran on 8792 and `onlykey-js --ble` found it only by ONLYKEY_LOCAL_MCP; the desktop's local MCP takes a
+ * free port each start): while an mcp-server runs on 127.0.0.1 it says where - { v: 1, url, pid, what } - so agents and
+ * the CLI on this machine find it. Not a secret (the local MCP takes 127.0.0.1 joins with no proof - Brad's choice), so
+ * plain permissions; a file whose process is gone is stale and read as none.
+ */
+const LOCAL_MCP_FILE = 'local-mcp.json';
+const localMcpFile = (root) => path.join(homeRoot(root), LOCAL_MCP_FILE);
+
+function writeLocalMcp({ root, url, what, pid = process.pid } = {}) {
+  if (!/^https?:\/\/127\.0\.0\.1:\d+$/.test(String(url))) throw new Error(`a local MCP is on 127.0.0.1, not ${url}`);
+  const record = { v: VERSION, url: String(url), pid, what: String(what || 'mcp-server') };
+  const file = localMcpFile(root);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(record)}\n`);
+  fs.renameSync(tmp, file);
+  return record;
+}
+
+/** the local MCP that runs now -> {url, pid, what}, or null (none, or its process is gone) */
+function readLocalMcp(root, { isAlive = alive } = {}) {
+  try {
+    const r = JSON.parse(fs.readFileSync(localMcpFile(root), 'utf8'));
+    if (!r || r.v !== VERSION || typeof r.url !== 'string' || !/^https?:\/\/127\.0\.0\.1:\d+$/.test(r.url)) return null;
+    return isAlive(r.pid) ? r : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** at stop: the file goes only if it is still this process's */
+function removeLocalMcp({ root, pid = process.pid } = {}) {
+  try {
+    const r = JSON.parse(fs.readFileSync(localMcpFile(root), 'utf8'));
+    if (r && r.pid === pid) fs.unlinkSync(localMcpFile(root));
+  } catch (_) { /* none, or already gone */ }
+}
+
+module.exports = {
+  VERSION, FILE, homeRoot, trustFile, socketPath, writeTrust, readTrust, liveTrust, removeTrust, tokenMatches, alive,
+  LOCAL_MCP_FILE, writeLocalMcp, readLocalMcp, removeLocalMcp,
+};
