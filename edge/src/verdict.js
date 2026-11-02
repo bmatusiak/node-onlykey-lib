@@ -209,4 +209,37 @@ function verdict(c, head, key, { held = [], prev = null, noFull = false, say = (
   return done(v, unverified, path);
 }
 
-module.exports = { verdict, digestOf, anchorOf, sealedStart, NO_SEQ };
+/**
+ * May links offered for a key's OWN chain be taken into its copy? (S4 step 6 - one set of rules for every host: the
+ * desktop taking this computer's shared records, a CLI taking a copy it was given.) In: what merging them gave
+ * (sync.merge: added, conflicts), the copy WITH them checked like any copy (its verdict, the seqs that check verified),
+ * and its accepted losses (copy.lossesIn). Out: {ok: true} or {ok: false, refusal, detail}.
+ *
+ *   a fork (a link that disagrees with one the copy holds): refused - never chosen between
+ *   the copy would not verify with them (other than a gap): refused
+ *   EVERY LINK TAKEN IS A CHECKED ONE (Brad, 2026-10-11: "checking every field in a token means nothing if we never
+ *   check the signature"): a link the check did not verify - welded to the key's signed checkpoint - is refused, unless
+ *   it lies inside a range the key accepted as lost (a LOSS link, R24: the LOSS accounts for it, and the link after it
+ *   welds to it - key 1, 2026-10-24). A gap verdict alone once let links inside the gap in unchecked; the real links at
+ *   those seqs were refused later as a fork.
+ *
+ * @param {{added: Array<{link: Uint8Array}>, conflicts: number[], verdict: {kind: string}, verifiedSeqs: Set<number> | number[], losses?: Array<{from: number, to: number}>}} o
+ * @returns {{ok: true} | {ok: false, refusal: string, detail: string}}
+ */
+function takeOwn({ added, conflicts, verdict: v, verifiedSeqs, losses = [] }) {
+  if (conflicts.length) {
+    return { ok: false, refusal: 'invalid', detail: `a fork: this copy holds different links at #${conflicts.join(', #')} - nothing taken; settle it in the app` };
+  }
+  if (added.length && v.kind !== 'verified' && v.kind !== 'gap') {
+    return { ok: false, refusal: 'copy_unverified', detail: `with those links this copy would not verify (${v.kind}) - nothing taken` };
+  }
+  const verified = verifiedSeqs instanceof Set ? verifiedSeqs : new Set(verifiedSeqs);
+  const lost = (seq) => losses.some((l) => l.from <= seq && seq <= l.to);
+  const unchecked = added.map((r) => chain.decodeLink(r.link).seq).filter((seq) => !verified.has(seq) && !lost(seq));
+  if (unchecked.length) {
+    return { ok: false, refusal: 'copy_unverified', detail: `#${unchecked.slice(0, 5).join(', #')}${unchecked.length > 5 ? '…' : ''} cannot be checked against the key - nothing taken` };
+  }
+  return { ok: true };
+}
+
+module.exports = { verdict, digestOf, anchorOf, sealedStart, takeOwn, NO_SEQ };
