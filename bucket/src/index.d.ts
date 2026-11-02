@@ -9,6 +9,7 @@ declare const _exports: {
     roomClient: typeof import("./room-client");
     roomAgent: typeof import("./room-agent");
     sealedCopy: typeof import("./sealedcopy");
+    roomSync: typeof import("./roomsync");
     FORMAT: "onlykey-bucket";
     SEALED_FORMAT: "onlykey-bucket-sealed";
     AGE_FORMAT: "onlykey-bucket-age";
