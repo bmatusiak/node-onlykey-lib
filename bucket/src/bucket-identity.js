@@ -151,6 +151,22 @@ function verifyCertificate({ identityPublicKey, bucketPublicKey, certificate, lo
   }
 }
 
+/**
+ * A KEPT BUCKET KEY IS USED ONLY IF ITS CERTIFICATE VERIFIES (the Windows desktop, 2026-10-25: through the desktop app the
+ * key's answers were crossed with the app's own, and a bucket key with a certificate from other bytes was kept - every
+ * proof from it was refused, for good). One check for every holder - the CLI's file (bucket/cli/trade.js) and the app's
+ * sealed copy (ok-edge bucketTrade.ts) - run when made and when read; one that fails is not used, and is made again.
+ * me: {id, identityPublicKey, bucketKey: {publicKey}, certificate} -> boolean (never throws)
+ */
+function certifies(me) {
+  try {
+    return identityIdOf(me.identityPublicKey) === me.id
+      && verifyCertificate({ identityPublicKey: me.identityPublicKey, bucketPublicKey: me.bucketKey.publicKey, certificate: me.certificate });
+  } catch {
+    return false;
+  }
+}
+
 /*
  * What the bucket key signs, each under its own domain so a signature for one is never one for another:
  * 'proof' (a fresh challenge), 'give' (a GIVE's bytes), 'accept' / 'revoke' (a peer's public key), 'join' (a server's
@@ -181,4 +197,4 @@ function verify({ identityPublicKey, bucketPublicKey, certificate, login, purpos
   }
 }
 
-module.exports = { bucketLabel, IDENTITY_LABEL,isBucketIdentityId, identityIdOf, readIdentity, deriveBucketKeyAt, BUCKET_KEY_VERSION, bucketKeyLabel, certify, verifyCertificate, sign, verify, signLogin, loginDigest };
+module.exports = { bucketLabel, IDENTITY_LABEL,isBucketIdentityId, identityIdOf, readIdentity, deriveBucketKeyAt, BUCKET_KEY_VERSION, bucketKeyLabel, certify, verifyCertificate, certifies, sign, verify, signLogin, loginDigest };

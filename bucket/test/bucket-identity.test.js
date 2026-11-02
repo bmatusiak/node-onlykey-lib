@@ -88,3 +88,18 @@ test('what the bucket key signs checks only for its own purpose and its own byte
   assert.equal(bid.verify({ ...base, purpose: 'proof', bytes: new Uint8Array(32).fill(8) }), false, 'another challenge');
   assert.throws(() => bid.sign(bucketKey, 'nametag', challenge), /signs proof, give, accept, revoke/);
 });
+
+test('certifies: a kept bucket key is used only when its certificate is this identity\'s, for this bucket key', async () => {
+  const a = await setUp(fakeKey('backup-1'));
+  const other = await setUp(fakeKey('backup-2'));
+  const me = { id: a.identity.id, identityPublicKey: a.identity.publicKey, bucketKey: a.bucketKey, certificate: a.certificate };
+  assert.equal(bid.certifies(me), true);
+  /* the certificate from other bytes (the desktop's crossed answers, 2026-10-25): not used */
+  assert.equal(bid.certifies({ ...me, certificate: other.certificate }), false);
+  /* another bucket key under this certificate, or this key filed under another identity's id */
+  assert.equal(bid.certifies({ ...me, bucketKey: other.bucketKey }), false);
+  assert.equal(bid.certifies({ ...me, id: other.identity.id }), false);
+  /* anything malformed: false, never a throw */
+  assert.equal(bid.certifies({ ...me, certificate: new Uint8Array(3) }), false);
+  assert.equal(bid.certifies({}), false);
+});

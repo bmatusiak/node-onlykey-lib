@@ -57,14 +57,8 @@ function storeRules() {
 /* the bucket key and certificate of an identity, beside its bucket: buckets/<net>/<id>.key */
 const keyFile = (id, net) => home.identityFile(id, net).replace(/\.json$/, '.key');
 
-/*
- * A BUCKET KEY IS KEPT ONLY IF ITS CERTIFICATE VERIFIES (the Windows desktop, 2026-10-25: through the desktop app the
- * key's answers were crossed with the app's own, and a bucket key with a certificate from other bytes was kept - every
- * proof from it was refused, for good). Checked when made and when read; one that does not verify is not used, and is
- * made again.
- */
-const certifies = (me) => bid.identityIdOf(me.identityPublicKey) === me.id
-  && bid.verifyCertificate({ identityPublicKey: me.identityPublicKey, bucketPublicKey: me.bucketKey.publicKey, certificate: me.certificate });
+/* a bucket key is kept and used only if its certificate verifies - checked when made and when read (bucket-identity certifies) */
+const { certifies } = bid;
 
 function loadMe(id, net) {
   try {

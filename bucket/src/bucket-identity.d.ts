@@ -49,6 +49,14 @@ export function verifyCertificate({ identityPublicKey, bucketPublicKey, certific
     certificate: any;
     login: any;
 }): boolean;
+/**
+ * A KEPT BUCKET KEY IS USED ONLY IF ITS CERTIFICATE VERIFIES (the Windows desktop, 2026-10-25: through the desktop app the
+ * key's answers were crossed with the app's own, and a bucket key with a certificate from other bytes was kept - every
+ * proof from it was refused, for good). One check for every holder - the CLI's file (bucket/cli/trade.js) and the app's
+ * sealed copy (ok-edge bucketTrade.ts) - run when made and when read; one that fails is not used, and is made again.
+ * me: {id, identityPublicKey, bucketKey: {publicKey}, certificate} -> boolean (never throws)
+ */
+export function certifies(me: any): boolean;
 /** Sign with the bucket key, host-side, no press. */
 export function sign(bucketKey: any, purpose: any, bytes: any): Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>;
 /**
