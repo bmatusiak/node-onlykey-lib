@@ -187,6 +187,18 @@ async function warmIfCold(edge, deviceId, h) {
   return edge.head();
 }
 
+/*
+ * WHERE THIS COPY ENDS, TOLD BEFORE THE FIRST REQUEST (the ship proof on the box, 2026-11-02: `edge budget` through the
+ * desktop app failed "head must be 32 bytes" - on a key that never reveals its head, the budget's opening is checked
+ * against heads this computer welds from its copy, and the copy was only read at the command's close, after the
+ * request). The same two steps the sync takes first: the copy's last head seeded, and a cold computer warmed up from the
+ * login card's top. KEY REQUESTS: one head read (no press); the warm-up's own when the computer is cold.
+ */
+async function seed(edge, home, deviceId) {
+  seedHead(edge, load(home, deviceId), deviceId);
+  return warmIfCold(edge, deviceId, await edge.head());
+}
+
 /* the verdict, in words: verified / gap / tampered (fork, rollback, edited) */
 /* keySeq: the key's head - a copy whose only gaps are accepted as lost (LOSS) is verified up to it, and says what was lost */
 function verdictOf(a, keySeq) {
@@ -469,4 +481,4 @@ function nametagHistory() {
   return Object.values(namesKv().entries()).map((v) => { try { return JSON.parse(v); } catch (_) { return null; } }).filter((r) => r && r.statement);
 }
 
-module.exports = { sync, catchUp, adoptAll, load, store, useIdentityBucket, keepSeals, keepLog, blocks, keepOpenings, keepNotes, keepNametag, nametagHistory };
+module.exports = { sync, seed, catchUp, adoptAll, load, store, useIdentityBucket, keepSeals, keepLog, blocks, keepOpenings, keepNotes, keepNametag, nametagHistory };
