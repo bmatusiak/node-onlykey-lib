@@ -69,6 +69,11 @@
     "./desktop/serve": "./desktop/serve.js",
     "./desktop/session": "./desktop/session.js",
     "./desktop/member": "./desktop/member.js",
+    "./mcp/core": "./mcp/core/plugin.js",
+    "./mcp/core/room": "./mcp/core/room.js",
+    "./mcp/core/mcp": "./mcp/core/mcp.js",
+    "./mcp/localhost": "./mcp/localhost/plugin.js",
+    "./mcp/localhost/main": "./mcp/localhost/main.js",
     "./desktop/trust": "./desktop/trust.js",
     "./cli/transport-desktop": "./cli/transport-desktop.js",
     "./edge/cli/local-host": "./edge/cli/local-host.js",
@@ -90,6 +95,7 @@
     "cryptobox",
     "bucket",
     "desktop",
+    "mcp",
     "!cli/dev",
     "!edge/cli/dev",
     "scripts",
@@ -111,7 +117,8 @@
   "peerDependencies": {
     "node-hid": "^3.4.0",
     "@stoprocent/noble": "github:bmatusiak/noble-ble#d16fc663a0169d69c7f6a467974ce8d2c799d006",
-    "dbus-next": "^0.10.2"
+    "dbus-next": "^0.10.2",
+    "ws": ">=7"
   },
   "peerDependenciesMeta": {
     "node-hid": {
@@ -121,6 +128,9 @@
       "optional": true
     },
     "dbus-next": {
+      "optional": true
+    },
+    "ws": {
       "optional": true
     }
   }

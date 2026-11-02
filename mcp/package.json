@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "The user's MCP server (ESM) - a Rectify app: core/ (the MCP and the identity rooms: the logic every host runs - the Cloudflare Worker, the desktop app's local MCP, `onlykey-js --service`), localhost/ (plain Node on 127.0.0.1). Moved from ok-edge mcp-server/src (S5c, 2026-11-02): one server code for every host.",
+  "type": "module"
+}
