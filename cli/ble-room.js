@@ -28,7 +28,7 @@ const path = require('path');
 const crypto = require('crypto');
 const trust = require('../desktop/trust');
 
-/* the local mcp-server: ONLYKEY_LOCAL_MCP, else the one that says it runs (desktop/trust.js local-mcp.json), else its default port (main.js) */
+/* the local mcp-server: ONLYKEY_LOCAL_MCP, else the one that says it runs (desktop/trust.js local-mcp-ble.json), else its default port (main.js) */
 const LOCAL_MCP = 'http://127.0.0.1:8790';
 /* a person answering on the phone */
 const ACCEPT_MS = 120000;
@@ -89,7 +89,7 @@ function phoneChannel({ url, root, name = `${os.hostname()} (onlykey-js)`, say =
   const { connectAgent } = require('../bucket/src/room-agent');
   return async () => {
     /* asked when the channel opens: the server may have started (and taken its port) after this was made */
-    if (!url) url = process.env.ONLYKEY_LOCAL_MCP || (trust.readLocalMcp(root) || {}).url || LOCAL_MCP;
+    if (!url) url = process.env.ONLYKEY_LOCAL_MCP || (trust.readLocalMcp(root, 'ble') || {}).url || LOCAL_MCP;
     const phone = await wherePhone(url, fetchFn);
     const agent = await connectAgent({ url, room: phone.room, agentKey: agentKey(root), name, WebSocket: WS });
     try {
