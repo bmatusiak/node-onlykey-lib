@@ -141,3 +141,23 @@ test('take: merged into the copy as it is now, first-seen times kept; a fork kee
   await assert.rejects(h.take(DEV, [{ link: other, head: b32(51), reveal: null }]), /a fork at #5/);
   assert.equal((await h.load(DEV)).links.length, 2, 'nothing kept');
 });
+
+/* the app runs the store in Electron's page, a browser and React Native - no Node Buffer there (2026-11-02: the box
+   desktop's budget failed "Buffer is not defined" the first time it used this store) */
+test('the store runs with no Node Buffer', async () => {
+  const kv = memoryKv();
+  kv.m.set(`okrn.edge.mirror.${DEV}`, appStored);
+  const more = { link: link(6), head: b32(60), reveal: null };
+  const B = globalThis.Buffer;
+  delete globalThis.Buffer;
+  try {
+    const h = createHistory({ kv, prefix: () => 'okrn.edge.mirror.' });
+    const m = await h.load(DEV);
+    assert.equal(m.links.length, 2);
+    await h.save(m);
+    assert.equal((await h.take(DEV, [more], 1)).added, 1);
+    assert.equal((await h.ends(DEV)).seq, 6);
+  } finally {
+    globalThis.Buffer = B;
+  }
+});

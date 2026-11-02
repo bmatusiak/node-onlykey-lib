@@ -41,8 +41,10 @@
 const chain = require('./chain');
 const { merge } = require('./sync');
 
-const toHex = (b) => Buffer.from(b).toString('hex');
-const fromHex = (h) => Uint8Array.from(Buffer.from(String(h || ''), 'hex'));
+/* the lib's own hex (src/bytes): no Node Buffer - the app runs this in Electron's page, a browser and React Native */
+const bytes = require('../../src/bytes');
+const toHex = (b) => bytes.toHex(b);
+const fromHex = (h) => bytes.fromHex(String(h || ''));
 const numKeys = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [Number(k), v]));
 const strKeys = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [String(k), v]));
 const pointIn = (a) => ({ seq: a.seq, head: fromHex(a.head), signature: fromHex(a.signature), ...(a.signaturePq ? { signaturePq: fromHex(a.signaturePq) } : {}) });
