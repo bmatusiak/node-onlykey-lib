@@ -67,3 +67,13 @@ export function keyDebts(entries: any): {
     owed: number[];
     carried: number;
 };
+export function resultMessage({ line, fields }: {
+    line: any;
+    fields?: {} | undefined;
+}): string;
+/** -> {line, fields} from a message resultMessage wrote; any other text is all line */
+export function readResult(message: any): {
+    line: string;
+    fields: {};
+};
+export const RESULT_MAX: 1024;
