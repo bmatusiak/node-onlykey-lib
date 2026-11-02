@@ -73,6 +73,7 @@
     "./edge/cli/local-host": "./edge/cli/local-host.js",
     "./bucket/cli/home": "./bucket/cli/home.js",
     "./bucket/cli/trade": "./bucket/cli/trade.js",
+    "./bucket/cli/file-side": "./bucket/cli/file-side.js",
     "./edge/cli/migrate-identity": "./edge/cli/migrate-identity.js",
     "./edge/cli/nametag": "./edge/cli/nametag.js",
     "./edge/cli/copy": "./edge/cli/copy.js"

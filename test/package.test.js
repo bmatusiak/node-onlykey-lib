@@ -294,3 +294,32 @@ test('the preference table is public, and shaped per firmware without composing 
   assert.deepEqual(prefs.preferenceRows(null), prefs.preferenceRows(capabilities('INITIALIZED')));
   assert.equal(prefs.preferenceRow('nope', null), null);
 });
+
+/*
+ * WHAT THE APP REACHES FOR IS EXPORTED (2026-11-02: the desktop's main process required node-onlykey-lib/bucket/cli/
+ * file-side, which the exports map did not name - Node refused it at run time, the bucket never opened, and every test
+ * here passed, as the lib's own code requires its files by relative path). When ok-edge sits beside this checkout, each
+ * `node-onlykey-lib/<subpath>` its sources name must be in the map; without it the test has nothing to read and passes.
+ */
+test('every node-onlykey-lib subpath the ok-edge sources import is exported', () => {
+  const edge = path.join(ROOT, '..', 'ok-edge');
+  if (!fs.existsSync(path.join(edge, 'package.json'))) return;
+  const seen = new Map();
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name.startsWith('.') || e.name === 'android' || e.name === 'dist' || e.name === 'docs') continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(js|cjs|mjs|ts|tsx)$/.test(e.name)) {
+        /* imports only: require(...), from '...', import(...) - not a path string that names the sibling checkout */
+        for (const m of fs.readFileSync(p, 'utf8').matchAll(/(?:require\(\s*|from\s+|import\(\s*)['"]node-onlykey-lib(\/[^'"]+)?['"]/g)) {
+          const sub = `.${m[1] || ''}`;
+          if (!seen.has(sub)) seen.set(sub, path.relative(edge, p));
+        }
+      }
+    }
+  };
+  for (const d of ['src', 'electron', 'mcp-server', 'tools']) if (fs.existsSync(path.join(edge, d))) walk(path.join(edge, d));
+  const missing = [...seen].filter(([sub]) => !(sub in pkg.exports) && !Object.keys(pkg.exports).some((k) => k.endsWith('/*') && sub.startsWith(k.slice(0, -1))));
+  assert.deepEqual(missing, [], `ok-edge imports subpaths the exports map does not name: ${missing.map(([s, f]) => `${s} (${f})`).join(', ')}`);
+});
