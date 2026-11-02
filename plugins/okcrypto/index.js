@@ -784,7 +784,9 @@ function setup(imports, register, config) {
       tunnelEvent('end', { ok: true });
       return out;
     } catch (e) {
-      tunnelEvent('end', { ok: false });
+      /* the reason, in the words it came in (a browser's NotAllowedError, the key's text, a time-out) - a host's log says why (2026-11-02: the Windows web app's failures said only "failed") */
+      const error = e && e.name && e.name !== 'Error' ? `${e.name}: ${e.message}` : String((e && e.message) || e);
+      tunnelEvent('end', { ok: false, error: error.slice(0, 200) });
       throw e;
     } finally {
       currentOp = null;
@@ -1586,7 +1588,13 @@ function setup(imports, register, config) {
        * that asks a press waits in (Brad, 2026-11-01: the press sheet only while the press is asked; a 22-ceremony budget
        * opening was taken as pressed after its first request packet)
        */
-      currentOp.pressAt = stepsBefore + sizes.length;
+      /*
+       * A request the key asks INSIDE (confirmFirst - deriveSecret's touch mode) waits in its last packet's own ceremony,
+       * which returns only once pressed: the key can take the press when the packets before it are done (Brad,
+       * 2026-11-02, the Windows web app: a derive's code sheet waited for a step that comes after the press, so it never
+       * showed, and the key gave up at 20 s - a packet every 2.4 s there).
+       */
+      currentOp.pressAt = stepsBefore + sizes.length - (confirmFirst ? 1 : 0);
       tunnelEvent('plan');
     }
 
