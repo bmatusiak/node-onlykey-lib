@@ -169,7 +169,11 @@ function connectRoom({ url, me: given, device, WebSocket: WS, randomBytes, timeo
         default:
       }
     };
-    ws.onclose = () => { clearTimeout(joinTimer); if (ping) clearInterval(ping); fail('the room connection closed'); emit('close'); reject(new Error(`${host}: the connection closed before the join`)); };
+    /*
+     * the close says its code: 4409 is the room's "replaced" (core/room.js - the newest join of a device id is that device),
+     * so the other member of this computer joined, and a host must not join again (bucket/cli/roomservice.js)
+     */
+    ws.onclose = (ev) => { clearTimeout(joinTimer); if (ping) clearInterval(ping); fail('the room connection closed'); emit('close', { code: ev && ev.code, reason: ev && ev.reason }); reject(new Error(`${host}: the connection closed before the join`)); };
     ws.onerror = () => { /* onclose follows and says it */ };
 
     const api = {

@@ -2,12 +2,13 @@
 
 /**
  * A HOST'S BUCKET SYNC IN A JOINED ROOM (the structure track S5, 2026-11-02): one set of work for every room a host
- * joins - the user's server over its websocket, a computer's mcp-server over Bluetooth, later the CLI's `--service`:
+ * joins - the user's server over its websocket, a computer's mcp-server over Bluetooth, the CLI's `--service`:
  *
  *   - ANSWER the trades other devices start (the host's peer side - its handleTrade);
  *   - START one with each device that comes online, and with every device when this bucket changes - ONE STARTER PER
- *     PAIR: two devices that both start a trade run two at once, each mid-way when the other changes the bucket; a CLI
- *     starts its own (its sync is one-shot: it starts, never answers), and between two apps the lower id starts;
+ *     PAIR: two devices that both start a trade run two at once, each mid-way when the other changes the bucket; the
+ *     lower id starts, for every pair - the CLI's `--service` is a full member too (bucket/cli/roomservice.js), one
+ *     device per computer with the desktop app (Brad, 2026-11-02);
  *   - FOLLOW THE SERVER'S SEALED COPY (bucket/src/sealedcopy.js): at each join and each change here, the room's table of
  *     keyed ids and change tags against this bucket's, then only the rows that differ - the newer ones taken through the
  *     stores' own rules, this side's put sealed; with the heads row (each Edge log's newest link). A server that keeps
@@ -109,7 +110,7 @@ function createRoomSync({ open, me, save, handleTrade, rules, randomBytes, selfI
   function tradeSoon(peer, r, hooks) {
     const mine = selfId() || r.you || '';
     /* said, so a pair where neither starts shows: the other side's line says it starts */
-    if (peer.kind === 'cli' || (mine && peer.id < mine)) { say(`${hooks.tag} ${peer.name}: it starts the trade (${peer.kind === 'cli' ? 'a CLI starts its own' : 'the lower id'})`); return; }
+    if (mine && peer.id < mine) { say(`${hooks.tag} ${peer.name}: it starts the trade (the lower id)`); return; }
     queue(() => tradeWith(peer, r, hooks), (e) => {
       const line = `not traded: ${String(e?.message ?? e)}`;
       say(`${hooks.tag} ${peer.name}: ${line}`);
