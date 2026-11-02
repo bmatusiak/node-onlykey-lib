@@ -833,6 +833,8 @@ module.exports = function register(COMMANDS, h) {
          * sealed copy, the kept buckets watched; the room is its only sync since 2026-10-30). When the app comes back it
          * steps down again. Its device id and look are the app's (home.js thisDevice).
          *
+         * And while it serves, it hosts this computer's local MCP (127.0.0.1:8650 - the desktop app's, when the app is open).
+         *
          * KEY REQUESTS: opening the key when it serves; the bucket key once ever (kept); one login proof per join (the
          * takeover's, then each the person asks for after a drop - never on a timer). Trades ask the key nothing.
          */
@@ -892,11 +894,25 @@ module.exports = function register(COMMANDS, h) {
           });
           current.room = room;
           await room.start().catch((e) => st.say(`sync: not started - ${e.message}`));
+          /*
+           * THIS COMPUTER'S LOCAL MCP (S5c, 2026-11-02 - "--service is its local MCP"): 127.0.0.1:8650, the same server
+           * and address the desktop app hosts while it is open (mcp/localhost/computer.js), so an agent on this computer
+           * reaches it whichever serves. Agents' plans wait there; running them from this service is the one runner's
+           * (S7: the app's plan answering, moved into the lib).
+           */
+          try {
+            const { startComputerMcp } = await import('../../mcp/localhost/computer.js');
+            const mcp = await startComputerMcp({ log: (l) => st.say(`local MCP: ${l}`) });
+            if (current && current.st === st) { current.mcp = mcp; st.say(`local MCP: ready on ${mcp.url}`); } else await mcp.close();
+          } catch (e) {
+            st.say(`local MCP: not started - ${e.message}`);
+          }
         };
         const standDown = async (by) => {
           const c = current;
           current = null;
           if (!c) return;
+          if (c.mcp) await c.mcp.close();
           if (c.room) await c.room.stop();
           await c.st.close();
           if (by) say(`standing by - ${by} serves this computer; nothing is held here until it ends`);

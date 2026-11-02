@@ -118,12 +118,12 @@ function tokenMatches(record, offered) {
  * THE LOCAL MCP ON THIS MACHINE (local-mcp.json beside desktop.json; ok-edge plan B4's follow-up, 2026-11-01: the box's
  * headless server ran on 8792 and `onlykey-js --ble` found it only by ONLYKEY_LOCAL_MCP; the desktop's runs on 8650, one
  * fixed address an agent's config can name): while an mcp-server runs on 127.0.0.1 it says where - local-mcp-<what>.json { v: 1, url, pid,
- * what } - so agents and the CLI on this machine find it. One file per kind, since the box runs several at once: 'desktop'
- * (the desktop app's - agents' plans), 'ble' (the headless server with Bluetooth - onlykey-js --ble). Not a secret (the
+ * what } - so agents and the CLI on this machine find it. One file per kind, since the box runs several at once: 'computer'
+ * (this computer's - the desktop app's or `onlykey-js --service`'s, mcp/localhost/computer.js - agents' plans), 'ble' (the headless server with Bluetooth - onlykey-js --ble). Not a secret (the
  * local MCP takes 127.0.0.1 joins with no proof - Brad's choice), so plain permissions; a file whose process is gone is
  * stale and read as none.
  */
-const KINDS = ['desktop', 'ble'];
+const KINDS = ['computer', 'ble'];
 const localMcpFile = (root, what) => {
   if (!KINDS.includes(what)) throw new Error(`a local MCP is ${KINDS.join(' or ')}, not ${what}`);
   return path.join(homeRoot(root), `local-mcp-${what}.json`);

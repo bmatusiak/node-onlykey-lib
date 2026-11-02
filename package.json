@@ -74,6 +74,7 @@
     "./mcp/core/mcp": "./mcp/core/mcp.js",
     "./mcp/localhost": "./mcp/localhost/plugin.js",
     "./mcp/localhost/main": "./mcp/localhost/main.js",
+    "./mcp/computer": "./mcp/localhost/computer.js",
     "./desktop/trust": "./desktop/trust.js",
     "./cli/transport-desktop": "./cli/transport-desktop.js",
     "./edge/cli/local-host": "./edge/cli/local-host.js",
