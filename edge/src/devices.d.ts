@@ -5,8 +5,9 @@
  *   records: [{link, head, reveal?}] of that device's chain; checkpoint: {seq, head, signature,
  *   signaturePq} from its key; statement (optional): {deviceId, publicKey, publicKeyPq, seq, nametag,
  *   signature, signaturePq}; card (optional): its certified login card (certify.record)
- * @param {Uint8Array} o.ownerKey   THIS device's own owner public key (X||Y)
- * @param {Uint8Array} o.ownerKeyPq THIS device's own owner ML-DSA-65 public key (1952 bytes)
+ * @param {Uint8Array | null} o.ownerKey   THIS device's own owner public key (X||Y) - null when the host has none yet:
+ *                                         no label verifies (the log is UNPROVEN, UNNAMED), its chain is checked all the same
+ * @param {Uint8Array | null} o.ownerKeyPq THIS device's own owner ML-DSA-65 public key (1952 bytes), null likewise
  * @param {Array<{deviceId: string}>} [o.known]  your devices (deviceId hex)
  * @param {Array<{seq, head}>} [o.merged]  the points of that chain this device merged before
  * -> {class, deviceId (hex), nametag, check}. class: mine-known / mine-new (a verified card or nametag of this owner),
@@ -22,8 +23,8 @@ export function classify({ log, ownerKey, ownerKeyPq, known, merged }: {
         statement: any;
         card: any;
     };
-    ownerKey: Uint8Array;
-    ownerKeyPq: Uint8Array;
+    ownerKey: Uint8Array | null;
+    ownerKeyPq: Uint8Array | null;
     known?: {
         deviceId: string;
     }[] | undefined;

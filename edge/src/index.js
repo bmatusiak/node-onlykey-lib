@@ -34,6 +34,8 @@ module.exports = {
   budgetbook: require('./budgetbook'),
   /* the key's own chain copy a host keeps (S4 step 8) */
   historystore: require('./historystore'),
+  /* one chain state per key - the answers every asker shares (S4 step 9) */
+  chainstate: require('./chainstate'),
   devices: require('./devices'),
   /* a pure Bluetooth link test: the phone echoes, testing mode only (onlykey-js edge ping) */
   ping: require('./ping'),
