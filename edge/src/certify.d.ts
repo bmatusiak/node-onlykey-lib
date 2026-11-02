@@ -69,18 +69,27 @@ export function record(kind: string, thing: object, certification: object): {
     };
 };
 /**
- * The top as a card keeps it (hex). checkpoint: {seq, head, signature, signaturePq} with the head this host welded;
- * links: the raw links after it, oldest first.
- * @param {{seq: number, head: Uint8Array, signature: Uint8Array, signaturePq: Uint8Array}} checkpoint
+ * The top as a card keeps it (hex). checkpoint: {seq, head, signature, signaturePq, gate?} with the head this host
+ * welded - or {seq, gate} alone, a checkpoint whose head this host never held (a certify's); links: the raw links
+ * after it, oldest first (none without the head).
+ * @param {{seq: number, head?: Uint8Array | null, signature?: Uint8Array, signaturePq?: Uint8Array, gate?: Uint8Array}} checkpoint
  * @param {Uint8Array[]} links
  */
 export function top(checkpoint: {
     seq: number;
-    head: Uint8Array;
-    signature: Uint8Array;
-    signaturePq: Uint8Array;
+    head?: Uint8Array | null;
+    signature?: Uint8Array;
+    signaturePq?: Uint8Array;
+    gate?: Uint8Array;
 }, links?: Uint8Array[]): {
     checkpoint: {
+        seq: number;
+        gate: string | null;
+    };
+    links: never[];
+} | {
+    checkpoint: {
+        gate?: string | undefined;
         seq: number;
         head: string;
         signature: string;

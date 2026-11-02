@@ -134,17 +134,27 @@ function record(kind, thing, certification) {
 /* how far back a top's checkpoint may be from the key's head, in links ("the 1024 limits how far back a checkpoint may be") */
 const TOP_REACH = 1024;
 
+/*
+ * AND ITS GATE TOKEN (WARM_GATE firmware; Brad, 2026-11-01: "the login identity card holds cold boot for edge to warm
+ * up"; "the enabled gate is enough"): a checkpoint's token, which only the key makes or checks, rides in the top too. A
+ * host shows it back (edge.warm) and the key alone decides - its own, within TOP_REACH links - so a top may carry the
+ * token with no head: what a host that holds none of the chain got from its certify (the head hidden) is still a top.
+ */
 /**
- * The top as a card keeps it (hex). checkpoint: {seq, head, signature, signaturePq} with the head this host welded;
- * links: the raw links after it, oldest first.
- * @param {{seq: number, head: Uint8Array, signature: Uint8Array, signaturePq: Uint8Array}} checkpoint
+ * The top as a card keeps it (hex). checkpoint: {seq, head, signature, signaturePq, gate?} with the head this host
+ * welded - or {seq, gate} alone, a checkpoint whose head this host never held (a certify's); links: the raw links
+ * after it, oldest first (none without the head).
+ * @param {{seq: number, head?: Uint8Array | null, signature?: Uint8Array, signaturePq?: Uint8Array, gate?: Uint8Array}} checkpoint
  * @param {Uint8Array[]} links
  */
 function top(checkpoint, links = []) {
-  if (!checkpoint || !(checkpoint.head instanceof Uint8Array) || checkpoint.head.length !== 32) throw new TypeError('certify.top: a checkpoint with the 32-byte head this host welded');
+  const hasHead = checkpoint && checkpoint.head instanceof Uint8Array && checkpoint.head.length === 32 && checkpoint.head.some((x) => x);
+  const gate = checkpoint && checkpoint.gate instanceof Uint8Array && checkpoint.gate.length === 16 ? toHex(checkpoint.gate) : null;
+  if (!checkpoint || !Number.isInteger(checkpoint.seq) || (!hasHead && !gate)) throw new TypeError('certify.top: a checkpoint with the 32-byte head this host welded, or its gate token');
   if (links.length > TOP_REACH) throw new RangeError(`certify.top: at most ${TOP_REACH} links after the checkpoint, not ${links.length}`);
+  if (!hasHead) return { checkpoint: { seq: checkpoint.seq, gate }, links: [] };
   return {
-    checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature), signaturePq: toHex(checkpoint.signaturePq) },
+    checkpoint: { seq: checkpoint.seq, head: toHex(checkpoint.head), signature: toHex(checkpoint.signature), signaturePq: toHex(checkpoint.signaturePq), ...(gate ? { gate } : {}) },
     links: links.map((l) => toHex(l)),
   };
 }

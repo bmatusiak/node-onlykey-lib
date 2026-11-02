@@ -23,7 +23,7 @@ const { inLane, laneOf } = require('../../src/transport/lane');
 const okmsg = require('../../src/protocol/okmsg');
 const { IFACE } = require('../../src/protocol/msg');
 const { assertTransport } = require('../../src/transport/contract');
-const { concat, toHex } = require('../../src/bytes');
+const { concat, toHex, fromHex } = require('../../src/bytes');
 const { codes, chain, receipts, copy: copyCheck } = require('../src');
 const { identityIdOf } = require('../src/identity-id');
 
@@ -33,6 +33,8 @@ const SUB = Object.freeze({
   /* 0x06 was the no-press owner statement: retired - the owner key signs only through CERTIFY (a press or a budget) */
   /* CHECKPOINT (0x03): firmware before CERTIFY_HEADPROOF only - after it the key confirms a head the host proves (PROVE_HEAD) */
   HEAD: 0x01, PICKUP: 0x02, CHECKPOINT: 0x03, PUBKEY: 0x04, PUBKEY_PQ: 0x05, CERTIFY: 0x08, PROVE_HEAD: 0x09,
+  /* WARM_GATE: {seq, gate token} - a checkpoint's token, in reach: the head shown, as PROVE_HEAD */
+  WARM: 0x0a,
   /* over WebAuthn only: the ML-DSA-65 signature an answer left out (one answer holds at most 3392 bytes) - tunnelCall */
   MORE: 0x07,
   /* R31: DEBUG firmware only - a production key answers it as unknown (EDGE:0A) */
@@ -74,9 +76,19 @@ const HELD = 8;
  * signed. A link no host holds strands every host - the heads after it cannot be welded, and a certify's checkpoint
  * hides the head; the person's pressed LOSS names the lost range in the chain for good and gives the head to go on from.
  */
-const CAPS = Object.freeze({ CERTIFY_HEADPROOF: 0x01, OPS_CHECKPOINT: 0x02, LOSS_ANCHOR: 0x04 });
+/*
+ * WARM_GATE (Brad, 2026-11-01: "the login identity card holds cold boot for edge to warm up"; "the enabled gate is enough,
+ * we just need to be close to the head to enable it"): every checkpoint's first report carries a GATE TOKEN in bytes 36-51
+ * - the key's keyed hash of (device, seq), a secret only it makes or checks - and WARM {seq, token} answers, for a
+ * token of its own no further than 1024 links behind it, with the head shown and signed. The token rides in the login
+ * card's top (certify.top), synced with the bucket, so a host that holds none of the chain warms up with no press; a
+ * key whose newest token is out of reach (an old backup, a lost key) cannot, and shows itself.
+ */
+const CAPS = Object.freeze({ CERTIFY_HEADPROOF: 0x01, OPS_CHECKPOINT: 0x02, LOSS_ANCHOR: 0x04, WARM_GATE: 0x08 });
 /* every bit this library knows - HEAD's byte 59 with any other bit set is not a HEAD this library reads */
-const KNOWN_CAPS = CAPS.CERTIFY_HEADPROOF | CAPS.OPS_CHECKPOINT | CAPS.LOSS_ANCHOR;
+const KNOWN_CAPS = CAPS.CERTIFY_HEADPROOF | CAPS.OPS_CHECKPOINT | CAPS.LOSS_ANCHOR | CAPS.WARM_GATE;
+/* a checkpoint's gate token: bytes 36-51 of its first report (52-63 stay zero - the padding aboveSeq reads) */
+const GATE_BYTES = 16;
 /* how many computed heads the tracker keeps, by seq - the key's ring is 8 links */
 const TRACKED = 32;
 
@@ -95,9 +107,14 @@ const get32 = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] <
 /* a reply of n bytes, in 64-byte reports */
 const reportsFor = (n) => Math.ceil(n / 64);
 /* a checkpoint reply: seq . head, then the P-256 signature, then the ML-DSA-65 signature in its reports */
-const checkpointOf = (c, rest) => ({
-  seq: get32(c, 0), head: c.slice(4, 36), signature: rest[0].slice(0, 64), signaturePq: concat(rest.slice(1)).slice(0, chain.ML_DSA65.SIG),
-});
+const checkpointOf = (c, rest) => {
+  /* WARM_GATE firmware: the token after seq . head; older firmware leaves those bytes zero - no gate */
+  const gate = c.length >= 36 + GATE_BYTES ? c.slice(36, 36 + GATE_BYTES) : null;
+  return {
+    seq: get32(c, 0), head: c.slice(4, 36), signature: rest[0].slice(0, 64), signaturePq: concat(rest.slice(1)).slice(0, chain.ML_DSA65.SIG),
+    ...(gate && gate.some((x) => x) ? { gate } : {}),
+  };
+};
 const get16 = (b, o) => b[o] | (b[o + 1] << 8);
 const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -725,6 +742,20 @@ function setup(imports, register) {
       if (h.seq === null) return null;
       if (!h.head && caps & CAPS.CERTIFY_HEADPROOF) {
         if (!top) throw noCheckpoint('no-top');
+        /*
+         * THE GATE FIRST (WARM_GATE): the card's gate token shown to the key, which alone checks it - its own, not ahead,
+         * within 1024 links - and answers with the head shown and signed. No links, no weld, no press. A refused token
+         * (too far back: a key that has not been in use since) falls through to the links, then to a certify.
+         */
+        const gate = top.checkpoint && top.checkpoint.gate;
+        if (gate && caps & CAPS.WARM_GATE) {
+          const warmed = await edge.warm(top.checkpoint.seq, fromHex(gate), opts).catch((e) => {
+            if (e && e.status === 'gate-refused') return null;
+            throw e;
+          });
+          if (warmed) return warmed;
+          if (!top.checkpoint.head) throw noCheckpoint('gate-refused');
+        }
         const { certify } = require('../src');
         const { publicKey, deviceId } = await edge.publicKey(opts);
         const v = certify.verifyTop(top, { deviceId, publicKey, publicKeyPq: await edge.publicKeyPq('checkpoint'), keySeq: h.seq });
@@ -740,9 +771,29 @@ function setup(imports, register) {
       return edge.checkpoint(opts);
     },
 
-    /** The newest checkpoint this connection saw with its head ({seq, head, signature, signaturePq}), or null - for the card's top. */
+    /** The newest checkpoint this connection saw with its head ({seq, head, signature, signaturePq, gate?}), or null - for the card's top. */
     newestCheckpoint() {
       return newest && (!track || newest.dev === track.dev) ? newest.cp : null;
+    },
+
+    /** The newest gate token this connection saw ({seq, gate}), head or not, or null - a cold host's card top. */
+    newestGate() {
+      return newestGate && (!track || newestGate.dev === track.dev) ? { seq: newestGate.seq, gate: newestGate.gate } : null;
+    },
+
+    /**
+     * WARM {seq, gate token} (WARM_GATE): the key checks the token is its own for that seq and the seq is within 1024 of
+     * its own - then the checkpoint with the head shown, which this host now holds to weld the ring on. No press, no
+     * link. -> {seq, head, signature, signaturePq, gate}; EdgeError 'gate-refused' otherwise.
+     */
+    async warm(seq, gate, opts) {
+      await needCaps(CAPS.WARM_GATE, 'the warm-up gate');
+      if (!Number.isInteger(seq) || seq < 0 || !(gate instanceof Uint8Array) || gate.length !== GATE_BYTES) throw new TypeError(`Edge: warm needs a seq and a ${GATE_BYTES}-byte gate token`);
+      const rs = await call(SUB.WARM, concat([u32(seq), gate]), { ...opts, reports: 2 + reportsFor(chain.ML_DSA65.SIG) });
+      const cp = checkpointOf(rs[0], rs.slice(1));
+      const { deviceId } = await edge.publicKey(opts);
+      edge.knownHead(cp.seq, cp.head, deviceId);
+      return noteCheckpoint(cp);
     },
 
     /**
@@ -1048,8 +1099,12 @@ function setup(imports, register) {
    * head - for the card's top (certify.top): whichever host makes the request, the newest one is kept here.
    */
   let newest = null;
+  /* the newest gate token this connection saw ({dev, seq, gate}) - a certify's checkpoint gives one with the head hidden */
+  let newestGate = null;
   function noteCheckpoint(cp) {
     if (cp && cp.head && cp.head.some((x) => x) && (!newest || cp.seq >= newest.cp.seq || newest.dev !== (track && track.dev))) newest = { dev: track && track.dev, cp };
+    /* its gate token, head or not (a certify's checkpoint hides the head): what a cold host's card top carries */
+    if (cp && cp.gate && (!newestGate || cp.seq >= newestGate.seq || newestGate.dev !== (track && track.dev))) newestGate = { dev: track && track.dev, seq: cp.seq, gate: cp.gate };
     return cp;
   }
   function remember(seq, head) {

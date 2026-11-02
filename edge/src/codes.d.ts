@@ -127,6 +127,10 @@ export const STATUS: Readonly<{
         name: string;
         text: string;
     };
+    14: {
+        name: string;
+        text: string;
+    };
     18: {
         name: string;
         text: string;

@@ -144,6 +144,7 @@ const STATUS = Object.freeze({
   0x0b: { name: 'stale-head', text: 'The chain moved since that head - read the head and start again' },
   0x0c: { name: 'receipt-owed', text: 'A use is waiting for its receipt - receipt it, or settle in the app' },
   0x0d: { name: 'nothing-to-pay', text: 'No live budget (or every one is on hold)' },
+  0x0e: { name: 'gate-refused', text: 'The key did not take that warm-up token - not its own, or too far behind its newest link (more than 1024)' },
   /* 0x0e-0x11 (restore-then-replay) and 0x13-0x1b (peers, siblings, sync, anchors on the key) went 2026-10-08; their numbers stay unused */
   0x12: { name: 'bad-range', text: 'A loss is #from..#to, at or before the key\'s head' },
   /* R13a (2026-10-06): the sign was not the request the agent started for - refused, no link; TX start again */

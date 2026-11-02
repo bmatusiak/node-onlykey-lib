@@ -52,7 +52,7 @@ const status = (code) => report([...Buffer.from(`EDGE:${code.toString(16).toUppe
  * lossAnchor (default with opsCheckpoint): HEAD byte 59 bit 4 - LOSS ends with a checkpoint that shows the head.
  * ring: the links PICKUP still answers, newest first (the firmware's 8); null - every link (the default).
  */
-function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true, opsCheckpoint = headproof, lossAnchor = opsCheckpoint, ring = null } = {}) {
+function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ownerSecret = OWNER_SECRET, headproof = true, opsCheckpoint = headproof, lossAnchor = opsCheckpoint, warmGate = lossAnchor, ring = null } = {}) {
   /* each fake key its own Edge key - SECRET by default */
   const myPub = p256.getPublicKey(secret, false).slice(1);
   const myDevice = chain.deviceIdOf(myPub);
@@ -92,11 +92,14 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
   const hidden = (h) => (headproof ? new Uint8Array(32) : h);
   /* HEAD's oldest held link */
   const oldest = () => (ring ? Math.max(0, held.length - ring) : 0);
+  /* WARM_GATE (okplugin_edge gate_token): a keyed hash of (device, seq) only this key makes - its first 16 bytes */
+  const gateKey = sha256(new Uint8Array([...secret, ...new TextEncoder().encode('gate')]));
+  const gateToken = (seq) => sha256(new Uint8Array([...new TextEncoder().encode('OKEDGE-GATE-v1'), ...gateKey, ...myDevice, ...u32(seq)])).slice(0, 16);
   const checkpoint = (show = !headproof) => {
     const seq = held.length - 1;
     const sig = chain.signCheckpoint({ deviceId: myDevice, seq, head }, secret);
     const sigPq = signPq(chain.checkpointDigest({ deviceId: myDevice, seq, head }), myPq.secretKey);
-    emit(report([...u32(seq), ...(show ? head : new Uint8Array(32))]));
+    emit(report([...u32(seq), ...(show ? head : new Uint8Array(32)), ...(warmGate ? gateToken(seq) : [])]));
     emit(report([...sig]));
     for (const r of reports(sigPq)) emit(r);
   };
@@ -120,7 +123,7 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       if (sub === 0x01) {
         const ids = [0, 1, 2, 3].map((i) => live[i] || 0);
         const mask = ids.reduce((m, id, i) => (id && onHold.has(id) ? m | (1 << i) : m), 0);
-        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(oldest()), ...ids.flatMap(u32), mask, owed.length, 0, (headproof ? 1 : 0) | (opsCheckpoint ? 2 : 0) | (lossAnchor ? 4 : 0), refusedTx, 0]));
+        emit(report([...u32(held.length - 1), ...hidden(head), ...u32(oldest()), ...ids.flatMap(u32), mask, owed.length, 0, (headproof ? 1 : 0) | (opsCheckpoint ? 2 : 0) | (lossAnchor ? 4 : 0) | (warmGate ? 8 : 0), refusedTx, 0]));
       } else if (sub === 0x04) {
         /* PUBKEY {which}: 0 the checkpoint key, 1 the owner key - nothing signed */
         emit(report([...(arg[0] ? p256.getPublicKey(ownerSecret, false).slice(1) : myPub)]));
@@ -141,6 +144,12 @@ function fakeKey({ silent = false, noPin = false, delay = 1, secret = SECRET, ow
       } else if (sub === 0x03) {
         if (headproof) return emit(status(0x0a));
         checkpoint();
+      } else if (sub === 0x0a && warmGate) {
+        /* WARM {seq, gate token}: this key's token for that seq, not ahead and within 1024 - the head shown */
+        const seq = (arg[0] | (arg[1] << 8) | (arg[2] << 16) | (arg[3] << 24)) >>> 0;
+        const now = held.length - 1;
+        if (now < 0 || seq > now || now - seq > 1024 || !same(arg.slice(4, 20), gateToken(seq))) return emit(status(0x0e));
+        checkpoint(true);
       } else if (sub === 0x09 && headproof) {
         /* PROVE_HEAD {seq, head}: the host's welded head - confirmed only when it is the key's own */
         const seq = (arg[0] | (arg[1] << 8) | (arg[2] << 16) | (arg[3] << 24)) >>> 0;
