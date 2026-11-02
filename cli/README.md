@@ -112,7 +112,7 @@ the same key on any machine. The self-signatures of a key dated 0 are dated 1 -
 GnuPG takes a signature at 0 as undated and then verifies the person's own
 key's signatures as `[uncertain]` (measured; lib-agent's keys have that fault).
 v2 is `--skey derived-v2` / `--dkey derived-v2`. What init chose - the keys, the
-key (`--path`, `--desktop` or `--soft-key`) and `NODE_PATH` - is written once, into
+key (`--path` or `--desktop`) and `NODE_PATH` - is written once, into
 the home's `onlykey-agent.json`, and every agent for that home reads it: the
 one gpg starts, and `gpg-agent` run by hand to watch it (`--homedir` defaults
 to `~/.gnupg/onlykey`, as for init; an option given still wins for that run).

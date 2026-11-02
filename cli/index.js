@@ -32,8 +32,8 @@
  * cli/gpg-agent.js and cli/assuan.js on Node built-ins).
  *
  * WHICH KEY. By default a USB key over node-hid - or, while the ok-edge desktop
- * app runs, the key it holds (--desktop insists on it); --soft-key the app's
- * soft key booted here; --ble the phone's key, through the room it joined over
+ * app runs, the key it holds (--desktop insists on it) - its soft key included, the
+ * computer's soft key is the app's alone; --ble the phone's key, through the room it joined over
  * Bluetooth on this computer's mcp-server (cli/ble-room.js). The option is global, so every device command - agent
  * and gpg-agent included - takes it unchanged: the pipe is below the
  * transport, and nothing above it knows which one it is. (The direct, cli-paired
@@ -130,15 +130,19 @@ const classicSlotName = (n) => (n <= 6 ? `${n}a` : `${n - 6}b`);
  */
 /*
  * WHICH KEY (Brad, 2026-10-25: "the CLI will try to do the work if no desktop app is found, and then it tries to use
- * hardkey by default, unless --ble or --soft-key is used"): --ble the phone's key through its room (cli/ble-room.js);
- * else the desktop app when it runs - it does the work with the key it has open; else --soft-key the desktop app's own soft key booted here
- * (cli/transport-softkey.js, the testnet's with --test-mode), or a hard key on USB.
+ * hardkey by default"): --ble the phone's key through its room (cli/ble-room.js); else the desktop app when it runs - it
+ * does the work with the key it has open, its soft key included; else a hard key on USB.
+ *
+ * NO SOFT KEY OF ITS OWN (Brad, 2026-11-02: "lets turn off --soft-key for cli, and leave it a desktop only feature";
+ * "softkey need button presses, so the desktop app becomes the computer's softkey - if the user has no hardkey, they can
+ * still use onlykey, or use an onlykey backup if they lost their key"): a soft key's presses are the app's buttons, so the
+ * CLI reaches the soft key only through the running app. --soft-key, which booted it here, is refused with what to do.
  */
 function deviceOpts(opts) {
+  if (opts['soft-key']) throw new CliError('--soft-key is gone: the soft key belongs to the desktop app - open the ok-edge desktop app, and onlykey-js uses the key it has open (its soft key included)');
   if (opts.desktop) return { desktop: true };
   if (opts.ble) return { ble: true };
   if (!opts.path && require('../desktop/trust').liveTrust()) return { desktop: true, auto: true };
-  if (opts['soft-key']) return { softKey: true, softKeyNet: process.argv.includes('--test-mode') ? 'test' : 'live' };
   return { path: opts.path };
 }
 
@@ -146,7 +150,6 @@ function deviceOpts(opts) {
 function deviceArgs(opts) {
   if (opts.desktop) return ['--desktop'];
   if (opts.ble) return ['--ble'];
-  if (opts['soft-key']) return ['--soft-key'];
   return opts.path ? ['--path', opts.path] : [];
 }
 
@@ -221,7 +224,7 @@ COMMANDS.help = {
   async run(io) {
     io.out(`${NAME} v${PKG.version} - the OnlyKey command line, on node-onlykey-lib`);
     io.out('');
-    io.out(`Usage: ${NAME} <command> [arguments] [--path <hid path> | --desktop | --ble | --soft-key] [--yes]`);
+    io.out(`Usage: ${NAME} <command> [arguments] [--path <hid path> | --desktop | --ble] [--yes]`);
     io.out('');
     io.out('Commands:');
     for (const [name, cmd] of Object.entries(COMMANDS)) {
@@ -2243,7 +2246,7 @@ function bootCli() {
  * @param {object} [io]
  * @param {(line: string) => void} [io.out]  one line of output
  * @param {(line: string) => void} [io.err]  one line of error
- * @param {(opts: {path?: string, desktop?: boolean, softKey?: boolean}) => Promise<object>} [io.start]
+ * @param {(opts: {path?: string, desktop?: boolean, ble?: boolean}) => Promise<object>} [io.start]
  *   compose and open the stack; defaults to startDesktop - over node-hid, the
  *   desktop app's socket, or the soft key booted here
  * @param {(question: string) => Promise<string>} [io.prompt]  read one secret;
@@ -2314,7 +2317,7 @@ async function main(argv, io = {}) {
     yes: { type: 'boolean' },
     /* a hard key's host asks its y/N in a desktop dialog, not on this terminal (cli/gui-prompt.js) */
     'gui-prompt': { type: 'boolean' },
-    /* the desktop app's soft key, booted here when the app is not running - interactive over stdio (cli/transport-softkey.js) */
+    /* gone (2026-11-02): the soft key is the desktop app's - kept here only so deviceOpts can say so */
     'soft-key': { type: 'boolean' },
   };
   /*
@@ -2328,7 +2331,7 @@ async function main(argv, io = {}) {
    * (Brad, 2026-10-27) - the room is its only sync (Brad, 2026-10-30: the Bluetooth trade with cli-paired phones was
    * removed pending a redesign). `onlykey-js --service [--test-mode] [--server <url> | --no-server]` is
    * `onlykey-js edge [--test-mode] agent [--server <url> | --no-server]`, with the global key options (--path,
-   * --desktop, --soft-key, ...) kept in front.
+   * --desktop, ...) kept in front.
    */
   {
     const at = argv.indexOf('--service');

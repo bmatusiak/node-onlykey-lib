@@ -839,7 +839,8 @@ module.exports = function register(COMMANDS, h) {
          * takeover's, then each the person asks for after a drop - never on a timer). Trades ask the key nothing.
          */
         const say = (l) => io.out(l);
-        const keyKind = opts['soft-key'] ? 'soft key' : 'hard key';
+        /* the service's key is a hard key on USB: the soft key is the desktop app's (2026-11-02), and while the app runs it serves */
+        const keyKind = 'hard key';
         const randomBytes = (k) => new Uint8Array(require('crypto').randomBytes(k));
         let current = null;
         const serve = async () => {
