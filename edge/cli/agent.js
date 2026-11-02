@@ -553,5 +553,21 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
 const AGENT_DERIVE = { keyType: 1, version: 2 };
 const agentPublicKey = (okcrypto, identity) => okcrypto.agent.publicKey(identity, AGENT_DERIVE);
 
+/*
+ * TESTNET-ONLY HOST PINS (Brad, 2026-11-02: yes - so the ship's push is proven on the box's own ssh server before red-key):
+ * an ssh signature is paid only for a session bound to a pinned host, GitHub's by default (cli/ssh-session-bind.js). On
+ * the TESTNET, `ssh-pins.json` in its Edge home may add a test server's host key fingerprints (["SHA256:..."], the form
+ * `ssh-keygen -lf` prints). The live net never reads the file. -> the pins to use, or null (the default).
+ */
+const PINS_FILE = 'ssh-pins.json';
+function pinsFor({ net, home, read = (f) => fs.readFileSync(f, 'utf8') }) {
+  if (net !== 'test' || !home) return null;
+  let extra;
+  try { extra = JSON.parse(read(path.join(home, PINS_FILE))); } catch { return null; }
+  if (!Array.isArray(extra)) return null;
+  const valid = extra.filter((p) => typeof p === 'string' && /^SHA256:[A-Za-z0-9+/]{43}$/.test(p));
+  return valid.length ? [...bindLib.GITHUB_FINGERPRINTS, ...valid] : null;
+}
+
 module.exports = {
-  createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS, AGENT_DERIVE, agentPublicKey };
+  createEdgeAgent, controlHandlers, startEdgeAgent, oneShotPath, EXEC_CAP_MS, AGENT_DERIVE, agentPublicKey, pinsFor, PINS_FILE };

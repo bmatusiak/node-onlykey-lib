@@ -385,8 +385,11 @@ async function openStack(io, opts, h, { serve, dev, wait, setup = true }) {
     recordCert(io, identity, serve ? 'onlykey-js edge agent' : 'onlykey-js edge');
     const { deviceId } = await span('open: edge public key', () => edge.publicKey());
     const c = client.createEdgeClient({ edge, channel, store });
+    /* the testnet may pin a test ssh server beside GitHub's (agent.js pinsFor) - said each time, never silent */
+    const pins = require('./agent').pinsFor({ net: NET, home: require('./control').edgeHome() });
+    if (pins) say(`edge: TESTNET - ssh signatures are also paid for the test host(s) in ${require('./agent').PINS_FILE}: ${pins.filter((p) => !require('../../cli/ssh-session-bind').GITHUB_FINGERPRINTS.includes(p)).join(', ')}`);
     const svc = await span('open: start agent', () => startEdgeAgent({
-      okcrypto, client: c, edge, home, identity, deviceId,
+      okcrypto, client: c, edge, home, identity, deviceId, pins,
       /* a service reads each request's new links into this computer's copy (copy.catchUp) */
       keepCopy: serve,
       pointers: edgeStore.createPointerStore(pointerKv(home)),
