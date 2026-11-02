@@ -108,7 +108,8 @@ function createRoomSync({ open, me, save, handleTrade, rules, randomBytes, selfI
 
   function tradeSoon(peer, r, hooks) {
     const mine = selfId() || r.you || '';
-    if (peer.kind === 'cli' || (mine && peer.id < mine)) return;
+    /* said, so a pair where neither starts shows: the other side's line says it starts */
+    if (peer.kind === 'cli' || (mine && peer.id < mine)) { say(`${hooks.tag} ${peer.name}: it starts the trade (${peer.kind === 'cli' ? 'a CLI starts its own' : 'the lower id'})`); return; }
     queue(() => tradeWith(peer, r, hooks), (e) => {
       const line = `not traded: ${String(e?.message ?? e)}`;
       say(`${hooks.tag} ${peer.name}: ${line}`);
@@ -120,7 +121,10 @@ function createRoomSync({ open, me, save, handleTrade, rules, randomBytes, selfI
   async function tradeWith(peer, r, hooks) {
     const o = open();
     const m = await me();
-    if (!r || !wired.has(r) || !o || !m) return;
+    if (!r || !wired.has(r) || !o || !m) {
+      say(`${hooks.tag} ${peer.name}: no trade - ${!o ? 'no bucket open here' : !m ? 'no proof material for the open bucket' : 'that room is closed'}`);
+      return;
+    }
     const send = (msg) => { t.pulse(); return r.request(peer.id, msg, { timeoutMs: answerMs }); };
     const c = trade.computerSide({ bucket: o.bucket, me: m, randomBytes, rules });
     const done = (line) => {
