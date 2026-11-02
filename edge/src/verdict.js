@@ -41,7 +41,12 @@ const seqOf = (r) => chain.decodeLink(r.link).seq;
 /* a key with no link yet signs its checkpoint at this seq (no link) */
 const NO_SEQ = 0xffffffff;
 
-/** The digest of a copy's first n links (each link and its head, in order). */
+/**
+ * The digest of a copy's first n links (each link and its head, in order).
+ * @param {Array<{link: Uint8Array, head: Uint8Array}>} links
+ * @param {number} [n]
+ * @returns {string}
+ */
 function digestOf(links, n = links.length) {
   const h = sha256.create();
   for (let i = 0; i < n; i++) { h.update(links[i].link); h.update(links[i].head); }
@@ -86,6 +91,13 @@ function sealedStart(c, head, key, say) {
   return { seq: seal.seq, head: seal.head };
 }
 
+/**
+ * @param {{deviceId: Uint8Array, links: Array<{link: Uint8Array, head: Uint8Array, reveal?: Uint8Array|null}>, anchor?: {seq: number, head: Uint8Array}|null, seals?: Array<{seq: number, head: Uint8Array, signature: Uint8Array}>, lastSeen?: {seq: number, head: Uint8Array}|null}} c
+ * @param {{seq: number, head: Uint8Array|null, ringFrom: number}|null} head
+ * @param {{publicKey?: Uint8Array|null, publicKeyPq?: Uint8Array|null, checkpoint?: {seq: number, head: Uint8Array, signature: Uint8Array, signaturePq?: Uint8Array|null}|null, openings?: any}|null} key
+ * @param {{held?: Array<{link: Uint8Array, head: Uint8Array}>, prev?: any, noFull?: boolean, say?: (t: string) => void}} [opts]
+ * @returns {{verdict: any, unverified: number[], state: any, path: string|null} | null}
+ */
 function verdict(c, head, key, { held = [], prev = null, noFull = false, say = () => {} } = {}) {
   /* no head bytes: the same as not synced, until a copy arrives - nothing kept changes */
   if (!head || !head.head) return { verdict: { kind: 'not-synced' }, unverified: [], state: prev, path: null };
