@@ -379,7 +379,8 @@ async function run({ io, opts, argv, net, home, dev = null }) {
             if (signedHere < todo.length) {
               const was = todo[signedHere];
               const subject = git(wt, 'log', '-1', '--format=%h %s').out.trim().slice(0, 60);
-              spend(`sign: ${r.name} ${subject}`, ['git', '-C', wt, 'commit', '--amend', '--no-edit', '-S'], () => ({
+              /* --allow-empty: re-signing a commit that changes no file (a repo may keep such commits) is still a re-sign, never a stop */
+              spend(`sign: ${r.name} ${subject}`, ['git', '-C', wt, 'commit', '--amend', '--no-edit', '--allow-empty', '-S'], () => ({
                 line: `signed ${r.name} ${subject}`,
                 fields: { repo: r.name, commit: git(wt, 'rev-parse', 'HEAD').out.trim(), was: was.hash, ts: new Date().toISOString() },
               }));
