@@ -10,12 +10,16 @@
  * keys a trade compares one by one (bucket/src/replicate.js units): a full block never changes again, so after the
  * first trade a ship moves the block it grew and the meta.
  *
- *   <dev>.meta             the newest checkpoint and lastSeen - what changes at every read of the key
+ *   <dev>.meta             the newest checkpoint and lastSeen - what changes at every read of the key - and the anchor
+ *                          (where the copy began trusting the key: rarely changes)
  *   <dev>.keys             the device's Edge public keys (P-256, ML-DSA-65) - never change
  *   <dev>.statement        its owner statement (nametag) - changes when it is renamed
- *   <dev>.seals            the seals (only the newest with its ML-DSA-65 half) - change when a budget is sealed
+ *   <dev>.seals            the seals (only the newest with its ML-DSA-65 half; `ended`: the budget each closed) - change
+ *                          when a budget is sealed
+ *   <dev>.refusals         the refused TX starts (the newest copyfile.REFUSALS_KEPT)
  *   <dev>.links.<n>        links n*64 .. n*64+63 (seq), with their heads (and a press's reveal)
- *   <dev>.notes.<n>        the intents, receipt messages and seen marks for those links
+ *   <dev>.notes.<n>        the intents, receipt messages and seen marks for those links, and who wrote each intent and
+ *                          when (who: {seq: {computer, at}})
  *   <dev>.open.<grantId>   one budget's opening words
  * <dev> is the device id's first 16 hex (the copies store's key); <n> zero-padded so the keys sort.
  *
@@ -43,16 +47,19 @@ const seqOfHex = (l) => chain.decodeLink(fromHex(l.link)).seq;
 
 /* the copy's fields each one-off key holds (deviceId and v in each, so every key reads alone) */
 const FIELDS = {
-  meta: ['lastSeen', 'checkpoint'],
+  meta: ['lastSeen', 'checkpoint', 'anchor'],
   keys: ['publicKey', 'publicKeyPq'],
   statement: ['statement'],
   seals: ['seals'],
+  refusals: ['refusals'],
 };
+/* the fields of a notes block */
+const NOTE_FIELDS = ['reasons', 'messages', 'seen', 'who'];
 const NUMBERED = ['links', 'notes', 'open'];
 
 /** The key's kind and device: {dev, kind, n} or null for a key that is not a log's. */
 function parseKey(key) {
-  const m = /^([0-9a-f]{16})\.(meta|keys|statement|seals|links|notes|open)(?:\.(\d+))?$/.exec(key);
+  const m = /^([0-9a-f]{16})\.(meta|keys|statement|seals|refusals|links|notes|open)(?:\.(\d+))?$/.exec(key);
   if (!m) return null;
   if (NUMBERED.includes(m[2]) !== (m[3] !== undefined)) return null;
   return { dev: m[1], kind: m[2], n: m[3] === undefined ? null : Number(m[3]) };
@@ -81,11 +88,13 @@ function split(j) {
   }
   for (const [n, ls] of byBlock) out[`${dev}.links.${pad(n)}`] = JSON.stringify(ls.sort((a, b) => seqOfHex(a) - seqOfHex(b)));
   const noteBlocks = new Map();
-  for (const field of ['reasons', 'messages', 'seen']) {
+  for (const field of NOTE_FIELDS) {
     for (const [seq, v] of Object.entries(notes[field] || {})) {
       const n = Math.floor(Number(seq) / BLOCK);
       if (!noteBlocks.has(n)) noteBlocks.set(n, { reasons: {}, messages: {}, seen: {} });
-      noteBlocks.get(n)[field][seq] = v;
+      const nb = noteBlocks.get(n);
+      if (!nb[field]) nb[field] = {};
+      nb[field][seq] = v;
     }
   }
   for (const [n, nb] of noteBlocks) out[`${dev}.notes.${pad(n)}`] = JSON.stringify(nb);
@@ -108,7 +117,7 @@ function join(entries, deviceIdHex) {
   for (const kind of Object.keys(FIELDS)) if (entries[`${dev}.${kind}`] !== undefined) Object.assign(one, JSON.parse(entries[`${dev}.${kind}`]));
   const j = { v: meta.v, deviceId: meta.deviceId, links: [] };
   if (one.lastSeen !== undefined) j.lastSeen = one.lastSeen;
-  for (const f of ['publicKey', 'publicKeyPq', 'seals', 'checkpoint', 'statement']) if (one[f] !== undefined) j[f] = one[f];
+  for (const f of ['publicKey', 'publicKeyPq', 'seals', 'checkpoint', 'statement', 'anchor', 'refusals']) if (one[f] !== undefined) j[f] = one[f];
   /* copyfile.toJSON always writes the seals, even none (an empty list is not kept as a key) */
   if (!j.seals) j.seals = [];
   j.notes = { reasons: {}, messages: {}, seen: {} };
@@ -118,7 +127,7 @@ function join(entries, deviceIdHex) {
     if (!k || k.dev !== dev || !NUMBERED.includes(k.kind)) continue;
     const v = JSON.parse(entries[key]);
     if (k.kind === 'links') j.links.push(...v);
-    if (k.kind === 'notes') for (const f of ['reasons', 'messages', 'seen']) Object.assign(j.notes[f], v[f] || {});
+    if (k.kind === 'notes') for (const f of NOTE_FIELDS) if (v[f]) j.notes[f] = Object.assign(j.notes[f] || {}, v[f]);
     if (k.kind === 'open') j.openings.push(v);
   }
   j.links.sort((a, b) => seqOfHex(a) - seqOfHex(b));
@@ -126,6 +135,7 @@ function join(entries, deviceIdHex) {
   /* as copyfile.toJSON writes a copy: no openings field when there are none, no seen marks when none were kept */
   if (!j.openings.length) delete j.openings;
   if (!Object.keys(j.notes.seen).length) delete j.notes.seen;
+  if (j.notes.who && !Object.keys(j.notes.who).length) delete j.notes.who;
   return j;
 }
 
@@ -159,10 +169,10 @@ function mergeEntry(key, haveText, lo, hi) {
     const a = JSON.parse(lo);
     const b = JSON.parse(hi);
     const out = {};
-    for (const f of ['reasons', 'messages', 'seen']) out[f] = { ...(a[f] || {}), ...(b[f] || {}) };
+    for (const f of NOTE_FIELDS) if (a[f] || b[f] || f !== 'who') out[f] = { ...(a[f] || {}), ...(b[f] || {}) };
     const v = JSON.stringify(out);
     const have = JSON.parse(haveText);
-    const count = (x) => ['reasons', 'messages', 'seen'].reduce((s, f) => s + Object.keys(x[f] || {}).length, 0);
+    const count = (x) => NOTE_FIELDS.reduce((s, f) => s + Object.keys(x[f] || {}).length, 0);
     return { v, taken: v === haveText ? 0 : Math.max(1, count(out) - count(have)), fork: null };
   }
   if (FIELDS[k.kind]) {

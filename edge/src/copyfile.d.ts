@@ -1,4 +1,5 @@
 export const VERSION: 1;
+export const REFUSALS_KEPT: 50;
 /** A copy with nothing in it yet. */
 export function empty(deviceId: any): {
     deviceId: any;
@@ -10,6 +11,8 @@ export function empty(deviceId: any): {
     checkpoint: null;
     statement: null;
     openings: never[];
+    anchor: null;
+    refusals: never[];
 };
 /**
  * A copy from its JSON (the CLI's copy-<id>.json, the bucket's edge.copies entries). An older
@@ -27,6 +30,8 @@ export function fromJSON(s: object | null, deviceId: Uint8Array): {
     checkpoint: null;
     statement: null;
     openings: never[];
+    anchor: null;
+    refusals: never[];
 } | {
     deviceId: Uint8Array<ArrayBufferLike>;
     links: any;
@@ -38,6 +43,11 @@ export function fromJSON(s: object | null, deviceId: Uint8Array): {
     publicKeyPq: Uint8Array<ArrayBuffer> | null;
     seals: any;
     openings: any;
+    anchor: {
+        seq: any;
+        head: Uint8Array<ArrayBuffer>;
+    } | null;
+    refusals: any;
     notes: any;
     checkpoint: {
         seq: any;
@@ -76,8 +86,14 @@ export function toJSON(c: ReturnType<typeof empty>): {
         signaturePq: string;
     } | undefined;
     notes?: any;
+    refusals?: never[] | undefined;
+    anchor?: {
+        seq: any;
+        head: string;
+    } | undefined;
     openings?: never[] | undefined;
     seals: {
+        ended?: any;
         signaturePq?: string | undefined;
         seq: any;
         head: string;

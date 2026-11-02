@@ -169,3 +169,63 @@ test('each log\'s newest link, from its last links block - what the sealed copy\
   assert.deepEqual(logblocks.newestSeqs(logblocks.split(copyJSON(0, 140))), { [dev]: 140 });
   assert.deepEqual(logblocks.newestSeqs({}), {});
 });
+
+/*
+ * THE FIELDS THE APP KEPT ONLY ON ITS DEVICE (S4 step 1, 2026-11-02): the anchor, a seal's `ended`, who wrote a reason
+ * and when, the refused TX starts - each comes back from the blocks as it went in, and two copies merge them by their
+ * rules (the earlier anchor; ended kept from either side; who and refusals by union, refusals capped).
+ */
+test('edge-logs: the anchor, seals\' ended, notes.who and refusals survive the blocks and merge by their rules', () => {
+  const who = { 4: { computer: 'nitro16', at: 1000 } };
+  const a = copyJSON(0, 40, {
+    anchor: { seq: 30, head: heads[30] },
+    refusals: [{ seq: 12, computer: 'nitro16', at: 10, why: 'no budget' }],
+  });
+  a.notes.who = who;
+  a.seals = a.seals.map((s) => ({ ...s, ended: 7 }));
+  /* through the blocks and back: the same JSON */
+  const back = logblocks.join(logblocks.split(a), toHexId());
+  assert.deepEqual(back.anchor, a.anchor);
+  assert.deepEqual(back.refusals, a.refusals);
+  assert.deepEqual(back.notes.who, who);
+  assert.equal(back.seals.at(-1).ended, 7);
+  /* and through copyfile, as every host reads a copy */
+  const c = copyfile.fromJSON(back, id);
+  assert.equal(c.anchor.seq, 30);
+  assert.deepEqual(copyfile.toJSON(c).anchor, a.anchor);
+
+  /* two copies: the earlier anchor; a seal's ended from the side that knows it; refusals and who by union */
+  const b = copyJSON(20, 40, {
+    anchor: { seq: 20, head: heads[20] },
+    refusals: [{ seq: 33, computer: 'box', at: 20, why: 'expired' }],
+  });
+  b.notes.who = { 25: { computer: 'box', at: 2000 } };
+  const m = copyfile.merge(copyfile.fromJSON(a, id), copyfile.fromJSON(b, id));
+  assert.equal(m.fork, null);
+  assert.equal(m.copy.anchor.seq, 20, 'the earlier anchor');
+  assert.equal(m.copy.seals.find((s) => s.seq === 40).ended, 7, 'ended kept from the copy that knew it');
+  assert.deepEqual(m.copy.refusals.map((r) => r.seq), [12, 33]);
+  assert.deepEqual(Object.keys(m.copy.notes.who).sort(), ['25', '4']);
+
+  /* refusals are capped at the newest REFUSALS_KEPT */
+  const many = Array.from({ length: copyfile.REFUSALS_KEPT + 5 }, (_, i) => ({ seq: i, computer: 'x', at: i, why: 'w' }));
+  const capped = copyfile.merge(copyfile.fromJSON(copyJSON(0, 2, { refusals: many.slice(0, 30) }), id), copyfile.fromJSON(copyJSON(0, 2, { refusals: many.slice(30) }), id));
+  assert.equal(capped.copy.refusals.length, copyfile.REFUSALS_KEPT);
+  assert.equal(capped.copy.refusals[0].at, 5, 'the oldest dropped first');
+
+  /* in the bucket: filing b into a's blocks takes b's anchor and who without a fork */
+  const filed = logblocks.fileInto(logblocks.split(a), b);
+  assert.deepEqual(filed.forks, []);
+  const after = logblocks.join({ ...logblocks.split(a), ...filed.changed }, toHexId());
+  assert.equal(after.anchor.seq, 20);
+  assert.deepEqual(Object.keys(after.notes.who).sort(), ['25', '4']);
+});
+
+/* an older copy (none of the new fields) reads and writes back unchanged - nothing in the bucket is rewritten */
+test('edge-logs: a copy without the new fields round-trips unchanged', () => {
+  const old = copyJSON(0, 70);
+  assert.deepEqual(copyfile.toJSON(copyfile.fromJSON(old, id)), old);
+  assert.deepEqual(logblocks.join(logblocks.split(old), toHexId()), old);
+});
+
+function toHexId() { return Buffer.from(id).toString('hex'); }

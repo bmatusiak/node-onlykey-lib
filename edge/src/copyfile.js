@@ -15,8 +15,12 @@
  *   checkpoint the newer replaces the older, never the other way round
  *   statement  the later one (by seq)
  *   openings   union by budget (each was checked against the links when it was kept)
- *   notes      union
+ *   notes      union (reasons, receipt messages, seen marks, and who wrote a reason and when - notes.who)
  *   keys       must be the same keys - two keys are two devices, never one copy
+ *   anchor     where a copy began trusting the key (a checkpoint, or a LOSS accepted): the earlier of the two - the
+ *              union of links reaches back to it (S4, 2026-11-02: it lived only in the app's AsyncStorage)
+ *   refusals   the computers' refused TX starts (seq, computer, at, why): union, the newest REFUSALS_KEPT
+ *   seals      ...and a seal's `ended` (the budget it closed) is kept when either copy has it
  * Brad, 2026-10-21: merge "to not lose important logging".
  */
 
@@ -25,12 +29,14 @@ const chain = require('./chain');
 const block = require('./block');
 
 const VERSION = 1;
+/* the refused TX starts a copy keeps - the newest, as the app's Edge tab shows them */
+const REFUSALS_KEPT = 50;
 const seqOf = (r) => chain.decodeLink(r.link).seq;
 const hex = (b) => (b ? toHex(b) : '');
 
 /** A copy with nothing in it yet. */
 function empty(deviceId) {
-  return { deviceId, links: [], lastSeen: null, publicKey: null, publicKeyPq: null, seals: [], checkpoint: null, statement: null, openings: [] };
+  return { deviceId, links: [], lastSeen: null, publicKey: null, publicKeyPq: null, seals: [], checkpoint: null, statement: null, openings: [], anchor: null, refusals: [] };
 }
 
 /**
@@ -48,8 +54,10 @@ function fromJSON(s, deviceId) {
     publicKey: s.publicKey ? fromHex(s.publicKey) : null,
     publicKeyPq: s.publicKeyPq ? fromHex(s.publicKeyPq) : null,
     /* only the newest seal keeps signaturePq ("B"); the checkpoint without one loads as empty bytes and fails its check */
-    seals: (s.seals || []).map((x) => ({ seq: x.seq, head: fromHex(x.head), signature: fromHex(x.signature), ...(x.signaturePq ? { signaturePq: fromHex(x.signaturePq) } : {}) })),
+    seals: (s.seals || []).map((x) => ({ seq: x.seq, head: fromHex(x.head), signature: fromHex(x.signature), ...(x.signaturePq ? { signaturePq: fromHex(x.signaturePq) } : {}), ...(x.ended !== undefined ? { ended: x.ended } : {}) })),
     openings: Array.isArray(s.openings) ? s.openings : [],
+    anchor: s.anchor ? { seq: s.anchor.seq, head: fromHex(s.anchor.head) } : null,
+    refusals: Array.isArray(s.refusals) ? s.refusals : [],
     notes: s.notes && typeof s.notes === 'object' ? s.notes : { reasons: {}, messages: {} },
     checkpoint: s.checkpoint ? {
       seq: s.checkpoint.seq, head: fromHex(s.checkpoint.head), signature: fromHex(s.checkpoint.signature), signaturePq: fromHex(s.checkpoint.signaturePq || ''),
@@ -73,8 +81,10 @@ function toJSON(c) {
     lastSeen: c.lastSeen ? { seq: c.lastSeen.seq, head: toHex(c.lastSeen.head) } : null,
     ...(c.publicKey ? { publicKey: toHex(c.publicKey) } : {}),
     ...(c.publicKeyPq ? { publicKeyPq: toHex(c.publicKeyPq) } : {}),
-    seals: (c.seals || []).map((x) => ({ seq: x.seq, head: toHex(x.head), signature: toHex(x.signature), ...(x.signaturePq && x.signaturePq.length ? { signaturePq: toHex(x.signaturePq) } : {}) })),
+    seals: (c.seals || []).map((x) => ({ seq: x.seq, head: toHex(x.head), signature: toHex(x.signature), ...(x.signaturePq && x.signaturePq.length ? { signaturePq: toHex(x.signaturePq) } : {}), ...(x.ended !== undefined ? { ended: x.ended } : {}) })),
     ...(c.openings && c.openings.length ? { openings: c.openings } : {}),
+    ...(c.anchor ? { anchor: { seq: c.anchor.seq, head: toHex(c.anchor.head) } } : {}),
+    ...(c.refusals && c.refusals.length ? { refusals: c.refusals } : {}),
     ...(c.notes ? { notes: c.notes } : {}),
     ...(c.checkpoint ? { checkpoint: {
       seq: c.checkpoint.seq, head: toHex(c.checkpoint.head), signature: toHex(c.checkpoint.signature), signaturePq: toHex(c.checkpoint.signaturePq || new Uint8Array(0)),
@@ -128,7 +138,16 @@ function merge(a, b) {
   const links = [...bySeq.values()].sort((x, y) => seqOf(x) - seqOf(y));
 
   const seals = new Map(a.seals.map((x) => [x.seq, x]));
-  for (const x of b.seals) if (!seals.has(x.seq)) seals.set(x.seq, x);
+  for (const x of b.seals) {
+    const was = seals.get(x.seq);
+    if (!was) seals.set(x.seq, x);
+    /* the same seal: the one that knows which budget it closed */
+    else if (was.ended === undefined && x.ended !== undefined) seals.set(x.seq, { ...was, ended: x.ended });
+  }
+  /* refused TX starts: the union (one per seq, computer and time), the newest kept */
+  const refusalKey = (r) => `${r.seq}|${r.computer}|${r.at}`;
+  const refused = new Map([...(b.refusals || []), ...(a.refusals || [])].map((r) => [refusalKey(r), r]));
+  const refusals = [...refused.values()].sort((x, y) => (x.at || 0) - (y.at || 0)).slice(-REFUSALS_KEPT);
   const newer = (x, y, seq) => (!x ? y : !y ? x : seq(y) > seq(x) ? y : x);
   const openings = new Map((a.openings || []).map((o) => [o.grantId, o]));
   for (const o of b.openings || []) if (!openings.has(o.grantId)) openings.set(o.grantId, o);
@@ -146,7 +165,13 @@ function merge(a, b) {
       checkpoint: newer(a.checkpoint, b.checkpoint, (x) => x.seq),
       statement: newer(a.statement, b.statement, (x) => x.seq ?? -1),
       openings: [...openings.values()].sort((x, y) => x.grantId - y.grantId),
-      notes: { reasons: { ...nb.reasons, ...na.reasons }, messages: { ...nb.messages, ...na.messages }, seen: { ...(nb.seen || {}), ...(na.seen || {}) } },
+      notes: {
+        reasons: { ...nb.reasons, ...na.reasons }, messages: { ...nb.messages, ...na.messages }, seen: { ...(nb.seen || {}), ...(na.seen || {}) },
+        ...(na.who || nb.who ? { who: { ...(nb.who || {}), ...(na.who || {}) } } : {}),
+      },
+      /* the earlier anchor: the union of links reaches back to it */
+      anchor: !a.anchor ? (b.anchor || null) : !b.anchor ? a.anchor : (b.anchor.seq < a.anchor.seq ? b.anchor : a.anchor),
+      refusals,
     },
     taken,
     fork: null,
@@ -165,10 +190,10 @@ function blocks(c, { net }) {
   const out = [];
   for (const [i, b] of r.blocks.entries()) {
     const anchor = i === r.blocks.length - 1;
-    const v = c.publicKey ? block.verifyBlock(b, c.publicKey, c.publicKeyPq, out.length ? out[out.length - 1].block : null, { anchor }) : { ok: false, reason: 'no public key kept - run onlykey-js edge sync' };
+    const v = c.publicKey ? block.verifyBlock(b, c.publicKey, c.publicKeyPq, out.length ? out[out.length - 1].block : null, { anchor }) : { ok: false, reason: 'no public key kept - it is read from the key with the copy (any edge command with the key plugged in)' };
     out.push({ block: b, id: block.blockId(b), ok: v.ok, ...(v.ok ? {} : { reason: v.reason }) });
   }
   return { deviceId: toHex(c.deviceId), blocks: out, open: r.open, ...(r.reason ? { reason: r.reason } : {}) };
 }
 
-module.exports = { VERSION, empty, fromJSON, toJSON, merge, blocks, seqOf };
+module.exports = { VERSION, REFUSALS_KEPT, empty, fromJSON, toJSON, merge, blocks, seqOf };
