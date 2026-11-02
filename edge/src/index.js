@@ -45,6 +45,8 @@ module.exports = {
   history: require('./history'),
   /* B3.0 (2026-10-24): the identity id every Edge record is filed under - the owner key's, no salt */
   identityId: require('./identity-id'),
+  /* the MCP plan (Step 4b): a submitted plan run on a device of its identity - one budget, each item a paid use */
+  plan: require('./plan'),
   /* the computer's own small state over a host store (getItem/setItem): one budget pointer per key */
   store: require('./store'),
 };
