@@ -28,6 +28,8 @@ module.exports = {
   wire: require('./wire'),
   /* merging copies of a chain (a fork reported, never chosen) and checking another device's against its checkpoint - what edge sync left (removed 2026-11-02) */
   sync: require('./sync'),
+  /* the verdict on a copy - one answer for every host, its state a host may keep (S4) */
+  verdict: require('./verdict'),
   devices: require('./devices'),
   /* a pure Bluetooth link test: the phone echoes, testing mode only (onlykey-js edge ping) */
   ping: require('./ping'),
