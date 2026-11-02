@@ -20,4 +20,5 @@ export let logblocks: typeof import("./logblocks");
 export let identity: typeof import("./identity");
 export let history: typeof import("./history");
 export let identityId: typeof import("./identity-id");
+export let plan: typeof import("./plan");
 export let store: typeof import("./store");
