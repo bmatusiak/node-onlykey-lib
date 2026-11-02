@@ -30,6 +30,8 @@ module.exports = {
   sync: require('./sync'),
   /* the verdict on a copy - one answer for every host, its state a host may keep (S4) */
   verdict: require('./verdict'),
+  /* the approving host's records of the budgets it approved (S4 step 7) */
+  budgetbook: require('./budgetbook'),
   devices: require('./devices'),
   /* a pure Bluetooth link test: the phone echoes, testing mode only (onlykey-js edge ping) */
   ping: require('./ping'),

@@ -13,6 +13,7 @@ export let client: typeof import("./client");
 export let wire: typeof import("./wire");
 export let sync: typeof import("./sync");
 export let verdict: typeof import("./verdict");
+export let budgetbook: typeof import("./budgetbook");
 export let devices: typeof import("./devices");
 export let ping: typeof import("./ping");
 export let block: typeof import("./block");
