@@ -29,30 +29,8 @@ const { toHex, fromHex } = require('../../src/bytes');
 
 const rnd = (n) => new Uint8Array(crypto.randomBytes(n));
 
-/*
- * THE STORE RULES THE APP USES TOO - each feature's own merge where it has one. Required softly: the bucket stands
- * without any feature folder (scripts/check-without.js), and a store without its rule takes the generic newer-wins.
- */
-function storeRules() {
-  const out = {};
-  try {
-    const kc = rules.keychain(require('../../keychain/src/list'));
-    out.keychain = kc;
-    out['keychain-test'] = kc;
-  } catch { /* no Key Chain here */ }
-  out.guestbook = rules.guestbook();
-  out['guestbook-test'] = rules.guestbook();
-  out.passwords = rules.passwords();
-  out.cryptobox = rules.cryptobox();
-  out['cryptobox-test'] = rules.cryptobox();
-  /* the Edge logs (edge/src/logblocks.js): block by block - links the union, a fork reported */
-  try {
-    const el = rules.edgeLogs(require('../../edge/src/logblocks'));
-    out['edge-logs'] = el;
-    out['edge-logs-test'] = el;
-  } catch { /* no Edge here */ }
-  return out;
-}
+/* the store rules: one table for every merge and trade (bucket/src/store-rules.js) */
+const { storeRules } = require('../src/store-rules');
 
 /* the bucket key and certificate of an identity, beside its bucket: buckets/<net>/<id>.key */
 const keyFile = (id, net) => home.identityFile(id, net).replace(/\.json$/, '.key');

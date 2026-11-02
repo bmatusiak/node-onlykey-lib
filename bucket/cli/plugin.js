@@ -25,13 +25,8 @@ const home = require('./home');
 /* a development checkout has cli/dev; the published package leaves it out (package.json files) */
 const DEV_BUILD = fs.existsSync(path.join(__dirname, '..', '..', 'cli', 'dev'));
 
-/* the merge rule for each store the CLI keeps; a store without one is taken key by key, newest wins */
-function storeRules() {
-  const r = {};
-  try { const list = require('../../keychain/src/list'); r.keychain = rules.keychain(list); r['keychain-test'] = rules.keychain(list); } catch { /* no keychain folder in this build */ }
-  try { const copyfile = require('../../edge/src/copyfile'); r['edge.copies'] = rules.edgeCopies(copyfile); r['edge-test.copies'] = rules.edgeCopies(copyfile); } catch { /* no edge folder */ }
-  return r;
-}
+/* the merge rule for each store: one table for every merge and trade (bucket/src/store-rules.js); a store without one is taken key by key, newest wins */
+const { storeRules } = require('../src/store-rules');
 
 function setup(imports, register) {
   const { cli } = imports;
@@ -126,7 +121,6 @@ function setup(imports, register) {
             const host = new URL(url).host;
             /* the server's sealed copy first (bucket/cli/sealed.js): it answers with nobody else online */
             const { syncKept } = require('./sealed');
-            const { storeRules } = require('./trade');
             const { newestSeqs } = require('../../edge/src/logblocks');
             const live = (b, s) => Object.fromEntries(Object.entries((b.stores || {})[s] || {}).filter(([, r]) => r && !r.archived && r.v !== null).map(([k, r]) => [k, r.v]));
             try {

@@ -1,5 +1,6 @@
 declare const _exports: {
     rules: typeof import("./rules");
+    storeRules: typeof import("./store-rules").storeRules;
     replicate: typeof import("./replicate");
     bucketIdentity: typeof import("./bucket-identity");
     trade: typeof import("./trade");
