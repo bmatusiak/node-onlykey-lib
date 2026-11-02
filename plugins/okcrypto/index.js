@@ -767,13 +767,17 @@ function setup(imports, register, config) {
   }
   function tunnelEvent(phase, extra = {}) {
     if (!currentOp) return;
-    const { id, msg, slot, step, steps } = currentOp;
-    try { events.emit('tunnel', { phase, id, msg, slot, step, steps, waiting: laneWaiting(), ...extra }); } catch { /* a listener's error is not the operation's */ }
+    const { id, msg, slot, step, steps, limitMs } = currentOp;
+    try { events.emit('tunnel', { phase, id, msg, slot, step, steps, limitMs, waiting: laneWaiting(), ...extra }); } catch { /* a listener's error is not the operation's */ }
   }
-  async function tracked(msg, slot, steps, fn) {
+  /*
+   * limitMs: how long the key is given to answer this operation (its timeoutMs) - a host's sheet counts it down from the
+   * begin (Brad, 2026-11-01: the sheet "just inactive" while a read hung 30 s; "if it has a timer it gets a timer progress bar")
+   */
+  async function tracked(msg, slot, steps, fn, limitMs = null) {
     /* nested (the connect an operation opens with): its ceremonies are steps of the outer one */
     if (currentOp) return fn();
-    currentOp = { id: ++opSeq, msg, slot, step: 0, steps };
+    currentOp = { id: ++opSeq, msg, slot, step: 0, steps, limitMs };
     tunnelEvent('begin');
     try {
       const out = await fn();
@@ -1264,7 +1268,7 @@ function setup(imports, register, config) {
   /* replyWhole follows the connect too: its answer is staged like any other (WIPES_DELIVERED) */
   async function connectTunnel(opts) {
     replyWhole = false;
-    const out = await tracked(okconnect.OKCONNECT, 0, 1, () => connectTunnelRun(opts));
+    const out = await tracked(okconnect.OKCONNECT, 0, 1, () => connectTunnelRun(opts), (opts && opts.timeoutMs) || 60000);
     replyWhole = true;
     return out;
   }
@@ -1492,7 +1496,7 @@ function setup(imports, register, config) {
   async function tunnelOperationNow(...args) {
     try {
       /* tracked for the host's sheet; 'plan' gives the real step count once the packets are planned */
-      const out = await tracked(args[0], args[1], 1, () => tunnelOperationRun(...args));
+      const out = await tracked(args[0], args[1], 1, () => tunnelOperationRun(...args), (args[3] && args[3].timeoutMs) || 30000);
       replyWhole = true;
       return out;
     } catch (e) {

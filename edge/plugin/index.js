@@ -352,7 +352,8 @@ function setup(imports, register) {
      * as the web app does - "a refresh is just a trigger for the operation, the sheet shows what's happening"). Only on
      * this direct path: over the tunnel okcrypto's own 'tunnel' events say it already.
      */
-    const said = (phase, ok) => { if (edge && typeof edge.onRequest === 'function') { try { edge.onRequest({ phase, sub, ok, waiting: laneWaiting() }); } catch { /* a listener's error is not the request's */ } } };
+    /* limitMs: how long the key is given to answer - a host's sheet counts it down (Brad, 2026-11-01: "if it has a timer it gets a timer progress bar") */
+    const said = (phase, ok) => { if (edge && typeof edge.onRequest === 'function') { try { edge.onRequest({ phase, sub, ok, waiting: laneWaiting(), limitMs: timeoutMs }); } catch { /* a listener's error is not the request's */ } } };
     said('begin');
     return timed(new Promise((resolve, reject) => {
       const got = [];
