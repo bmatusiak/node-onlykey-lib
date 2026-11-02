@@ -116,8 +116,8 @@ function tokenMatches(record, offered) {
 
 /*
  * THE LOCAL MCP ON THIS MACHINE (local-mcp.json beside desktop.json; ok-edge plan B4's follow-up, 2026-11-01: the box's
- * headless server ran on 8792 and `onlykey-js --ble` found it only by ONLYKEY_LOCAL_MCP; the desktop's local MCP takes a
- * free port each start): while an mcp-server runs on 127.0.0.1 it says where - local-mcp-<what>.json { v: 1, url, pid,
+ * headless server ran on 8792 and `onlykey-js --ble` found it only by ONLYKEY_LOCAL_MCP; the desktop's runs on 8650, one
+ * fixed address an agent's config can name): while an mcp-server runs on 127.0.0.1 it says where - local-mcp-<what>.json { v: 1, url, pid,
  * what } - so agents and the CLI on this machine find it. One file per kind, since the box runs several at once: 'desktop'
  * (the desktop app's - agents' plans), 'ble' (the headless server with Bluetooth - onlykey-js --ble). Not a secret (the
  * local MCP takes 127.0.0.1 joins with no proof - Brad's choice), so plain permissions; a file whose process is gone is

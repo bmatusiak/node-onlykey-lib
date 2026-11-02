@@ -10,7 +10,7 @@
  *                                         desktop app, or this computer for a key on USB) keeps them
  *   onlykey-js edge agent [--wait s]      the OPTIONAL service (CLI.md §4): keeps the key open
  *                                         between commands, with the bucket sync in it
- *   onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync
+ *   onlykey-js edge budget | continue | end | status | exec | receipt | watch
  *                                         edge/cli/commands.js
  *
  * NO SERVICE BY DEFAULT (CLI.md §4): a command finds the `edge agent` service if one
@@ -34,7 +34,7 @@ const USAGE = [
   'onlykey-js edge continue --ttl MINUTES [--caps n,n] | end | status',
   'onlykey-js edge exec --head H --intent "…" [--receipt "…"] -- <command…>     the only way to spend a budget',
   'onlykey-js edge receipt <seq> [--code OK] --msg "…"',
-  'onlykey-js edge watch [--once] | sync [--status]',
+  'onlykey-js edge watch [--once]',
   'onlykey-js edge blocks [--json]                               the copy on this PC as JSON blocks (no key)',
   'onlykey-js edge name [<a name>]                              the name of this device in its identity: shown, or set / changed (signed by the key, no press)',
   'onlykey-js edge migrate --dry-run                             what of the records from before identities is this key\'s (the first command copies them by itself)',
@@ -495,7 +495,7 @@ module.exports = function register(COMMANDS, h) {
   COMMANDS.edge = {
     mirrors: '(new)',
     raw: true, /* its own arguments: `exec … -- <command>` must reach it as typed */
-    usage: 'setup | budget | continue | end | status | exec | receipt | watch | sync | blocks | agent | control … | --claude-setup | --test-mode … | --test-mode clear',
+    usage: 'setup | budget | continue | end | status | exec | receipt | watch | blocks | agent | control … | --claude-setup | --test-mode … | --test-mode clear',
     summary: 'Edge: an agent uses the key inside a budget you approve (in the desktop app, or here for a key on USB) - budget or no go',
     device: true,
     async run(io, opts, argv) {

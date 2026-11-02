@@ -266,7 +266,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
         await new Promise((r) => setTimeout(r, 2000));
       }
     }
-    err('onlykey-js edge budget | continue | end | status | exec | receipt | watch | sync | setup | agent');
+    err('onlykey-js edge budget | continue | end | status | exec | receipt | watch | setup | agent');
     return 2;
   } catch (e) {
     err(`onlykey-js edge: ${e.message}`);

@@ -151,7 +151,7 @@ without the folder the command is simply not there. It also decodes the soft key
 
 ## edge - OnlyKey Edge (`edge/`)
 
-`onlykey-js edge setup | budget | continue | end | status | exec | receipt | watch | sync | blocks |
+`onlykey-js edge setup | budget | continue | end | status | exec | receipt | watch | blocks |
 agent`, and `--test-mode` for the testnet: an AI agent signs under a budget the person approved
 in the ok-edge desktop app (or on this terminal, for a key on USB), each use bound to its request and receipted. Another plugin, used the same way: the
 core never requires `edge/`. Every option, and what each command may do: `onlykey-edge/CLI.md`.
