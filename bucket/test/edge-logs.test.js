@@ -179,16 +179,16 @@ test('edge-logs: the anchor, seals\' ended, notes.who and refusals survive the b
   const who = { 4: { computer: 'nitro16', at: 1000 } };
   const a = copyJSON(0, 40, {
     anchor: { seq: 30, head: heads[30] },
-    refusals: [{ seq: 12, computer: 'nitro16', at: 10, why: 'no budget' }],
+    refusals: [{ seq: 12, computer: 'nitro16', at: 10, status: 'no budget' }],
   });
   a.notes.who = who;
-  a.seals = a.seals.map((s) => ({ ...s, ended: 7 }));
+  a.seals = a.seals.map((s) => ({ ...s, ended: [7] }));
   /* through the blocks and back: the same JSON */
   const back = logblocks.join(logblocks.split(a), toHexId());
   assert.deepEqual(back.anchor, a.anchor);
   assert.deepEqual(back.refusals, a.refusals);
   assert.deepEqual(back.notes.who, who);
-  assert.equal(back.seals.at(-1).ended, 7);
+  assert.deepEqual(back.seals.at(-1).ended, [7]);
   /* and through copyfile, as every host reads a copy */
   const c = copyfile.fromJSON(back, id);
   assert.equal(c.anchor.seq, 30);
@@ -197,18 +197,19 @@ test('edge-logs: the anchor, seals\' ended, notes.who and refusals survive the b
   /* two copies: the earlier anchor; a seal's ended from the side that knows it; refusals and who by union */
   const b = copyJSON(20, 40, {
     anchor: { seq: 20, head: heads[20] },
-    refusals: [{ seq: 33, computer: 'box', at: 20, why: 'expired' }],
+    refusals: [{ seq: 33, computer: 'box', at: 20, status: 'expired' }],
   });
   b.notes.who = { 25: { computer: 'box', at: 2000 } };
+  b.seals = b.seals.map((s) => ({ ...s, ended: [8] }));
   const m = copyfile.merge(copyfile.fromJSON(a, id), copyfile.fromJSON(b, id));
   assert.equal(m.fork, null);
   assert.equal(m.copy.anchor.seq, 20, 'the earlier anchor');
-  assert.equal(m.copy.seals.find((s) => s.seq === 40).ended, 7, 'ended kept from the copy that knew it');
+  assert.deepEqual(m.copy.seals.find((s) => s.seq === 40).ended, [7, 8], 'the budgets each copy knew the seal closed');
   assert.deepEqual(m.copy.refusals.map((r) => r.seq), [12, 33]);
   assert.deepEqual(Object.keys(m.copy.notes.who).sort(), ['25', '4']);
 
   /* refusals are capped at the newest REFUSALS_KEPT */
-  const many = Array.from({ length: copyfile.REFUSALS_KEPT + 5 }, (_, i) => ({ seq: i, computer: 'x', at: i, why: 'w' }));
+  const many = Array.from({ length: copyfile.REFUSALS_KEPT + 5 }, (_, i) => ({ seq: i, computer: 'x', at: i, status: 'w' }));
   const capped = copyfile.merge(copyfile.fromJSON(copyJSON(0, 2, { refusals: many.slice(0, 30) }), id), copyfile.fromJSON(copyJSON(0, 2, { refusals: many.slice(30) }), id));
   assert.equal(capped.copy.refusals.length, copyfile.REFUSALS_KEPT);
   assert.equal(capped.copy.refusals[0].at, 5, 'the oldest dropped first');

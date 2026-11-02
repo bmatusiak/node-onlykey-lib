@@ -19,8 +19,8 @@
  *   keys       must be the same keys - two keys are two devices, never one copy
  *   anchor     where a copy began trusting the key (a checkpoint, or a LOSS accepted): the earlier of the two - the
  *              union of links reaches back to it (S4, 2026-11-02: it lived only in the app's AsyncStorage)
- *   refusals   the computers' refused TX starts (seq, computer, at, why): union, the newest REFUSALS_KEPT
- *   seals      ...and a seal's `ended` (the budget it closed) is kept when either copy has it
+ *   refusals   the computers' refused TX starts ({computer, seq, status, at}): union, the newest REFUSALS_KEPT
+ *   seals      ...and a seal's `ended` (the budgets it closed, grant ids): the union of both copies'
  * Brad, 2026-10-21: merge "to not lose important logging".
  */
 
@@ -141,8 +141,8 @@ function merge(a, b) {
   for (const x of b.seals) {
     const was = seals.get(x.seq);
     if (!was) seals.set(x.seq, x);
-    /* the same seal: the one that knows which budget it closed */
-    else if (was.ended === undefined && x.ended !== undefined) seals.set(x.seq, { ...was, ended: x.ended });
+    /* the same seal: the budgets it closed, as either copy knows them */
+    else if (x.ended !== undefined) seals.set(x.seq, { ...was, ended: [...new Set([...(was.ended || []), ...x.ended])].sort((p, q) => p - q) });
   }
   /* refused TX starts: the union (one per seq, computer and time), the newest kept */
   const refusalKey = (r) => `${r.seq}|${r.computer}|${r.at}`;
