@@ -767,8 +767,8 @@ function setup(imports, register, config) {
   }
   function tunnelEvent(phase, extra = {}) {
     if (!currentOp) return;
-    const { id, msg, slot, step, steps, limitMs } = currentOp;
-    try { events.emit('tunnel', { phase, id, msg, slot, step, steps, limitMs, waiting: laneWaiting(), ...extra }); } catch { /* a listener's error is not the operation's */ }
+    const { id, msg, slot, step, steps, limitMs, pressAt } = currentOp;
+    try { events.emit('tunnel', { phase, id, msg, slot, step, steps, limitMs, ...(pressAt !== undefined ? { pressAt } : {}), waiting: laneWaiting(), ...extra }); } catch { /* a listener's error is not the operation's */ }
   }
   /*
    * limitMs: how long the key is given to answer this operation (its timeoutMs) - a host's sheet counts it down from the
@@ -1581,6 +1581,12 @@ function setup(imports, register, config) {
     /* the host's progress: these request packets, then the polls an answer of this size takes (one for a variable one) */
     if (currentOp) {
       currentOp.steps = Math.max(currentOp.step, stepsBefore + sizes.length + (framed ? Math.ceil(framed / chunk.RESPONSE_CHUNK) : 1));
+      /*
+       * pressAt: the ceremonies done when the key has the whole request - the next one is the first poll, which a request
+       * that asks a press waits in (Brad, 2026-11-01: the press sheet only while the press is asked; a 22-ceremony budget
+       * opening was taken as pressed after its first request packet)
+       */
+      currentOp.pressAt = stepsBefore + sizes.length;
       tunnelEvent('plan');
     }
 
