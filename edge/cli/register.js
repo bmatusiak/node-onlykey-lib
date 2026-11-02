@@ -862,10 +862,22 @@ module.exports = function register(COMMANDS, h) {
               const r = typeof ok.keySite === 'function' ? await ok.keySite().catch(() => null) : null;
               return r && r.on && r.site ? `https://${r.site}` : null;
             }),
-            /* the app's login (Brad, 2026-11-02: "like the app"): the key signs this connection's challenge */
-            login: (asked, bucketPublicKey) => withKey((app) => app.services.identity.proveLogin(asked, bucketPublicKey, {
-              confirm: ({ digits } = {}) => st.say(digits && digits.length ? `sync: confirm on the OnlyKey (the login proof): enter ${digits.join(' ')}` : 'sync: press the OnlyKey (the login proof)'),
-            })),
+            /*
+             * the app's login (Brad, 2026-11-02: "like the app"): the key signs this connection's challenge - ONE key
+             * request. The identity is the kept proof material's (the box, 2026-11-02: reading it again through the
+             * identity plugin cost the soft key a second code per join); a proof that does not verify against it - another
+             * identity's key - is never sent.
+             */
+            login: (asked, m) => withKey(async (app, ok) => {
+              const bid = require('../../bucket/src/bucket-identity');
+              const proof = await bid.signLogin(ok, m.identityPublicKey, m.bucketKey.publicKey, asked, {
+                confirm: ({ digits } = {}) => st.say(digits && digits.length ? `sync: confirm on the OnlyKey (the login proof): enter ${digits.join(' ')}` : 'sync: press the OnlyKey (the login proof)'),
+              });
+              if (!bid.verifyCertificate({ identityPublicKey: m.identityPublicKey, bucketPublicKey: m.bucketKey.publicKey, certificate: proof, login: asked })) {
+                throw new Error('the login proof does not verify for the identity this computer kept - is this the same key?');
+              }
+              return proof;
+            }),
             /* the Try again: never the key on a timer - the person says when (a dialog with --gui-prompt, else this terminal) */
             onNeedsKey: (why) => {
               void personConfirm(opts)('log in to the server again? the key signs its challenge [y/N] ', { details: `sync: ${why}` })
@@ -893,7 +905,8 @@ module.exports = function register(COMMANDS, h) {
           who: `onlykey-js --service (pid ${process.pid})`,
           priority: 'service',
           log: say,
-          onServe: () => serve().catch((e) => { say(`the service did not start: ${e.message}`); stopAsked(); }),
+          /* not waited for: Ctrl-C and a control stop are heard while it opens the key (a PIN asked, a press) */
+          onServe: () => { void serve().catch((e) => { say(`the service did not start: ${e.message}`); stopAsked(); }); },
           onStandBy: (by) => standDown(by),
         });
         await member.start();

@@ -26,7 +26,8 @@
  *
  *   createRoomService({okcrypto, net, url, login, keyKind, say, WebSocket, randomBytes, onNeedsKey, onReplaced})
  *     url()      -> the server (the key's site) or null
- *     login      -> (asked, bucketPublicKey) => proof - the key signs; null: the kept certificate
+ *     login      -> (asked, me) => proof - the key signs this connection's challenge for the kept identity and bucket
+ *                   key (me: the proof material); null: the kept certificate
  *   -> {start(), stop(), rejoin(), state}
  */
 
@@ -128,7 +129,7 @@ function createRoomService({
         randomBytes,
         /* with a login: no kept certificate in the join - the proof over this connection's challenge takes its place */
         me: login ? { ...me, certificate: new Uint8Array(0) } : me,
-        login: login ? async (q) => { asked = true; say(`sync: proving the identity to ${host} - the key signs its challenge`); return login(q, me.bucketKey.publicKey); } : null,
+        login: login ? async (q) => { asked = true; say(`sync: proving the identity to ${host} - the key signs its challenge`); return login(q, me); } : null,
       });
       if (stopped) { r.close(); return; }
       room = r;
