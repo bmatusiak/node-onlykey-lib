@@ -767,8 +767,8 @@ function setup(imports, register, config) {
   }
   function tunnelEvent(phase, extra = {}) {
     if (!currentOp) return;
-    const { id, msg, slot, step, steps, limitMs, pressAt } = currentOp;
-    try { events.emit('tunnel', { phase, id, msg, slot, step, steps, limitMs, ...(pressAt !== undefined ? { pressAt } : {}), waiting: laneWaiting(), ...extra }); } catch { /* a listener's error is not the operation's */ }
+    const { id, msg, slot, step, steps, limitMs, pressAt, answered } = currentOp;
+    try { events.emit('tunnel', { phase, id, msg, slot, step, steps, limitMs, ...(pressAt !== undefined ? { pressAt } : {}), answered: !!answered, waiting: laneWaiting(), ...extra }); } catch { /* a listener's error is not the operation's */ }
   }
   /*
    * limitMs: how long the key is given to answer this operation (its timeoutMs) - a host's sheet counts it down from the
@@ -1659,7 +1659,16 @@ function setup(imports, register, config) {
         untilShortChunk: variable,
         intervalMs: pollIntervalMs,
         noProgressBudgetMs: timeoutMs,
-        onProgress: () => { answered = true; },
+        /*
+         * answered: the first poll that brought the answer - a key that waits for its press answers "not yet" to every poll
+         * before it, so the press is known here, not by counting polls (2026-11-01: the step after pressAt was taken as the
+         * press, and the press sheet went while the key waited out its 26 s). Said once, as its own phase ('answered' - the
+         * steps stay one per ceremony), and every event after it carries answered: true.
+         */
+        onProgress: () => {
+          answered = true;
+          if (currentOp && !currentOp.answered) { currentOp.answered = true; tunnelEvent('answered'); }
+        },
         challengeErrorIsFinal: deviceCan('challengeErrorIsFinal') === true,
       });
     } finally {
