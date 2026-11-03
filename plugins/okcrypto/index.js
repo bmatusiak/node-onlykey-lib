@@ -770,7 +770,7 @@ function setup(imports, register, config) {
   }
   /*
    * A PRESS ASKED, SAID BY THE LIB (Brad, 2026-11-02: the app knows "what is going to happen BEFORE it will happen"; a
-   * host's sheet is judged against this, not against the key's LED - a hard key does not report its LED, a release
+   * host's sheet is inspected against this, not against the key's LED - a hard key does not report its LED, a release
    * build has no drive): 'asked' when the key can take the press (the request is on it, a code shown with it), 'done'
    * when its answer came or did not. code: the 3-button code, null for a plain press.
    */

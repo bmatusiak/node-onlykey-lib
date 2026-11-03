@@ -328,7 +328,7 @@ function setup(imports, register) {
   }
 
   /*
-   * A PRESS ASKED, SAID BY THE LIB (edge.onPress; the same as okcrypto's 'press' event): the host's sheet is judged
+   * A PRESS ASKED, SAID BY THE LIB (edge.onPress; the same as okcrypto's 'press' event): the host's sheet is inspected
    * against it (ok-edge tools/drive/sheets.js) - what the lib asks of the key, not what a sheet happened to show
    */
   const saidPress = (phase, sub, ok) => { if (edge && typeof edge.onPress === 'function') { try { edge.onPress({ phase, sub, ...(ok === undefined ? {} : { ok }) }); } catch { /* a listener's error is not the request's */ } } };

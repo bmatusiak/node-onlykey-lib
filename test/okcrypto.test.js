@@ -259,7 +259,7 @@ test('the challenge digits are the ones the firmware will ask for', async () => 
 
 test('a press asked is said by the lib: asked with its code when the request is on the key, done with how it ended', async () => {
   /*
-   * The host's sheet is judged against this (ok-edge tools/drive/sheets.js, 2026-11-02) - the lib's own word that the
+   * The host's sheet is inspected against this (ok-edge tools/drive/sheets.js, 2026-11-02) - the lib's own word that the
    * key waits for a person, not the key's LED: a hard key does not report its LED, and a release has no drive.
    */
   const pipe = fakeFirmware();
