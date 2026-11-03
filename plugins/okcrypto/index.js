@@ -1630,9 +1630,11 @@ function setup(imports, register, config) {
       : Promise.resolve());
     let confirming = null;
     const asksPress = !quiet || press;
+    /* a code only where one is shown (the challenge event): a quiet request's press - Edge's over the tunnel - is a plain one */
+    const codeShown = !quiet && Array.isArray(digits) ? digits.join(' ') : null;
     if (confirmFirst) {
       if (!quiet) events.emit('challenge', { slot, digits, subject });
-      if (asksPress) saidPress('asked', msg, slot, { code: Array.isArray(digits) ? digits.join(' ') : null });
+      if (asksPress) saidPress('asked', msg, slot, { code: codeShown });
       confirming = startConfirm();
     }
 
@@ -1659,7 +1661,7 @@ function setup(imports, register, config) {
      */
     if (!confirmFirst) {
       if (!quiet) events.emit('challenge', { slot, digits, subject });
-      if (asksPress) saidPress('asked', msg, slot, { code: Array.isArray(digits) ? digits.join(' ') : null });
+      if (asksPress) saidPress('asked', msg, slot, { code: codeShown });
       confirming = startConfirm();
     }
 
