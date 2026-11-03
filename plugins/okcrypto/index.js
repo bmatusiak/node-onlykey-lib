@@ -537,15 +537,18 @@ function setup(imports, register, config) {
       throw err;
     }
     events.emit('challenge', { slot, digits, subject });
+    saidPress('asked', msg, slot, { code: Array.isArray(digits) ? digits.join(' ') : null });
 
     try {
       if (confirm) await confirm({ digits, slot, subject, isAnswered: () => answered });
       const out = await answer;
       /* Only a COMPLETED operation arms the device timers - see settleStaleTimers. */
       lastOperationEndedAt = Date.now();
+      saidPress('done', msg, slot, { ok: true });
       return out;
     } catch (err) {
       if (off) off();
+      saidPress('done', msg, slot, { ok: false });
       throw err;
     }
   }
@@ -764,6 +767,15 @@ function setup(imports, register, config) {
   let currentOp = null;
   function laneWaiting() {
     try { return transport.tunnelOnly ? laneOf(transport).state().waiting : 0; } catch { return 0; }
+  }
+  /*
+   * A PRESS ASKED, SAID BY THE LIB (Brad, 2026-11-02: the app knows "what is going to happen BEFORE it will happen"; a
+   * host's sheet is judged against this, not against the key's LED - a hard key does not report its LED, a release
+   * build has no drive): 'asked' when the key can take the press (the request is on it, a code shown with it), 'done'
+   * when its answer came or did not. code: the 3-button code, null for a plain press.
+   */
+  function saidPress(phase, msg, slot, extra = {}) {
+    try { events.emit('press', { phase, msg, slot, ...extra }); } catch { /* a listener's error is not the request's */ }
   }
   function tunnelEvent(phase, extra = {}) {
     if (!currentOp) return;
@@ -1528,6 +1540,8 @@ function setup(imports, register, config) {
       confirmFirst = false,
       /* the key asks for a plain press, not the 3-button code (deriveSecret touch): confirm and the event get no digits */
       pressOnly = false,
+      /* a quiet request that waits for a press all the same (Edge's pressed ones over the tunnel): said as one (saidPress) */
+      press = false,
       /*
        * A REQUEST, NOT A CRYPTO OPERATION (tunnelRequest - Edge over WebAuthn): the answer comes back as { data } or,
        * when the key answers in a sentence ("EDGE:00", "Timeout ..."), as { text } - the caller reads both. An empty
@@ -1615,8 +1629,10 @@ function setup(imports, register, config) {
         .catch((err) => { confirmError = err; })
       : Promise.resolve());
     let confirming = null;
+    const asksPress = !quiet || press;
     if (confirmFirst) {
       if (!quiet) events.emit('challenge', { slot, digits, subject });
+      if (asksPress) saidPress('asked', msg, slot, { code: Array.isArray(digits) ? digits.join(' ') : null });
       confirming = startConfirm();
     }
 
@@ -1643,6 +1659,7 @@ function setup(imports, register, config) {
      */
     if (!confirmFirst) {
       if (!quiet) events.emit('challenge', { slot, digits, subject });
+      if (asksPress) saidPress('asked', msg, slot, { code: Array.isArray(digits) ? digits.join(' ') : null });
       confirming = startConfirm();
     }
 
@@ -1681,6 +1698,7 @@ function setup(imports, register, config) {
       });
     } finally {
       finished = true;
+      if (asksPress) saidPress('done', msg, slot, { ok: answered });
     }
     await confirming;
     if (confirmError) throw confirmError;

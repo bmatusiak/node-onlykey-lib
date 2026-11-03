@@ -65,7 +65,7 @@ function socketChannel({ record, root, connect }) {
  * @param {() => Promise<object>} [o.channel] another carrier (see A CHANNEL above) - in place of the local socket
  */
 /* a request's progress, as the sheet reads it (ok-edge src/keyBusy.ts) - plain fields, never bytes */
-const BUSY_FIELDS = ['phase', 'id', 'msg', 'slot', 'sub', 'step', 'steps', 'waiting', 'limitMs', 'pressAt', 'answered', 'ok', 'error'];
+const BUSY_FIELDS = ['phase', 'id', 'msg', 'slot', 'sub', 'step', 'steps', 'waiting', 'limitMs', 'pressAt', 'answered', 'ok', 'error', 'code'];
 
 function createDesktopPipe({ record, root, connect = (p) => net.connect(p), channel = null } = {}) {
   const listeners = new Set();

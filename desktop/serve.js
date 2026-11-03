@@ -47,7 +47,7 @@ const { HELLO_MS, send, readLines } = require('./protocol');
  * @param {string} [o.root] the shared home (default ~/.onlykey-js)
  * @param {string} [o.socket] where to listen (default trust.socketPath(root))
  * @param {(line: string) => void} [o.log]
- * @param {(b: {kind: 'tunnel'|'edge'|'gone', e: object}) => void} [o.onBusy] the CLI's request progress, for the app's sheet
+ * @param {(b: {kind: 'tunnel'|'edge'|'press'|'gone', e: object}) => void} [o.onBusy] the CLI's request progress and the presses it asks, for the app's sheet
  * @param {(connected: boolean) => void} [o.onClient] a CLI was accepted (true) / went away (false) -
  *   the app keeps its own key traffic out of the CLI's whole conversation, as the phone's bridge does
  */

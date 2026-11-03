@@ -257,6 +257,25 @@ test('the challenge digits are the ones the firmware will ask for', async () => 
   await app.destroy();
 });
 
+test('a press asked is said by the lib: asked with its code when the request is on the key, done with how it ended', async () => {
+  /*
+   * The host's sheet is judged against this (ok-edge tools/drive/sheets.js, 2026-11-02) - the lib's own word that the
+   * key waits for a person, not the key's LED: a hard key does not report its LED, and a release has no drive.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(FULL(), pipe);
+  const said = [];
+  app.services.okcrypto.on('press', (e) => said.push(e));
+  const payload = Uint8Array.from([1, 2, 3, 4, 5]);
+  await app.services.okcrypto.composite_sign(101, composite.HALF_ECC, payload, { timeoutMs: 200 }).catch(() => null);
+  const code = challengeDigits(Uint8Array.from([composite.HALF_ECC, ...payload])).join(' ');
+  assert.deepEqual(said.map((e) => e.phase), ['asked', 'done']);
+  assert.equal(said[0].slot, 101);
+  assert.equal(said[0].code, code);
+  assert.equal(said[1].ok, false, 'no answer in its time: done, not ok');
+  await app.destroy();
+});
+
 test('a wrong challenge comes back as the sentence the device said', async () => {
   /*
    * "Error incorrect challenge was entered" is the failure a caller will

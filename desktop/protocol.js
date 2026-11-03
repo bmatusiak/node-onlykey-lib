@@ -7,7 +7,8 @@
  *
  *   CLI -> app   { t: 'hello', v, token }          first, within HELLO_MS
  *                { t: 'write', iface, b64 }       a report for the key - or, an 0xF7 piece, for the host
- *                { t: 'busy', kind, e }           a request's progress (kind 'tunnel' | 'edge'), for the app's sheet
+ *                { t: 'busy', kind, e }           a request's progress (kind 'tunnel' | 'edge'), or a press it asks
+ *                                                 (kind 'press': asked | done), for the app's sheet and log
  *   app -> CLI   { t: 'ready', device, interfaces } the hello was accepted
  *                { t: 'refused', why }             it was not (and the socket closes)
  *                { t: 'report', iface, b64 }      a report from the key - or a piece of the host's answer

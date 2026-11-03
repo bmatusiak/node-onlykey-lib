@@ -102,7 +102,11 @@ function startDesktop({ pipe, path, loadHid, desktop = false, ble = false, confi
      */
     if (typeof thePipe.tell === 'function') {
       const tell = (kind, e) => { try { thePipe.tell(kind, e); } catch (_) { /* the sheet is not the request */ } };
-      if (app.services.okcrypto && typeof app.services.okcrypto.on === 'function') app.services.okcrypto.on('tunnel', (e) => tell('tunnel', e));
+      if (app.services.okcrypto && typeof app.services.okcrypto.on === 'function') {
+        app.services.okcrypto.on('tunnel', (e) => tell('tunnel', e));
+        /* and each press it asks (okcrypto 'press'): the app's log says it, and its sheet is judged against it */
+        app.services.okcrypto.on('press', (e) => tell('press', e));
+      }
       app.tellHolder = tell;
     }
     return app;

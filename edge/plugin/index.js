@@ -227,7 +227,7 @@ function setup(imports, register) {
    * the one callNow applies over USB and Bluetooth. okcrypto is reached through app.services, only here: a host
    * that never uses the tunnel needs no okcrypto for Edge.
    */
-  async function tunnelCall(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null, pqAt = null } = {}) {
+  async function tunnelCall(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null, pqAt = null, press = false } = {}) {
     const okcrypto = imports.app && imports.app.services && imports.app.services.okcrypto;
     if (!okcrypto || typeof okcrypto.tunnelRequest !== 'function') {
       throw Object.assign(new Error('Edge over WebAuthn needs okcrypto with a supplied ctap (the web app)'), { code: 'NO_VENDOR_INTERFACE' });
@@ -240,7 +240,7 @@ function setup(imports, register) {
      */
     let r;
     try {
-      r = await okcrypto.tunnelRequest(OKEDGE, sub, args || [], { timeoutMs });
+      r = await okcrypto.tunnelRequest(OKEDGE, sub, args || [], { timeoutMs, press });
     } catch (e) {
       /*
        * A press the key stopped waiting for. Over USB the key says nothing then (the core's "Timeout occured" is a
@@ -327,6 +327,12 @@ function setup(imports, register) {
     };
   }
 
+  /*
+   * A PRESS ASKED, SAID BY THE LIB (edge.onPress; the same as okcrypto's 'press' event): the host's sheet is judged
+   * against it (ok-edge tools/drive/sheets.js) - what the lib asks of the key, not what a sheet happened to show
+   */
+  const saidPress = (phase, sub, ok) => { if (edge && typeof edge.onPress === 'function') { try { edge.onPress({ phase, sub, ...(ok === undefined ? {} : { ok }) }); } catch { /* a listener's error is not the request's */ } } };
+
   /* a request the key answers only after a physical press: onPress once it is written */
   function pressed(sub, args, opts, onPress) {
     return exclusive(async () => {
@@ -338,9 +344,13 @@ function setup(imports, register) {
         const above = aboveSeq(before === SEQ_NONE ? null : before);
         opts = { ...opts, accept: (bytes, got) => (got && got.length ? true : above(bytes)) };
       }
-      const pending = callNow(sub, args, opts); /* written synchronously */
+      /* over the tunnel okcrypto says the press when the key can take it (its press option); here, once written */
+      const direct = !transport.tunnelOnly;
+      const pending = callNow(sub, args, direct ? opts : { ...opts, press: true }); /* written synchronously */
       if (onPress) onPress(); /* the request is on the key: now ask for the press */
-      return pending;
+      if (!direct) return pending;
+      saidPress('asked', sub);
+      return pending.then((v) => { saidPress('done', sub, true); return v; }, (e) => { saidPress('done', sub, false); throw e; });
     });
   }
 
@@ -357,13 +367,13 @@ function setup(imports, register) {
    * shape can be checked are checked; a report that fails is someone else's,
    * or late.
    */
-  function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null, pqAt = null } = {}) {
+  function callNow(sub, args, { reports = 1, timeoutMs = 6000, text = false, accept = null, pqAt = null, press = false } = {}) {
     /* how long each key request takes, for a caller that asks (edge.onTiming; the agent's OKEDGE_TIMES) */
     const began = Date.now();
     const timed = (p) => (edge && typeof edge.onTiming === 'function'
       ? p.then((v) => { edge.onTiming(sub, Date.now() - began, true); return v; }, (e) => { edge.onTiming(sub, Date.now() - began, false); throw e; })
       : p);
-    if (transport.tunnelOnly) return timed(tunnelCall(sub, args, { reports, timeoutMs, text, accept, pqAt }));
+    if (transport.tunnelOnly) return timed(tunnelCall(sub, args, { reports, timeoutMs, text, accept, pqAt, press }));
     /*
      * EACH REQUEST SAID AS IT STARTS AND ENDS (edge.onRequest; Brad, 2026-10-29: the phone shows what the key is doing,
      * as the web app does - "a refresh is just a trigger for the operation, the sheet shows what's happening"). Only on
