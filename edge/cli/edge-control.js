@@ -112,8 +112,25 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     return { code: r.status, out: `${r.stdout || ''}${r.stderr || ''}` };
   };
   const git = (repo, ...a) => runP('git', ['-C', repo, ...a]);
+  /*
+   * EACH STEP SAYS WHAT IT IS FOR (Brad, 2026-11-03: "cant onlykey-js send the reason?"): the app holding the key shows a
+   * computer's requests with the computer's own words (desktop/protocol.js hello.why, from ONLYKEY_JS_WHY) - the budget's
+   * reason, and the use each exec signs. Said from the step's own arguments, so no step goes out without them.
+   */
+  let BUDGET_REASON = null;
+  const argAfter = (a, flag) => { const i = a.indexOf(flag); return i >= 0 ? String(a[i + 1] || '') : ''; };
+  const whyOf = (a) => {
+    const of = BUDGET_REASON || REASON || 'the ship';
+    if (a[0] === 'status') return `checking the key and this computer's copy for the ship: ${of}`;
+    if (a[0] === 'budget') return `asking for a budget: ${argAfter(a, '--reason')}`;
+    if (a[0] === 'exec') return `${of}: ${argAfter(a, '--intent')}`;
+    if (a[0] === 'receipt') return `${of}: filing the receipt of #${a[1]}`;
+    if (a[0] === 'end') return `${of}: ending the budget`;
+    return `${of}: edge ${a[0]}`;
+  };
   /* this CLI, run as a child with the same key and net: no shell, so reasons and intents need no quoting */
-  const cli = (a, timeout = 180000, extra = {}) => runP(process.execPath, [CLI, ...keyArgs, 'edge', ...netArgs, ...a], { timeout, ...extra });
+  const cli = (a, timeout = 180000, extra = {}) => runP(process.execPath, [CLI, ...keyArgs, 'edge', ...netArgs, ...a],
+    { timeout, ...extra, env: { ...process.env, ONLYKEY_JS_WHY: whyOf(a), ...(extra.env || {}) } });
   /* hooks run from the Edge home, so the settings may name scripts beside them */
   const hook = (name) => HOOKS[name] && runP(HOOKS[name], [], { shell: true, cwd: home, timeout: 300000 });
   let watcher = null;
@@ -256,6 +273,7 @@ async function run({ io, opts, argv, net, home, dev = null }) {
    */
   function openBudget(t) {
     sheet(t);
+    BUDGET_REASON = reasonText(t.gpg);
     const r = cli(['budget', '--reason', reasonText(t.gpg), '--gpg', String(t.gpg), '--ssh', String(t.ssh), '--ttl', TTL],
       HOOKS.watch ? 180000 : 600000, !GUI ? { stdio: ['inherit', 'pipe', 'inherit'] } : {});
     HEAD = (r.out.match(/head = ([0-9a-f]{64})/) || [])[1];

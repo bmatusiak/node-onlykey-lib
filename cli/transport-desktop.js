@@ -33,6 +33,27 @@ const desktopError = (code, message) => Object.assign(new Error(message), { code
  *   name               who holds the key, for errors ('the desktop app', 'the phone')
  */
 
+/*
+ * WHAT THIS CONNECTION IS FOR, IN THE COMPUTER'S OWN WORDS (Brad, 2026-11-03: "cant onlykey-js send the reason? im
+ * expecting the agent using the mcp to send a reason"): the app holding the key says it beside this CLI's requests (its
+ * "Working with your key" sheet). ONLYKEY_JS_WHY when the caller set it (edge control ship sets it for each step: the
+ * budget's reason, the use an exec signs); else the command's own words - its leading subcommands and, for an exec, the
+ * program it runs - never a path, an option's value or a secret. At most WHY_MAX characters.
+ */
+const WHY_MAX = 200;
+function whyOfProcess(argv = process.argv.slice(2), env = process.env) {
+  const set = String(env.ONLYKEY_JS_WHY || '').replace(/\s+/g, ' ').trim();
+  if (set) return set.slice(0, WHY_MAX);
+  const dd = argv.indexOf('--');
+  const words = [];
+  for (const w of dd >= 0 ? argv.slice(0, dd) : argv) {
+    if (words.length >= 3 || w.startsWith('-') || /[\\/]/.test(w)) break;
+    words.push(w);
+  }
+  const ran = dd >= 0 ? argv.slice(dd + 1, dd + 3).filter((w) => !w.startsWith('-') && !/[\\/]/.test(w)) : [];
+  return `onlykey-js ${words.join(' ')}${ran.length ? `: ${ran.join(' ')}` : ''}`.trim().slice(0, WHY_MAX);
+}
+
 /* the desktop app's local socket, opened (rejects when it cannot be reached) */
 function socketChannel({ record, root, connect }) {
   const r = record || trust.liveTrust(root);
@@ -50,7 +71,7 @@ function socketChannel({ record, root, connect }) {
         onMessage: (f) => msgs.add(f),
         onClose: (f) => closes.add(f),
         close: () => s.end(),
-        hello: { t: 'hello', v: trust.VERSION, token: r.token },
+        hello: { t: 'hello', v: trust.VERSION, token: r.token, why: whyOfProcess() },
         name: 'the desktop app',
       });
     });
@@ -156,4 +177,4 @@ function createDesktopPipe({ record, root, connect = (p) => net.connect(p), chan
   };
 }
 
-module.exports = { createDesktopPipe };
+module.exports = { createDesktopPipe, whyOfProcess };

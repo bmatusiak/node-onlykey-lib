@@ -72,7 +72,8 @@ function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () =>
           sock.end();
           return;
         }
-        accepted = await session.open(c);
+        /* hello.why: what the CLI says it is doing - shown with its requests, its own words (protocol.js) */
+        accepted = await session.open(c, { why: typeof m.why === 'string' && m.why.trim() ? m.why.trim().slice(0, 200) : null });
         clearTimeout(helloTimer);
         if (!accepted) sock.end();
         return;

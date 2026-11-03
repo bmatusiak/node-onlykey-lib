@@ -5,7 +5,8 @@
  * one JSON object per line, report bytes in base64. Both ends use these two helpers, so the framing
  * is written once.
  *
- *   CLI -> app   { t: 'hello', v, token }          first, within HELLO_MS
+ *   CLI -> app   { t: 'hello', v, token, why }     first, within HELLO_MS; why: what this connection is for, in the
+ *                                                 CLI's own words (at most 200 characters) - the app shows it with its requests
  *                { t: 'write', iface, b64 }       a report for the key - or, an 0xF7 piece, for the host
  *                { t: 'busy', kind, e }           a request's progress (kind 'tunnel' | 'edge'), or a press it asks
  *                                                 (kind 'press': asked | done), for the app's sheet and log

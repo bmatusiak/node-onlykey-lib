@@ -37,7 +37,8 @@ const { toBase64, fromBase64 } = require('../src/bytes');
  * @param {string} [o.dev] who answers, in the answer's envelope ('desktop', 'android')
  * @param {string} [o.holder] who holds the key, in what the CLI is told ('the desktop app', 'the phone')
  * @param {(line: string) => void} [o.log]
- * @param {(connected: boolean) => void} [o.onClient] a CLI was accepted (true) / went away (false)
+ * @param {(connected: boolean, info?: {why: string|null}) => void} [o.onClient] a CLI was accepted (true, with what it says it is
+ *   doing - its hello's why) / went away (false)
  */
 function createKeySession({ pipe, openKey, hostFor, dev = 'desktop', holder = 'the desktop app', log = () => {}, onClient = () => {}, onBusy = () => {} }) {
   /* the one CLI: {send(obj), gone(): boolean} */
@@ -105,9 +106,10 @@ function createKeySession({ pipe, openKey, hostFor, dev = 'desktop', holder = 't
     /**
      * A CLI the carrier let in: accepted, or refused (busy, no key) - the reply is sent to it here.
      * @param {{send: (obj: object) => void, gone?: () => boolean}} c
+     * @param {{why?: string|null}} [info] what the client says it is doing (its hello's why) - for the holder's sheet
      * @returns {Promise<boolean>} accepted
      */
-    async open(c) {
+    async open(c, info = {}) {
       /* a client whose connection is gone is no client */
       if (client && client.gone && client.gone()) drop(client);
       if (client) { c.send({ t: 'refused', why: `busy: another onlykey-js is talking to the key through ${holder}` }); return false; }
@@ -125,7 +127,7 @@ function createKeySession({ pipe, openKey, hostFor, dev = 'desktop', holder = 't
       client = c;
       spoke = false;
       asm = wire.createAssembler();
-      onClient(true);
+      onClient(true, { why: info.why || null });
       const d = pipe.device || null;
       c.send({
         t: 'ready',

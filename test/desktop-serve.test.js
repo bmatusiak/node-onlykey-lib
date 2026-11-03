@@ -218,6 +218,36 @@ test('desktop: onClient is told when a CLI is accepted and when it goes - not fo
   }
 });
 
+/* what the CLI is doing reaches the app in its own words (hello.why, Brad 2026-11-03: "cant onlykey-js send the reason?") */
+test('desktop: the hello says what the CLI is doing - ONLYKEY_JS_WHY - and onClient is told it', async () => {
+  const root = tmp();
+  const told = [];
+  const server = createDesktopServer({ pipe: fakeKeyPipe(), root, hostFor: () => ({ send: async () => null }), onClient: (c, info) => told.push([c, info && info.why]) });
+  const rec = await server.start();
+  const was = process.env.ONLYKEY_JS_WHY;
+  process.env.ONLYKEY_JS_WHY = 'sign 5 commit(s) and push: ship-proof (5): sign: ship-proof abc1234 a subject';
+  try {
+    const cli = createDesktopPipe({ record: rec });
+    await cli.start();
+    await until(() => told.length === 1);
+    assert.deepEqual(told[0], [true, 'sign 5 commit(s) and push: ship-proof (5): sign: ship-proof abc1234 a subject']);
+    await cli.stop();
+  } finally {
+    if (was === undefined) delete process.env.ONLYKEY_JS_WHY; else process.env.ONLYKEY_JS_WHY = was;
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cli: with no ONLYKEY_JS_WHY the why is the command\'s own words - never a path, an option\'s value or what follows', () => {
+  const { whyOfProcess } = require('../cli/transport-desktop');
+  assert.equal(whyOfProcess(['edge', 'status'], {}), 'onlykey-js edge status');
+  assert.equal(whyOfProcess(['edge', 'exec', '--head', 'ab'.repeat(32), '--intent', 'secret words', '--', 'git', 'commit', '-S'], {}), 'onlykey-js edge exec: git commit');
+  assert.equal(whyOfProcess(['edge', 'control', 'ship', '/home/me/repo', '--max', '5'], {}), 'onlykey-js edge control ship');
+  assert.equal(whyOfProcess(['--path', '/dev/hidraw3', 'edge', 'status'], {}), 'onlykey-js', 'an option first: nothing after it is taken');
+  assert.equal(whyOfProcess([], { ONLYKEY_JS_WHY: `  two\n  lines ${'x'.repeat(300)}` }).length, 200, 'its own words, one line, at most 200');
+});
+
 /* the CLI's request progress reaches the app for its press sheet: plain fields only, and a CLI gone clears it */
 test('desktop: the CLI\'s request progress goes to onBusy (fields picked, nothing else); its going says gone', async () => {
   const root = tmp();
