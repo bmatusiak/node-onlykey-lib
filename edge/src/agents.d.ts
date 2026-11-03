@@ -131,14 +131,7 @@ export function recordFromCard(card: any, certs?: {}): {
     gpgUid?: string | undefined;
     ssh?: string | undefined;
 };
-export function answer(msg: any, { entries, owner, approve, certifyAgent, write, now }: {
-    entries: any;
-    owner: any;
-    approve: any;
-    certifyAgent: any;
-    write: any;
-    now: any;
-}): Promise<{
+export function answer(msg: any, host: any): Promise<{
     ok: boolean;
     agents: {
         label: string;

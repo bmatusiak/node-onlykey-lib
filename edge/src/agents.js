@@ -159,13 +159,19 @@ function recordFromCard(card, certs = {}) {
  * its owner keys, its sheet and its key:
  *   entries()          the store's live entries (label -> JSON), or null when no bucket is open
  *   owner()            {ownerKey, ownerKeyPq} read from the key, or null
- *   approve(ask)       ask = {label, derive, committer, expires, fingerprint} -> true when the person approves
+ *   approve(ask)       ask = {label, created, expires, derive, committer, fingerprint} -> true when the person approves
  *   certifyAgent(info) the key's certify at a press -> the card record
  *   write(label, entry)
  *   now                seconds (tests); else the clock
  * -> the answer to send back.
+ * @param {any} msg
+ * @param {{entries: () => Promise<Object<string, string>|null>, owner: () => Promise<{ownerKey: Uint8Array, ownerKeyPq: Uint8Array}|null>,
+ *   approve: (ask: {label: string, created: number, expires: number, derive: {ssh?: string, gpg?: string}, committer: {name: string, email: string}|null, fingerprint: string|null}) => Promise<boolean>,
+ *   certifyAgent: (info: any) => Promise<any>, write: (label: string, entry: object) => Promise<void>, now?: number}} host
+ * @returns {Promise<any>}
  */
-async function answer(msg, { entries, owner, approve, certifyAgent, write, now }) {
+async function answer(msg, host) {
+  const { entries, owner, approve, certifyAgent, write, now } = host;
   const e = await entries();
   if (!e) return { ok: false, refusal: 'invalid', detail: 'no identity bucket is open on this device - log in first' };
   if (msg.type === LIST_TYPE || msg.type === GET_TYPE) {
@@ -183,7 +189,7 @@ async function answer(msg, { entries, owner, approve, certifyAgent, write, now }
   const info = certify.agentCard(msg.info);
   if (taken(e, info.label)) return { ok: false, refusal: 'invalid', detail: `"${info.label}" is already an agent identity's label (a revoked one stays taken)` };
   const certs = cleanCerts(msg.certs);
-  const yes = await approve({ label: info.label, derive: info.derive, committer: info.committer, expires: info.expires, fingerprint: certs.gpg ? certs.gpg.fingerprint : null });
+  const yes = await approve({ label: info.label, created: info.created, expires: info.expires, derive: info.derive, committer: info.committer, fingerprint: certs.gpg ? certs.gpg.fingerprint : null });
   if (!yes) return { ok: false, refusal: 'declined' };
   const card = await certifyAgent(info);
   await write(info.label, { card, certs });

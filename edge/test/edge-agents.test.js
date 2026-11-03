@@ -101,7 +101,7 @@ test('a host answers: CREATE shown, certified at a press and written; a taken la
   const made = await agents.answer(create, host(true));
   assert.equal(made.ok, true);
   assert.deepEqual(made.agent.kinds, ['ssh', 'gpg']);
-  assert.deepEqual(asked[1], { label: 'nitro16 claude', derive: { ssh: RECORD.ssh, gpg: RECORD.gpgUid }, committer: RECORD.committer, expires: RECORD.expires, fingerprint: RECORD.cert.fingerprint.toUpperCase() }, 'the sheet is shown the label, the keys and the certificate');
+  assert.deepEqual(asked[1], { label: 'nitro16 claude', created: RECORD.cert.created, derive: { ssh: RECORD.ssh, gpg: RECORD.gpgUid }, committer: RECORD.committer, expires: RECORD.expires, fingerprint: RECORD.cert.fingerprint.toUpperCase() }, 'the sheet is shown the label, the keys and the certificate');
   const again = await agents.answer(create, host(true));
   assert.equal(again.ok, false);
   assert.match(again.detail, /already an agent identity's label/);
