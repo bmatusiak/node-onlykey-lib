@@ -74,8 +74,9 @@ export function buildGet({ label, nonce }: {
     nonce: string;
     label: string;
 };
-export function buildCreate({ info, nonce }: {
+export function buildCreate({ info, certs, nonce }: {
     info: any;
+    certs?: {} | undefined;
     nonce?: (Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>) | undefined;
 }): {
     type: string;
@@ -96,6 +97,15 @@ export function buildCreate({ info, nonce }: {
             email: string;
         } | null;
     };
+    certs: {
+        gpg?: undefined;
+    } | {
+        gpg: {
+            armored: any;
+            fingerprint: any;
+            signPublic: any;
+        };
+    };
 };
 export function verify(msg: any, { seen }?: {}): {
     ok: boolean;
@@ -104,3 +114,72 @@ export function verify(msg: any, { seen }?: {}): {
     ok: boolean;
     reason?: undefined;
 };
+export function recordFromCard(card: any, certs?: {}): {
+    label: string;
+    cert?: {
+        armored: any;
+        fingerprint: any;
+        created: any;
+        expires: any;
+        signPublic: any;
+    } | undefined;
+    committer: {
+        name: string;
+        email: string;
+    } | null;
+    expires: any;
+    gpgUid?: string | undefined;
+    ssh?: string | undefined;
+};
+export function answer(msg: any, { entries, owner, approve, certifyAgent, write, now }: {
+    entries: any;
+    owner: any;
+    approve: any;
+    certifyAgent: any;
+    write: any;
+    now: any;
+}): Promise<{
+    ok: boolean;
+    agents: {
+        label: string;
+        status: string;
+        created: any;
+        expires: any;
+        kinds: string[];
+    }[];
+    agent?: undefined;
+    refusal?: undefined;
+    detail?: undefined;
+} | {
+    ok: boolean;
+    agent: {
+        card: any;
+        certs: any;
+    };
+    agents?: undefined;
+    refusal?: undefined;
+    detail?: undefined;
+} | {
+    ok: boolean;
+    refusal: string;
+    detail: any;
+    agents?: undefined;
+    agent?: undefined;
+} | {
+    ok: boolean;
+    refusal: string;
+    agents?: undefined;
+    agent?: undefined;
+    detail?: undefined;
+} | {
+    ok: boolean;
+    agent: {
+        label: string;
+        created: any;
+        expires: any;
+        kinds: string[];
+    };
+    agents?: undefined;
+    refusal?: undefined;
+    detail?: undefined;
+}>;

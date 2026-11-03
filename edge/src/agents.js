@@ -101,10 +101,28 @@ function budgetAllowed(card, scopes) {
 const isHex = (s, n) => typeof s === 'string' && s.length === n * 2 && /^[0-9a-f]+$/i.test(s);
 function buildList({ nonce = randomBytes(16) } = {}) { return { type: LIST_TYPE, v: 1, nonce: toHex(nonce) }; }
 function buildGet({ label, nonce = randomBytes(16) }) { return { type: GET_TYPE, v: 1, nonce: toHex(nonce), label: String(label || '') }; }
-function buildCreate({ info, nonce = randomBytes(16) }) { return { type: CREATE_TYPE, v: 1, nonce: toHex(nonce), info: certify.agentCard(info) }; }
+/*
+ * certs: the public certificates made from the card (today the gpg one, made on the key by the computer that asks -
+ * edge setup), travelling beside it: {gpg: {armored, fingerprint, signPublic}}. A card naming a gpg user ID needs it.
+ */
+function buildCreate({ info, certs = {}, nonce = randomBytes(16) }) {
+  return { type: CREATE_TYPE, v: 1, nonce: toHex(nonce), info: certify.agentCard(info), certs: cleanCerts(certs) };
+}
+function cleanCerts(certs) {
+  const g = certs && certs.gpg;
+  if (!g) return {};
+  if (typeof g.armored !== 'string' || !/^[0-9A-Fa-f]{40}$/.test(String(g.fingerprint || '')) || !/^[0-9a-fA-F]{64}$/.test(String(g.signPublic || ''))) {
+    throw new TypeError('agents: certs.gpg is {armored, fingerprint (40 hex), signPublic (64 hex)}');
+  }
+  return { gpg: { armored: g.armored, fingerprint: g.fingerprint.toUpperCase(), signPublic: g.signPublic.toLowerCase() } };
+}
 function verify(msg, { seen } = {}) {
   if (!msg || !TYPES.includes(msg.type) || msg.v !== 1 || !isHex(msg.nonce, 16)) return { ok: false, reason: 'malformed' };
-  if (msg.type === CREATE_TYPE) { try { certify.agentCard(msg.info); } catch (e) { return { ok: false, reason: e.message }; } }
+  if (msg.type === CREATE_TYPE) {
+    let info;
+    try { info = certify.agentCard(msg.info); cleanCerts(msg.certs); } catch (e) { return { ok: false, reason: e.message }; }
+    if (info.derive.gpg !== undefined && !(msg.certs && msg.certs.gpg)) return { ok: false, reason: 'a card naming a gpg user ID comes with its gpg certificate' };
+  }
   if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
   return { ok: true };
 }
@@ -115,7 +133,64 @@ function budgetNames(card) {
   return [d.ssh, d.gpg !== undefined ? `gpg://${d.gpg}` : undefined].filter(Boolean);
 }
 
+/*
+ * A CARD IN THE SHAPE THE CLI SIGNS WITH (its ssh agent, gpg shim and committer - edge/cli, the record `edge setup` once
+ * kept): the derivation labels, the committer and the gpg certificate, read from the certified card and the certificate
+ * beside it. The card's created time is the certificate's, so the gpg key it derives is the one the certificate names.
+ */
+function recordFromCard(card, certs = {}) {
+  const t = certify.agentCard(card && card.thing);
+  const g = certs && certs.gpg;
+  return {
+    ...(t.derive.ssh ? { ssh: t.derive.ssh } : {}),
+    ...(t.derive.gpg !== undefined ? { gpgUid: t.derive.gpg } : {}),
+    committer: t.committer,
+    expires: t.expires,
+    ...(g ? { cert: { armored: g.armored, fingerprint: g.fingerprint, created: t.created, expires: t.expires, signPublic: g.signPublic } } : {}),
+    label: t.label,
+  };
+}
+
+/*
+ * THE HOST'S ANSWERS, ONE FOR EVERY HOST (the desktop app, the phone, the web app, this computer for a key on USB - Brad,
+ * 2026-11-03: "the ai agent creates the card over cli/mcp, providing the label it wants, the keys it wants to use for
+ * future budgets"): LIST and GET from the store, checked against the owner keys read from the key; CREATE shown to the
+ * person (approve), then certified by the key at a press and written beside the chain. Pure - the host hands in its store,
+ * its owner keys, its sheet and its key:
+ *   entries()          the store's live entries (label -> JSON), or null when no bucket is open
+ *   owner()            {ownerKey, ownerKeyPq} read from the key, or null
+ *   approve(ask)       ask = {label, derive, committer, expires, fingerprint} -> true when the person approves
+ *   certifyAgent(info) the key's certify at a press -> the card record
+ *   write(label, entry)
+ *   now                seconds (tests); else the clock
+ * -> the answer to send back.
+ */
+async function answer(msg, { entries, owner, approve, certifyAgent, write, now }) {
+  const e = await entries();
+  if (!e) return { ok: false, refusal: 'invalid', detail: 'no identity bucket is open on this device - log in first' };
+  if (msg.type === LIST_TYPE || msg.type === GET_TYPE) {
+    const o = await owner();
+    if (!o) return { ok: false, refusal: 'invalid', detail: "the key's owner keys could not be read - is it unlocked?" };
+    if (msg.type === LIST_TYPE) {
+      return { ok: true, agents: list(e, o.ownerKey, o.ownerKeyPq, now).map(({ label, status, created, expires, kinds }) => ({ label, status, created, expires, kinds })) };
+    }
+    try {
+      return { ok: true, agent: pick(e, msg.label, o.ownerKey, o.ownerKeyPq, now) };
+    } catch (err) {
+      return { ok: false, refusal: 'invalid', detail: err.message };
+    }
+  }
+  const info = certify.agentCard(msg.info);
+  if (taken(e, info.label)) return { ok: false, refusal: 'invalid', detail: `"${info.label}" is already an agent identity's label (a revoked one stays taken)` };
+  const certs = cleanCerts(msg.certs);
+  const yes = await approve({ label: info.label, derive: info.derive, committer: info.committer, expires: info.expires, fingerprint: certs.gpg ? certs.gpg.fingerprint : null });
+  if (!yes) return { ok: false, refusal: 'declined' };
+  const card = await certifyAgent(info);
+  await write(info.label, { card, certs });
+  return { ok: true, agent: { label: info.label, created: info.created, expires: info.expires, kinds: Object.keys(info.derive) } };
+}
+
 module.exports = {
   LIST_TYPE, GET_TYPE, CREATE_TYPE, TYPES, store, infoFromRecord, certsFromRecord, list, pick, taken, budgetAllowed,
-  budgetNames, scopeLabels, buildList, buildGet, buildCreate, verify,
+  budgetNames, scopeLabels, buildList, buildGet, buildCreate, verify, recordFromCard, answer,
 };

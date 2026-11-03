@@ -71,9 +71,56 @@ test('a budget only inside the agent card\'s derivation labels', async () => {
 
 test('the messages: LIST, GET by label, CREATE with its creation info; malformed and replayed refused', () => {
   const info = agents.infoFromRecord(RECORD, 'nitro16 claude');
-  for (const m of [agents.buildList(), agents.buildGet({ label: 'nitro16 claude' }), agents.buildCreate({ info })]) assert.equal(agents.verify(m).ok, true, m.type);
-  const bad = { ...agents.buildCreate({ info }), info: { ...info, label: '' } };
+  const certs = agents.certsFromRecord(RECORD);
+  for (const m of [agents.buildList(), agents.buildGet({ label: 'nitro16 claude' }), agents.buildCreate({ info, certs })]) assert.equal(agents.verify(m).ok, true, m.type);
+  const bad = { ...agents.buildCreate({ info, certs }), info: { ...info, label: '' } };
   assert.equal(agents.verify(bad).ok, false);
+  assert.match(agents.verify({ ...agents.buildCreate({ info, certs }), certs: {} }).reason, /gpg certificate/, 'a gpg card without its certificate');
+  assert.equal(agents.verify(agents.buildCreate({ info: { ...info, derive: { ssh: RECORD.ssh } } })).ok, true, 'an ssh-only card needs none');
   const m = agents.buildList();
   assert.equal(agents.verify(m, { seen: new Set([m.nonce]) }).reason, 'replayed');
+});
+
+/* the host's answers (Brad, 2026-11-03: "the ai agent creates the card over cli/mcp, providing the label ... the keys") */
+test('a host answers: CREATE shown, certified at a press and written; a taken label and a decline refused; LIST and GET checked', async () => {
+  const e = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey() }));
+  const [ok, okPq] = await ownerOf(e);
+  const store = {};
+  const asked = [];
+  const host = (yes) => ({
+    entries: async () => store,
+    owner: async () => ({ ownerKey: ok, ownerKeyPq: okPq }),
+    approve: async (a) => { asked.push(a); return yes; },
+    certifyAgent: (info) => e.certifyAgent(info),
+    write: async (label, entry) => { store[label] = JSON.stringify(entry); },
+    now: RECORD.cert.created + 10,
+  });
+  const create = agents.buildCreate({ info: agents.infoFromRecord(RECORD, 'nitro16 claude'), certs: agents.certsFromRecord(RECORD) });
+  assert.deepEqual(await agents.answer(create, host(false)), { ok: false, refusal: 'declined' });
+  assert.deepEqual(Object.keys(store), [], 'declined: nothing written');
+  const made = await agents.answer(create, host(true));
+  assert.equal(made.ok, true);
+  assert.deepEqual(made.agent.kinds, ['ssh', 'gpg']);
+  assert.deepEqual(asked[1], { label: 'nitro16 claude', derive: { ssh: RECORD.ssh, gpg: RECORD.gpgUid }, committer: RECORD.committer, expires: RECORD.expires, fingerprint: RECORD.cert.fingerprint.toUpperCase() }, 'the sheet is shown the label, the keys and the certificate');
+  const again = await agents.answer(create, host(true));
+  assert.equal(again.ok, false);
+  assert.match(again.detail, /already an agent identity's label/);
+  const listed = await agents.answer(agents.buildList(), host(true));
+  assert.deepEqual(listed.agents.map((a) => [a.label, a.status]), [['nitro16 claude', 'usable']]);
+  const got = await agents.answer(agents.buildGet({ label: 'nitro16 claude' }), host(true));
+  assert.equal(got.agent.certs.gpg.fingerprint, RECORD.cert.fingerprint.toUpperCase());
+  assert.equal((await agents.answer(agents.buildGet({ label: 'nobody' }), host(true))).ok, false);
+  assert.deepEqual(await agents.answer(agents.buildList(), { ...host(true), entries: async () => null }), { ok: false, refusal: 'invalid', detail: 'no identity bucket is open on this device - log in first' });
+});
+
+test('a card in the shape the CLI signs with: the same labels, committer and certificate as the record it came from', async () => {
+  const e = edgeOver(fakeKey({ secret: p256.utils.randomSecretKey() }));
+  const card = await e.certifyAgent(agents.infoFromRecord(RECORD, 'nitro16 claude'));
+  const r = agents.recordFromCard(card, agents.certsFromRecord(RECORD));
+  assert.equal(r.ssh, RECORD.ssh);
+  assert.equal(r.gpgUid, RECORD.gpgUid);
+  assert.deepEqual(r.committer, RECORD.committer);
+  assert.equal(r.cert.created, RECORD.cert.created, 'the created time the gpg key is derived with');
+  assert.equal(r.cert.fingerprint, RECORD.cert.fingerprint.toUpperCase());
+  assert.equal(r.label, 'nitro16 claude');
 });
