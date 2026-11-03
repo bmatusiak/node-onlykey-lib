@@ -422,7 +422,7 @@ async function openStack(io, opts, h, { serve, dev, wait, setup = true }) {
       const r = await span('close: copy - read + verify', () => require('./copy').sync(edge, home)).catch((e) => ({ error: e }));
       /* ONLYKEY_JS_DEBUG: the stack too (cli/dev: stack traces on errors) - a message alone named no line */
       if (r && r.error) say(`could not bring this computer's copy to the key's head (${r.error.message})${process.env.ONLYKEY_JS_DEBUG ? `\n${r.error.stack}` : ''}`);
-      else if (r && r.verdict && r.verdict.kind !== 'verified' && r.verdict.kind !== 'unsigned') say(`this computer's copy of the chain: ${r.verdict.kind}${r.verdict.seq !== undefined ? ` at #${r.verdict.seq}` : ''}`);
+      else if (r && r.verdict && r.verdict.kind !== 'verified' && r.verdict.kind !== 'unsigned') say(`this computer's copy of the chain: ${r.verdict.kind}${r.verdict.seq !== undefined ? ` at #${r.verdict.seq}` : ''}${r.verdict.reason ? ` (${r.verdict.reason})` : ''}`);
       /* and its log kept ready to offer to the identity's other devices (nametag.js offerOwnLog - as a phone's pull does) */
       else await span('close: copy - own log kept to offer', () => require('./nametag').offerOwnLog({ edge, home })).catch(() => undefined);
     };
