@@ -452,7 +452,8 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
   };
   const device = {
     publicKey: (identity) => agentPublicKey(okcrypto, identity),
-    sign: (identity, message) => okcrypto.agent.sign(identity, message, { ...AGENT_DERIVE, ...(confirm ? { confirm } : {}) }),
+    /* no confirm: the budget pays it - the key presses itself, so no host asks the person first (okcrypto beforePress, paid) */
+    sign: (identity, message) => okcrypto.agent.sign(identity, message, { ...AGENT_DERIVE, ...(confirm ? { confirm } : { paid: true }) }),
   };
 
   const sshId = wire.parseIdentity(identity.ssh);

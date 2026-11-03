@@ -98,6 +98,11 @@ const agentProto = require('../../src/protocol/agent');
 const { challengeDigits } = require('../../src/protocol/challenge');
 const { toBase64Url, utf8ToBytes, concat, toHex } = require('../../src/bytes');
 const { sha256: subjectHash } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
+/* an agent identity as a person reads it: gpg://<uid>, ssh://user@host - a string is its own name */
+const identityName = (id) => (typeof id === 'string' ? id
+  : id && id.gpg ? `gpg://${id.gpg}`
+    : id && id.ssh ? `ssh://${id.ssh.user ? `${id.ssh.user}@` : ''}${id.ssh.host}`
+      : 'this identity');
 
 /*
  * The derive_secret firmware plugin's request (emulator plugins/derive_secret): OKDERIVESECRET is TYPE_INIT | 0x7C, a
@@ -346,7 +351,11 @@ function setup(imports, register, config) {
      * what it is for, the message the key will sign, its code. Before the lane (the ask is a conversation of its own on
      * the same transport - inside the lane it would wait for itself). A refusal throws here: nothing reaches the key.
      */
-    if (beforePress) {
+    /*
+     * ...ONLY WHERE THE KEY ASKS A PRESS (box, 2026-11-03: a ship's sign under its open budget - paid, the key self-presses -
+     * put an approval sheet up for a press that never comes): a caller whose request a budget pays says so (paid)
+     */
+    if (beforePress && !(opts && opts.paid)) {
       const payload = Uint8Array.from(data);
       const o = opts || {};
       const formula = o.formula || (session && session.capabilities && session.capabilities.challengeFormula) || undefined;
@@ -1946,7 +1955,8 @@ function setup(imports, register, config) {
          * signature is 64 bytes either way, so the tunnel's poll knows when it has it all (the USB path is left as it was).
          */
         /* what the press is for, when the caller says nothing more (beforePress - the app's approval sheet): the identity signing */
-        const said = { what: `a signature as ${identity}`, ...opts };
+        /* by its name, never the object (box, 2026-11-03: the sheet read "a signature as [object Object]") */
+        const said = { what: `a signature as ${identityName(identity)}`, ...opts };
         const out = await storedOperation(MSG.OKSIGN, code, payload, suppliedCtap ? { expectBytes: 64, ...said } : said);
         return out.slice(0, 64);
       },

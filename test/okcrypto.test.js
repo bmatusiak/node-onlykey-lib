@@ -280,6 +280,28 @@ test('a host that approves first: refused - nothing reaches the key; approved - 
   await app.destroy();
 });
 
+test('a host that approves first: a request a budget pays is not asked (no press comes); an agent sign is named by its identity', async () => {
+  /*
+   * box, 2026-11-03: a ship's sign under its open budget (the key presses itself) put "a signature as [object Object]" on the
+   * desktop app's approval sheet - a press that never comes, named by an object.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(FULL(), pipe);
+  const asked = [];
+  app.services.okcrypto.setBeforePress(async (p) => { asked.push(p); throw new Error('declined in the app'); });
+  const payload = Uint8Array.from([4, 5, 6]);
+  const before = cryptoFrames(pipe).length;
+  await app.services.okcrypto.composite_sign(101, composite.HALF_ECC, payload, { timeoutMs: 200, paid: true }).catch(() => null);
+  assert.equal(asked.length, 0, 'a paid request asked the host for a press');
+  assert.ok(cryptoFrames(pipe).length > before, 'a paid request did not reach the key');
+  await assert.rejects(app.services.okcrypto.agent.sign({ gpg: 'Agent <agent@example.invalid>' }, payload, { version: 2, keyType: 1, timeoutMs: 200 }), /declined in the app/);
+  assert.equal(asked[0].what, 'a signature as gpg://Agent <agent@example.invalid>');
+  await assert.rejects(app.services.okcrypto.agent.sign({ ssh: { user: 'claude', host: 'nitro16' } }, payload, { version: 2, keyType: 1, timeoutMs: 200 }), /declined in the app/);
+  assert.equal(asked[1].what, 'a signature as ssh://claude@nitro16');
+  app.services.okcrypto.setBeforePress(null);
+  await app.destroy();
+});
+
 test('a press asked is said by the lib: asked with its code when the request is on the key, done with how it ended', async () => {
   /*
    * The host's sheet is inspected against this (ok-edge tools/drive/sheets.js, 2026-11-02) - the lib's own word that the
