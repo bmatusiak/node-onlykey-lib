@@ -14,7 +14,8 @@
  *   2. THE HOST: an 0xF7 piece is not for the key - its pieces are gathered into the message, answered by the host the
  *      caller gives (hostFor), and the answer goes back in 0xF7 pieces stamped with the request's net.
  *   3. While the host uses the key, the key's reports are the host's (muted). A CLI gets the key's reports only from
- *      its own first write on, and none while the key is being handed over to it.
+ *      its own first write on, and none while the key is being handed over to it - and after a host answer, only from
+ *      its next write on (the holder let go of the key to answer, and its own reads ran meanwhile).
  *   4. One CLI at a time.
  * Who may talk at all is the CARRIER's question, decided before open(): the desktop's token (desktop/trust.js), the
  * room's accepted agent (ok-edge mcp-server core room.js).
@@ -75,6 +76,13 @@ function createKeySession({ pipe, openKey, hostFor, dev = 'desktop', holder = 't
         answer = { ok: false, refusal: 'invalid', detail: `${holder} could not answer: ${e && e.message}` };
       } finally {
         muted = false;
+        /*
+         * ...AND UNTIL THE CLI WRITES AGAIN (red-key, 2026-11-03: twice the agent's gpg key read back wrong at the ship's
+         * start - the app let go of the key to answer this message, its own chain reads began, and a reply of theirs reached
+         * the CLI between this answer and its next write; its head read "answered" in 2 ms): nothing the key says is the
+         * CLI's until its next write has gone out. A note is answered while the CLI may wait on the key: it changes nothing.
+         */
+        if (!isNote) spoke = false;
       }
       if (!answer || to !== client) return;
       for (const frame of wire.encode(wire.KIND.ANSWER, wire.answerEnvelope(message, answer, { dev, net: n }))) {

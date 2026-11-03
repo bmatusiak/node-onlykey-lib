@@ -298,3 +298,47 @@ test('desktop: during any CLI write\'s handover, reports are not relayed - not j
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/*
+ * red-key, 2026-11-03: the app let go of the key to answer the CLI's host message, its own chain reads ran, and one of their
+ * replies reached the CLI before its next write - the CLI's next request took it as its answer (the agent's gpg key read back
+ * wrong). After a host answer, nothing the key says is the CLI's until its next write.
+ */
+test('desktop: after a host answer, the key\'s reports are not the CLI\'s until it writes again', async () => {
+  const root = tmp();
+  const key = fakeKeyPipe();
+  const server = createDesktopServer({ pipe: key, root, hostFor: () => ({ send: async () => ({ ok: true, record: null }) }) });
+  const rec = await server.start();
+  try {
+    const cli = createDesktopPipe({ record: rec });
+    const seen = [];
+    const asm = wire.createAssembler();
+    let answer = null;
+    cli.on('stream', (ev) => {
+      if (ev.dir !== DIR.OUT) return;
+      if (wire.isEdgeRequestFrame(ev.bytes)) { const got = asm.push(ev.bytes); if (got && got.kind === wire.KIND.ANSWER) answer = got.message; return; }
+      seen.push(ev.bytes[0]);
+    });
+    await cli.start();
+    const a = new Uint8Array(64); a[0] = 7;
+    await cli.write(2, a);
+    await until(() => seen.length === 1);
+    const request = { type: 'EDGE_IDENTITY_GET', v: 1, nonce: 'cd'.repeat(16), wire: { dev: 'cli', id: 'r2', ts: Date.now(), net: 'test' } };
+    for (const frame of wire.encode(wire.KIND.REQUEST, request)) await cli.write(2, frame);
+    await until(() => answer);
+    await server.idle();
+    /* the app's own read, after it answered: its reply is the app's */
+    const apps = new Uint8Array(64); apps[0] = 0x66;
+    key.emit({ iface: 2, dir: DIR.OUT, bytes: apps });
+    await new Promise((r) => setTimeout(r, 30));
+    const b = new Uint8Array(64); b[0] = 9;
+    await cli.write(2, b);
+    await until(() => seen.length >= 2);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(seen, [8, 10], 'the app\'s reply after the answer reached the CLI');
+    await cli.stop();
+  } finally {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
