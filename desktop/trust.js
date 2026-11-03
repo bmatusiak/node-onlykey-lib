@@ -94,10 +94,23 @@ function liveTrust(root, { platform = process.platform, isAlive = alive } = {}) 
   /*
    * its socket must be there on Windows too (2026-10-27: a desktop app gone without removing its file, and its pid
    * answering EPERM - reused by a process this user may not signal - sent a ship to a pipe that no longer existed).
-   * existsSync sees a named pipe while it listens (checked on Windows 11).
    */
-  if (!fs.existsSync(r.socket)) return null;
+  if (!socketThere(r.socket, platform)) return null;
   return r;
+}
+
+/*
+ * A NAMED PIPE IS THERE WHILE ANY INSTANCE OF IT IS (red-key, 2026-11-03: existsSync on \\.\pipe\<name> answered false
+ * for an instant while the app's pipe was busy between two CLI processes - the next exec chose the USB key, opened
+ * red-key beside the app, and its gpg derive read back wrong; its "open: lib + USB" took 116 ms, the app's ~30). The
+ * pipe namespace's listing shows it busy or not.
+ */
+function socketThere(socket, platform) {
+  if (fs.existsSync(socket)) return true;
+  if (platform !== 'win32') return false;
+  const m = /^\\\\[.?]\\pipe\\(.+)$/i.exec(String(socket));
+  if (!m) return false;
+  try { return fs.readdirSync('\\\\.\\pipe\\').some((n) => n.toLowerCase() === m[1].toLowerCase()); } catch (_) { return false; }
 }
 
 /** the app's side, at quit: the file goes only if it is still this app's */

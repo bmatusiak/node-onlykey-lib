@@ -74,6 +74,30 @@ test('trust: written owner-only with a fresh token; live while its app runs; sta
   }
 });
 
+/*
+ * red-key, 2026-11-03: existsSync on the app's named pipe said false in about half the checks while CLI processes came
+ * and went, and a ship's next exec opened the USB key beside the app. A pipe that listens is live, existsSync or not.
+ */
+test('trust: a listening named pipe is live while existsSync says it is not (Windows)', { skip: process.platform !== 'win32' && 'a Windows named pipe' }, async () => {
+  const root = tmp();
+  const socket = `\\\\.\\pipe\\okjs-trust-test-${process.pid}-${Date.now()}`;
+  const server = require('net').createServer(() => {});
+  await new Promise((r) => server.listen(socket, r));
+  const exists = fs.existsSync;
+  try {
+    const rec = trust.writeTrust({ root, socket });
+    fs.existsSync = (p) => (p === socket ? false : exists(p));
+    assert.equal(trust.liveTrust(root, { platform: 'win32' }).token, rec.token, 'listed in the pipe namespace: live');
+    fs.existsSync = exists;
+    await new Promise((r) => server.close(r));
+    assert.equal(trust.liveTrust(root, { platform: 'win32' }), null, 'closed: not live');
+  } finally {
+    fs.existsSync = exists;
+    if (server.listening) server.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('desktop: the hello needs the token; one CLI at a time; the key\'s reports both ways, the echo kept local', async () => {
   const root = tmp();
   const key = fakeKeyPipe();
