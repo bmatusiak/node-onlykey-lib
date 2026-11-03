@@ -291,8 +291,11 @@ test('a host that approves first: a request a budget pays is not asked (no press
   app.services.okcrypto.setBeforePress(async (p) => { asked.push(p); throw new Error('declined in the app'); });
   const payload = Uint8Array.from([4, 5, 6]);
   const before = cryptoFrames(pipe).length;
+  const said = [];
+  app.services.okcrypto.on('press', (e) => said.push(e));
   await app.services.okcrypto.composite_sign(101, composite.HALF_ECC, payload, { timeoutMs: 200, paid: true }).catch(() => null);
   assert.equal(asked.length, 0, 'a paid request asked the host for a press');
+  assert.equal(said.length, 0, 'a paid request said a press was asked');
   assert.ok(cryptoFrames(pipe).length > before, 'a paid request did not reach the key');
   await assert.rejects(app.services.okcrypto.agent.sign({ gpg: 'Agent <agent@example.invalid>' }, payload, { version: 2, keyType: 1, timeoutMs: 200 }), /declined in the app/);
   assert.equal(asked[0].what, 'a signature as gpg://Agent <agent@example.invalid>');

@@ -558,18 +558,19 @@ function setup(imports, register, config) {
       throw err;
     }
     events.emit('challenge', { slot, digits, subject });
-    saidPress('asked', msg, slot, { code: Array.isArray(digits) ? digits.join(' ') : null });
+    /* a request a budget pays (paid) waits for no press - none is said (the host's sheet, the drive's presser) */
+    if (!opts.paid) saidPress('asked', msg, slot, { code: Array.isArray(digits) ? digits.join(' ') : null });
 
     try {
       if (confirm) await confirm({ digits, slot, subject, isAnswered: () => answered });
       const out = await answer;
       /* Only a COMPLETED operation arms the device timers - see settleStaleTimers. */
       lastOperationEndedAt = Date.now();
-      saidPress('done', msg, slot, { ok: true });
+      if (!opts.paid) saidPress('done', msg, slot, { ok: true });
       return out;
     } catch (err) {
       if (off) off();
-      saidPress('done', msg, slot, { ok: false });
+      if (!opts.paid) saidPress('done', msg, slot, { ok: false });
       throw err;
     }
   }
