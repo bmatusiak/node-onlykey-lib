@@ -310,9 +310,9 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
     return r;
   }
 
-  async function open({ reason, scopes, ttlMinutes, continueOf = null }) {
+  async function open({ reason, scopes, ttlMinutes, continueOf = null, card = null }) {
     const { publicKey, deviceId } = await deviceIdentity();
-    const msg = await request.build({ reason, scopes, lifetime: ttlMinutes, continueOf });
+    const msg = await request.build({ reason, scopes, lifetime: ttlMinutes, continueOf, card });
     const c = request.check(msg);
     if (!c.ok) throw fail('EEDGE_INVALID', `edge: ${c.reason}`);
     const answer = await channel.send(msg);
@@ -384,8 +384,9 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
      * EEDGE_NO_ANSWER (dropped: not paired, replayed) or EEDGE_OPENING
      * (the answer is not a budget the key opened as asked).
      */
-    async request({ reason, scopes, ttlMinutes }) {
-      return open({ reason, scopes, ttlMinutes });
+    /* card: the agent card's label the budget is asked under - the host refuses scopes outside it (approve.js) */
+    async request({ reason, scopes, ttlMinutes, card = null }) {
+      return open({ reason, scopes, ttlMinutes, card });
     },
 
     /**

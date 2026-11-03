@@ -65,6 +65,17 @@ function logsKv() {
   if (!bucketHome.hasIdentityBucket(id, net)) bucketHome.keepIdentityBucket(id, net, require('../../bucket/src/bucket').create({ owner: id }));
   return bucketHome.kv(bucketHome.identityAt(id, net, net === 'test' ? 'edge-logs-test' : 'edge-logs'));
 }
+/*
+ * THE AGENT CARDS, BESIDE THE CHAIN (Brad, 2026-11-03: "in storage live next to the blockchain in the edge's bucket"): the
+ * identity bucket's `edge-agents` store (agents.store), next to its `edge-logs` - or null when no identity bucket is in
+ * use this run (nothing is listed or kept then).
+ */
+function agentsKv() {
+  if (!logs) return null;
+  const { id, net } = logs;
+  if (!bucketHome.hasIdentityBucket(id, net)) return null;
+  return bucketHome.kv(bucketHome.identityAt(id, net, require('../src/agents').store(net)));
+}
 /* write a copy's blocks: only the keys that changed, in one locked write */
 function saveBlocks(kv, have, json) {
   const next = logblocks.split(json);
@@ -481,4 +492,4 @@ function nametagHistory() {
   return Object.values(namesKv().entries()).map((v) => { try { return JSON.parse(v); } catch (_) { return null; } }).filter((r) => r && r.statement);
 }
 
-module.exports = { sync, seed, catchUp, adoptAll, load, store, useIdentityBucket, keepSeals, keepLog, blocks, keepOpenings, keepNotes, keepNametag, nametagHistory };
+module.exports = { sync, seed, catchUp, adoptAll, load, store, useIdentityBucket, agentsKv, keepSeals, keepLog, blocks, keepOpenings, keepNotes, keepNametag, nametagHistory };

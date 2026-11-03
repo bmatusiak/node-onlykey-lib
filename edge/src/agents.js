@@ -69,7 +69,7 @@ function list(entries, ownerKey, ownerKeyPq, now = Math.floor(Date.now() / 1000)
 }
 
 /** One usable identity by label -> {card, certs}; throws naming why not (missing, revoked, expired, unverified). */
-function pick(entries, label, ownerKey, ownerKeyPq, now) {
+function pick(entries, label, ownerKey, ownerKeyPq, now = Math.floor(Date.now() / 1000)) {
   if (!label) throw Object.assign(new Error('edge: pick an agent identity by its label'), { code: 'EAGENT_PICK' });
   const it = list(entries, ownerKey, ownerKeyPq, now).find((x) => x.label === label);
   if (!it) throw Object.assign(new Error(`edge: no agent identity "${label}"`), { code: 'EAGENT_NONE' });

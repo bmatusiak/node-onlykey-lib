@@ -43,7 +43,7 @@ export function list(entries: {
     entry: any;
 }[];
 /** One usable identity by label -> {card, certs}; throws naming why not (missing, revoked, expired, unverified). */
-export function pick(entries: any, label: any, ownerKey: any, ownerKeyPq: any, now: any): {
+export function pick(entries: any, label: any, ownerKey: any, ownerKeyPq: any, now?: number): {
     card: any;
     certs: any;
 };

@@ -123,7 +123,7 @@ async function main(argv, { out = (s) => process.stdout.write(s + '\n'), err = (
     if (cmd === 'status') {
       const s = await ask('status');
       /* who a budget here is for: the agent identity whose keys are its scopes */
-      if (s.identity) out(`identity: ${s.identity.ssh}${s.identity.gpg ? ` · gpg "${s.identity.gpg}"${s.identity.fingerprint ? ` (${s.identity.fingerprint})` : ''}` : ''}`);
+      if (s.identity) out(`identity: ${s.identity.card ? `card "${s.identity.card}" · ` : ''}${s.identity.ssh}${s.identity.gpg ? ` · gpg "${s.identity.gpg}"${s.identity.fingerprint ? ` (${s.identity.fingerprint})` : ''}` : ''}`);
       /* its ssh public key, as a server's authorized_keys takes it (a public key: nothing secret) */
       if (s.identity && s.identity.sshKey) out(`ssh key: ${s.identity.sshKey}`);
       if (!s.budget) out('no budget');

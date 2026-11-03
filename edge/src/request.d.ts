@@ -3,13 +3,15 @@ export const MAX_REQUEST_USES: 300;
 export const MAX_LIFETIME_MINUTES: number;
 export const REFUSALS: readonly string[];
 /** The asking side (an agent on a paired computer): a request. */
-export function build({ reason, scopes, lifetime, continueOf, nonce }: {
+export function build({ reason, scopes, lifetime, continueOf, card, nonce }: {
     reason: any;
     scopes: any;
     lifetime: any;
     continueOf?: null | undefined;
+    card?: null | undefined;
     nonce?: (Uint8Array<ArrayBufferLike> & Uint8Array<ArrayBuffer>) | undefined;
 }): Promise<{
+    card?: string | undefined;
     continue?: undefined;
     type: string;
     v: number;
@@ -60,6 +62,7 @@ export function view(msg: any, { covered }?: {
     uses: any;
     scopes: any;
     continues: any;
+    card: any;
     covered: any[];
 };
 export function sameScopes(a: any, b: any): any;

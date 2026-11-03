@@ -73,6 +73,15 @@ function pointerKv(home) {
   return bucketHome.kv(bucketHome.edgeAt(home, 'pointers'));
 }
 
+/*
+ * THIS COMPUTER'S AGENT CARD, BY ITS LABEL (Brad, 2026-11-03: "the ai agent creates the card over cli/mcp, providing the
+ * label it wants, the keys it wants to use for future budgets"): the card itself lives in the identity bucket beside the
+ * chain, certified, kept by the host; this computer keeps only which one is its own - the label edge setup made it under.
+ */
+function cardLabelKv(home) {
+  return bucketHome.kv(bucketHome.edgeAt(home, 'card'));
+}
+
 /* edge setup's flags: only what was given (the rest comes from the identity the host keeps) */
 function parseSetup(args, h) {
   const ssh = opt(args, '--ssh');
@@ -81,7 +90,10 @@ function parseSetup(args, h) {
   const ce = opt(args, '--committer-email');
   const expires = opt(args, '--expires');
   const created = opt(args, '--created');
+  /* --label: the agent card's name, set before it is made and never changed (agents.js) */
+  const label = opt(args, '--label');
   const s = {};
+  if (label !== undefined) s.label = label;
   if (ssh) s.ssh = ssh;
   if (gpg) s.gpgUid = gpg;
   if (cn || ce) s.committer = { name: cn, email: ce };
@@ -157,15 +169,42 @@ async function setUpIdentity(io, d, h, given, { wait } = {}) {
     record.cert = { armored: made.armored, fingerprint: made.fingerprint, created: made.created, expires: made.expires, signPublic: Buffer.from(made.signPublic).toString('hex') };
   }
   const host = d.channel.local ? 'this computer' : 'the desktop app';
-  if (now && lib.same(now, record)) return { record, host, changed: false };
-  io.out(d.channel.local ? 'approve the identity here' : 'the desktop app shows the identity - approve it there');
-  const a = await d.channel.send(lib.buildSet({ record }), { timeoutMs: (Number(wait) || 180) * 1000 });
-  if (!a) throw new h.CliError(`${host} did not answer (its request ran out, or it is not up to date) - nothing was kept`);
-  if (a.ok === false) {
-    throw new h.CliError(`${host} did not keep it: ${a.refusal}${a.detail ? ` - ${a.detail}` : ''}${def ? ` - to name it yourself: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}` : ''}`);
+  /*
+   * MADE AS AN AGENT CARD (Brad, 2026-11-03: "the OLD way is still there, and the new way is not used yet"): the labels
+   * and the certificate above - the one kept today, when it is the same identity, so its gpg fingerprint stays the one
+   * GitHub verifies - certified by the key at a press under a label set now, kept by the host beside the chain. No label
+   * given: the card is named for its ssh name (plug in and go), shown before the person's Yes like the rest.
+   */
+  const agentsLib = require('../src/agents');
+  const label = String(given.label || record.ssh.replace(/^ssh:\/\//, '')).trim();
+  const kept = cardLabelKv(d.home).getItem('card');
+  if (kept && kept === label) {
+    const mine = await askCard(d.channel, d.home).catch(() => null);
+    if (mine && lib.same(mine, record)) return { record: mine, host, changed: false };
   }
+  const info = { label, created: record.cert.created, expires: record.expires, derive: { ssh: record.ssh, gpg: record.gpgUid }, committer: record.committer || null };
+  io.out(d.channel.local ? `approve the agent card "${label}" here, then press the key` : `the desktop app shows the agent card "${label}" - approve it there, then press the key`);
+  const a = await d.channel.send(agentsLib.buildCreate({ info, certs: agentsLib.certsFromRecord(record) }), { timeoutMs: (Number(wait) || 180) * 1000 });
+  if (!a) throw new h.CliError(`${host} did not answer (its request ran out, or it is not up to date) - no card was made`);
+  if (a.ok === false) {
+    if (/already an agent identity's label/.test(String(a.detail || ''))) throw new h.CliError(`${host}: "${label}" is already an agent card's label - name this one: ${edgeCmd('setup --label "<a new label>"')}`);
+    throw new h.CliError(`${host} did not make the card: ${a.refusal}${a.detail ? ` - ${a.detail}` : ''}${def ? ` - to name it yourself: ${edgeCmd('setup --ssh ssh://user@host --gpg "Name <email>"')}` : ''}`);
+  }
+  cardLabelKv(d.home).setItem('card', label);
   recordCert(io, record, 'onlykey-js edge setup');
-  return { record, host, changed: true };
+  return { record: { ...record, label }, host, changed: true };
+}
+
+/* this computer's agent card (its label, kept by edge setup) as its host keeps it - in the shape the agent signs with - or null */
+async function askCard(channel, home) {
+  const label = cardLabelKv(home).getItem('card');
+  if (!label) return null;
+  const agentsLib = require('../src/agents');
+  const host = channel.local ? 'this computer' : 'the desktop app';
+  const a = await channel.send(agentsLib.buildGet({ label }), { timeoutMs: 20000 });
+  if (!a) throw new Error(`${host} did not answer for the agent card "${label}" (EDGE_AGENT_GET) - is it up to date and open?`);
+  if (a.ok === false) throw new Error(`${host} has no usable agent card "${label}": ${a.detail || a.refusal} - make one: ${edgeCmd('setup --label "<a label>"')}`);
+  return agentsLib.recordFromCard(a.agent.card, a.agent.certs);
 }
 
 /* the host's identity record (or null), asked over the channel to it */
@@ -370,7 +409,7 @@ async function openStack(io, opts, h, { serve, dev, wait, setup = true }) {
   const { app, transport, okcrypto, edge, channel, say, home } = d;
   const { store } = budgetStore(home);
   try {
-    let identity = await span('open: agent identity', () => askIdentity(channel));
+    let identity = await span('open: agent identity', () => askCard(channel, home));
     /*
      * NONE YET: MADE NOW, IN THIS RUN (Brad, 2026-10-29: "edge setup should be checking itself to see if its setup and
      * autosetup itself - plug it in and go - but we dont want to remove best security practices"). The same setup as
@@ -382,7 +421,7 @@ async function openStack(io, opts, h, { serve, dev, wait, setup = true }) {
     if (!identity && !serve && setup) {
       say('this computer has no agent identity for this key yet - making one now (approve it, then press when asked)');
       await setUpIdentity(io, d, h, {}, { wait });
-      identity = await askIdentity(channel);
+      identity = await askCard(channel, home);
     }
     if (!identity) {
       /* coded: a long-lived service runs its sync without an agent (the agent branch below) */

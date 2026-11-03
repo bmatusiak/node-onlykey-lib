@@ -332,7 +332,8 @@ function createEdgeAgent({ device, ssh, pins = bindLib.GITHUB_FINGERPRINTS, log 
  * sign code (221), told apart by label (R11a); sizes come from the request
  * (D4, at most 300 together).
  */
-function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null }) {
+/* card: the agent card's label this agent's budgets are asked under (its keys are the scopes - approve.js) */
+function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimCommand = null, signCode = 221, edge = null, card = null }) {
   /*
    * identity: name another identity in the ssh scope (edge budget --identity) - for
    * rule-10 tests with an identity the phone marks as test. Such a budget cannot
@@ -355,7 +356,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
   const gpgEndpoints = new Map();
   return {
     /* and WHO a budget here is for - the agent identity whose credentials are its scopes (edge control plan shows it) */
-    status: async () => ({ ...(await agent.status()), identity: { ssh: ssh.name, sshKey: require('../../src/crypto/ssh-pub').publicKeyLine(ssh.curve, ssh.raw, ssh.name), gpg: gpg ? gpg.name : null, fingerprint: gpg ? gpg.fingerprint : null } }),
+    status: async () => ({ ...(await agent.status()), identity: { card: identity.label || null, ssh: ssh.name, sshKey: require('../../src/crypto/ssh-pub').publicKeyLine(ssh.curve, ssh.raw, ssh.name), gpg: gpg ? gpg.name : null, fingerprint: gpg ? gpg.fingerprint : null } }),
     /* edge watch: read-only */
     feed: async ({ from = null, since = 0 }) => agent.feed({ from, since }),
     /* edge ping: a pure link test - the phone echoes (testing mode, encrypted only); no key, no budget */
@@ -363,7 +364,7 @@ function controlHandlers({ agent, client, ssh, gpg = null, openpgp = null, shimC
     /* edge wipe (dev): the key's DEBUG-only Edge wipe - a production key refuses it */
     'wipe-debug': async () => edge.wipeDebug(),
     budget: async ({ reason, uses, ttl }) => {
-      const b = await client.request({ reason, scopes: scopes(uses || {}), ttlMinutes: ttl });
+      const b = await client.request({ reason, scopes: scopes(uses || {}), ttlMinutes: ttl, card });
       agent.setBudget(b);
       return summary(b);
     },
@@ -509,7 +510,7 @@ async function startEdgeAgent({ okcrypto, client, edge = null, home = null, iden
     }
   }
 
-  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge, home });
+  const handlers = controlHandlers({ agent, client, ssh, gpg, openpgp, shimCommand, edge, home, card: identity.label || null });
   for (const op of ['budget', 'continue', 'end']) {
     const h = handlers[op];
     handlers[op] = async (req) => {

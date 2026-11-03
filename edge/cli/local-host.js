@@ -33,7 +33,7 @@
  */
 
 const bucketHome = require('../../bucket/cli/home');
-const { approve, request, identity: identityLib, note: noteLib, receipts, codes } = require('../src');
+const { approve, request, identity: identityLib, note: noteLib, receipts, codes, agents: agentsLib } = require('../src');
 const copy = require('./copy');
 const { fromHex } = require('../../src/bytes');
 /* a ship's progress window, when one named its file for this process: the dialog's moments as they happen */
@@ -115,6 +115,12 @@ function createLocalHost({ edge, home, confirm, say = () => {} }) {
     const was = msg.continue === undefined ? null : await budgetOfNow(msg.continue);
     const r = await approve.approveRequest(msg, {
       edge, from: LOCAL, seen,
+      /* the agent card the budget is under, from the identity bucket beside the chain, checked with the key's owner keys */
+      cardOf: async (label) => {
+        const k = copy.agentsKv();
+        if (!k) throw new Error('no identity bucket is in use here - the agent cards live in it');
+        return agentsLib.pick(k.entries(), label, await edge.ownerPublicKey(), await edge.publicKeyPq('owner')).card;
+      },
       ask: async (view) => {
         /* R27 before the question, as the phone greys out Approve: a copy that does not verify is refused unasked */
         const pre = await verifyCopy();
@@ -122,6 +128,7 @@ function createLocalHost({ edge, home, confirm, say = () => {} }) {
         const lines = [
           `budget request${view.continues !== null ? ` (continues budget ${view.continues})` : ''}: "${view.reason}"`,
           `  ${view.uses} use${view.uses === 1 ? '' : 's'}, for ${view.lifetime} minute${view.lifetime === 1 ? '' : 's'}`,
+          ...(view.card ? [`  under the agent card "${view.card}" - its keys only`] : []),
           ...view.scopes.map((s) => `  ${s.op} on ${s.identity ? `${s.identity} (slot ${s.slot})` : `slot ${s.slot}`}: up to ${s.cap}`),
         ];
         for (const l of lines) say(l);
@@ -161,6 +168,37 @@ function createLocalHost({ edge, home, confirm, say = () => {} }) {
     return { ok: true };
   }
 
+  /*
+   * A COMPUTER'S AGENT CARDS, ON A KEY WITH NO APP (Brad, 2026-11-03: "the ai agent creates the card over cli/mcp"): the
+   * lib's one answer (agents.answer) as the desktop app gives it - the card's rows on this terminal for the person's y/N,
+   * then the key's certify at a press, kept in the identity bucket beside the chain (copy.agentsKv).
+   */
+  async function answerCard(msg) {
+    const checked = agentsLib.verify(msg, { seen });
+    if (!checked.ok) {
+      return checked.reason === 'malformed' || checked.reason === 'replayed'
+        ? null
+        : { ok: false, refusal: 'invalid', detail: `not a usable agent card: ${checked.reason}` };
+    }
+    seen.add(String(msg.nonce).toLowerCase());
+    return agentsLib.answer(msg, {
+      entries: async () => { const k = copy.agentsKv(); return k ? k.entries() : null; },
+      owner: async () => ({ ownerKey: await edge.ownerPublicKey(), ownerKeyPq: await edge.publicKeyPq('owner') }),
+      approve: async (a) => {
+        const day = (s) => new Date(s * 1000).toISOString().slice(0, 10);
+        const lines = [`a new agent card - "${a.label}" (its label cannot change afterwards):`,
+          ...(a.derive.ssh ? [`  ssh: ${a.derive.ssh}`] : []), ...(a.derive.gpg !== undefined ? [`  gpg: ${a.derive.gpg}`] : []),
+          ...(a.committer ? [`  committer: ${a.committer.name} <${a.committer.email}>`] : []),
+          ...(a.fingerprint ? [`  certificate: ${identityLib.spacedFingerprint(a.fingerprint)}`] : []),
+          `  made: ${day(a.created)}, expires: ${a.expires ? day(a.created + a.expires) : 'never'}`];
+        for (const l of lines) say(l);
+        return confirm('certify this agent card? [y/N] ', { details: lines.join('\n'), title: 'OnlyKey Edge: a new agent card' });
+      },
+      certifyAgent: (info) => edge.certifyAgent(info, { onPress: () => say(`PRESS the key now: it certifies the agent card "${info.label}"`) }),
+      write: async (label, entry) => { copy.agentsKv().setItem(label, JSON.stringify(entry)); },
+    });
+  }
+
   return {
     /* register.js and its texts: the host is here, not on a phone */
     local: true,
@@ -190,6 +228,7 @@ function createLocalHost({ edge, home, confirm, say = () => {} }) {
         return { ok: true };
       }
       if (identityLib.TYPES.includes(type)) return answerIdentity(message);
+      if (agentsLib.TYPES.includes(type)) return answerCard(message);
       if (type === request.TYPE) return answerRequest(message);
       return NO_PHONE;
     },

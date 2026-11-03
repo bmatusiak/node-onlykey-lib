@@ -21,6 +21,7 @@
  */
 
 const request = require('./request');
+const agents = require('./agents');
 const { toHex } = require('../../src/bytes');
 
 const refuse = (refusal, detail) => ({ ok: false, refusal, ...(detail ? { detail } : {}) });
@@ -41,18 +42,37 @@ const refuse = (refusal, detail) => ({ ok: false, refusal, ...(detail ? { detail
  *   which scopes) - null when the app never opened it
  * @param {(msg: object) => Promise<object[]>|object[]} [o.coverOf] the live
  *   budgets that already cover what this request names (view().covered)
+ * @param {(label: string) => Promise<object>} [o.cardOf] the usable agent card by its label (agents.pick) - throws naming
+ *   why not; none given: this host keeps no cards, and every request is refused
  * @param {() => void} [o.onPress] told when the key waits for the press
  * @param {number} [o.timeoutMs] the press wait (the key's own is 25 s)
  * @returns {Promise<{ok: true, budget: object} | {ok: false, refusal: string} | {dropped: string}>}
  *   dropped: nothing is answered (malformed, replayed)
  */
-async function approveRequest(msg, { edge, from = null, seen, ask, verifyCopy, budgetOf = () => null, coverOf = () => [], onPress, timeoutMs = 30000 }) {
+async function approveRequest(msg, { edge, from = null, seen, ask, verifyCopy, budgetOf = () => null, coverOf = () => [], cardOf = null, onPress, timeoutMs = 30000 }) {
   const v = request.verify(msg, { seen });
   if (!v.ok) return { dropped: v.reason };
   seen.add(msg.nonce.toLowerCase()); /* taken now: a replay of it is dropped, whatever the person answers */
 
   const c = request.check(msg);
   if (!c.ok) return refuse('invalid', c.reason);
+
+  /*
+   * UNDER AN AGENT CARD (Brad, 2026-11-03: "agent identities are the cards that contain what keys are allowed to be used
+   * for the budget request"): the request names its card; the card must be one this identity certified and still usable,
+   * and every scope must name one of its keys - a budget can use that card's keys and nothing else on the key. Checked
+   * before the sheet: what the person approves is already inside the card.
+   */
+  if (!msg.card) return refuse('invalid', 'a budget names the agent card it is asked under - make one: onlykey-js edge setup --label "<a label>"');
+  let card;
+  try {
+    if (!cardOf) throw new Error('this host keeps no agent cards');
+    card = await cardOf(msg.card);
+  } catch (e) {
+    return refuse('invalid', e && e.message ? e.message : String(e));
+  }
+  const allowed = agents.budgetAllowed(card, msg.scopes);
+  if (!allowed.ok) return refuse('invalid', `outside the agent card "${msg.card}": ${allowed.why}`);
 
   if (msg.continue !== undefined) {
     /* "continues <budget>": one this app opened, for this same paired computer, with the same scopes */

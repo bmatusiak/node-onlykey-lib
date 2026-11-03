@@ -14,12 +14,14 @@
  *   which scopes) - null when the app never opened it
  * @param {(msg: object) => Promise<object[]>|object[]} [o.coverOf] the live
  *   budgets that already cover what this request names (view().covered)
+ * @param {(label: string) => Promise<object>} [o.cardOf] the usable agent card by its label (agents.pick) - throws naming
+ *   why not; none given: this host keeps no cards, and every request is refused
  * @param {() => void} [o.onPress] told when the key waits for the press
  * @param {number} [o.timeoutMs] the press wait (the key's own is 25 s)
  * @returns {Promise<{ok: true, budget: object} | {ok: false, refusal: string} | {dropped: string}>}
  *   dropped: nothing is answered (malformed, replayed)
  */
-export function approveRequest(msg: object, { edge, from, seen, ask, verifyCopy, budgetOf, coverOf, onPress, timeoutMs }: {
+export function approveRequest(msg: object, { edge, from, seen, ask, verifyCopy, budgetOf, coverOf, cardOf, onPress, timeoutMs }: {
     edge: object;
     from?: string | null | undefined;
     seen: Set<string>;
@@ -33,6 +35,7 @@ export function approveRequest(msg: object, { edge, from, seen, ask, verifyCopy,
         scopes: object[];
     } | null)) | undefined;
     coverOf?: ((msg: object) => Promise<object[]> | object[]) | undefined;
+    cardOf?: ((label: string) => Promise<object>) | undefined;
     onPress?: (() => void) | undefined;
     timeoutMs?: number | undefined;
 }): Promise<{

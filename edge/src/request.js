@@ -51,7 +51,8 @@ const isHex = (s, n) => typeof s === 'string' && s.length === n * 2 && /^[0-9a-f
 const isU32 = (n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
 
 /** The asking side (an agent on a paired computer): a request. */
-async function build({ reason, scopes, lifetime, continueOf = null, nonce = randomBytes(16) }) {
+/* card: the agent card the budget is asked under, by its label (agents.js) - its keys are the only ones the scopes may name */
+async function build({ reason, scopes, lifetime, continueOf = null, card = null, nonce = randomBytes(16) }) {
   return {
     type: TYPE, v: 1,
     nonce: toHex(nonce),
@@ -59,6 +60,7 @@ async function build({ reason, scopes, lifetime, continueOf = null, nonce = rand
     scopes: scopes.map((s) => ({ op: s.op, slot: s.slot, cap: s.cap, ...(s.identity ? { identity: String(s.identity) } : {}) })),
     lifetime,
     ...(continueOf !== null && continueOf !== undefined ? { continue: continueOf } : {}),
+    ...(card ? { card: String(card) } : {}),
   };
 }
 
@@ -82,7 +84,8 @@ function peerSignerFromSecret(secret) {
 function verify(msg, { seen } = {}) {
   if (!msg || msg.type !== TYPE || msg.v !== 1 || !isHex(msg.nonce, 16)
     || typeof msg.reason !== 'string' || !Array.isArray(msg.scopes) || !Number.isInteger(msg.lifetime)
-    || (msg.continue !== undefined && !isU32(msg.continue))) {
+    || (msg.continue !== undefined && !isU32(msg.continue))
+    || (msg.card !== undefined && (typeof msg.card !== 'string' || !msg.card.trim() || msg.card.length > 64))) {
     return { ok: false, reason: 'malformed' };
   }
   if (seen && seen.has(msg.nonce.toLowerCase())) return { ok: false, reason: 'replayed' };
@@ -138,6 +141,8 @@ function view(msg, { covered = [] } = {}) {
     uses: msg.scopes.reduce((n, s) => n + s.cap, 0),
     scopes,
     continues: msg.continue === undefined ? null : msg.continue,
+    /* the agent card it is asked under (approve checked its scopes against the card) */
+    card: msg.card === undefined ? null : msg.card,
     /*
      * 4.7a: live budgets that already cover an identity (or slot) this request
      * names - "this agent already has N uses left on <identity> until <time>".

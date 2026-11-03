@@ -56,10 +56,11 @@ export function createEdgeClient({ edge, channel, store, noteTimeoutMs }: {
      * EEDGE_NO_ANSWER (dropped: not paired, replayed) or EEDGE_OPENING
      * (the answer is not a budget the key opened as asked).
      */
-    request({ reason, scopes, ttlMinutes }: {
+    request({ reason, scopes, ttlMinutes, card }: {
         reason: any;
         scopes: any;
         ttlMinutes: any;
+        card?: null | undefined;
     }): Promise<{
         grantId: any;
         uses: any;

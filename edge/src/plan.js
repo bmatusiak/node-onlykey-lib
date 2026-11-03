@@ -163,7 +163,8 @@ async function runPlan({ plan, client, signers, update, subscribe, ttlMinutes = 
 
   let budget;
   try {
-    budget = await client.request({ reason: reasonOf(plan, runnable), scopes: scopesOf(runnable), ttlMinutes });
+    /* plan.card: the agent card it is asked under (a plan with none is refused by the host - the MCP's plans name one, plan step 3) */
+    budget = await client.request({ reason: reasonOf(plan, runnable), scopes: scopesOf(runnable), ttlMinutes, card: plan.card || null });
   } catch (e) {
     unsubscribe();
     const declined = e.refusal === 'declined';
