@@ -55,6 +55,24 @@ test('a copy the app stored reads as it is, under the same key, and saves back t
   assert.equal(kv.m.get(`okrn.edge.mirror.${DEV}`), appStored, 'the stored text is the app\'s, byte for byte');
 });
 
+test('the key\'s signed checkpoint is kept with the copy, both halves, and read back - none stored reads as null', async () => {
+  const kv = memoryKv();
+  const h = createHistory({ kv, prefix: () => 'p.' });
+  const m = await h.load(DEV);
+  assert.equal(m.checkpoint, undefined, 'a new copy holds no checkpoint');
+  m.links.push({ link: link(4), head: b32(40), reveal: null });
+  m.checkpoint = { seq: 4, head: b32(40), signature: b32(7), signaturePq: b32(8) };
+  await h.save(m);
+  assert.deepEqual(JSON.parse(kv.m.get(`p.${DEV}`)).checkpoint, { seq: 4, head: hex(b32(40)), signature: hex(b32(7)), signaturePq: hex(b32(8)) });
+  h.drop(DEV);
+  const back = await h.load(DEV);
+  assert.equal(back.checkpoint.seq, 4);
+  assert.deepEqual([...back.checkpoint.signaturePq], [...b32(8)], 'the ML-DSA-65 half too');
+  kv.m.set(`p.${DEV}`, appStored);
+  h.drop(DEV);
+  assert.equal((await h.load(DEV)).checkpoint, null, 'a copy stored without one reads as null');
+});
+
 test('load hands out a copy: a change not saved changes nothing; a save is kept', async () => {
   const kv = memoryKv();
   const h = createHistory({ kv, prefix: () => 'p.' });

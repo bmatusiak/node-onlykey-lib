@@ -119,6 +119,7 @@ function createHistory({ kv, prefix }) {
       continued: s.continued || null,
       merged: (s.merged || []).map((a) => ({ ...pointIn(a), at: a.at })),
       seals: (s.seals || []).map((x) => ({ ...pointIn(x), ended: x.ended || [] })),
+      checkpoint: s.checkpoint ? pointIn(s.checkpoint) : null,
     };
   }
 
@@ -150,6 +151,13 @@ function createHistory({ kv, prefix }) {
       ...(m.continued ? { continued: m.continued } : {}),
       ...(m.merged && m.merged.length ? { merged: m.merged.map((a) => ({ ...pointOut(a), at: a.at })) } : {}),
       ...(m.seals && m.seals.length ? { seals: m.seals.map((x) => ({ ...pointOut(x), ended: x.ended })) } : {}),
+      /*
+       * THE KEY'S NEWEST SIGNED CHECKPOINT THIS COPY WAS CHECKED UP TO (Brad, 2026-11-03: "why is the head not being
+       * verified offline"): {seq, head, signature, signaturePq}, both halves. It is what a later session checks the copy
+       * against with no key - the links weld up to its head and its signatures verify under the held public keys - so a
+       * copy brought up to date by a computer's log is never re-read from the key to be believed.
+       */
+      ...(m.checkpoint ? { checkpoint: pointOut(m.checkpoint) } : {}),
     };
     const text = JSON.stringify(s);
     const now = (await kv.getItem(key(id))) ?? null;
