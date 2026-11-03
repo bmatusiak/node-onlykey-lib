@@ -195,9 +195,27 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     for (let i = 0; i < 500 && rebasing(r); i++) git(r.repo, '-c', 'commit.gpgsign=false', 'rebase', '--continue');
     if (rebasing(r)) stop(`${r.name}: a rebase is in progress and will not finish`);
   }
-  /* commits after base, oldest first (G/U/E = signed; E = by a key whose public half is not on this machine) */
-  const commits = (r) => git(r.repo, 'log', '--reverse', '--format=%H%x09%G?%x09%s', range(r)).out.trim().split('\n').filter(Boolean)
-    .map((l) => { const [hash, g, subject] = l.split('\t'); return { hash, signed: /^[GUE]$/.test(g), subject }; });
+  /*
+   * commits after base, oldest first; signed = it carries a signature (its gpgsig header - gpg's or ssh's).
+   * READ, NOT VERIFIED (red-key, 2026-11-03: `--format=%G?` ran gpg over every commit ahead of GitHub on each call - 33 s
+   * for 403, twice after the budget opened, a minute of "no activity"; the raw header reads in 0.3 s). %G? never vouched
+   * for an Edge signature here anyway: the agent's public key is not on this machine, so each read E ("cannot check"),
+   * counted as signed. GitHub's verification is the check that counts; this only finds the commits still to sign.
+   */
+  const commits = (r) => {
+    const list = [];
+    let cur = null;
+    let inMessage = false;
+    for (const line of git(r.repo, 'log', '--reverse', '--pretty=raw', range(r)).out.split('\n')) {
+      const m = /^commit ([0-9a-f]{40,64})/.exec(line);
+      if (m) { cur = { hash: m[1], signed: false, subject: '' }; list.push(cur); inMessage = false; continue; }
+      if (!cur) continue;
+      /* the headers, then a blank line, then the message indented four spaces - its first line the subject */
+      if (!inMessage) { if (line.startsWith('gpgsig ')) cur.signed = true; else if (line.trim() === '') inMessage = true; continue; }
+      if (!cur.subject && line.startsWith('    ')) cur.subject = line.slice(4).trimEnd();
+    }
+    return list;
+  };
   const unsigned = (r) => commits(r).filter((c) => !c.signed);
 
   /* ---------------------------------------------------------------- the request */

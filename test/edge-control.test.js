@@ -178,6 +178,31 @@ test('control ship --max N: a batch takes N signatures from the repos in order; 
   }
 });
 
+/*
+ * SIGNED = IT CARRIES A SIGNATURE, READ FROM THE COMMIT'S HEADER (2026-11-03: %G? ran gpg over every commit on each call,
+ * 33 s for 403): a commit written with a gpgsig header counts as signed with no gpg on this machine - its signature here
+ * is not a real one, and need not be: the ship only finds what is left to sign.
+ */
+test('control ship --plan: a commit that carries a signature is not signed again - read from its header, no gpg', async () => {
+  const home = tmp('okjs-ctl-home-');
+  const dir = repoWithCommits(1);
+  try {
+    const tree = git(dir, 'rev-parse', 'HEAD^{tree}');
+    const parent = git(dir, 'rev-parse', 'HEAD');
+    const who = 't <t@example.invalid> 1700000000 +0000';
+    const raw = `tree ${tree}\nparent ${parent}\nauthor ${who}\ncommitter ${who}\ngpgsig -----BEGIN SSH SIGNATURE-----\n U1NIU0lH\n -----END SSH SIGNATURE-----\n\nsigned already\n`;
+    const file = path.join(dir, '.git', 'raw-commit');
+    fs.writeFileSync(file, raw);
+    const signedHash = git(dir, 'hash-object', '-t', 'commit', '-w', file);
+    git(dir, 'update-ref', 'HEAD', signedHash);
+    const o = io();
+    assert.equal(await control.run({ io: o, opts: {}, argv: ['ship', `${dir}:HEAD~2`, '--plan'], net: 'live', home }), 0);
+    assert.deepEqual(o.lines, ['plan: 1 signature(s), 1 push(es)'], 'work 1 to sign; the commit with a signature is not');
+  } finally {
+    for (const d of [home, dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test('control plan: who, what and how many, why, how long, and the work commit by commit - nothing asked of a key', async () => {
   const home = tmp('okjs-ctl-home-');
   const a = repoWithCommits(3);
