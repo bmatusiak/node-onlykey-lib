@@ -194,6 +194,31 @@ test('desktop: onClient is told when a CLI is accepted and when it goes - not fo
   }
 });
 
+/* the CLI's request progress reaches the app for its press sheet: plain fields only, and a CLI gone clears it */
+test('desktop: the CLI\'s request progress goes to onBusy (fields picked, nothing else); its going says gone', async () => {
+  const root = tmp();
+  const busy = [];
+  const pipe = fakeKeyPipe();
+  const server = createDesktopServer({ pipe, root, hostFor: () => ({ send: async () => null }), onBusy: (b) => busy.push(b) });
+  const rec = await server.start();
+  try {
+    const cli = createDesktopPipe({ record: rec });
+    await cli.start();
+    cli.tell('edge', { phase: 'begin', sub: 8, limitMs: 30000, bytes: new Uint8Array([1, 2]), stray: { a: 1 } });
+    cli.tell('tunnel', { phase: 'step', id: 3, msg: 0xed, step: 1, steps: 2, pressAt: 1, via: 'tunnel' });
+    await until(() => busy.length === 2);
+    assert.deepEqual(busy[0], { kind: 'edge', e: { phase: 'begin', sub: 8, limitMs: 30000 } });
+    assert.deepEqual(busy[1], { kind: 'tunnel', e: { phase: 'step', id: 3, msg: 0xed, step: 1, steps: 2, pressAt: 1 } });
+    assert.equal(pipe.writes.length, 0, 'progress is never a key write');
+    await cli.stop();
+    await until(() => busy.length === 3);
+    assert.deepEqual(busy[2], { kind: 'gone', e: {} });
+  } finally {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 /* a report the app's own read left behind, arriving just after a CLI connects, is not that CLI's answer */
 test('desktop: a newly connected CLI gets the key\'s reports only from its own first write on', async () => {
   const root = tmp();

@@ -305,6 +305,8 @@ async function openDevice(io, opts, h, { dev, wait, migrating = false }) {
   const { transport, okcrypto } = app.services;
   let edge = null;
   require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
+  /* through the desktop app: each Edge request said to it, so its press sheet shows (cli/desktop.js tellHolder) */
+  if (typeof app.tellHolder === 'function') edge.onRequest = (e) => app.tellHolder('edge', e);
   /* before the first derive below (the identity home) records anything */
   await span('open: whose bucket', () => knowTheBucket(io, app, edge, require('./control').edgeHome()));
   /*

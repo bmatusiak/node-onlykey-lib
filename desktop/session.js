@@ -38,7 +38,7 @@ const { toBase64, fromBase64 } = require('../src/bytes');
  * @param {(line: string) => void} [o.log]
  * @param {(connected: boolean) => void} [o.onClient] a CLI was accepted (true) / went away (false)
  */
-function createKeySession({ pipe, openKey, hostFor, dev = 'desktop', holder = 'the desktop app', log = () => {}, onClient = () => {} }) {
+function createKeySession({ pipe, openKey, hostFor, dev = 'desktop', holder = 'the desktop app', log = () => {}, onClient = () => {}, onBusy = () => {} }) {
   /* the one CLI: {send(obj), gone(): boolean} */
   let client = null;
   let muted = false;
@@ -89,6 +89,8 @@ function createKeySession({ pipe, openKey, hostFor, dev = 'desktop', holder = 't
     client = null;
     asm = wire.createAssembler();
     onClient(false);
+    /* a CLI gone mid-request: its sheet goes with it */
+    try { onBusy({ kind: 'gone', e: {} }); } catch (_) { /* nothing to clear */ }
   }
 
   return {
@@ -127,6 +129,8 @@ function createKeySession({ pipe, openKey, hostFor, dev = 'desktop', holder = 't
 
     /** one message from the accepted CLI (a write: for the key, or an 0xF7 piece for the host) */
     async message(c, m) {
+      /* the CLI's request progress, for the holder's sheet (cli/transport-desktop.js tell) */
+      if (c === client && m && m.t === 'busy') { try { onBusy({ kind: m.kind, e: m.e || {} }); } catch (_) { /* the sheet is not the key */ } return; }
       if (c !== client || !m || m.t !== 'write') return;
       const bytes = fromBase64(m.b64 || '');
       if (m.iface === 2 && wire.isEdgeRequestFrame(bytes)) {

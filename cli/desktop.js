@@ -71,11 +71,12 @@ function startDesktop({ pipe, path, loadHid, desktop = false, ble = false, confi
      */
     require('../plugins/identity'),
   ];
+  const thePipe = pipe || makePipe();
   plugins.config = {
     ...config,
     transport: {
       ...(config.transport || {}),
-      pipe: pipe || makePipe(),
+      pipe: thePipe,
     },
   };
 
@@ -94,6 +95,15 @@ function startDesktop({ pipe, path, loadHid, desktop = false, ble = false, confi
        */
       await app.destroy().catch(() => {});
       throw err;
+    }
+    /*
+     * THROUGH THE DESKTOP APP, ITS PRESS SHEET (cli/transport-desktop.js tell): each request's progress - the press wait
+     * included - goes to the app, which shows it as it shows its own. app.tellHolder: Edge's requests too (register.js).
+     */
+    if (typeof thePipe.tell === 'function') {
+      const tell = (kind, e) => { try { thePipe.tell(kind, e); } catch (_) { /* the sheet is not the request */ } };
+      if (app.services.okcrypto && typeof app.services.okcrypto.on === 'function') app.services.okcrypto.on('tunnel', (e) => tell('tunnel', e));
+      app.tellHolder = tell;
     }
     return app;
   });

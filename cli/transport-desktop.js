@@ -64,6 +64,9 @@ function socketChannel({ record, root, connect }) {
  * @param {(path: string) => import('net').Socket} [o.connect]
  * @param {() => Promise<object>} [o.channel] another carrier (see A CHANNEL above) - in place of the local socket
  */
+/* a request's progress, as the sheet reads it (ok-edge src/keyBusy.ts) - plain fields, never bytes */
+const BUSY_FIELDS = ['phase', 'id', 'msg', 'slot', 'sub', 'step', 'steps', 'waiting', 'limitMs', 'pressAt', 'answered', 'ok', 'error'];
+
 function createDesktopPipe({ record, root, connect = (p) => net.connect(p), channel = null } = {}) {
   const listeners = new Set();
   const closeListeners = new Set();
@@ -130,6 +133,19 @@ function createDesktopPipe({ record, root, connect = (p) => net.connect(p), chan
       if (!set) throw new Error(`the desktop pipe has no "${event}" event`);
       set.add(listener);
       return () => set.delete(listener);
+    },
+
+    /*
+     * THE CLI'S OWN REQUESTS, SHOWN BY THE APP (Brad, 2026-11-02, Windows: the agent identity's certificate waited for a press
+     * through the desktop app and no press sheet came - "i thought we covered press sheets are shown if a press is
+     * required"). The app sees only the CLI's bytes; the CLI says each request's progress (okcrypto 'tunnel', edge
+     * onRequest) and the app's page feeds them to the same sheet its own requests use. Progress only - nothing of a key.
+     */
+    tell(kind, e) {
+      if (!chan || !ready || !e) return;
+      const pick = {};
+      for (const k of BUSY_FIELDS) if (e[k] !== undefined && (typeof e[k] !== 'object' || e[k] === null)) pick[k] = e[k];
+      chan.send({ t: 'busy', kind, e: pick });
     },
 
     /** the key the app holds, as it described it */

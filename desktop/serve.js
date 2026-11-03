@@ -47,14 +47,15 @@ const { HELLO_MS, send, readLines } = require('./protocol');
  * @param {string} [o.root] the shared home (default ~/.onlykey-js)
  * @param {string} [o.socket] where to listen (default trust.socketPath(root))
  * @param {(line: string) => void} [o.log]
+ * @param {(b: {kind: 'tunnel'|'edge'|'gone', e: object}) => void} [o.onBusy] the CLI's request progress, for the app's sheet
  * @param {(connected: boolean) => void} [o.onClient] a CLI was accepted (true) / went away (false) -
  *   the app keeps its own key traffic out of the CLI's whole conversation, as the phone's bridge does
  */
-function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () => {}, onClient = () => {} }) {
+function createDesktopServer({ pipe, openKey, hostFor, root, socket, log = () => {}, onClient = () => {}, onBusy = () => {} }) {
   const where = socket || trust.socketPath(root);
   let server = null;
   let record = null;
-  const session = createKeySession({ pipe, openKey, hostFor, dev: 'desktop', holder: 'the desktop app', log, onClient });
+  const session = createKeySession({ pipe, openKey, hostFor, dev: 'desktop', holder: 'the desktop app', log, onClient, onBusy });
   const sockets = new Set();
 
   function onConnection(sock) {
