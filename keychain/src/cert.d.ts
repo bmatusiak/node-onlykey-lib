@@ -3,16 +3,17 @@
  * Two presses: the user ID certification and the subkey binding.
  * @param {object} okcrypto  the app's okcrypto service
  * @param {object} openpgp   the fork (node-onlykey-lib/crypto/pgp)
- * @param {{label: string, version?: number, created?: number, expires?: number, onPress?: Function}} o
+ * @param {{label: string, version?: number, created?: number, expires?: number, onPress?: Function, what?: string}} o
  *   expires: seconds after `created` (0 / absent: never)
  * @returns {Promise<{uid: string, armored: string, fingerprint: string, created: number, expires: number, signPublic: Uint8Array}>}
  */
-export function makeCertificate(okcrypto: object, openpgp: object, { label, version, created, expires, onPress }?: {
+export function makeCertificate(okcrypto: object, openpgp: object, { label, version, created, expires, onPress, what }?: {
     label: string;
     version?: number;
     created?: number;
     expires?: number;
     onPress?: Function;
+    what?: string;
 }): Promise<{
     uid: string;
     armored: string;

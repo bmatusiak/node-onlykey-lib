@@ -44,9 +44,6 @@
  */
 'use strict';
 
-/* the person's time to answer the app's approval sheet (as a budget's: 2 min), and the wire's margin past it */
-const APPROVE_MS = 150000;
-
 function startDesktop({ pipe, path, loadHid, desktop = false, ble = false, config = {} } = {}) {
   const Rectify = require('@bmatusiak/rectify');
   /*
@@ -103,6 +100,8 @@ function startDesktop({ pipe, path, loadHid, desktop = false, ble = false, confi
      * THROUGH THE DESKTOP APP, ITS PRESS SHEET (cli/transport-desktop.js tell): each request's progress - the press wait
      * included - goes to the app, which shows it as it shows its own. app.tellHolder: Edge's requests too (register.js).
      */
+    /* the key is the desktop app's (its pipe), not one this process opened itself - a plugin's wrapper reads it (edge/cli/plugin.js) */
+    app.throughDesktopApp = thePipe.desktop === true;
     if (typeof thePipe.tell === 'function') {
       const tell = (kind, e) => { try { thePipe.tell(kind, e); } catch (_) { /* the sheet is not the request */ } };
       if (app.services.okcrypto && typeof app.services.okcrypto.on === 'function') {
@@ -111,22 +110,6 @@ function startDesktop({ pipe, path, loadHid, desktop = false, ble = false, confi
         app.services.okcrypto.on('press', (e) => tell('press', e));
       }
       app.tellHolder = tell;
-      /*
-       * THE APP APPROVES FIRST, THEN THE KEY IS PRESSED (Brad, 2026-11-03: "edge gives a prompt sheet, i press approve, and
-       * then the key press"; "i dont know what i was approving"): before each request that waits for a press, the desktop
-       * app is asked on the Edge wire (edge/src/pressask.js) - what it is for, the message, the code - and shows it as a
-       * budget is shown. Approve: the request goes to the key. Anything else: it never does.
-       */
-      if (desktop && !ble && app.services.okcrypto && typeof app.services.okcrypto.setBeforePress === 'function') {
-        const { wire, pressAsk } = require('../edge/src');
-        const channel = wire.createWireChannel(app.services.transport, { timeoutMs: APPROVE_MS });
-        app.services.okcrypto.setBeforePress(async ({ what, subject, code }) => {
-          const a = await channel.send(pressAsk.build({ what: what || 'a press', subject, code }), { timeoutMs: APPROVE_MS });
-          if (a && a.ok) return;
-          const why = !a ? 'no answer' : a.refusal === 'declined' ? 'declined' : a.detail || a.refusal || 'refused';
-          throw Object.assign(new Error(`the desktop app: ${why} - the key was not asked`), { code: 'EPRESSDECLINED' });
-        });
-      }
     }
     return app;
   });
