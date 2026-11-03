@@ -257,6 +257,29 @@ test('the challenge digits are the ones the firmware will ask for', async () => 
   await app.destroy();
 });
 
+test('a host that approves first: refused - nothing reaches the key; approved - the request goes, the host saw its message and code', async () => {
+  /*
+   * okcrypto beforePress (2026-11-03, Brad: "i press approve on the app, and then on the key, like edge"): the CLI through
+   * the desktop app asks the app before each press-asking request - a refusal must leave the key untouched.
+   */
+  const pipe = fakeFirmware();
+  const app = await start(FULL(), pipe);
+  const payload = Uint8Array.from([9, 8, 7]);
+  const asked = [];
+  app.services.okcrypto.setBeforePress(async (p) => { asked.push(p); throw new Error('declined in the app'); });
+  const before = cryptoFrames(pipe).length;
+  await assert.rejects(app.services.okcrypto.composite_sign(101, composite.HALF_ECC, payload, { timeoutMs: 200, what: 'a test signature' }), /declined in the app/);
+  assert.equal(cryptoFrames(pipe).length, before, 'a refused press wrote to the key');
+  assert.equal(asked[0].what, 'a test signature');
+  assert.equal(asked[0].code, challengeDigits(Uint8Array.from([composite.HALF_ECC, ...payload])).join(' '));
+  assert.match(asked[0].subject, /^[0-9a-f]{64}$/);
+  app.services.okcrypto.setBeforePress(async () => {});
+  await app.services.okcrypto.composite_sign(101, composite.HALF_ECC, payload, { timeoutMs: 200 }).catch(() => null);
+  assert.ok(cryptoFrames(pipe).length > before, 'an approved press went to the key');
+  app.services.okcrypto.setBeforePress(null);
+  await app.destroy();
+});
+
 test('a press asked is said by the lib: asked with its code when the request is on the key, done with how it ended', async () => {
   /*
    * The host's sheet is inspected against this (ok-edge tools/drive/sheets.js, 2026-11-02) - the lib's own word that the

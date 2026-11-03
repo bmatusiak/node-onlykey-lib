@@ -339,7 +339,19 @@ function setup(imports, register, config) {
     return out;
   }
 
-  function deviceOperation(msg, slot, data, opts) {
+  async function deviceOperation(msg, slot, data, opts) {
+    /*
+     * ASKED FIRST WHERE A HOST SAYS SO (Brad, 2026-11-03: "i press approve on the app, and then on the key, like edge";
+     * edge/src/pressask.js): a computer reaching the key through the desktop app asks the app before this request goes -
+     * what it is for, the message the key will sign, its code. Before the lane (the ask is a conversation of its own on
+     * the same transport - inside the lane it would wait for itself). A refusal throws here: nothing reaches the key.
+     */
+    if (beforePress) {
+      const payload = Uint8Array.from(data);
+      const o = opts || {};
+      const formula = o.formula || (session && session.capabilities && session.capabilities.challengeFormula) || undefined;
+      await beforePress({ msg, slot, subject: toHex(subjectHash(payload)), code: challengeDigits(payload, { duo: !!o.duo, formula }).join(' '), what: o.what || null });
+    }
     return asUse(msg, slot, data, opts, (o) => inLane(transport, () => deviceOperationBusyAware(msg, slot, data, o)));
   }
 
@@ -765,6 +777,8 @@ function setup(imports, register, config) {
    */
   let opSeq = 0;
   let currentOp = null;
+  /* setBeforePress: a host's approval before a press-asking request leaves (null: none - every app's own requests) */
+  let beforePress = null;
   function laneWaiting() {
     try { return transport.tunnelOnly ? laneOf(transport).state().waiting : 0; } catch { return 0; }
   }
@@ -1931,7 +1945,9 @@ function setup(imports, register, config) {
          * WebAuthn - the ctap_bridge firmware plugin lets the agent sign codes past the tunnel's stored-key gate. The
          * signature is 64 bytes either way, so the tunnel's poll knows when it has it all (the USB path is left as it was).
          */
-        const out = await storedOperation(MSG.OKSIGN, code, payload, suppliedCtap ? { expectBytes: 64, ...opts } : opts);
+        /* what the press is for, when the caller says nothing more (beforePress - the app's approval sheet): the identity signing */
+        const said = { what: `a signature as ${identity}`, ...opts };
+        const out = await storedOperation(MSG.OKSIGN, code, payload, suppliedCtap ? { expectBytes: 64, ...said } : said);
         return out.slice(0, 64);
       },
 
@@ -2037,6 +2053,12 @@ function setup(imports, register, config) {
      * The CALLER HOLDS THE KEY'S LANE (Edge does, for each whole call), so this runs unlaned - laning it again would
      * wait on itself (see tunnelOperation).
      */
+    /**
+     * A host's check before each request that waits for a press leaves (direct path): fn({msg, slot, subject, code, what})
+     * resolves to go on, or throws to stop it. The CLI's desktop link sets it (cli/desktop.js - the app approves first).
+     */
+    setBeforePress(fn) { beforePress = typeof fn === 'function' ? fn : null; },
+
     async tunnelRequest(msg, slot, data = [], opts = {}) {
       if (!suppliedCtap) throw new Error('tunnelRequest is for a host that reaches the key only through a supplied ctap (the web app)');
       return tunnelOperationNow(msg, slot, Uint8Array.from(data), { ...opts, quiet: true, confirm: null, raw: true });

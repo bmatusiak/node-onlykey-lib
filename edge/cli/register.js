@@ -148,6 +148,8 @@ async function setUpIdentity(io, d, h, given, { wait } = {}) {
     const { subjectFingerprint } = require('../../src/protocol/challenge');
     const made = await makeCertificate(d.okcrypto, require('../../src/crypto/pgp'), {
       label: record.gpgUid, version: 2, expires: record.expires,
+      /* the words the desktop app's approval sheet shows before each of the two presses (okcrypto beforePress) */
+      what: `sign the agent's PGP certificate for gpg://${record.gpgUid}`,
       ...(given.created !== undefined ? { created: given.created } : {}),
       /* each press said with what is sent (the fingerprint a soft key's sheet shows too) - on a hard key this line is all there is */
       onPress: ({ subject } = {}) => d.say(`press on the OnlyKey: sign the agent's PGP certificate for gpg://${record.gpgUid}${subject ? ` (message ${subjectFingerprint(subject)})` : ''}`),

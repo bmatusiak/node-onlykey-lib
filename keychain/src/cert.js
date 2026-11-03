@@ -22,8 +22,9 @@ function uidOf(label) {
   return uid;
 }
 
-function signerFor(okcrypto, identity, version, onPress) {
-  return (digest) => okcrypto.agent.sign(identity, digest, { keyType: ED25519, version, ...(onPress ? { confirm: onPress } : {}) });
+/* what: the press's words for a host that approves it first (okcrypto beforePress - the desktop app's sheet) */
+function signerFor(okcrypto, identity, version, onPress, what) {
+  return (digest) => okcrypto.agent.sign(identity, digest, { keyType: ED25519, version, ...(onPress ? { confirm: onPress } : {}), ...(what ? { what } : {}) });
 }
 
 /**
@@ -31,11 +32,11 @@ function signerFor(okcrypto, identity, version, onPress) {
  * Two presses: the user ID certification and the subkey binding.
  * @param {object} okcrypto  the app's okcrypto service
  * @param {object} openpgp   the fork (node-onlykey-lib/crypto/pgp)
- * @param {{label: string, version?: number, created?: number, expires?: number, onPress?: Function}} o
+ * @param {{label: string, version?: number, created?: number, expires?: number, onPress?: Function, what?: string}} o
  *   expires: seconds after `created` (0 / absent: never)
  * @returns {Promise<{uid: string, armored: string, fingerprint: string, created: number, expires: number, signPublic: Uint8Array}>}
  */
-async function makeCertificate(okcrypto, openpgp, { label, version = 2, created, expires = 0, onPress } = {}) {
+async function makeCertificate(okcrypto, openpgp, { label, version = 2, created, expires = 0, onPress, what } = {}) {
   const uid = uidOf(label);
   const identity = { gpg: uid };
   const signPublic = await okcrypto.agent.publicKey(identity, { keyType: ED25519, version });
@@ -44,7 +45,7 @@ async function makeCertificate(okcrypto, openpgp, { label, version = 2, created,
   const cert = await pgpCert.buildCertificate(openpgp, {
     userId: uid, curve: 'ed25519', created: when, signPublic, ecdhPublic,
     ...(expires ? { expires } : {}),
-    sign: signerFor(okcrypto, identity, version, onPress),
+    sign: signerFor(okcrypto, identity, version, onPress, what),
   });
   return { uid, armored: cert.armored, fingerprint: cert.fingerprint, created: when, expires: expires || 0, signPublic };
 }

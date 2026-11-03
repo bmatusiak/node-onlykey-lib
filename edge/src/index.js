@@ -49,6 +49,8 @@ module.exports = {
   logblocks: require('./logblocks'),
   /* SPEC H7 (2026-10-20): the agent identity the phone keeps - its record, checks, messages and words */
   identity: require('./identity'),
+  /* a computer's press, approved in the app before it reaches the key (2026-11-03) */
+  pressAsk: require('./pressask'),
   /* 2026-10-24: a copy described as budget history - the desktop app's Edge tab for a hard key, and any host */
   history: require('./history'),
   /* B3.0 (2026-10-24): the identity id every Edge record is filed under - the owner key's, no salt */
