@@ -77,9 +77,10 @@ async function stack() {
     userId: gpgIdentity.gpg, curve: 'ed25519', created, signPublic: gpgRaw, ecdhPublic: new Uint8Array(ecdh),
     sign: async (d) => new Uint8Array(crypto.sign(null, Buffer.from(d), keyOf(gpgIdentity).privateKey)),
   });
-  const agent = createEdgeAgent({ device, edge, client: c, ssh: { identity: sshIdentity, name: 'ssh://claude@test', comment: 'claude@test', curve: 'ed25519', raw: sshRaw } });
+  const ssh = { identity: sshIdentity, name: 'ssh://claude@test', comment: 'claude@test', curve: 'ed25519', raw: sshRaw };
+  const agent = createEdgeAgent({ device, edge, client: c, ssh });
   const gpg = { identity: gpgIdentity, name: 'gpg://Claude (agent) <claude@test>', raw: gpgRaw, created, fingerprint: cert.fingerprint, committer: { name: 'Claude (agent)', email: 'claude@test' } };
-  const handlers = controlHandlers({ agent, client: c, ssh: { name: 'ssh://claude@test' }, gpg, openpgp, shimCommand: SHIM, card: 'agent' });
+  const handlers = controlHandlers({ agent, client: c, ssh, gpg, openpgp, shimCommand: SHIM, card: 'agent' });
   const control = await serveControl({ handlers });
   const lastLink = async () => { const hd = await edge.head(); return chain.decodeLink((await edge.pickup(hd.seq, 1))[0].link); };
   /* the latest link of an op: a spent budget is ended right after its last receipt, so the receipt is not always the very last link */
@@ -130,6 +131,20 @@ test('onlykey-js edge budget, then `git commit -S` inside onlykey-js edge exec: 
     cap = capture();
     assert.equal(await okedge.main(['exec', '--head', head, '--reason', 'x', '--', 'git', '--version'], cap.io), 1);
     assert.match(cap.lines.join('\n'), /--head is not the budget's head/);
+  } finally {
+    await s.agent.closeAll();
+    await s.control.close();
+  }
+});
+
+/* WHO A BUDGET HERE IS FOR (2026-11-03: the status line named the card from a name not in scope - every `edge status` threw) */
+test('onlykey-js edge status names the agent card its budgets are asked under', async () => {
+  const s = await stack();
+  try {
+    assert.equal((await s.handlers.status()).identity.card, 'agent');
+    const cap = capture();
+    assert.equal(await okedge.main(['status'], cap.io), 0, cap.lines.join('\n'));
+    assert.match(cap.lines.join('\n'), /^identity: card "agent" · ssh:\/\/claude@test/m);
   } finally {
     await s.agent.closeAll();
     await s.control.close();
