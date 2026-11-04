@@ -410,7 +410,8 @@ export class AgentSessionCore {
       case 'plan_submit': {
         draft();
         need(p.kind === 'card' || p.items.length > 0, 'an empty plan: add an item first');
-        const r = await ROOM_STUB(this.env, p.room).submit(this.shown({ ...p, state: 'submitted' }, me));
+        /* a reason a draft kept (card_new before the owner accepted) is not the submitted plan's */
+        const r = await ROOM_STUB(this.env, p.room).submit(this.shown({ ...p, state: 'submitted', why: null }, me));
         need(r.ok, r.why);
         p.state = 'submitted';
         p.why = null;
