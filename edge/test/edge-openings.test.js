@@ -10,17 +10,29 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { request, approve, devices, chain } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
+const { cardOfScopes } = require('./helpers/cards');
 const { p256 } = require('../../src/vendor/exports/@noble/curves/nist.js');
 
 async function openedBudget(secret, scope = { op: 'sign', slot: 221, cap: 2, identity: 'ssh://claude@nitro16' }) {
   const transport = fakeKey(secret ? { secret } : {});
   const edge = edgeOver(transport);
   await edge.receipt(0, 0, new Uint8Array(32)); /* the fake starts with one owed use */
-  const msg = await request.build({ reason: 'TEST: push the work', scopes: [scope], lifetime: 15 });
-  const r = await approve.approveRequest(msg, {
-    edge, from: 'pc-nitro16', seen: new Set(), ask: async () => 'approve',
-    verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
-  });
+  /* under an agent card for its identity (approve.js) */
+  const msg = await request.build({ reason: 'TEST: push the work', scopes: [scope], lifetime: 15, card: 'agent' });
+  /*
+   * A STORED SLOT IS NO AGENT CARD'S, so no host opens a budget on one since cards (approve.js, 2026-11-03); the key itself
+   * still does, and the openings already on chains from before are read by the same rule - opened here as a host would
+   * have, with the key's grant and the fields approveRequest returns.
+   */
+  const r = scope.identity
+    ? await approve.approveRequest(msg, {
+      edge, from: 'pc-nitro16', seen: new Set(), cardOf: await cardOfScopes([scope]), ask: async () => 'approve',
+      verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
+    })
+    : await (async () => {
+      const g = await edge.grant({ scopes: request.grantScopes(msg), reasonHash: request.reasonHash(msg.reason), verifiedHead: (await edge.head()).head, ttlMinutes: msg.lifetime });
+      return { ok: true, budget: { grantId: g.grantId, uses: g.uses, genesis: Buffer.from(g.genesis).toString('hex'), lifetime: g.lifetime, checkpoint: { signature: Buffer.from(g.checkpoint.signature).toString('hex') } } };
+    })();
   assert.equal(r.ok, true, JSON.stringify(r));
   const { publicKey, deviceId } = await edge.publicKey();
   const h = await edge.head();

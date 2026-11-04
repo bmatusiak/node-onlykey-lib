@@ -5,10 +5,14 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const { testCard, cardOfFor } = require('./helpers/cards');
 const { approve, client, chain, grants, note, codes } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
 
 const ID = 'ssh://agent@nitro16';
+/* every budget is asked under an agent card (approve.js) */
+let cardOf = null;
+test.before(async () => { cardOf = cardOfFor(await testCard({ label: 'agent', ssh: ID })); });
 
 async function setup(opts = {}) {
   const transport = fakeKey(opts);
@@ -18,7 +22,7 @@ async function setup(opts = {}) {
   const channel = {
     async send(msg) {
       if (msg.type === note.TYPE) return { ok: true };
-      const r = await approve.approveRequest(msg, { edge, from: 'pc-nitro16', seen, ask: async () => 'approve',
+      const r = await approve.approveRequest(msg, { edge, from: 'pc-nitro16', seen, cardOf, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000 });
       return r.dropped ? null : r;
     },
@@ -38,7 +42,7 @@ test('intentOf: the first 16 bytes of SHA256("OKEDGE-INTENT-v1" || UTF-8 text) -
 
 test('a paid use carries its intent in bytes 47-62, version 1 in 63', async () => {
   const { edge, c, sign } = await setup();
-  const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: ID }], ttlMinutes: 10 });
+  const b = await c.request({ card: 'agent', reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: ID }], ttlMinutes: 10 });
   const u = await b.use(Uint8Array.from([1]), sign, { reason: 'git push origin master' });
   assert.equal(u.link.paid, true);
   const f = await linkAt(edge, u.link.seq);
@@ -50,7 +54,7 @@ test('a paid use carries its intent in bytes 47-62, version 1 in 63', async () =
 
 test('budget or no go (Brad, 2026-10-06, R13b): a TX start with an intent and nothing able to pay is refused - no sign, no link', async () => {
   const { edge, c, sign } = await setup();
-  const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: ID }], ttlMinutes: 10 });
+  const b = await c.request({ card: 'agent', reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: ID }], ttlMinutes: 10 });
   await edge.hold(b.grantId);
   const before = (await edge.head()).seq;
   let signed = false;
@@ -63,7 +67,7 @@ test('budget or no go (Brad, 2026-10-06, R13b): a TX start with an intent and no
 
 test('a TX start is refused while a receipt is owed - intent or not (R13a, R13b)', async () => {
   const { edge, c, sign } = await setup();
-  const b = await c.request({ reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: ID }], ttlMinutes: 10 });
+  const b = await c.request({ card: 'agent', reason: 'push', scopes: [{ op: 'sign', slot: 222, cap: 3, identity: ID }], ttlMinutes: 10 });
   await b.use(Uint8Array.from([3]), sign, { reason: 'one' });
   const h = await edge.head();
   const subject = grants.requestSubject(Uint8Array.from([4]));

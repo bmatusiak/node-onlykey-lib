@@ -10,13 +10,18 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { approve, client, plan: planLib, codes, chain } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
+const { testCard, cardOfFor } = require('./helpers/cards');
+
+/* a plan is asked under an agent card (approve.js; plan.card): its ssh and gpg keys */
+let cardOf = null;
+test.before(async () => { cardOf = cardOfFor(await testCard({ label: 'agent', ssh: 'ssh://test@example.com', gpg: 'A <a@x>' })); });
 
 function host(edge, { answer = 'approve', views = [] } = {}) {
   const seen = new Set();
   return {
     async send(msg) {
       const r = await approve.approveRequest(msg, {
-        edge, from: 'agent:test', seen,
+        edge, from: 'agent:test', seen, cardOf,
         ask: async (view) => { views.push(view); return answer; },
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }),
         timeoutMs: 2000,
@@ -60,7 +65,7 @@ function room() {
 }
 
 const PLAN = {
-  id: 'p1', title: 'sign the release notes', agent: { id: 'a1', name: 'test agent' },
+  id: 'p1', title: 'sign the release notes', agent: { id: 'a1', name: 'test agent' }, card: 'agent',
   items: [
     { item: 1, op: 'sign', key: { kind: 'ssh', identity: 'ssh://test@example.com' }, reason: 'the notes', data: 'notes v1' },
     { item: 2, op: 'sign', key: { kind: 'ssh', identity: 'test@example.com' }, reason: 'the tag, once it is made', data: null, held: true },
@@ -120,7 +125,7 @@ test('what a device cannot run is refused per item, before the budget: a decrypt
   const r = room();
   const views = [];
   const plan = {
-    id: 'p2', title: 'mixed', agent: { id: 'a1', name: 'test agent' },
+    id: 'p2', title: 'mixed', agent: { id: 'a1', name: 'test agent' }, card: 'agent',
     items: [
       { item: 1, op: 'decrypt', key: { kind: 'gpg', identity: 'A <a@x>' }, reason: 'read it', data: 'x' },
       { item: 2, op: 'sign', key: { kind: 'pgp', identity: 'A <a@x>' }, reason: 'bad kind', data: 'x' },

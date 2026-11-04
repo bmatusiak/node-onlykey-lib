@@ -8,6 +8,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const { testCard, cardOfFor } = require('./helpers/cards');
 const crypto = require('crypto');
 
 const openpgp = require('../../src/vendor/openpgp/openpgp.js');
@@ -19,6 +20,9 @@ const certLib = require('../../keychain/src/cert');
 const hex = (b) => Buffer.from(b).toString('hex');
 const UID = 'Claude (test) 2026 <claude+agent@test>';
 const LABEL = `gpg://${UID}`;
+/* every budget is asked under an agent card (approve.js): this gpg identity's */
+let cardOf = null;
+test.before(async () => { cardOf = cardOfFor(await testCard({ label: 'agent', gpg: UID })); });
 
 async function stack() {
   const transport = fakeKey();
@@ -47,7 +51,7 @@ async function stack() {
   const channel = {
     async send(msg) {
       const r = await approve.approveRequest(msg, {
-        edge, from: 'pc-nitro16', seen, ask: async () => 'approve',
+        edge, from: 'pc-nitro16', seen, cardOf, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
       });
       return r.dropped ? null : r;
@@ -55,7 +59,7 @@ async function stack() {
   };
   const c = client.createEdgeClient({ edge, channel });
   /* a live budget that covers THIS label */
-  const b = await c.request({ reason: 'work', scopes: [{ op: 'sign', slot: 221, cap: 4, identity: LABEL }], ttlMinutes: 60 });
+  const b = await c.request({ card: 'agent', reason: 'work', scopes: [{ op: 'sign', slot: 221, cap: 4, identity: LABEL }], ttlMinutes: 60 });
   const links = async (n) => {
     const h = await edge.head();
     return (await edge.pickup(h.seq - n + 1, n)).map((r) => chain.decodeLink(r.link));

@@ -24,6 +24,7 @@ const openpgp = require('../../src/vendor/openpgp/openpgp.js');
 const pgpCert = require('../../src/crypto/pgp-cert.js');
 const { approve, client, codes, chain, grants } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
+const { testCard, cardOfFor } = require('./helpers/cards');
 const agentProto = require('../../src/protocol/agent');
 const { createEdgeAgent, controlHandlers } = require('../cli/agent');
 const { serveControl } = require('../cli/control');
@@ -51,12 +52,14 @@ async function stack() {
     },
   };
   const seen = new Set();
+  /* the agent's card: its budgets are asked under it (approve.js) - its ssh and gpg keys */
+  const cardOf = cardOfFor(await testCard({ label: 'agent', ssh: 'ssh://claude@test', gpg: 'Claude (agent) <claude@test>' }));
   const notes = []; /* what the agent told the phone (EDGE_NOTE) */
   const channel = {
     async send(msg) {
       if (msg.type === require('../src').note.TYPE) { notes.push(msg); return { ok: true }; }
       const r = await approve.approveRequest(msg, {
-        edge, from: 'pc-nitro16', seen, ask: async () => 'approve',
+        edge, from: 'pc-nitro16', seen, cardOf, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
       });
       return r.dropped ? null : r;
@@ -76,7 +79,7 @@ async function stack() {
   });
   const agent = createEdgeAgent({ device, edge, client: c, ssh: { identity: sshIdentity, name: 'ssh://claude@test', comment: 'claude@test', curve: 'ed25519', raw: sshRaw } });
   const gpg = { identity: gpgIdentity, name: 'gpg://Claude (agent) <claude@test>', raw: gpgRaw, created, fingerprint: cert.fingerprint, committer: { name: 'Claude (agent)', email: 'claude@test' } };
-  const handlers = controlHandlers({ agent, client: c, ssh: { name: 'ssh://claude@test' }, gpg, openpgp, shimCommand: SHIM });
+  const handlers = controlHandlers({ agent, client: c, ssh: { name: 'ssh://claude@test' }, gpg, openpgp, shimCommand: SHIM, card: 'agent' });
   const control = await serveControl({ handlers });
   const lastLink = async () => { const hd = await edge.head(); return chain.decodeLink((await edge.pickup(hd.seq, 1))[0].link); };
   /* the latest link of an op: a spent budget is ended right after its last receipt, so the receipt is not always the very last link */

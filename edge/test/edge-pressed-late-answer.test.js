@@ -76,9 +76,11 @@ test('a budget request whose press the key refused says so - not "invalid", not 
   const edge = edgeOver(t);
   await edge.receipt(0, 0, new Uint8Array(32)); /* nothing owed: the grant reaches the key */
   t.setStale(report([...Buffer.from('Error button press was not accepted')]));
-  const msg = await request.build({ reason: 'late presser', scopes: [{ op: 'sign', slot: 1, cap: 1 }], lifetime: 10 });
+  /* the agent's own key, under its card (approve.js; a stored slot is no card's) */
+  const scopes = [{ op: 'sign', slot: 222, cap: 1, identity: 'ssh://agent@nitro16' }];
+  const msg = await request.build({ reason: 'late presser', scopes, lifetime: 10, card: 'agent' });
   const r = await approve.approveRequest(msg, {
-    edge, from: 'pc-nitro16', seen: new Set(), ask: async () => 'approve',
+    edge, from: 'pc-nitro16', seen: new Set(), cardOf: await require('./helpers/cards').cardOfScopes(scopes), ask: async () => 'approve',
     verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
   });
   assert.equal(r.refusal, 'timeout');

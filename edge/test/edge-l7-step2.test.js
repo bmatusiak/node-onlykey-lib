@@ -12,9 +12,16 @@ const assert = require('node:assert');
 const { request, approve, client, grants, wire, codes } = require('../src');
 const { sha256 } = require('../../src/vendor/exports/@noble/hashes/sha2.js');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
+const { testCard, cardOfFor } = require('./helpers/cards');
 
 const BRAD = 'ssh://bmatusiak@localhost';
 const AGENT_ID = 'ssh://agent@nitro16';
+/* the agent card's gpg key, as a scope names it (a derived code, slot 221) */
+const AGENT_GPG = 'Agent (nitro16) <agent@nitro16>';
+
+/* every budget is asked under an agent card (approve.js): the agent's ssh + gpg, and one for the person's own ssh identity */
+let cardOf = null;
+test.before(async () => { cardOf = cardOfFor(await testCard({ label: 'agent', ssh: AGENT_ID, gpg: AGENT_GPG }), await testCard({ label: 'brad', ssh: BRAD })); });
 const hex = (b) => Buffer.from(b).toString('hex');
 const enc = (s) => new TextEncoder().encode(s);
 
@@ -30,7 +37,7 @@ function phone(edge, { answer = 'approve', from = 'pc-nitro16', views = [], gran
     async send(msg, as = from) {
       const spy = { ...edge, grant: async (args) => { granted.push(args); return edge.grant(args); } };
       const r = await approve.approveRequest(msg, {
-        edge: spy, from: as, seen,
+        edge: spy, from: as, seen, cardOf,
         ask: async (view) => { views.push(view); return answer; },
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }),
         budgetOf: (id) => budgets.get(id) || null,
@@ -151,7 +158,7 @@ test('continue: "continues <budget>" - the same scopes, new uses and lifetime, o
   const p = phone(edge);
   const store = memoryStore();
   const c = client.createEdgeClient({ edge, channel: p, store });
-  const first = await c.request({ reason: 'release 0.0.6', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }, { op: 'sign', slot: 2, cap: 1 }], ttlMinutes: 30 });
+  const first = await c.request({ card: 'agent', reason: 'release 0.0.6', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }, { op: 'sign', slot: 221, cap: 1, identity: `gpg://${AGENT_GPG}` }], ttlMinutes: 30 });
   await first.end();
   const next = await c.continue(first.grantId, { caps: [5, 1], ttlMinutes: 120 });
   assert.notEqual(next.grantId, first.grantId, 'a new budget');
@@ -159,7 +166,8 @@ test('continue: "continues <budget>" - the same scopes, new uses and lifetime, o
   const v = p.views[1];
   assert.equal(v.continues, first.grantId, 'the sheet says what it continues');
   assert.equal(v.lifetime, 120);
-  assert.deepEqual(v.scopes.map((s) => [s.op, s.slot, s.identity, s.cap]), [['sign', 222, AGENT_ID, 5], ['sign', 2, undefined, 1]]);
+  assert.deepEqual(v.scopes.map((s) => [s.op, s.slot, s.identity, s.cap]), [['sign', 222, AGENT_ID, 5], ['sign', 221, `gpg://${AGENT_GPG}`, 1]]);
+  assert.equal(v.card, 'agent', 'a continue is asked under the same agent card');
   assert.equal(p.views[0].continues, null, 'a new budget continues nothing');
 });
 
@@ -168,12 +176,12 @@ test('continue: the app refuses one that changes the scopes, names a budget it n
   const { edge } = await readyKey();
   const p = phone(edge);
   const c = client.createEdgeClient({ edge, channel: p, store: memoryStore() });
-  const first = await c.request({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 10 });
-  const send = async (as, scopes, cont) => p.send(await request.build({ reason: 'r', scopes, lifetime: 10, continueOf: cont }), as);
-  const brad = await send('pc-nitro16', [{ op: 'sign', slot: 222, cap: 1, identity: BRAD }], first.grantId);
+  const first = await c.request({ card: 'agent', reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 10 });
+  const send = async (as, scopes, cont, card = 'agent') => p.send(await request.build({ reason: 'r', scopes, lifetime: 10, continueOf: cont, card }), as);
+  const brad = await send('pc-nitro16', [{ op: 'sign', slot: 222, cap: 1, identity: BRAD }], first.grantId, 'brad');
   assert.equal(brad.refusal, 'invalid');
   assert.match(brad.detail, /keeps the scopes/);
-  const wider = await send('pc-nitro16', [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }, { op: 'decrypt', slot: 1, cap: 1 }], first.grantId);
+  const wider = await send('pc-nitro16', [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }, { op: 'sign', slot: 221, cap: 1, identity: `gpg://${AGENT_GPG}` }], first.grantId);
   assert.match(wider.detail, /keeps the scopes/);
   assert.match((await send('pc-nitro16', [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], 0xdead)).detail, /no budget/);
   await first.end();
@@ -193,7 +201,7 @@ test('the app makes the labels and the reason hash itself - hashes carried by th
   const p = phone(edge, { grants: granted });
   const reason = 'push bm-ok/ok-rn';
   const scopes = [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }];
-  const msg = await request.build({ reason, scopes, lifetime: 60 });
+  const msg = await request.build({ reason, scopes, lifetime: 60, card: 'agent' });
   /* forged hashes riding along: a reason hash, labels, a label per scope (BRAD's) - extra fields, so the request is still well formed */
   const FORGED_REASON = hex(sha256(enc('sign everything')));
   const FORGED_LABEL = hex(grants.identityLabel(BRAD));
@@ -227,9 +235,9 @@ test('the app makes the labels and the reason hash itself - hashes carried by th
 
 test('a sheet that could not offer Approve (the copy did not verify) answers copy_unverified - nothing reaches the key', async () => {
   const { edge } = await readyKey();
-  const msg = await request.build({ reason: 'r', scopes: [{ op: 'sign', slot: 1, cap: 1 }], lifetime: 10 });
+  const msg = await request.build({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], lifetime: 10, card: 'agent' });
   const r = await approve.approveRequest(msg, {
-    edge: { ...edge, grant: async () => assert.fail('sent to the key') }, seen: new Set(),
+    edge: { ...edge, grant: async () => assert.fail('sent to the key') }, seen: new Set(), cardOf,
     ask: async () => 'copy_unverified', verifyCopy: async () => assert.fail('the copy is checked again only after a Yes'),
   });
   assert.deepEqual(r, { ok: false, refusal: 'copy_unverified' });
@@ -250,10 +258,10 @@ test('the key giving up on the press ("Timeout occured ...") is a timeout - the 
   };
   let edge = null;
   require('../plugin')({ transport }, (err, s) => { if (err) throw err; edge = s.edge; });
-  const msg = await request.build({ reason: 'r', scopes: [{ op: 'sign', slot: 1, cap: 1 }], lifetime: 10 });
+  const msg = await request.build({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], lifetime: 10, card: 'agent' });
   /* the head read before the grant answers normally - only the press times out */
   const r = await approve.approveRequest(msg, {
-    edge: { ...edge, head: async () => ({ owed: 0, live: [] }) }, seen: new Set(), ask: async () => 'approve',
+    edge: { ...edge, head: async () => ({ owed: 0, live: [] }) }, seen: new Set(), cardOf, ask: async () => 'approve',
     verifyCopy: async () => ({ ok: true, head: new Uint8Array(32) }), timeoutMs: 2000,
   });
   assert.equal(r.refusal, 'timeout');
@@ -265,10 +273,10 @@ test('continue: a continue of a LIVE budget is refused still_live; client.contin
   const p = phone(edge);
   const c = client.createEdgeClient({ edge, channel: p, store: memoryStore() });
   const scopes = [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }];
-  const first = await c.request({ reason: 'release', scopes, ttlMinutes: 30 });
+  const first = await c.request({ card: 'agent', reason: 'release', scopes, ttlMinutes: 30 });
   /* sent by hand while it is live: refused, before the sheet */
   const views = p.views.length;
-  const live = await p.send(await request.build({ reason: 'release', scopes, lifetime: 30, continueOf: first.grantId }));
+  const live = await p.send(await request.build({ reason: 'release', scopes, lifetime: 30, continueOf: first.grantId, card: 'agent' }));
   assert.equal(live.refusal, 'still_live');
   assert.equal(p.views.length, views, 'a still-live continue never reached the sheet');
   /* the client's continue: revoke (no press), then the request */
@@ -283,9 +291,9 @@ test('the sheet is told what already covers the request: "this agent already has
   const { edge } = await readyKey();
   const covered = [{ identity: AGENT_ID, slot: 222, usesLeft: 3, endsAt: 1700000000000, grantId: 7, sameComputer: true }];
   const views = [];
-  const msg = await request.build({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], lifetime: 10 });
+  const msg = await request.build({ reason: 'r', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], lifetime: 10, card: 'agent' });
   await approve.approveRequest(msg, {
-    edge, seen: new Set(), coverOf: async (m) => (m === msg ? covered : []),
+    edge, seen: new Set(), cardOf, coverOf: async (m) => (m === msg ? covered : []),
     ask: async (v) => { views.push(v); return 'decline'; }, verifyCopy: async () => assert.fail('declined'),
   });
   assert.deepEqual(views[0].covered, covered);

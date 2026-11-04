@@ -12,7 +12,8 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { client, identity } = require('../src');
+const { client, identity, agents } = require('../src');
+const bucketHome = require('../../bucket/cli/home');
 const { createLocalHost, identityKv } = require('../cli/local-host');
 const copy = require('../cli/copy');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
@@ -27,9 +28,17 @@ const record = () => ({
   cert: { armored: ARMORED, fingerprint: '7fbf276c85dd192794b46cc4f75a92949d5603ca', created: 1791085347, expires: 31536000, signPublic: 'AB'.repeat(32) },
 });
 
-/* a fresh Edge home in a temp folder (its own bucket), a fake key with one link, and a scripted person */
-async function setup({ answers = [] } = {}) {
+/*
+ * a fresh Edge home in a temp folder (its own bucket, and the identity bucket the agent cards live in), a fake key with one
+ * link, and a scripted person. card: the agent's card made first, the real way - EDGE_AGENT_CREATE to this host, a y, the
+ * key's press - so its budgets are asked under it (approve.js); its y/N and lines are not counted in what the test asserts.
+ */
+const BUCKET_ID = 'ab'.repeat(16);
+test.afterEach(() => { copy.useIdentityBucket(null); bucketHome.setRoot(null); });
+async function setup({ answers = [], card = false } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-local-'));
+  bucketHome.setRoot(fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-local-root-')));
+  copy.useIdentityBucket({ id: BUCKET_ID, net: 'live' });
   const transport = fakeKey();
   const edge = edgeOver(transport);
   await edge.receipt(0, 0, new Uint8Array(32));
@@ -40,6 +49,13 @@ async function setup({ answers = [] } = {}) {
     confirm: async (q) => { asked.push(q); return answers.length ? answers.shift() : false; },
   });
   const store = { m: new Map(), async get(k) { return this.m.get(k) || null; }, async set(k, v) { this.m.set(k, v); } };
+  if (card) {
+    answers.unshift(true);
+    const made = await host.send(agents.buildCreate({ info: agents.infoFromRecord(record(), 'agent'), certs: agents.certsFromRecord(record()) }));
+    assert.equal(made.ok, true, `the agent card: ${JSON.stringify(made)}`);
+    asked.length = 0;
+    said.length = 0;
+  }
   return { home, edge, host, asked, said, c: client.createEdgeClient({ edge, channel: host, store }) };
 }
 
@@ -66,8 +82,8 @@ test('identity: none at first; kept on y, not kept on n; GET reads back what was
 });
 
 test('budget: shown here, a y, the press - opened, and its opening kept with this computer\'s copy', async () => {
-  const { c, edge, home, asked, said } = await setup({ answers: [true] });
-  const b = await c.request({ reason: 'release 0.0.7', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }], ttlMinutes: 30 });
+  const { c, edge, home, asked, said } = await setup({ answers: [true], card: true });
+  const b = await c.request({ card: 'agent', reason: 'release 0.0.7', scopes: [{ op: 'sign', slot: 222, cap: 2, identity: AGENT_ID }], ttlMinutes: 30 });
   assert.ok(b.grantId > 0 && b.uses === 2, 'the budget opened');
   assert.equal(asked.length, 1, 'one y/N');
   assert.ok(said.some((l) => l.includes('release 0.0.7')), 'the reason shown');
@@ -78,17 +94,17 @@ test('budget: shown here, a y, the press - opened, and its opening kept with thi
 });
 
 test('budget: a second one after the first - R27 checks the copy WITH the first opening, and passes', async () => {
-  const { c, asked } = await setup({ answers: [true, true] });
-  const first = await c.request({ reason: 'one', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 30 });
+  const { c, asked } = await setup({ answers: [true, true], card: true });
+  const first = await c.request({ card: 'agent', reason: 'one', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 30 });
   await first.end();
-  const second = await c.request({ reason: 'two', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 30 });
+  const second = await c.request({ card: 'agent', reason: 'two', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 30 });
   assert.ok(second.grantId > first.grantId);
   assert.equal(asked.length, 2);
 });
 
 test('budget: a No opens nothing - declined, and the key never asked for a press', async () => {
-  const { c, said } = await setup({ answers: [false] });
-  await assert.rejects(c.request({ reason: 'no thanks', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 30 }), /declined/);
+  const { c, said } = await setup({ answers: [false], card: true });
+  await assert.rejects(c.request({ card: 'agent', reason: 'no thanks', scopes: [{ op: 'sign', slot: 222, cap: 1, identity: AGENT_ID }], ttlMinutes: 30 }), /declined/);
   assert.ok(!said.some((l) => /PRESS the key/.test(l)), 'no press asked');
 });
 

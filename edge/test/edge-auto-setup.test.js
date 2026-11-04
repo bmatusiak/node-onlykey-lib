@@ -14,6 +14,9 @@ const os = require('os');
 const path = require('path');
 const reg = require('../cli/register');
 const identity = require('../src/identity');
+const agents = require('../src/agents');
+const bucketHome = require('../../bucket/cli/home');
+const { testCard } = require('./helpers/cards');
 
 /* git's global config pointed at a scratch file for the test (GIT_CONFIG_GLOBAL) */
 function withGit(text, fn) {
@@ -28,11 +31,25 @@ const kept = {
   ssh: 'ssh://claude@nitro16', gpgUid: 'Claude (nitro16) <bmatusiak+agent@gmail.com>', committer: null, expires: 31536000,
   cert: { armored: ARMORED, fingerprint: '7fbf276c85dd192794b46cc4f75a92949d5603ca', created: 1791085347, expires: 31536000, signPublic: 'AB'.repeat(32) },
 };
-/* a host (this computer for a key on USB) that keeps `record`, and what it was sent */
-const hostWith = (record) => {
+/*
+ * a host (this computer for a key on USB) that keeps `record` - the identity of before cards - and `card` ({card, certs},
+ * or none), and what it was sent: the types, and the CREATE it was asked (the card it would certify at a press)
+ */
+const hostWith = (record, card = null) => {
   const sent = [];
-  return { sent, channel: { local: true, send: async (m) => { sent.push(m.type); return m.type === identity.GET_TYPE ? { ok: true, record } : { ok: true }; } } };
+  const created = [];
+  const send = async (m) => {
+    sent.push(m.type);
+    if (m.type === identity.GET_TYPE) return { ok: true, record };
+    if (m.type === agents.CREATE_TYPE) { created.push(m); return { ok: true, agent: { label: m.info.label } }; }
+    if (m.type === agents.GET_TYPE) return card && m.label === card.card.thing.label ? { ok: true, agent: card } : { ok: false, refusal: 'invalid', detail: `no agent identity "${m.label}"` };
+    return { ok: true };
+  };
+  return { sent, created, channel: { local: true, send } };
 };
+/* this computer's Edge home, where it keeps its card's label */
+const homeDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'okedge-home-'));
+const cardLabel = (home) => bucketHome.kv(bucketHome.edgeAt(home, 'card')).getItem('card');
 const h = { usage: (m) => Object.assign(new Error(m), { usage: true }), CliError: Error };
 const io = { out: () => {}, err: () => {} };
 
@@ -46,16 +63,39 @@ test('no git email: no default - an email is never guessed', () => withGit('[use
   assert.equal(reg.defaultIdentity(), null);
 }));
 
-test('an identity the host keeps stays as it is: nothing made, nothing sent but the question', async () => {
+/*
+ * THE OLD IDENTITY BECOMES A CARD (Brad, 2026-11-03: "the OLD way is still there, and the new way is not used yet"): the
+ * identity the host kept before cards is sent as this computer's agent card - its labels and its certificate as they are
+ * (nothing remade, the same gpg fingerprint), named for its ssh name - and the label is kept here.
+ */
+test('the identity the host keeps becomes this computer\'s agent card: its labels and certificate kept, named for its ssh name', async () => {
   const host = hostWith(kept);
-  const r = await reg.setUpIdentity(io, { channel: host.channel, say: () => {} }, h, {});
+  const home = homeDir();
+  const r = await reg.setUpIdentity(io, { channel: host.channel, say: () => {}, home }, h, {});
+  assert.equal(r.changed, true);
+  assert.deepEqual(host.sent, [identity.GET_TYPE, agents.CREATE_TYPE], 'the old record asked, then the card - no certificate made');
+  const [m] = host.created;
+  assert.equal(m.info.label, 'claude@nitro16');
+  assert.deepEqual(m.info.derive, { ssh: kept.ssh, gpg: kept.gpgUid });
+  assert.equal(m.info.created, kept.cert.created, 'the created time the gpg key and its fingerprint are made from');
+  assert.equal(m.certs.gpg.fingerprint, kept.cert.fingerprint.toUpperCase());
+  assert.equal(cardLabel(home), 'claude@nitro16', 'the label kept here');
+  assert.equal(r.record.label, 'claude@nitro16');
+});
+
+test('a card this computer already has stays as it is: nothing made, nothing sent but the questions', async () => {
+  const card = await testCard({ label: 'claude@nitro16', ssh: kept.ssh, gpg: kept.gpgUid, committer: kept.committer, created: kept.cert.created, expires: kept.expires });
+  const host = hostWith(kept, { card, certs: agents.certsFromRecord(kept) });
+  const home = homeDir();
+  bucketHome.kv(bucketHome.edgeAt(home, 'card')).setItem('card', 'claude@nitro16');
+  const r = await reg.setUpIdentity(io, { channel: host.channel, say: () => {}, home }, h, {});
   assert.equal(r.changed, false);
   assert.equal(r.record.cert.fingerprint.toLowerCase(), kept.cert.fingerprint);
-  assert.deepEqual(host.sent, [identity.GET_TYPE]);
+  assert.deepEqual(host.sent, [identity.GET_TYPE, agents.GET_TYPE]);
 });
 
 test('none kept and no git email: it stops and says what to set - nothing sent to keep', () => withGit('', async () => {
   const host = hostWith(null);
-  await assert.rejects(reg.setUpIdentity(io, { channel: host.channel, say: () => {} }, h, {}), /git config --global user\.name \/ user\.email/);
+  await assert.rejects(reg.setUpIdentity(io, { channel: host.channel, say: () => {}, home: homeDir() }, h, {}), /git config --global user\.name \/ user\.email/);
   assert.deepEqual(host.sent, [identity.GET_TYPE]);
 }));

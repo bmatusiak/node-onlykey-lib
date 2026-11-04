@@ -19,6 +19,7 @@ const fs = require('fs');
 const net = require('net');
 const { approve, client, codes, chain } = require('../src');
 const { fakeKey, edgeOver } = require('./helpers/fake-edge-key');
+const { testCard, cardOfFor } = require('./helpers/cards');
 const agentProto = require('../../src/protocol/agent');
 const wire = require('../../cli/ssh-wire');
 const bindLib = require('../../cli/ssh-session-bind');
@@ -88,12 +89,14 @@ async function setup({ cap = 4 } = {}) {
     },
   };
   const seen = new Set();
+  /* the agent's card: its budgets are asked under it (approve.js) */
+  const cardOf = cardOfFor(await testCard({ label: 'agent', ssh: SSH_NAME, gpg: GPG_IDENTITY.gpg }));
   /* the phone remembers what it opened, for which paired computer - a continue must match it (approve budgetOf) */
   const opened = new Map();
   const channel = {
     async send(msg) {
       const r = await approve.approveRequest(msg, {
-        edge, from: 'pc-nitro16', seen, ask: async () => 'approve',
+        edge, from: 'pc-nitro16', seen, cardOf, ask: async () => 'approve',
         verifyCopy: async () => ({ ok: true, head: (await edge.head()).head }), timeoutMs: 2000,
         budgetOf: (id) => opened.get(id) || null,
       });
@@ -105,7 +108,7 @@ async function setup({ cap = 4 } = {}) {
   const saved = new Map();
   const store = { get: async (k) => saved.get(k) ?? null, set: async (k, v) => { saved.set(k, v); }, delete: async (k) => { saved.delete(k); } };
   const c = client.createEdgeClient({ edge, channel, store });
-  const b = await c.request({ reason: 'work: push and sign', scopes: [{ op: 'sign', slot: 221, cap, identity: SSH_NAME }], ttlMinutes: 60 });
+  const b = await c.request({ card: 'agent', reason: 'work: push and sign', scopes: [{ op: 'sign', slot: 221, cap, identity: SSH_NAME }], ttlMinutes: 60 });
   const raw = await device.publicKey(SSH_IDENTITY);
   const h = host();
   const logs = [];
