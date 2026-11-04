@@ -191,7 +191,26 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
          * matches the started intent, and beside the link afterwards.
          */
         if (said) await sendNote({ seq: before.seq === null ? 0 : before.seq + 1, reason: said });
-        const result = await op(data);
+        let result;
+        try {
+          result = await op(data);
+        } catch (e) {
+          /*
+           * A USE THE KEY PAID WHOSE ANSWER WAS LOST (box, 2026-11-04: an RSA sign the budget paid, "vendor-bridge: no
+           * answer in 30000 ms" - the next TX start was refused receipt-owed, and nothing here knew of the debt): this
+           * use's link is looked for anyway; one that owes a receipt is owed here too (pending()), so the caller files
+           * it (R16) before anything else is asked. The error stands.
+           */
+          const l = await edge.pickup(before.seq === null ? 0 : before.seq + 1, 1).then((r) => r[0], () => null);
+          const f = l && chain.decodeLink(l.link);
+          if (f && same(f.subject, subject) && (f.flags & codes.FLAG.OWES_RECEIPT)) {
+            state.owed.push(f.seq);
+            if (f.decision === codes.DECISION.SELF_PRESS && f.grantId === record.grantId) state.spent = Math.max(state.spent, f.grantStep);
+            state.head = l.head;
+            await save();
+          }
+          throw e;
+        }
         /*
          * THIS USE'S LINK, WITHOUT A THIRD HEAD READ (Brad, 2026-10-06: each key
          * request is ~0.3-0.5 s over Bluetooth). It is the link after the head the

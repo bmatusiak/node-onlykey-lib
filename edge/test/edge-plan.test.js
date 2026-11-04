@@ -182,6 +182,33 @@ test('a stored RSA slot: the scope names the slot and no identity, the key signs
   assert.equal((await paidLinks(edge)).length, 2, 'both paid by the budget');
 });
 
+test('a sign the key paid whose answer was lost: its receipt is still filed (R16), so the next item runs; the plan ends failed', async () => {
+  const { transport, edge } = await readyKey();
+  let n = 0;
+  /* item 1: the key pays, the answer never comes; item 2: as usual */
+  const okcrypto = {
+    async sign(slot, data) {
+      transport.use(data, { slot });
+      if (++n === 1) throw new Error('vendor-bridge: no answer in 30000 ms');
+      return new Uint8Array(512).fill(5);
+    },
+  };
+  const d = [new Uint8Array(64).fill(1), new Uint8Array(64).fill(2)];
+  const key = { kind: 'rsa', slot: 3, bits: 4096 };
+  const plan = { id: 'p4', title: 'lost answer', agent: { id: AGENT, name: 'release signer' }, card: 'agent',
+    items: d.map((x, i) => ({ item: i + 1, op: 'sign', key, reason: `sig ${i + 1}`, fingerprint: planLib.fingerprintOf(x) })) };
+  const r = room();
+  const end = run(plan, edge, transport, r, { signers: planLib.planSigners({ okcrypto }) });
+  await r.state('running');
+  d.forEach((x, i) => r.tell({ ev: 'data', item: i + 1, data: Buffer.from(x).toString('base64'), encoding: 'base64' }));
+  assert.equal(await end, 'failed');
+  const last = r.updates[r.updates.length - 1];
+  assert.match(last.results[0].refusal, /no answer in 30000 ms/);
+  assert.ok(last.results[1].signature, 'item 2 signed after item 1\'s receipt');
+  assert.deepEqual(last.receipts.map((x) => x.code), ['AGENT_ERROR', 'OK'], 'both paid uses receipted');
+  assert.equal((await edge.head()).owed, false, 'nothing owed at the end');
+});
+
 test('the agent card is the agent\'s own: another agent\'s card, or a computer\'s, opens no budget', async () => {
   for (const [card, agent, why] of [['agent', OTHER, /another agent's card/], ['computer', AGENT, /an MCP agent asks under a card made for it/]]) {
     const { transport, edge } = await readyKey();
