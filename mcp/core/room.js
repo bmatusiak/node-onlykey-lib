@@ -397,14 +397,16 @@ export class RoomCore {
     return { ok: true };
   }
 
-  async fill(planId, item, data) {
+  /*
+   * AN ITEM'S DATA (plan_data, once its budget is open): passed on to the devices and never kept here - the room's mirror
+   * of the plan holds the fingerprints only (mcp.js shown); the device that runs it checks the data against them.
+   */
+  async data(planId, item, data) {
     const plan = await this.ctx.storage.get(`plan:${planId}`);
-    if (!plan || !['running', 'paused'].includes(plan.state)) return { ok: false, why: 'the plan is not running here' };
+    if (!plan || plan.state !== 'running') return { ok: false, why: 'the plan is not running here' };
     if (!this.joined().length) return { ok: false, why: 'no owner device is online' };
-    const it = plan.items.find((x) => x.item === item);
-    if (it) Object.assign(it, data);
-    await this.ctx.storage.put(`plan:${planId}`, plan);
-    this.tell({ ev: 'fill', plan: planId, item, ...data });
+    if (!plan.items.some((x) => x.item === item)) return { ok: false, why: `no item ${item} in the plan` };
+    this.tell({ ev: 'data', plan: planId, item, data: data.data, encoding: data.encoding });
     return { ok: true };
   }
 
@@ -431,7 +433,7 @@ export class RoomCore {
       /* block and remove take effect at once: the agent's plans that are not running go from every device */
       if (msg.state !== 'accepted') {
         for (const p of await this.plans()) {
-          if (p.agent.id === a.id && !['running', 'paused'].includes(p.state)) await this.withdraw(p.id, `agent ${msg.state}`);
+          if (p.agent.id === a.id && p.state !== 'running') await this.withdraw(p.id, `agent ${msg.state}`);
         }
       }
       this.tell({ ev: 'agent', agent: { ...a, state: msg.state } });

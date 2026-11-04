@@ -69,6 +69,41 @@ test('a budget only inside the agent card\'s derivation labels', async () => {
   assert.equal(agents.budgetAllowed(card, [{ op: 1, slot: 2, cap: 1 }]).ok, false, 'a stored slot is no agent identity\'s');
 });
 
+test('stored slots and an MCP agent on a card (2026-11-04, the release signer): written only when given, so an older card keeps its certified bytes; the slots bound its stored-key scopes; the agent binds who may ask', () => {
+  const info = agents.infoFromRecord(RECORD, 'nitro16 claude');
+  assert.equal(JSON.stringify(certify.agentCard(info)), JSON.stringify({ v: 1, kind: 'agent', label: info.label, created: info.created, expires: info.expires, derive: info.derive, committer: info.committer }), 'no slots, no agent: the canonical bytes of before');
+  const agent = 'c3'.repeat(32);
+  const signer = certify.agentCard({ label: 'release signer', created: 1762000000, expires: 0, slots: [3, 3], agent: agent.toUpperCase() });
+  assert.deepEqual(signer.slots, [3], 'sorted, no repeats');
+  assert.equal(signer.agent, agent, 'lower case');
+  assert.throws(() => certify.agentCard({ label: 'x', created: 1, expires: 0, slots: [5] }), /stored sign slots/);
+  assert.throws(() => certify.agentCard({ label: 'x', created: 1, expires: 0 }), /at least one derivation label or stored slot/);
+  assert.throws(() => certify.agentCard({ label: 'x', created: 1, expires: 0, slots: [3], agent: 'nope' }), /MCP agent id/);
+  const card = { thing: signer };
+  assert.equal(agents.budgetAllowed(card, [{ op: 1, slot: 3, cap: 2 }], { agent }).ok, true);
+  assert.match(agents.budgetAllowed(card, [{ op: 1, slot: 1, cap: 1 }], { agent }).why, /stored slot 1 is not on this card/);
+  assert.match(agents.budgetAllowed(card, [{ op: 1, slot: 3, cap: 1 }], { agent: 'd4'.repeat(32) }).why, /another agent's card/);
+  assert.match(agents.budgetAllowed(card, [{ op: 1, slot: 3, cap: 1 }]).why, /another agent's card/, 'a computer cannot use an agent\'s card');
+});
+
+test('a CREATE is bound to who asked, never to the agent its message names', async () => {
+  const written = {};
+  const asks = [];
+  const host = (agent) => ({
+    entries: async () => written, owner: async () => null, now: 1762000000, agent,
+    approve: async (a) => { asks.push(a); return true; },
+    certifyAgent: async (info) => ({ thing: info }),
+    write: async (label, e) => { written[label] = JSON.stringify(e); },
+  });
+  const claims = 'e5'.repeat(32);
+  const asker = 'f6'.repeat(32);
+  await agents.answer(agents.buildCreate({ info: { label: 'one', created: 1762000000, expires: 0, slots: [3], agent: claims } }), host(asker));
+  await agents.answer(agents.buildCreate({ info: { label: 'two', created: 1762000000, expires: 0, slots: [3], agent: claims } }), host(null));
+  assert.equal(JSON.parse(written.one).card.thing.agent, asker, 'the asker\'s id');
+  assert.equal(JSON.parse(written.two).card.thing.agent, undefined, 'a computer\'s card is bound to no agent');
+  assert.deepEqual([asks[0].agent, asks[0].slots], [asker, [3]], 'the sheet shows who it is for and its slots');
+});
+
 test('the messages: LIST, GET by label, CREATE with its creation info; malformed and replayed refused', () => {
   const info = agents.infoFromRecord(RECORD, 'nitro16 claude');
   const certs = agents.certsFromRecord(RECORD);
@@ -101,7 +136,7 @@ test('a host answers: CREATE shown, certified at a press and written; a taken la
   const made = await agents.answer(create, host(true));
   assert.equal(made.ok, true);
   assert.deepEqual(made.agent.kinds, ['ssh', 'gpg']);
-  assert.deepEqual(asked[1], { label: 'nitro16 claude', created: RECORD.cert.created, derive: { ssh: RECORD.ssh, gpg: RECORD.gpgUid }, committer: RECORD.committer, expires: RECORD.expires, fingerprint: RECORD.cert.fingerprint.toUpperCase() }, 'the sheet is shown the label, the keys and the certificate');
+  assert.deepEqual(asked[1], { label: 'nitro16 claude', created: RECORD.cert.created, derive: { ssh: RECORD.ssh, gpg: RECORD.gpgUid }, slots: [], agent: null, committer: RECORD.committer, expires: RECORD.expires, fingerprint: RECORD.cert.fingerprint.toUpperCase() }, 'the sheet is shown the label, the keys (no stored slots), who it is bound to (a computer: none) and the certificate');
   const again = await agents.answer(create, host(true));
   assert.equal(again.ok, false);
   assert.match(again.detail, /already an agent identity's label/);

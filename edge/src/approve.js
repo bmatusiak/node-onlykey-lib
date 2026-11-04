@@ -44,12 +44,13 @@ const refuse = (refusal, detail) => ({ ok: false, refusal, ...(detail ? { detail
  *   budgets that already cover what this request names (view().covered)
  * @param {(label: string) => Promise<object>} [o.cardOf] the usable agent card by its label (agents.pick) - throws naming
  *   why not; none given: this host keeps no cards, and every request is refused
+ * @param {string|null} [o.agent] an MCP agent that asks (its id): its budgets open under its own card only (agents.budgetAllowed)
  * @param {() => void} [o.onPress] told when the key waits for the press
  * @param {number} [o.timeoutMs] the press wait (the key's own is 25 s)
  * @returns {Promise<{ok: true, budget: object} | {ok: false, refusal: string} | {dropped: string}>}
  *   dropped: nothing is answered (malformed, replayed)
  */
-async function approveRequest(msg, { edge, from = null, seen, ask, verifyCopy, budgetOf = () => null, coverOf = () => [], cardOf = null, onPress, timeoutMs = 30000 }) {
+async function approveRequest(msg, { edge, from = null, seen, ask, verifyCopy, budgetOf = () => null, coverOf = () => [], cardOf = null, agent = null, onPress, timeoutMs = 30000 }) {
   const v = request.verify(msg, { seen });
   if (!v.ok) return { dropped: v.reason };
   seen.add(msg.nonce.toLowerCase()); /* taken now: a replay of it is dropped, whatever the person answers */
@@ -71,7 +72,7 @@ async function approveRequest(msg, { edge, from = null, seen, ask, verifyCopy, b
   } catch (e) {
     return refuse('invalid', e && e.message ? e.message : String(e));
   }
-  const allowed = agents.budgetAllowed(card, msg.scopes);
+  const allowed = agents.budgetAllowed(card, msg.scopes, { agent });
   if (!allowed.ok) return refuse('invalid', `outside the agent card "${msg.card}": ${allowed.why}`);
 
   if (msg.continue !== undefined) {

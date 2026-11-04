@@ -15,13 +15,13 @@ const certifierEdge = () => (certifier ??= edgeOver(fakeKey({ secret: CERTIFIER_
 
 /**
  * A certified card for the derivation labels a test budgets under.
- * @param {{label?: string, ssh?: string, gpg?: string, committer?: {name: string, email: string}|null, created?: number, expires?: number}} [o]
+ * @param {{label?: string, ssh?: string, gpg?: string, slots?: number[], agent?: string|null, committer?: {name: string, email: string}|null, created?: number, expires?: number}} [o]
  *   ssh 'ssh://user@host'; gpg the user ID (a scope names it as 'gpg://<user id>'); created / expires: a card made from an
- *   identity keeps its certificate's (agents.infoFromRecord)
+ *   identity keeps its certificate's (agents.infoFromRecord); slots: stored sign slots; agent: the MCP agent id it is bound to
  */
-async function testCard({ label = 'test agent', ssh, gpg, committer = null, created = 1760000000, expires = 0 } = {}) {
+async function testCard({ label = 'test agent', ssh, gpg, slots, agent = null, committer = null, created = 1760000000, expires = 0 } = {}) {
   const derive = { ...(ssh ? { ssh } : {}), ...(gpg !== undefined ? { gpg } : {}) };
-  return certifierEdge().certifyAgent({ label, created, expires, derive, committer });
+  return certifierEdge().certifyAgent({ label, created, expires, derive, slots, agent, committer });
 }
 
 /** A host's cardOf over these cards - a usable card by label, or a throw naming why not (as the hosts answer). */

@@ -4,6 +4,8 @@ export const CREATE_TYPE: "EDGE_AGENT_CREATE";
 export const TYPES: string[];
 export function store(net: any): "edge-agents-test" | "edge-agents";
 export function infoFromRecord(record: any, label: any): {
+    agent?: string | undefined;
+    slots?: any[] | undefined;
     v: number;
     kind: string;
     label: string;
@@ -49,7 +51,9 @@ export function pick(entries: any, label: any, ownerKey: any, ownerKeyPq: any, n
 };
 /** A label already taken (any status - a revoked one stays taken): creating it again is refused. */
 export function taken(entries: any, label: any): boolean;
-export function budgetAllowed(card: any, scopes: any): {
+export function budgetAllowed(card: any, scopes: any, { agent }?: {
+    agent?: null | undefined;
+}): {
     ok: boolean;
     why: any;
 } | {
@@ -83,6 +87,8 @@ export function buildCreate({ info, certs, nonce }: {
     v: number;
     nonce: string;
     info: {
+        agent?: string | undefined;
+        slots?: any[] | undefined;
         v: number;
         kind: string;
         label: string;

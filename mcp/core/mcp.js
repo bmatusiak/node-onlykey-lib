@@ -18,6 +18,15 @@
  * room - to that owner's web app - and withdrawn from the old target's when it moves. Nothing reaches a key except
  * through plan_submit to the current target, whose owner approves it there (the web app runs it: one budget, one press).
  *
+ * FINGERPRINTS FIRST, DATA AFTER (Brad, 2026-11-04: "all ready, hashed, fingerprinted before sending; on budget approval,
+ * then the data passes to the desktop app ... at the end of the budget, the results are sent back"): plan_new names
+ * every item with the SHA-256 of its data and no data; the owner approves the count and the fingerprints; once the
+ * budget is open (plan_wait: running) plan_data sends the data, which the device checks against the fingerprints before
+ * the key signs any of it; the results come back together when the budget ends.
+ *
+ * UNDER THE AGENT'S OWN CARD (edge/src/agents.js): every plan names one, made for this agent with card_new - the owner
+ * approves it once and the key certifies it at a press; its keys bound every budget the agent asks.
+ *
  * Trust: the server relays over TLS; nothing is sealed end to end (decided 2026-10-28: "sealing e2e will require a lot
  * of tooling"). What the server never does: hold a key, approve, or answer for the owner.
  */
@@ -34,7 +43,11 @@ const MAX_DATA = 64 * 1024;
 const MAX_TEXT = 200;
 const WAIT_MAX_S = 60;
 const OPS = ['sign', 'decrypt'];
-const KINDS = ['ssh', 'gpg'];
+const KINDS = ['ssh', 'gpg', 'rsa'];
+const RSA_SLOTS = [1, 2, 3, 4];
+const RSA_BITS = [1024, 2048, 3072, 4096];
+const LABEL = /^[ -~]{1,64}$/;
+const STATES = ['declined', 'running', 'done', 'failed', 'ended'];
 
 const hex = (u8) => bytes.toHex(u8);
 const randomHex = (n) => hex(crypto.getRandomValues(new Uint8Array(n)));
@@ -56,21 +69,53 @@ const identityArg = (v) => {
   return h;
 };
 
+/* one item of plan_new: what it signs with, why, and the fingerprint of the data it will be sent */
+const itemArgs = (it, n) => {
+  need(it && typeof it === 'object', `item ${n}: {op, key, reason, fingerprint}`);
+  need(OPS.includes(it.op), `item ${n}: op ${OPS.join(' or ')}`);
+  const k = it.key || {};
+  need(KINDS.includes(k.kind), `item ${n}: key.kind ${KINDS.join(', ')}`);
+  let key;
+  if (k.kind === 'rsa') {
+    need(RSA_SLOTS.includes(k.slot), `item ${n}: an rsa key's slot is 1-4`);
+    need(RSA_BITS.includes(k.bits), `item ${n}: an rsa key's bits are ${RSA_BITS.join(', ')}`);
+    key = { kind: 'rsa', slot: k.slot, bits: k.bits };
+  } else key = { kind: k.kind, identity: text(k.identity, `item ${n}: key.identity`) };
+  const fingerprint = typeof it.fingerprint === 'string' ? it.fingerprint.trim().toLowerCase() : '';
+  need(HEX64.test(fingerprint), `item ${n}: fingerprint - the SHA-256 of its data, 64 hex`);
+  return { op: it.op, key, reason: text(it.reason, `item ${n}: reason`), fingerprint };
+};
+/* one item's data in plan_data: text, or base64 for bytes */
+const dataArg = (d) => {
+  const enc = d.encoding || 'text';
+  need(enc === 'text' || enc === 'base64', 'encoding: text or base64');
+  need(typeof d.data === 'string' && d.data.length > 0 && d.data.length <= MAX_DATA, `data: 1 to ${MAX_DATA} characters`);
+  if (enc === 'base64') need(/^[A-Za-z0-9+/]*={0,2}$/.test(d.data) && d.data.length % 4 === 0, 'data: not base64');
+  return { data: d.data, encoding: enc };
+};
+const bytesOf = (one) => (one.encoding === 'base64' ? bytes.fromBase64(one.data) : new TextEncoder().encode(one.data));
+
 /* ------------------------------------------------------------------------------------------------ the tools */
 
 const KEY_SCHEMA = {
   type: 'object',
   properties: {
-    kind: { type: 'string', enum: KINDS, description: 'ssh or gpg: the agent-derived key Edge uses' },
-    identity: { type: 'string', description: 'the key\'s label, e.g. "you@example.com" (gpg) or "ssh://user@host" (ssh)' },
+    kind: { type: 'string', enum: KINDS, description: 'ssh or gpg: an agent-derived key Edge uses; rsa: a key stored on the OnlyKey' },
+    identity: { type: 'string', description: 'ssh / gpg: the key\'s label, e.g. "you@example.com" (gpg) or "ssh://user@host" (ssh)' },
+    slot: { type: 'integer', description: 'rsa: the stored slot, 1-4' },
+    bits: { type: 'integer', description: 'rsa: the key\'s size, 1024-4096 (its signature\'s length)' },
   },
-  required: ['kind', 'identity'],
+  required: ['kind'],
 };
-const ITEM_PROPS = {
-  plan_id: { type: 'string' },
-  op: { type: 'string', enum: OPS },
-  key: KEY_SCHEMA,
-  reason: { type: 'string', description: 'why, in a few words - the owner reads it before approving' },
+const ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    op: { type: 'string', enum: OPS },
+    key: KEY_SCHEMA,
+    reason: { type: 'string', description: 'why, in a few words - the owner reads it before approving' },
+    fingerprint: { type: 'string', description: 'SHA-256 of the exact bytes this item will sign (64 hex) - its data comes after the approval (plan_data)' },
+  },
+  required: ['op', 'key', 'reason', 'fingerprint'],
 };
 
 export const TOOLS = [
@@ -78,32 +123,37 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: { name: { type: 'string' }, agent_key: { type: 'string', description: '64 hex characters, from your first hello' } }, required: ['name'] } },
   { name: 'status', description: 'Your plans, and for an identity: whether its owner has accepted you, and whether the owner is online.',
     inputSchema: { type: 'object', properties: { identity: { type: 'string', description: 'an identity public key (64 hex)' } } } },
-  { name: 'plan_new', description: 'A new plan for an identity (its public key, 64 hex). Its owner sees it in their web app at once, and every change after.',
-    inputSchema: { type: 'object', properties: { identity: { type: 'string' }, title: { type: 'string' } }, required: ['identity', 'title'] } },
+  { name: 'card_new', description: 'Ask the owner for your agent card: the keys your plans may use, under a label of your choosing. The owner approves it once and their key certifies it at a press; plan_wait on the plan_id it gives says when. Every plan names it.',
+    inputSchema: { type: 'object', properties: {
+      identity: { type: 'string' }, label: { type: 'string', description: 'the card\'s label, 1-64 printable characters, fixed for good' },
+      slots: { type: 'array', items: { type: 'integer' }, description: 'stored sign slots: 1-4 (RSA)' },
+      ssh: { type: 'string', description: 'an ssh identity to derive, ssh://user@host' },
+      days: { type: 'integer', description: 'how long it lasts, in days (0 = until revoked)' },
+      reason: { type: 'string', description: 'why you need it - the owner reads it' },
+    }, required: ['identity', 'label', 'reason'] } },
+  { name: 'plan_new', description: 'A new plan for an identity (its public key, 64 hex), under your card: every item with the SHA-256 of its data - no data yet. Its owner sees it in their web app at once, and every change after.',
+    inputSchema: { type: 'object', properties: { identity: { type: 'string' }, title: { type: 'string' }, card: { type: 'string', description: 'your card\'s label (card_new)' }, items: { type: 'array', items: ITEM_SCHEMA } }, required: ['identity', 'title', 'card', 'items'] } },
   { name: 'plan_target', description: 'Move a draft plan to another identity: withdrawn from the old owner\'s web app, shown in the new one\'s.',
     inputSchema: { type: 'object', properties: { plan_id: { type: 'string' }, identity: { type: 'string' } }, required: ['plan_id', 'identity'] } },
-  { name: 'plan_add', description: 'Add one operation with its data (base64 when it is bytes, set encoding: "base64").',
-    inputSchema: { type: 'object', properties: { ...ITEM_PROPS, data: { type: 'string' }, encoding: { type: 'string', enum: ['text', 'base64'] } }, required: ['plan_id', 'op', 'key', 'data', 'reason'] } },
-  { name: 'plan_hold', description: 'Add a PLACEHOLDER: an operation whose data comes later (plan_fill, while the plan runs), counted in the budget - so work that depends on an earlier signature needs no second approval.',
-    inputSchema: { type: 'object', properties: ITEM_PROPS, required: ['plan_id', 'op', 'key', 'reason'] } },
   { name: 'plan_remove', description: 'Remove one item from a draft plan.',
     inputSchema: { type: 'object', properties: { plan_id: { type: 'string' }, item: { type: 'integer' } }, required: ['plan_id', 'item'] } },
   { name: 'plan_show', description: 'The plan as it is now (read only).',
     inputSchema: { type: 'object', properties: { plan_id: { type: 'string' } }, required: ['plan_id'] } },
-  { name: 'plan_submit', description: 'Ask the owner to approve the plan: one budget sized to it, one press. Refused until the owner has accepted you, or while no owner device is online.',
+  { name: 'plan_submit', description: 'Ask the owner to approve the plan - the item count and their fingerprints: one budget sized to it, one press. Refused until the owner has accepted you, or while no owner device is online.',
     inputSchema: { type: 'object', properties: { plan_id: { type: 'string' } }, required: ['plan_id'] } },
-  { name: 'plan_fill', description: 'While the plan runs: a placeholder\'s data. It runs inside the open budget, no new press.',
-    inputSchema: { type: 'object', properties: { plan_id: { type: 'string' }, item: { type: 'integer' }, data: { type: 'string' }, encoding: { type: 'string', enum: ['text', 'base64'] } }, required: ['plan_id', 'item', 'data'] } },
-  { name: 'plan_wait', description: 'Wait (up to 60 s) for the plan to move on: its state, each item\'s result (signature, plaintext or refusal), the placeholders still waiting, the receipts.',
+  { name: 'plan_data', description: 'Once the plan runs (its budget is open): the items\' data (base64 when it is bytes, encoding: "base64"). Each must match its fingerprint, or nothing is signed.',
+    inputSchema: { type: 'object', properties: { plan_id: { type: 'string' }, items: { type: 'array', items: { type: 'object', properties: { item: { type: 'integer' }, data: { type: 'string' }, encoding: { type: 'string', enum: ['text', 'base64'] } }, required: ['item', 'data'] } } }, required: ['plan_id', 'items'] } },
+  { name: 'plan_wait', description: 'Wait (up to 60 s) for the plan to move on: its state, the items whose data it still waits for, and at its end every item\'s result (signature or refusal) and the receipts.',
     inputSchema: { type: 'object', properties: { plan_id: { type: 'string' }, seconds: { type: 'integer' } }, required: ['plan_id'] } },
-  { name: 'plan_finish', description: 'End the plan\'s budget now: unfilled placeholders are dropped, receipts filed.',
+  { name: 'plan_finish', description: 'End the plan\'s budget now: if its data has not all come, nothing is signed.',
     inputSchema: { type: 'object', properties: { plan_id: { type: 'string' } }, required: ['plan_id'] } },
 ];
 
 const INSTRUCTIONS = 'OnlyKey Edge control. Your owner gives you this URL and their identity public key. '
-  + 'Say hello (keep the agent_key you get the first time), build a plan for the identity (plan_new, plan_add, '
-  + 'plan_hold for data that comes later), then plan_submit: the owner sees the plan live in their web app, accepts you '
-  + 'once, approves the plan and presses their key once. plan_wait gives the results.';
+  + 'Say hello (keep the agent_key you get the first time); once, ask for your card (card_new) and plan_wait for its '
+  + 'approval. Then build a plan under it: plan_new with every item\'s SHA-256 fingerprint and no data, plan_submit - the '
+  + 'owner sees it live in their web app, accepts you once, approves the plan and presses their key once. When '
+  + 'plan_wait says running, send the data (plan_data); plan_wait gives every result when the budget ends.';
 
 /* ------------------------------------------------------------------------------------------------ the HTTP face */
 
@@ -252,7 +302,15 @@ export class AgentSessionCore {
     return this.view(p);
   }
   /* what the owner's web app is shown: everything but the agent's own bookkeeping */
-  shown(p, me) { return { id: p.id, room: p.room, title: p.title, agent: { id: me.id, name: me.name }, state: p.state, items: p.items, results: p.results, receipts: p.receipts, why: p.why || null }; }
+  /* a plan's items go out with their fingerprints and never their data: the data goes to the device that runs it (plan_data) */
+  shown(p, me) {
+    return {
+      id: p.id, kind: p.kind || 'plan', room: p.room, title: p.title, agent: { id: me.id, name: me.name }, state: p.state,
+      ...(p.card ? { card: p.card } : {}), ...(p.ask ? { ask: p.ask } : {}),
+      items: p.items.map(({ item, op, key, reason, fingerprint }) => ({ item, op, key, reason, fingerprint })),
+      results: p.results, receipts: p.receipts, why: p.why || null,
+    };
+  }
   async mirror(p) {
     const me = await this.me();
     return ROOM_STUB(this.env, p.room).show(this.shown(p, me));
@@ -279,12 +337,41 @@ export class AgentSessionCore {
       }
       return out;
     }
+    if (name === 'card_new') {
+      /*
+       * THE AGENT'S CARD, ASKED (agents.js answer): a plan of kind 'card', submitted at once - the owner's device shows the
+       * card sheet (its label, keys and who asks), the person approves, the key certifies it at a press, and the device
+       * binds it to this agent's id. plan_wait on it says done, declined or failed.
+       */
+      const identity = identityArg(args.identity);
+      const label = text(args.label, 'label', { max: 64 });
+      need(LABEL.test(label), 'label: 1-64 printable characters');
+      const slots = args.slots === undefined ? [] : args.slots;
+      need(Array.isArray(slots) && slots.every((s) => RSA_SLOTS.includes(s)), 'slots: stored RSA slots, 1-4');
+      const ssh = args.ssh === undefined ? null : text(args.ssh, 'ssh');
+      need(ssh === null || /^ssh:\/\/\S+$/.test(ssh), 'ssh: ssh://user@host');
+      need(slots.length || ssh, 'a card names at least one key: slots or ssh');
+      const days = args.days === undefined ? 0 : Number(args.days);
+      need(Number.isInteger(days) && days >= 0 && days <= 3650, 'days: 0 (until revoked) to 3650');
+      const ask = { label, slots: [...new Set(slots)].sort(), ...(ssh ? { ssh } : {}), days, reason: text(args.reason, 'reason') };
+      const p = { id: randomHex(8), kind: 'card', title: `agent card "${label}"`, identity, room: roomOf(identity), state: 'draft', ask, items: [], results: {}, receipts: [], created: Date.now() };
+      await this.save(p);
+      await this.mirror(p);
+      const r = await ROOM_STUB(this.env, p.room).submit(this.shown({ ...p, state: 'submitted' }, me));
+      need(r.ok, r.why);
+      p.state = 'submitted';
+      await this.save(p);
+      return this.view(p);
+    }
     if (name === 'plan_new') {
       const identity = identityArg(args.identity);
-      const p = { id: randomHex(8), title: text(args.title, 'title'), identity, room: roomOf(identity), state: 'draft', items: [], results: {}, receipts: [], created: Date.now() };
+      const card = text(args.card, 'card', { max: 64 });
+      need(Array.isArray(args.items) && args.items.length > 0 && args.items.length <= MAX_ITEMS, `items: 1 to ${MAX_ITEMS}, each {op, key, reason, fingerprint}`);
+      const items = args.items.map((it, n) => ({ item: n + 1, ...itemArgs(it, n + 1) }));
+      const p = { id: randomHex(8), title: text(args.title, 'title'), identity, room: roomOf(identity), card, state: 'draft', items, results: {}, receipts: [], created: Date.now() };
       await this.save(p);
       const seen = await this.mirror(p);
-      return { plan_id: p.id, identity, ...seen };
+      return { ...this.view(p), ...seen };
     }
     const p = await this.plan(String(args.plan_id || ''));
     need(p, `no plan ${args.plan_id} - plan_new makes one`);
@@ -294,21 +381,6 @@ export class AgentSessionCore {
       need(it, `no item ${n} in the plan`);
       return it;
     };
-    const opArgs = () => {
-      need(OPS.includes(args.op), `op: ${OPS.join(' or ')}`);
-      const k = args.key || {};
-      need(KINDS.includes(k.kind), `key.kind: ${KINDS.join(' or ')}`);
-      return { op: args.op, key: { kind: k.kind, identity: text(k.identity, 'key.identity') }, reason: text(args.reason, 'reason') };
-    };
-    const dataArg = () => {
-      const enc = args.encoding || 'text';
-      need(enc === 'text' || enc === 'base64', 'encoding: text or base64');
-      need(typeof args.data === 'string' && args.data.length > 0 && args.data.length <= MAX_DATA, `data: 1 to ${MAX_DATA} characters`);
-      if (enc === 'base64') need(/^[A-Za-z0-9+/]*={0,2}$/.test(args.data) && args.data.length % 4 === 0, 'data: not base64');
-      return { data: args.data, encoding: enc };
-    };
-    const nextItem = () => p.items.reduce((m, x) => Math.max(m, x.item), 0) + 1;
-
     switch (name) {
       case 'plan_show':
         return this.shownToAgent(p);
@@ -322,16 +394,6 @@ export class AgentSessionCore {
         await this.save(p);
         await ROOM_STUB(this.env, old).withdraw(p.id, 'moved to another identity');
         return { ...this.view(p), ...(await this.mirror(p)) };
-      }
-      case 'plan_add':
-      case 'plan_hold': {
-        draft();
-        need(p.items.length < MAX_ITEMS, `a plan holds up to ${MAX_ITEMS} items`);
-        const it = { item: nextItem(), ...opArgs(), ...(name === 'plan_add' ? dataArg() : { data: null, held: true }) };
-        p.items.push(it);
-        await this.save(p);
-        await this.mirror(p);
-        return { item: it.item, ...this.view(p) };
       }
       case 'plan_remove': {
         draft();
@@ -350,18 +412,29 @@ export class AgentSessionCore {
         await this.save(p);
         return this.view(p);
       }
-      case 'plan_fill': {
-        need(p.state === 'running' || p.state === 'paused', `the plan is ${p.state}: a placeholder is filled while it runs`);
-        const it = itemOf(args.item);
-        need(it.held && it.data === null, `item ${it.item} is not a placeholder waiting for its data`);
-        Object.assign(it, dataArg());
+      case 'plan_data': {
+        need(p.kind !== 'card', 'a card ask takes no data');
+        need(p.state === 'running', `the plan is ${p.state}: its data is sent once it runs (its budget is open - plan_wait)`);
+        need(Array.isArray(args.items) && args.items.length > 0, 'items: [{item, data, encoding}]');
+        /* checked here first (a wrong one is refused at once, nothing sent); the device checks again before the key signs */
+        const sent = [];
+        for (const d of args.items) {
+          const it = itemOf(d && d.item);
+          need(!it.sent, `item ${it.item}'s data was sent already`);
+          const one = dataArg(d);
+          need(await sha256Hex(bytes.toHex(bytesOf(one))) === it.fingerprint, `item ${it.item}'s data does not match its fingerprint ${it.fingerprint.slice(0, 16)} - not sent`);
+          sent.push([it, one]);
+        }
+        for (const [it, one] of sent) {
+          const r = await ROOM_STUB(this.env, p.room).data(p.id, it.item, one);
+          need(r.ok, r.why);
+          it.sent = true;
+        }
         await this.save(p);
-        const r = await ROOM_STUB(this.env, p.room).fill(p.id, it.item, { data: it.data, encoding: it.encoding });
-        need(r.ok, r.why);
         return this.view(p);
       }
       case 'plan_finish': {
-        need(['submitted', 'running', 'paused'].includes(p.state), `the plan is ${p.state}: nothing to finish`);
+        need(['submitted', 'running'].includes(p.state), `the plan is ${p.state}: nothing to finish`);
         const r = await ROOM_STUB(this.env, p.room).finish(p.id);
         need(r.ok, r.why);
         p.finishing = true;
@@ -386,25 +459,25 @@ export class AgentSessionCore {
     }
   }
 
-  /* what the agent reads: the plan, its results, and the placeholders still waiting for data */
+  /* what the agent reads: the plan, the items whose data the running plan still waits for, and at its end the results */
   view(p) {
     return {
-      plan_id: p.id, title: p.title, identity: p.identity, state: p.state, why: p.why || null,
-      items: p.items.map(({ item, op, key, reason, held, data }) => ({ item, op, key, reason, ...(held ? { placeholder: true, filled: data !== null } : {}) })),
-      results: p.results, waiting: p.items.filter((x) => x.held && x.data === null).map((x) => x.item), receipts: p.receipts,
+      plan_id: p.id, kind: p.kind || 'plan', title: p.title, identity: p.identity, state: p.state, why: p.why || null,
+      ...(p.card ? { card: p.card } : {}), ...(p.ask ? { ask: p.ask } : {}),
+      items: p.items.map(({ item, op, key, reason, fingerprint, sent }) => ({ item, op, key, reason, fingerprint, sent: !!sent })),
+      results: p.results, waiting: p.state === 'running' ? p.items.filter((x) => !x.sent).map((x) => x.item) : [], receipts: p.receipts,
     };
   }
 
   /**
-   * What the owner did, from their room (index.js, an owner device's mcp-re): the plan's state - declined, running,
-   * paused (waiting for a placeholder), done, failed, ended - with results by item and the receipts. The room has
-   * checked the plan is its own and the device joined; here the plan must be this agent's and past its draft.
+   * What the owner did, from their room (index.js, an owner device's mcp-re): the plan's state - declined, running (its
+   * budget open: the data may come), done, failed, ended - with results by item and the receipts. The room has checked
+   * the plan is its own and the device joined; here the plan must be this agent's and past its draft.
    */
   async fromRoom(roomId, u) {
     const p = await this.plan(String(u.plan || ''));
     if (!p || p.room !== roomId || p.state === 'draft') return { ok: false, why: 'not a submitted plan of that identity' };
     if (u.state) {
-      const STATES = ['declined', 'running', 'paused', 'done', 'failed', 'ended'];
       if (!STATES.includes(u.state)) return { ok: false, why: `state: ${STATES.join(' | ')}` };
       p.state = u.state;
     }

@@ -90,9 +90,26 @@ function agentCard(c) {
   const derive = {};
   if (d.ssh !== undefined) { if (!/^ssh:\/\/\S+$/.test(String(d.ssh))) throw new TypeError('certify: derive.ssh is ssh://user@host'); derive.ssh = String(d.ssh); }
   if (d.gpg !== undefined) { if (!String(d.gpg).trim()) throw new TypeError('certify: derive.gpg is a user ID'); derive.gpg = String(d.gpg); }
-  if (!Object.keys(derive).length) throw new TypeError('certify: an agent identity provides at least one derivation label');
+  /*
+   * STORED KEYS TOO (Brad, 2026-11-04: the release APK signed by red-key's "RSA3 Code Signing" slot): the stored sign slots
+   * the card's budgets may use - RSA 1-4, ECC 101-116, as the key lets a budget pay (okplugin_edge scope_allowed). Sorted,
+   * no repeats. A card holds derivation labels, stored slots, or both.
+   */
+  const slots = [...new Set(c.slots || [])].sort((a, b) => a - b);
+  if (slots.some((s) => !Number.isInteger(s) || !((s >= 1 && s <= 4) || (s >= 101 && s <= 116)))) {
+    throw new TypeError('certify: an agent identity\'s slots are stored sign slots, 1-4 (RSA) or 101-116 (ECC)');
+  }
+  if (!Object.keys(derive).length && !slots.length) throw new TypeError('certify: an agent identity provides at least one derivation label or stored slot');
+  /*
+   * AN MCP AGENT'S OWN CARD (Brad, 2026-11-04: "the workflow can request signing from my desktop app"): bound to the agent's
+   * id (the SHA-256 of its agent_key, mcp.js hello) - set by the host from who asked, never by the agent - so only that
+   * agent's plans open budgets under it, and no other agent's (agents.budgetAllowed).
+   */
+  const agent = c.agent === undefined || c.agent === null ? null : String(c.agent).toLowerCase();
+  if (agent !== null && !isHex(agent, 64)) throw new TypeError('certify: an agent identity\'s agent is an MCP agent id (64 hex)');
   const committer = c.committer ? { name: String(c.committer.name), email: String(c.committer.email) } : null;
-  return { v: 1, kind: 'agent', label, created: c.created, expires: c.expires, derive, committer };
+  /* slots and agent only when given: a card certified before them keeps its canonical bytes, so its certification still verifies */
+  return { v: 1, kind: 'agent', label, created: c.created, expires: c.expires, derive, committer, ...(slots.length ? { slots } : {}), ...(agent ? { agent } : {}) };
 }
 
 /** The 32 bytes the key certifies for a thing of this kind (the card's canonical JSON; a nametag its hash). */

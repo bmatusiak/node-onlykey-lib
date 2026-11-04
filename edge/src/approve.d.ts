@@ -16,12 +16,13 @@
  *   budgets that already cover what this request names (view().covered)
  * @param {(label: string) => Promise<object>} [o.cardOf] the usable agent card by its label (agents.pick) - throws naming
  *   why not; none given: this host keeps no cards, and every request is refused
+ * @param {string|null} [o.agent] an MCP agent that asks (its id): its budgets open under its own card only (agents.budgetAllowed)
  * @param {() => void} [o.onPress] told when the key waits for the press
  * @param {number} [o.timeoutMs] the press wait (the key's own is 25 s)
  * @returns {Promise<{ok: true, budget: object} | {ok: false, refusal: string} | {dropped: string}>}
  *   dropped: nothing is answered (malformed, replayed)
  */
-export function approveRequest(msg: object, { edge, from, seen, ask, verifyCopy, budgetOf, coverOf, cardOf, onPress, timeoutMs }: {
+export function approveRequest(msg: object, { edge, from, seen, ask, verifyCopy, budgetOf, coverOf, cardOf, agent, onPress, timeoutMs }: {
     edge: object;
     from?: string | null | undefined;
     seen: Set<string>;
@@ -36,6 +37,7 @@ export function approveRequest(msg: object, { edge, from, seen, ask, verifyCopy,
     } | null)) | undefined;
     coverOf?: ((msg: object) => Promise<object[]> | object[]) | undefined;
     cardOf?: ((label: string) => Promise<object>) | undefined;
+    agent?: string | null | undefined;
     onPress?: (() => void) | undefined;
     timeoutMs?: number | undefined;
 }): Promise<{

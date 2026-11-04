@@ -40,6 +40,8 @@ export function loginCard(c: {
     };
 };
 export function agentCard(c: any): {
+    agent?: string | undefined;
+    slots?: any[] | undefined;
     v: number;
     kind: string;
     label: string;

@@ -62,7 +62,7 @@ function list(entries, ownerKey, ownerKeyPq, now = Math.floor(Date.now() / 1000)
     else if (ok && card.thing.expires && card.thing.created + card.thing.expires <= now) status = 'expired';
     out.push({
       label, status, created: card && card.thing ? card.thing.created : null, expires: card && card.thing ? card.thing.expires : null,
-      kinds: card && card.thing && card.thing.derive ? Object.keys(card.thing.derive) : [], entry: e,
+      kinds: card && card.thing && card.thing.derive ? [...Object.keys(card.thing.derive), ...(card.thing.slots ? ['slots'] : [])] : [], entry: e,
     });
   }
   return out.sort((a, b) => a.label.localeCompare(b.label));
@@ -84,15 +84,23 @@ function taken(entries, label) {
 
 /*
  * MAY THIS BUDGET OPEN UNDER THIS AGENT CARD? Every scope on a derived code names one of the card's derivation labels
- * (ssh://user@host, or gpg://<user id>) - the agent's keys are derived from exactly those. The hosts enforce it; the key,
- * later (certify.keyEnforces).
+ * (ssh://user@host, or gpg://<user id>) - the agent's keys are derived from exactly those; every scope on a stored slot
+ * (no identity) is one of the card's slots. A card bound to an MCP agent opens budgets for that agent only, and an MCP
+ * agent only under its own card: `agent` is who asks (the MCP agent's id, or null for a computer). The hosts enforce it;
+ * the key, later (certify.keyEnforces).
  */
-function budgetAllowed(card, scopes) {
+function budgetAllowed(card, scopes, { agent = null } = {}) {
   let info;
   try { info = certify.agentCard(card && card.thing); } catch (e) { return { ok: false, why: e.message }; }
+  const asker = agent ? String(agent).toLowerCase() : null;
+  if ((info.agent || null) !== asker) {
+    return { ok: false, why: info.agent ? 'it is another agent\'s card' : 'an MCP agent asks under a card made for it (card_new)' };
+  }
   const names = [info.derive.ssh, info.derive.gpg !== undefined ? `gpg://${info.derive.gpg}` : undefined].filter(Boolean);
   for (const s of scopes || []) {
-    if (!names.includes(String(s.identity || ''))) return { ok: false, why: `scope on slot ${s.slot} names "${s.identity || 'no identity'}", not this card's` };
+    if (!s.identity && !grants.isDerivedCode(s.slot)) {
+      if (!(info.slots || []).includes(s.slot)) return { ok: false, why: `the stored slot ${s.slot} is not on this card` };
+    } else if (!names.includes(String(s.identity || ''))) return { ok: false, why: `scope on slot ${s.slot} names "${s.identity || 'no identity'}", not this card's` };
   }
   return { ok: true };
 }
@@ -159,19 +167,21 @@ function recordFromCard(card, certs = {}) {
  * its owner keys, its sheet and its key:
  *   entries()          the store's live entries (label -> JSON), or null when no bucket is open
  *   owner()            {ownerKey, ownerKeyPq} read from the key, or null
- *   approve(ask)       ask = {label, created, expires, derive, committer, fingerprint} -> true when the person approves
+ *   approve(ask)       ask = {label, created, expires, derive, slots, agent, committer, fingerprint} -> true when the person approves
  *   certifyAgent(info) the key's certify at a press -> the card record
  *   write(label, entry)
+ *   agent              who asks a CREATE: the MCP agent's id (its card is bound to it), or null - a computer's card is
+ *                      bound to none. Set from the channel, never taken from the message.
  *   now                seconds (tests); else the clock
  * -> the answer to send back.
  * @param {any} msg
  * @param {{entries: () => Promise<Object<string, string>|null>, owner: () => Promise<{ownerKey: Uint8Array, ownerKeyPq: Uint8Array}|null>,
- *   approve: (ask: {label: string, created: number, expires: number, derive: {ssh?: string, gpg?: string}, committer: {name: string, email: string}|null, fingerprint: string|null}) => Promise<boolean>,
- *   certifyAgent: (info: any) => Promise<any>, write: (label: string, entry: object) => Promise<void>, now?: number}} host
+ *   approve: (ask: {label: string, created: number, expires: number, derive: {ssh?: string, gpg?: string}, slots: number[], agent: string|null, committer: {name: string, email: string}|null, fingerprint: string|null}) => Promise<boolean>,
+ *   certifyAgent: (info: any) => Promise<any>, write: (label: string, entry: object) => Promise<void>, agent?: string|null, now?: number}} host
  * @returns {Promise<any>}
  */
 async function answer(msg, host) {
-  const { entries, owner, approve, certifyAgent, write, now } = host;
+  const { entries, owner, approve, certifyAgent, write, now, agent = null } = host;
   const e = await entries();
   if (!e) return { ok: false, refusal: 'invalid', detail: 'no identity bucket is open on this device - log in first' };
   if (msg.type === LIST_TYPE || msg.type === GET_TYPE) {
@@ -186,10 +196,11 @@ async function answer(msg, host) {
       return { ok: false, refusal: 'invalid', detail: err.message };
     }
   }
-  const info = certify.agentCard(msg.info);
+  /* the binding is the host's: whatever agent the message names is replaced by who asked */
+  const info = certify.agentCard({ ...msg.info, agent });
   if (taken(e, info.label)) return { ok: false, refusal: 'invalid', detail: `"${info.label}" is already an agent identity's label (a revoked one stays taken)` };
   const certs = cleanCerts(msg.certs);
-  const yes = await approve({ label: info.label, created: info.created, expires: info.expires, derive: info.derive, committer: info.committer, fingerprint: certs.gpg ? certs.gpg.fingerprint : null });
+  const yes = await approve({ label: info.label, created: info.created, expires: info.expires, derive: info.derive, slots: info.slots || [], agent: info.agent || null, committer: info.committer, fingerprint: certs.gpg ? certs.gpg.fingerprint : null });
   if (!yes) return { ok: false, refusal: 'declined' };
   const card = await certifyAgent(info);
   await write(info.label, { card, certs });
