@@ -38,7 +38,9 @@
  *   identity.proveByBucket({sealed, key}) -> {held, bucket}
  *   identity.proveByRows({rows, key, rules}) -> {held, bucket}   (a bucket kept as rows)
  *   identity.requireVerified()  -> held, or throws
- *   identity.forget(why?)
+ *   identity.forget(why?)       (the store emptied first: state = {})
+ *   identity.store              getItem(k) -> v | null, setItem(k, v), removeItem(k), keys(), clear()
+ *   identity.on('store', fn)    ({op: 'add' | 'remove' | 'clear', key?, keys?, why?}) - what holds this key's state, seen
  *   identity.on('change', fn)   (held | null)
  *   identity.on('forgotten', fn) (why | null)
  * held: {id, publicKey, site, parts: {<service>: part}, verified: null | {how: 'signature' | 'bucket' | 'login', at}, at}
@@ -70,6 +72,29 @@ function setup(imports, register) {
   let lastRecord = null;
 
   const changed = () => { try { events.emit('change', held); } catch { /* a listener's error is not identity's */ } };
+
+  /*
+   * THE KEY'S STATE, IN ONE PLACE (Brad, 2026-11-03: "use the identity rectify plugin, store the state in that plugin, so
+   * it's 1 place to clear"; "a simple in-memory object to hold key values, and a simple local storage like api so it's
+   * standard and simple, and cleanup is as simple as state = {}"). Red-key's idle lockout restarted it under the desktop,
+   * and a session from before the restart answered for it - the app kept per-key state in 86 places and cleared the ones
+   * a list named. Everything a host or a feature keeps about THIS key lives here instead: in memory, any value (a Map, a
+   * session), read and written as localStorage is. forget() empties it before anyone hears the key went, so nothing of
+   * this key can be there after.
+   */
+  /* SEEN (Brad: "then we can see what is using the state and it makes it debuggable"): a key's first value, its removal and
+   * every clear are told to 'store' listeners - a host logs them; the values are never told, only their names */
+  let state = {};
+  const told = (e) => { try { events.emit('store', e); } catch { /* a listener's error is not identity's */ } };
+  const has = (k) => Object.prototype.hasOwnProperty.call(state, k);
+  const empty = (why) => { const keys = Object.keys(state); state = {}; if (keys.length) told({ op: 'clear', keys, why: why == null ? null : why }); };
+  const store = {
+    getItem: (k) => (has(k) ? state[k] : null),
+    setItem: (k, v) => { const added = !has(k); state[k] = v; if (added) told({ op: 'add', key: k }); },
+    removeItem: (k) => { if (!has(k)) return; delete state[k]; told({ op: 'remove', key: k }); },
+    keys: () => Object.keys(state),
+    clear: () => empty('clear'),
+  };
 
   /*
    * the key's site (ctap_bridge's): where its bucket sync lives; a key without the plugin has none (null). A read that
@@ -411,8 +436,11 @@ function setup(imports, register) {
       return held;
     },
 
+    store,
+
     forget(why) {
       generation += 1;
+      empty(why);
       try { events.emit('forgotten', why == null ? null : why); } catch { /* a listener's error is not identity's */ }
       if (held === null) return;
       held = null;

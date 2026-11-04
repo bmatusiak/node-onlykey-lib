@@ -36,6 +36,48 @@ function compose(key, services = {}) {
   return out;
 }
 
+/* THE KEY'S STATE IN ONE PLACE (Brad, 2026-11-03: "a simple local storage like api ... cleanup is as simple as state = {}") */
+test('store: the key\'s state as localStorage reads it - any value, kept as given; forget empties it before anyone hears', () => {
+  const identity = compose(fakeKey());
+  const heads = new Map([[1, 'a']]);
+  identity.store.setItem('edge.heads', heads);
+  identity.store.setItem('card.offer', { device: 'x' });
+  assert.equal(identity.store.getItem('edge.heads'), heads, 'the same object back, not a copy');
+  assert.equal(identity.store.getItem('nothing'), null);
+  assert.deepEqual(identity.store.keys().sort(), ['card.offer', 'edge.heads']);
+  identity.store.removeItem('card.offer');
+  assert.deepEqual(identity.store.keys(), ['edge.heads']);
+  let seenAtForget = null;
+  identity.on('forgotten', () => { seenAtForget = identity.store.keys(); });
+  identity.forget('locked');
+  assert.deepEqual(seenAtForget, [], 'empty before the listeners hear the key went');
+  assert.equal(identity.store.getItem('edge.heads'), null);
+  identity.store.setItem('a', 1);
+  identity.store.clear();
+  assert.deepEqual(identity.store.keys(), []);
+});
+
+/* "then we can see what is using the state and it makes it debuggable" (Brad, 2026-11-03) */
+test('store: what holds the key\'s state is told - a first value, a removal, a clear with its why; names only, never values', () => {
+  const identity = compose(fakeKey());
+  const seen = [];
+  identity.on('store', (e) => seen.push(e));
+  identity.store.setItem('edge.heads', new Map());
+  identity.store.setItem('edge.heads', new Map([[1, 2]]));
+  identity.store.setItem('secret.thing', 'do not tell');
+  identity.store.removeItem('nothing');
+  identity.store.removeItem('edge.heads');
+  identity.forget('locked');
+  identity.forget('again');
+  assert.deepEqual(seen, [
+    { op: 'add', key: 'edge.heads' },
+    { op: 'add', key: 'secret.thing' },
+    { op: 'remove', key: 'edge.heads' },
+    { op: 'clear', keys: ['secret.thing'], why: 'locked' },
+  ], 'a second value of a key, a removal of nothing and an empty clear say nothing');
+  assert.ok(!JSON.stringify(seen).includes('do not tell'), 'never a value');
+});
+
 test('load: read once - a second load and callers at the same time get the same read, no new request', async () => {
   const key = fakeKey({ slow: 20 });
   const identity = compose(key);
