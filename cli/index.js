@@ -529,6 +529,57 @@ COMMANDS.getkeylabels = {
   },
 };
 
+/*
+ * A SELF-SIGNED X.509 CERTIFICATE FOR AN RSA SLOT (src/crypto/x509.js; Brad, 2026-11-04: the release APK signed by
+ * red-key's "RSA3 Code Signing" slot - Android's APK signatures carry the signer's certificate). The slot's public key is
+ * read (no press); the slot signs the certificate (a press - its challenge code said first, as every sign).
+ */
+COMMANDS.cert = {
+  mirrors: '(new)',
+  usage: '<RSA1-4> --cn <name> [--o <organization>] [--c <country>] [--days <n>] [--out <file.pem>]',
+  summary: 'a self-signed X.509 certificate for an RSA slot\'s key (read: no press; signed by the slot: a press)',
+  device: true,
+  options: { cn: { type: 'string' }, o: { type: 'string' }, c: { type: 'string' }, days: { type: 'string' }, out: { type: 'string' } },
+  async run(io, opts, args) {
+    const [slotArg, ...extra] = args;
+    if (!slotArg || extra.length) throw usage('cert takes one RSA slot (RSA1-4)');
+    const key = parseKeySlot(slotArg, ['rsa'], 'cert');
+    if (!opts.cn) throw usage('cert names the certificate\'s subject: --cn <name>');
+    const days = opts.days === undefined ? 365 * 30 : Number(opts.days);
+    if (!Number.isInteger(days) || days < 1) throw usage('--days is a whole number of days, 1 or more');
+    const x509 = require('../src/crypto/x509');
+    const subject = { CN: opts.cn, ...(opts.o ? { O: opts.o } : {}), ...(opts.c ? { C: opts.c } : {}) };
+    return withDevice(io, opts, async ({ device, okcrypto, identity }) => {
+      requireUnlocked(identity, 'cert');
+      const probe = await device.probeKeySlot(key.slot);
+      if (probe.kind !== 'rsa') throw new CliError(`${key.name} holds no RSA key (${probe.kind}${probe.wiped ? ', wiped' : ''})`);
+      io.err(`${key.name}: RSA-${probe.bits} - the certificate is signed by this slot: press when the key asks`);
+      let der;
+      try {
+        der = await x509.selfSigned({
+          modulus: probe.publicKey, subject, days,
+          sign: (digest) => okcrypto.sign(key.slot, digest, {
+            expectBytes: probe.bits / 8,
+            confirm: ({ digits, subject: sent }) => io.err(`Confirm on the OnlyKey to sign the certificate${sentAs(sent)}: enter ${digits.join(' ')} (or press any button, if the key asks for a single press)`),
+          }),
+        });
+      } catch (err) {
+        throw new CliError(`cert: ${deviceSentence(err) || err.message}`);
+      }
+      const pem = x509.toPem(der);
+      const fingerprint = require('crypto').createHash('sha256').update(der).digest('hex').toUpperCase();
+      if (opts.out) {
+        require('fs').writeFileSync(opts.out, pem);
+        io.err(`wrote ${opts.out}`);
+      } else {
+        io.out(pem.replace(/\n$/, ''));
+      }
+      io.err(`certificate SHA-256 ${fingerprint.match(/../g).join(':')}`);
+      return 0;
+    });
+  },
+};
+
 /* ------------------------------------------------------------ writing: shared */
 
 /*
