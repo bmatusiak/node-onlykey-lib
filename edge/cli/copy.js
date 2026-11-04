@@ -68,12 +68,13 @@ function logsKv() {
 /*
  * THE AGENT CARDS, BESIDE THE CHAIN (Brad, 2026-11-03: "in storage live next to the blockchain in the edge's bucket"): the
  * identity bucket's `edge-agents` store (agents.store), next to its `edge-logs` - or null when no identity bucket is in
- * use this run (nothing is listed or kept then).
+ * use this run (nothing is listed or kept then). Made when it is not there yet, as logsKv makes it: a computer with only
+ * the CLI and a key on USB keeps its first card before any log is written.
  */
 function agentsKv() {
   if (!logs) return null;
   const { id, net } = logs;
-  if (!bucketHome.hasIdentityBucket(id, net)) return null;
+  if (!bucketHome.hasIdentityBucket(id, net)) bucketHome.keepIdentityBucket(id, net, require('../../bucket/src/bucket').create({ owner: id }));
   return bucketHome.kv(bucketHome.identityAt(id, net, require('../src/agents').store(net)));
 }
 /* write a copy's blocks: only the keys that changed, in one locked write */

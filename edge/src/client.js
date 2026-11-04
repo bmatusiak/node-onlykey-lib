@@ -334,7 +334,8 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
     if (!verdict.ok || verdict.grantId !== b.grantId) {
       throw fail('EEDGE_OPENING', `edge: the answer is not a budget the key opened as asked (${verdict.reason || 'another budget'})`);
     }
-    const record = { grantId: b.grantId, uses: b.uses, genesis: b.genesis, head: b.checkpoint.head, reason, scopes: msg.scopes, lifetime: ttlMinutes, owed: [], ...(continueOf !== null ? { continues: continueOf } : {}) };
+    /* card: kept with it, so a continue is asked under the same agent card (approve.js refuses a request without one) */
+    const record = { grantId: b.grantId, uses: b.uses, genesis: b.genesis, head: b.checkpoint.head, reason, scopes: msg.scopes, lifetime: ttlMinutes, owed: [], ...(card ? { card } : {}), ...(continueOf !== null ? { continues: continueOf } : {}) };
     record.deviceId = await dev();
     if (store) await store.set(storeKey(record.deviceId, b.grantId), JSON.stringify(record));
     return budgetOf(record);
@@ -416,7 +417,7 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
       if (caps && caps.length !== was.scopes.length) throw fail('EEDGE_INVALID', `edge: budget ${grantId} has ${was.scopes.length} scopes - give one cap each`);
       const scopes = was.scopes.map((s, i) => ({ ...s, cap: caps ? caps[i] : s.cap }));
       /* no lifetime given (the agent's automatic continue after a key restart): the one it had */
-      return open({ reason: reason === null ? was.reason : reason, scopes, ttlMinutes: ttlMinutes || was.lifetime, continueOf: grantId });
+      return open({ reason: reason === null ? was.reason : reason, scopes, ttlMinutes: ttlMinutes || was.lifetime, continueOf: grantId, card: was.card || null });
     },
 
     /**
