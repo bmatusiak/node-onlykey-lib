@@ -357,9 +357,13 @@ export class AgentSessionCore {
       const p = { id: randomHex(8), kind: 'card', title: `agent card "${label}"`, identity, room: roomOf(identity), state: 'draft', ask, items: [], results: {}, receipts: [], created: Date.now() };
       await this.save(p);
       await this.mirror(p);
+      /*
+       * submitted at once when it can be; while the owner has not accepted this agent (it is shown to them now, pending)
+       * it stays a draft and says why - plan_submit sends it once they have, as a plan's
+       */
       const r = await ROOM_STUB(this.env, p.room).submit(this.shown({ ...p, state: 'submitted' }, me));
-      need(r.ok, r.why);
-      p.state = 'submitted';
+      if (r.ok) p.state = 'submitted';
+      else p.why = r.why;
       await this.save(p);
       return this.view(p);
     }
@@ -405,10 +409,11 @@ export class AgentSessionCore {
       }
       case 'plan_submit': {
         draft();
-        need(p.items.length > 0, 'an empty plan: add an item first');
+        need(p.kind === 'card' || p.items.length > 0, 'an empty plan: add an item first');
         const r = await ROOM_STUB(this.env, p.room).submit(this.shown({ ...p, state: 'submitted' }, me));
         need(r.ok, r.why);
         p.state = 'submitted';
+        p.why = null;
         await this.save(p);
         return this.view(p);
       }
