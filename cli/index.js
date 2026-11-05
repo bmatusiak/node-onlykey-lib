@@ -560,6 +560,11 @@ COMMANDS.cert = {
           modulus: probe.publicKey, subject, days,
           sign: (digest) => okcrypto.sign(key.slot, digest, {
             expectBytes: probe.bits / 8,
+            /*
+             * WHAT THE PRESS IS FOR, on the desktop app's approval sheet (Brad, 2026-11-04 23:25, red-key: the sheet said
+             * only "a press" - "dont know what im pressing for" - and he declined; every press says why)
+             */
+            what: `a certificate for ${key.name} (RSA-${probe.bits}), signed by its own key: ${Object.entries(subject).map(([k, v]) => `${k}=${v}`).join(', ')}, ${days} days`,
             confirm: ({ digits, subject: sent }) => io.err(`Confirm on the OnlyKey to sign the certificate${sentAs(sent)}: enter ${digits.join(' ')} (or press any button, if the key asks for a single press)`),
           }),
         });
