@@ -315,6 +315,20 @@ test('a stale staged reply in answer to a request chunk fails by name', async ()
   await app.destroy();
 });
 
+test('a press that never came is named as a press timeout, not as a transit failure - and the session is kept', async () => {
+  const device = fakeTunnelDevice({ firmware: 'v3.1.0-prodc', pressTimeout: true });
+  const app = await start(device);
+  await app.services.okcrypto.connectTunnel();
+  await new Promise((r) => setTimeout(r, 50)); /* let the connect reply expire */
+  await assert.rejects(
+    app.services.okcrypto.composite_sign(3, composite.HALF_ECC, DIGEST, { ...FAST, timeoutMs: 20000 }),
+    (err) => err.code === 'PRESS_TIMEOUT' && /waited for a press/.test(err.message)
+      && /CTAP2_ERR_ACTION_TIMEOUT/.test(err.message) && !/stale reply|transit/.test(err.message),
+  );
+  assert.equal(device.requests.filter((r) => r.cmd === okconnect.OKCONNECT).length, 1, 'no new connect: the session stands');
+  await app.destroy();
+});
+
 test('stored keys disabled over FIDO2 comes back as the device sentence', async () => {
   const app = await start(fakeTunnelDevice({ webcryptLevel: 1 }));
   await assert.rejects(

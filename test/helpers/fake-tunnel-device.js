@@ -44,6 +44,7 @@ const CODE = {
   EXTENSION_NOT_SUPPORTED: 0x18,
   USER_ACTION_PENDING: 0x23,
   NO_OPERATION_PENDING: 0x2a,
+  ACTION_TIMEOUT: 0x3a,
 };
 
 /** What the device signs or decrypts to: a function of exactly what arrived. */
@@ -66,6 +67,8 @@ function fakeTunnelDevice({
   results = null,
   /* emulator patch 0016 (experimental): a new request, not a poll, wipes a reply already delivered whole */
   wipesDelivered = false,
+  /* nobody presses: a sign or decrypt request is answered CTAP2_ERR_ACTION_TIMEOUT, as the key does when its wait ends */
+  pressTimeout = false,
 } = {}) {
   const status = `UNLOCKED${firmware}`;
   const v2 = version.capabilities(status).transitV2 === true;
@@ -229,6 +232,7 @@ function fakeTunnelDevice({
           stageText('Error stored key use over FIDO2 not enabled');
           return serve();
         }
+        if (pressTimeout) return answer(CODE.ACTION_TIMEOUT);
         if (!lastOpt3) lastOpt3 = opt3;
         else if (opt3 <= lastOpt3) {
           record.dropped = true;

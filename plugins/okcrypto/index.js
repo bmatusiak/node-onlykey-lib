@@ -1485,6 +1485,19 @@ function setup(imports, register, config) {
       );
     }
 
+    /*
+     * THE KEY WAITED FOR A PRESS THAT NEVER CAME (the Pixel, 2026-11-05: a login's bucket derive, its press button hidden
+     * under a progress sheet - the key answered CTAP2_ERR_ACTION_TIMEOUT after 18 s, and this said "transit authentication
+     * failed or a stale reply was returned", which read as the Windows connection bug, patch 0020). A timeout is the key
+     * answering this request, under this session, by name: nothing is wrong with the transit, so the session is kept
+     * and the error says what happened.
+     */
+    if (reply.status === 'CTAP2_ERR_ACTION_TIMEOUT' || reply.status === 'CTAP2_ERR_USER_ACTION_TIMEOUT') {
+      const err = new Error(`the key waited for a press that did not come (${where} was answered ${reply.status})`);
+      err.code = 'PRESS_TIMEOUT';
+      throw err;
+    }
+
     const hint = reply.status === 'CTAP2_ERR_EXTENSION_NOT_SUPPORTED'
       ? ' The device refuses the extension while locked, and to untrusted origins.'
       : reply.status === 'CTAP2_ERR_NO_OPERATION_PENDING'
