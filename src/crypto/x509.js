@@ -14,7 +14,7 @@
  */
 const { sha256, sha512 } = require('../vendor/exports/@noble/hashes/sha2.js');
 const { randomBytes } = require('../vendor/exports/@noble/ciphers/utils.js');
-const { concat, utf8ToBytes, toBase64 } = require('../bytes');
+const { concat, utf8ToBytes, toBase64, fromBase64 } = require('../bytes');
 const { tlv, sequence, NULL, integer, oid } = require('./der');
 
 const OID = {
@@ -111,4 +111,108 @@ function toPem(der) {
   return `-----BEGIN CERTIFICATE-----\n${b64.match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----\n`;
 }
 
-module.exports = { selfSigned, toPem, rsaPublicKeyInfo, name, OID };
+/*
+ * READING ONE BACK (Brad, 2026-11-04: "store the pub cert in the Key Chain in the desktop app"): a Key Chain entry keeps a
+ * slot's certificate, and takes it only when its public key IS that slot's - so the reader gives what that check and the
+ * screen need: the subject, the validity, the RSA public key, the SHA-256 fingerprint, and the signed bytes with their
+ * signature (a host with RSA verify - WebCrypto - checks it; this file has none). DER, strictly: a tag, a definite length
+ * that fits, nothing after the outer SEQUENCE. RSA subject keys only, as selfSigned makes.
+ */
+function derRead(bytes, at) {
+  const tag = bytes[at];
+  let len = bytes[at + 1];
+  let head = 2;
+  if (len === undefined) throw new Error('x509: a DER element runs past the end');
+  if (len & 0x80) {
+    const n = len & 0x7f;
+    if (n < 1 || n > 3) throw new Error('x509: a DER length this reader does not take');
+    len = 0;
+    for (let i = 0; i < n; i++) len = len * 256 + bytes[at + 2 + i];
+    head = 2 + n;
+  }
+  const start = at + head;
+  const end = start + len;
+  if (end > bytes.length) throw new Error('x509: a DER element runs past the end');
+  return { tag, start, end, all: bytes.subarray(at, end) };
+}
+/* the elements inside a constructed one */
+function derChildren(bytes, el) {
+  const out = [];
+  for (let at = el.start; at < el.end;) {
+    const c = derRead(bytes, at);
+    out.push(c);
+    at = c.end;
+  }
+  return out;
+}
+function oidText(b) {
+  const parts = [Math.floor(b[0] / 40), b[0] % 40];
+  for (let i = 1, v = 0; i < b.length; i++) {
+    v = v * 128 + (b[i] & 0x7f);
+    if (!(b[i] & 0x80)) { parts.push(v); v = 0; }
+  }
+  return parts.join('.');
+}
+const NAME_KEYS = { [OID.commonName]: 'CN', [OID.organizationName]: 'O', [OID.organizationalUnitName]: 'OU', [OID.countryName]: 'C' };
+function nameOf(bytes, el) {
+  const out = {};
+  for (const set of derChildren(bytes, el)) {
+    for (const atv of derChildren(bytes, set)) {
+      const [type, value] = derChildren(bytes, atv);
+      const key = NAME_KEYS[oidText(bytes.subarray(type.start, type.end))];
+      if (key) out[key] = new TextDecoder().decode(bytes.subarray(value.start, value.end));
+    }
+  }
+  return out;
+}
+/* UTCTime (YYMMDDHHMMSSZ) or GeneralizedTime (YYYYMMDDHHMMSSZ) -> ISO */
+function timeOf(bytes, el) {
+  const t = new TextDecoder().decode(bytes.subarray(el.start, el.end));
+  const full = el.tag === 0x17 ? `${Number(t.slice(0, 2)) < 50 ? '20' : '19'}${t}` : t;
+  return `${full.slice(0, 4)}-${full.slice(4, 6)}-${full.slice(6, 8)}T${full.slice(8, 10)}:${full.slice(10, 12)}:${full.slice(12, 14)}Z`;
+}
+/**
+ * A PEM ("CERTIFICATE") or DER certificate, read.
+ * @returns {{der: Uint8Array, subject: object, issuer: object, notBefore: string, notAfter: string, modulus: Uint8Array,
+ *   exponent: Uint8Array, bits: number, signatureAlgorithm: string, tbs: Uint8Array, signature: Uint8Array, sha256: string}}
+ */
+function read(input) {
+  let der = input;
+  if (typeof input === 'string') {
+    const m = /-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/.exec(input);
+    if (!m) throw new Error('x509: not a PEM certificate (no BEGIN CERTIFICATE block)');
+    der = fromBase64(m[1].replace(/\s+/g, ''));
+  }
+  der = Uint8Array.from(der);
+  const cert = derRead(der, 0);
+  if (cert.tag !== 0x30 || cert.end !== der.length) throw new Error('x509: not one DER certificate');
+  const [tbsEl, algEl, sigEl] = derChildren(der, cert);
+  if (!tbsEl || !algEl || !sigEl || sigEl.tag !== 0x03) throw new Error('x509: a certificate is to-be-signed, algorithm, signature');
+  const tbsParts = derChildren(der, tbsEl);
+  const f = tbsParts[0].tag === 0xa0 ? tbsParts.slice(1) : tbsParts; /* the [0] version, when present */
+  const [, , issuerEl, validityEl, subjectEl, spkiEl] = f;
+  const [nb, na] = derChildren(der, validityEl);
+  const [spkiAlg, spkiBits] = derChildren(der, spkiEl);
+  const keyOid = oidText(der.subarray(derChildren(der, spkiAlg)[0].start, derChildren(der, spkiAlg)[0].end));
+  if (keyOid !== OID.rsaEncryption) throw new Error(`x509: an RSA certificate is read here; its key is ${keyOid}`);
+  const rsaKey = derRead(der, spkiBits.start + 1); /* past the BIT STRING's unused-bits byte */
+  const [nEl, eEl] = derChildren(der, rsaKey);
+  const modulus = unsigned(der.subarray(nEl.start, nEl.end));
+  const sigAlg = oidText(der.subarray(derChildren(der, algEl)[0].start, derChildren(der, algEl)[0].end));
+  return {
+    der,
+    subject: nameOf(der, subjectEl),
+    issuer: nameOf(der, issuerEl),
+    notBefore: timeOf(der, nb),
+    notAfter: timeOf(der, na),
+    modulus,
+    exponent: unsigned(der.subarray(eEl.start, eEl.end)),
+    bits: modulus.length * 8,
+    signatureAlgorithm: sigAlg === OID.sha512WithRSAEncryption ? 'sha512WithRSAEncryption' : sigAlg === OID.sha256WithRSAEncryption ? 'sha256WithRSAEncryption' : sigAlg,
+    tbs: tbsEl.all,
+    signature: der.subarray(sigEl.start + 1, sigEl.end),
+    sha256: Array.from(sha256(der), (b) => b.toString(16).padStart(2, '0')).join(''),
+  };
+}
+
+module.exports = { selfSigned, toPem, read, rsaPublicKeyInfo, name, OID };

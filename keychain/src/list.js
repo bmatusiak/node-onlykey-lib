@@ -84,6 +84,17 @@ function createEntry(fields) {
   if (e.revocation !== undefined && (typeof e.revocation !== 'string' || !/BEGIN PGP PUBLIC KEY BLOCK/.test(e.revocation))) {
     throw new Error('an entry revocation is an armored PUBLIC key block');
   }
+  /*
+   * A SLOT KEY'S X.509 CERTIFICATE (Brad, 2026-11-04: RSA3's code-signing certificate kept in the Key Chain, beside the
+   * copy in the repo): a PEM certificate - public data - kept only when its public key IS this entry's (an RSA key's
+   * modulus), so the list never pairs a key with someone else's certificate.
+   */
+  if (e.x509 !== undefined) {
+    if (typeof e.x509 !== 'string' || !/BEGIN CERTIFICATE/.test(e.x509)) throw new Error('an entry\'s x509 is a PEM certificate');
+    if (e.type !== 'rsa') throw new Error('an entry keeps an x509 certificate for an RSA key');
+    const cert = require('../../src/crypto/x509').read(e.x509);
+    if (toHex(cert.modulus) !== toHex(e.publicKey)) throw new Error('the certificate\'s public key is not this entry\'s key');
+  }
   if (!e.artifacts && (e.publicKey.length || e.pgp)) {
     try { e.artifacts = artifacts.forKey({ type: e.type, publicKey: e.publicKey, pgp: e.pgp }); } catch (_) { e.artifacts = {}; }
   }

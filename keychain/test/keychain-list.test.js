@@ -123,3 +123,16 @@ test('merge: the later lastSeen is kept, so both sides end with the same list', 
   assert.equal(list.serialize(onDesk.entries), list.serialize(onPhone.entries));
   assert.equal(onDesk.entries[0].lastSeen, '2026-10-25T19:16:51.000Z');
 });
+
+test('a slot entry keeps its RSA key\'s X.509 certificate - only one whose public key is that key - and a file carries it', async () => {
+  const x509 = require('../../src/crypto/x509');
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const modulus = Buffer.from(publicKey.export({ format: 'jwk' }).n, 'base64url');
+  const pem = x509.toPem(await x509.selfSigned({ modulus, subject: { CN: 'slot cert' }, sign: (d) => crypto.sign(null, Buffer.concat([Buffer.from('3031300d060960864801650304020105000420', 'hex'), d]), { key: privateKey, padding: crypto.constants.RSA_PKCS1_PADDING }) }));
+  const e = list.createEntry({ kind: 'slot', slot: 3, type: 'rsa', publicKey: modulus, name: 'RSA3', x509: pem });
+  assert.equal(e.x509, pem);
+  assert.equal(list.parse(list.serialize([e]))[0].x509, pem, 'a Key Chain file carries it');
+  const other = Buffer.from(modulus); other[10] ^= 1;
+  assert.throws(() => list.createEntry({ kind: 'slot', slot: 3, type: 'rsa', publicKey: other, x509: pem }), /not this entry's key/);
+  assert.throws(() => list.createEntry({ kind: 'slot', slot: 3, type: 'rsa', publicKey: modulus, x509: 'not a cert' }), /a PEM certificate/);
+});

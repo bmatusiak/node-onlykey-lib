@@ -65,3 +65,24 @@ test('refused: no CN, a bad country, a modulus out of range, a signature of the 
   await assert.rejects(x509.selfSigned({ modulus: new Uint8Array(64).fill(1), subject: { CN: 'x' }, sign: k.sign }), /1024 to 4096 bits/);
   await assert.rejects(x509.selfSigned({ modulus: k.modulus, subject: { CN: 'x' }, sign: () => new Uint8Array(10) }), /not 256 \(its modulus\)/);
 });
+
+test('read: a certificate back - its subject, dates, RSA key, fingerprint and signed bytes, as node reads them', async () => {
+  const k = keyOf(4096);
+  const der = await x509.selfSigned({ modulus: k.modulus, subject: { CN: 'ok-edge release', O: 'bmatusiak' }, days: 30, sign: k.sign });
+  const pem = x509.toPem(der);
+  const r = x509.read(pem);
+  const cert = new crypto.X509Certificate(pem);
+  assert.deepEqual(r.subject, { O: 'bmatusiak', CN: 'ok-edge release' });
+  assert.deepEqual(r.issuer, r.subject);
+  assert.equal(r.bits, 4096);
+  assert.equal(Buffer.from(r.modulus).toString('hex'), Buffer.from(k.modulus).toString('hex'));
+  assert.equal(Buffer.from(r.exponent).toString('hex'), '010001');
+  assert.equal(r.signatureAlgorithm, 'sha512WithRSAEncryption');
+  assert.equal(new Date(r.notBefore).getTime(), new Date(cert.validFrom).getTime());
+  assert.equal(new Date(r.notAfter).getTime(), new Date(cert.validTo).getTime());
+  assert.equal(r.sha256.toUpperCase(), cert.fingerprint256.replace(/:/g, ''));
+  assert.equal(crypto.verify('sha512', Buffer.from(r.tbs), k.publicKey, Buffer.from(r.signature)), true, 'the signed bytes and the signature');
+  assert.equal(x509.read(der).sha256, r.sha256, 'DER reads the same');
+  assert.throws(() => x509.read('-----BEGIN PGP PUBLIC KEY BLOCK-----'), /not a PEM certificate/);
+  assert.throws(() => x509.read(Buffer.concat([Buffer.from(der), Buffer.alloc(1)])), /not one DER certificate/);
+});
