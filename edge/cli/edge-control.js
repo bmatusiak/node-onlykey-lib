@@ -111,7 +111,13 @@ async function run({ io, opts, argv, net, home, dev = null }) {
     if (TIMES) TIMES.took(`run ${ranWhat(file, a)}`, Date.now() - t, { failed: r.status !== 0 });
     return { code: r.status, out: `${r.stdout || ''}${r.stderr || ''}` };
   };
-  const git = (repo, ...a) => runP('git', ['-C', repo, ...a]);
+  /*
+   * LONG PATHS ON WINDOWS (2026-11-05, the 0.0.15 ship: the emulator's signing worktree under %TEMP%\okedge-ship-<repo>-*
+   * put a 185-character patch path past Windows' 260 - "could not make a worktree to sign in: Could not reset index file
+   * to revision 'HEAD'"): Git for Windows writes such paths only with core.longpaths, set here for the ship's own calls
+   */
+  const LONG = process.platform === 'win32' ? ['-c', 'core.longpaths=true'] : [];
+  const git = (repo, ...a) => runP('git', [...LONG, '-C', repo, ...a]);
   /*
    * EACH STEP SAYS WHAT IT IS FOR (Brad, 2026-11-03: "cant onlykey-js send the reason?"): the app holding the key shows a
    * computer's requests with the computer's own words (desktop/protocol.js hello.why, from ONLYKEY_JS_WHY) - the budget's
@@ -397,7 +403,7 @@ async function run({ io, opts, argv, net, home, dev = null }) {
         const noEditor = { env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'sed -i s/^pick/edit/' } };
         /* the first commit of a repository has no parent to rebase onto: --root takes it too */
         const onto = git(wt, 'rev-parse', '--verify', '-q', `${todo[0].hash}^`).code === 0 ? `${todo[0].hash}^` : '--root';
-        runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '-q', '-i', onto], noEditor);
+        runP('git', [...LONG, '-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '-q', '-i', onto], noEditor);
         if (!wtRebasing()) stop(`${r.name}: the rebase did not stop at ${todo[0].hash.slice(0, 7)}`);
         /* the signed commits go on the branch - all of them, or as many as were signed before a stop */
         const keep = () => {
@@ -416,7 +422,7 @@ async function run({ io, opts, argv, net, home, dev = null }) {
               const was = todo[signedHere];
               const subject = git(wt, 'log', '-1', '--format=%h %s').out.trim().slice(0, 60);
               /* --allow-empty: re-signing a commit that changes no file (a repo may keep such commits) is still a re-sign, never a stop */
-              spend(`sign: ${r.name} ${subject}`, ['git', '-C', wt, 'commit', '--amend', '--no-edit', '--allow-empty', '-S'], () => ({
+              spend(`sign: ${r.name} ${subject}`, ['git', ...LONG, '-C', wt, 'commit', '--amend', '--no-edit', '--allow-empty', '-S'], () => ({
                 line: `signed ${r.name} ${subject}`,
                 fields: { repo: r.name, commit: git(wt, 'rev-parse', 'HEAD').out.trim(), was: was.hash, ts: new Date().toISOString() },
               }));
@@ -426,7 +432,7 @@ async function run({ io, opts, argv, net, home, dev = null }) {
               signedCount += 1;
               if (PROGRESS) PROGRESS.step(`signed ${signedCount} - ${r.name}: ${subject}`);
             }
-            runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
+            runP('git', [...LONG, '-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
           }
         } catch (e) {
           /*
@@ -435,7 +441,7 @@ async function run({ io, opts, argv, net, home, dev = null }) {
            * files are checked equal, and the branch moves: the next ship signs only what is left.
            */
           if (e instanceof Stop) {
-            for (let n = 0; wtRebasing() && n < 500; n++) runP('git', ['-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
+            for (let n = 0; wtRebasing() && n < 500; n++) runP('git', [...LONG, '-C', wt, '-c', 'commit.gpgsign=false', 'rebase', '--continue'], noEditor);
             if (!wtRebasing()) { try { keep(); say(`  ${r.name}: the commits signed so far are kept on ${r.branch}`); } catch (_) { /* the stop below says why */ } }
           }
           throw e;
