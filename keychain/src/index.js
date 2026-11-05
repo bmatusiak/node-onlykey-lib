@@ -18,4 +18,6 @@ module.exports = {
   cert: require('./cert'),
   pgpImport: require('./pgp-import'),
   composite: require('./composite'),
+  /* a slot's X.509 certificate, read (an entry's x509 - list.js) */
+  x509: require('../../src/crypto/x509'),
 };
