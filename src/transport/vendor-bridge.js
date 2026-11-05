@@ -74,12 +74,25 @@ function createVendorBridgeCtap(transport, { timeoutMs = 60000 } = {}) {
         const done = (fn, v) => { clearTimeout(timer); off(); pending.delete(cancel); fn(v); };
         const cancel = (e) => done(reject, e);
         pending.add(cancel);
-        const timer = setTimeout(() => done(reject, Object.assign(new Error(`vendor-bridge: no answer in ${wait} ms`), { code: 'ETIMEDOUT' })), wait);
+        /*
+         * WHAT CAME WHILE IT WAITED, said with a time-out (Brad, 2026-11-04 20:11, red-key on Windows; reproduced on blue-key
+         * at once: after a lockout restart and an unlock the key pushed its answer - its console said so - and this waited
+         * out 30 s, the next request then reading a stale reply). Did the host hear the key at all meanwhile - its status
+         * words, other reports - or nothing? Counts, and up to three strays by their first words (a key's status text;
+         * never a payload's bytes: the first 4 only, in hex).
+         */
+        const heard = { vendor: 0, other: 0, strays: [], written: false };
+        const timer = setTimeout(() => {
+          const strays = heard.strays.length ? `; strays: ${heard.strays.join(' | ')}` : '';
+          done(reject, Object.assign(new Error(`vendor-bridge: no answer in ${wait} ms (request ${heard.written ? 'written' : 'not written'}; heard meanwhile: ${heard.vendor} vendor report(s), ${heard.other} on other interfaces${strays})`), { code: 'ETIMEDOUT', heard }));
+        }, wait);
         const off = transport.on('report', (event) => {
-          if (event.iface !== IFACE.VENDOR) return;
+          if (event.iface !== IFACE.VENDOR) { heard.other++; return; }
+          heard.vendor++;
           const r = event.data;
           if (r[0] !== OKVENDORBRIDGE) {
             const t = okmsg.text(r);
+            if (heard.strays.length < 3) heard.strays.push(/^[\x20-\x7e]{3,}$/.test(t) ? t.slice(0, 24) : Array.from(r.subarray(0, 4), (b) => b.toString(16).padStart(2, '0')).join(''));
             if (/^VB (site|req|order)$/.test(t)) done(reject, Object.assign(new Error(`vendor-bridge: the key said "${t}"`), { code: 'EKEYREFUSED', keyText: t }));
             return; /* another conversation's report cannot be here (the lane); a stray is not ours */
           }
@@ -101,7 +114,7 @@ function createVendorBridgeCtap(transport, { timeoutMs = 60000 } = {}) {
           }
         });
         Promise.resolve()
-          .then(async () => { for (const f of frames(credentialId)) await transport.write(IFACE.VENDOR, f); })
+          .then(async () => { for (const f of frames(credentialId)) await transport.write(IFACE.VENDOR, f); heard.written = true; })
           .catch((e) => done(reject, e));
       });
       /* as a browser's assertion, for decodeAssertion: 2 authData (unused by the tunnel), 3 the signature */
