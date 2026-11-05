@@ -32,6 +32,7 @@
  */
 import bucketLib from '../../bucket/src/index.js';
 import bytes from '../../src/bytes.js';
+import x509 from '../../src/crypto/x509.js';
 
 const PROTOCOL = '2025-06-18';
 const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -44,8 +45,8 @@ const MAX_TEXT = 200;
 const WAIT_MAX_S = 60;
 const OPS = ['sign', 'decrypt'];
 const KINDS = ['ssh', 'gpg', 'rsa'];
-const RSA_SLOTS = [1, 2, 3, 4];
-const RSA_BITS = [1024, 2048, 3072, 4096];
+/* the RSA keys a card names, each by its X.509 certificate (card_new certs) */
+const MAX_CERTS = 4;
 const LABEL = /^[ -~]{1,64}$/;
 const STATES = ['declined', 'running', 'done', 'failed', 'ended'];
 
@@ -77,9 +78,10 @@ const itemArgs = (it, n) => {
   need(KINDS.includes(k.kind), `item ${n}: key.kind ${KINDS.join(', ')}`);
   let key;
   if (k.kind === 'rsa') {
-    need(RSA_SLOTS.includes(k.slot), `item ${n}: an rsa key's slot is 1-4`);
-    need(RSA_BITS.includes(k.bits), `item ${n}: an rsa key's bits are ${RSA_BITS.join(', ')}`);
-    key = { kind: 'rsa', slot: k.slot, bits: k.bits };
+    /* named by its certificate's SHA-256 - one the card holds; the owner's device knows which slot that is */
+    const cert = typeof k.cert === 'string' ? k.cert.trim().toLowerCase() : '';
+    need(HEX64.test(cert), `item ${n}: an rsa key is named by key.cert - the SHA-256 (64 hex) of a certificate your card holds`);
+    key = { kind: 'rsa', cert };
   } else key = { kind: k.kind, identity: text(k.identity, `item ${n}: key.identity`) };
   const fingerprint = typeof it.fingerprint === 'string' ? it.fingerprint.trim().toLowerCase() : '';
   need(HEX64.test(fingerprint), `item ${n}: fingerprint - the SHA-256 of its data, 64 hex`);
@@ -102,8 +104,7 @@ const KEY_SCHEMA = {
   properties: {
     kind: { type: 'string', enum: KINDS, description: 'ssh or gpg: an agent-derived key Edge uses; rsa: a key stored on the OnlyKey' },
     identity: { type: 'string', description: 'ssh / gpg: the key\'s label, e.g. "you@example.com" (gpg) or "ssh://user@host" (ssh)' },
-    slot: { type: 'integer', description: 'rsa: the stored slot, 1-4' },
-    bits: { type: 'integer', description: 'rsa: the key\'s size, 1024-4096 (its signature\'s length)' },
+    cert: { type: 'string', description: 'rsa: the SHA-256 (64 hex) of the key\'s X.509 certificate - one your card holds (card_new certs)' },
   },
   required: ['kind'],
 };
@@ -126,7 +127,7 @@ export const TOOLS = [
   { name: 'card_new', description: 'Ask the owner for your agent card: the keys your plans may use, under a label of your choosing. The owner approves it once and their key certifies it at a press; plan_wait on the plan_id it gives says when. Every plan names it.',
     inputSchema: { type: 'object', properties: {
       identity: { type: 'string' }, label: { type: 'string', description: 'the card\'s label, 1-64 printable characters, fixed for good' },
-      slots: { type: 'array', items: { type: 'integer' }, description: 'stored sign slots: 1-4 (RSA)' },
+      certs: { type: 'array', items: { type: 'string' }, description: 'RSA keys on the OnlyKey, each named by its X.509 certificate (PEM): the owner\'s device finds the key it certifies - you never name a slot' },
       ssh: { type: 'string', description: 'an ssh identity to derive, ssh://user@host' },
       days: { type: 'integer', description: 'how long it lasts, in days (0 = until revoked)' },
       reason: { type: 'string', description: 'why you need it - the owner reads it' },
@@ -346,14 +347,24 @@ export class AgentSessionCore {
       const identity = identityArg(args.identity);
       const label = text(args.label, 'label', { max: 64 });
       need(LABEL.test(label), 'label: 1-64 printable characters');
-      const slots = args.slots === undefined ? [] : args.slots;
-      need(Array.isArray(slots) && slots.every((s) => RSA_SLOTS.includes(s)), 'slots: stored RSA slots, 1-4');
+      /*
+       * THE KEYS BY THEIR CERTIFICATES (Brad, 2026-11-04: "we upload the pubcert as the label to select RSA3"): the agent
+       * never names a slot. It sends the certificate it holds; the owner's device finds the slot whose public key it is,
+       * shows the certificate on the card sheet, and keeps it in the owner's Key Chain. Read here, so what is not an RSA
+       * certificate is refused before it reaches anyone.
+       */
+      const certs = args.certs === undefined ? [] : args.certs;
+      need(Array.isArray(certs) && certs.length <= MAX_CERTS, `certs: up to ${MAX_CERTS} PEM certificates`);
+      const read = certs.map((pem, i) => {
+        need(typeof pem === 'string' && pem.length <= 8192, `certs[${i}]: a PEM certificate`);
+        try { return { pem: pem.trim(), sha256: x509.read(pem).sha256 }; } catch (e) { throw new Refused(`certs[${i}]: ${e.message}`); }
+      });
       const ssh = args.ssh === undefined ? null : text(args.ssh, 'ssh');
       need(ssh === null || /^ssh:\/\/\S+$/.test(ssh), 'ssh: ssh://user@host');
-      need(slots.length || ssh, 'a card names at least one key: slots or ssh');
+      need(read.length || ssh, 'a card names at least one key: certs or ssh');
       const days = args.days === undefined ? 0 : Number(args.days);
       need(Number.isInteger(days) && days >= 0 && days <= 3650, 'days: 0 (until revoked) to 3650');
-      const ask = { label, slots: [...new Set(slots)].sort(), ...(ssh ? { ssh } : {}), days, reason: text(args.reason, 'reason') };
+      const ask = { label, certs: read.filter((c, i) => read.findIndex((x) => x.sha256 === c.sha256) === i),...(ssh ? { ssh } : {}), days, reason: text(args.reason, 'reason') };
       const p = { id: randomHex(8), kind: 'card', title: `agent card "${label}"`, identity, room: roomOf(identity), state: 'draft', ask, items: [], results: {}, receipts: [], created: Date.now() };
       await this.save(p);
       await this.mirror(p);

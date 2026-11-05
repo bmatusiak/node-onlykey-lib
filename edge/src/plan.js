@@ -60,7 +60,8 @@ function keyOf(key) {
     if (!RSA_SLOTS.includes(slot)) throw fail('EPLAN_KEY', `an rsa key is a stored slot 1-4, not ${JSON.stringify(key.slot)}`);
     const bits = Number(key.bits);
     if (![1024, 2048, 3072, 4096].includes(bits)) throw fail('EPLAN_KEY', `an rsa key names its size: bits 1024, 2048, 3072 or 4096, not ${JSON.stringify(key.bits)}`);
-    return { kind, name: `slot ${slot}`, slot, bits };
+    /* cert: how the agent named it (mcp.js) - the only name a text told back to the agent may use; the slot is the owner's */
+    return { kind, name: `slot ${slot}`, slot, bits, ...(key.cert ? { cert: String(key.cert) } : {}) };
   }
   const text = String((key && key.identity) || '').trim();
   if (kind === 'ssh') {
@@ -166,7 +167,7 @@ function planSigners({ okcrypto, openpgp = null, identity = async () => null }) 
       if (![32, 48, 64].includes(data.length)) throw fail('EPLAN_RSA', `an rsa item's data is its digest (32, 48 or 64 bytes), not ${data.length} bytes`);
       /* the key pays over SHA-256 of exactly what is submitted (okplugin_edge_primed); the signature is the modulus' length */
       const sig = await pay(data, () => okcrypto.sign(key.slot, data, { expectBytes: key.bits / 8, ...PAID }));
-      if (sig.length !== key.bits / 8) throw fail('EPLAN_RSA', `slot ${key.slot} answered ${sig.length} bytes, not a ${key.bits}-bit signature`);
+      if (sig.length !== key.bits / 8) throw fail('EPLAN_RSA', `the key ${key.cert ? `of certificate ${key.cert.slice(0, 16)}…` : `in slot ${key.slot}`} answered ${sig.length} bytes, not a ${key.bits}-bit signature`);
       return { signature: toBase64(Uint8Array.from(sig)), encoding: 'base64' };
     },
   };
