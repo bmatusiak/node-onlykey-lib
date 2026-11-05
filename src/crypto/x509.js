@@ -153,6 +153,12 @@ function oidText(b) {
   }
   return parts.join('.');
 }
+const READ_SIGNATURES = {
+  '1.2.840.113549.1.1.5': 'sha1WithRSAEncryption',
+  [OID.sha256WithRSAEncryption]: 'sha256WithRSAEncryption',
+  '1.2.840.113549.1.1.12': 'sha384WithRSAEncryption',
+  [OID.sha512WithRSAEncryption]: 'sha512WithRSAEncryption',
+};
 const NAME_KEYS = { [OID.commonName]: 'CN', [OID.organizationName]: 'O', [OID.organizationalUnitName]: 'OU', [OID.countryName]: 'C' };
 function nameOf(bytes, el) {
   const out = {};
@@ -208,7 +214,8 @@ function read(input) {
     modulus,
     exponent: unsigned(der.subarray(eEl.start, eEl.end)),
     bits: modulus.length * 8,
-    signatureAlgorithm: sigAlg === OID.sha512WithRSAEncryption ? 'sha512WithRSAEncryption' : sigAlg === OID.sha256WithRSAEncryption ? 'sha256WithRSAEncryption' : sigAlg,
+    /* by name when known (READ_SIGNATURES - the ones a host may check: Android's debug certificate is SHA-1), else its OID */
+    signatureAlgorithm: READ_SIGNATURES[sigAlg] || sigAlg,
     tbs: tbsEl.all,
     signature: der.subarray(sigEl.start + 1, sigEl.end),
     sha256: Array.from(sha256(der), (b) => b.toString(16).padStart(2, '0')).join(''),
