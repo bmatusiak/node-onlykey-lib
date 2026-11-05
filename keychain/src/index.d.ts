@@ -15,3 +15,4 @@ export declare let list: typeof import("./list");
 export declare let cert: typeof import("./cert");
 export declare let pgpImport: typeof import("./pgp-import");
 export declare let composite: typeof import("./composite");
+export declare let x509: typeof import("../../src/crypto/x509");

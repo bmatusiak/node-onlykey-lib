@@ -28,6 +28,25 @@ export function selfSigned({ modulus, exponent, subject, notBefore, days, hash, 
 }): Promise<Uint8Array>;
 /** DER -> PEM ("CERTIFICATE"), 64 characters a line */
 export function toPem(der: any): string;
+/**
+ * A PEM ("CERTIFICATE") or DER certificate, read.
+ * @returns {{der: Uint8Array, subject: object, issuer: object, notBefore: string, notAfter: string, modulus: Uint8Array,
+ *   exponent: Uint8Array, bits: number, signatureAlgorithm: string, tbs: Uint8Array, signature: Uint8Array, sha256: string}}
+ */
+export function read(input: any): {
+    der: Uint8Array;
+    subject: object;
+    issuer: object;
+    notBefore: string;
+    notAfter: string;
+    modulus: Uint8Array;
+    exponent: Uint8Array;
+    bits: number;
+    signatureAlgorithm: string;
+    tbs: Uint8Array;
+    signature: Uint8Array;
+    sha256: string;
+};
 /** SubjectPublicKeyInfo for an RSA key: {rsaEncryption, NULL} and RSAPublicKey {n, e} */
 export function rsaPublicKeyInfo(modulus: any, exponent?: number): Uint8Array<ArrayBuffer>;
 export function name(n: any): Uint8Array<ArrayBuffer>;

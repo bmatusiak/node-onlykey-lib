@@ -8,6 +8,9 @@
  * @param {(l: (e: any) => void) => () => void} o.subscribe  this plan's data / finish events
  * @param {number} [o.ttlMinutes]
  * @param {(line: string) => void} [o.log]
+ * @param {() => Promise<void> | void} [o.progress]  the budget moved on the key: called after each receipt and once the
+ *   budget is ended - the host's own views of its copy follow it (its plan runner signs straight on the key, so nothing
+ *   else tells them); awaited, its failure only logged
  * -> the end state: 'done' | 'ended' | 'declined' | 'failed'
  */
 export function runPlan({ plan, client, signers, update, subscribe, ttlMinutes, log, progress }: {
@@ -47,6 +50,7 @@ export function sortItems(plan: any): {
     runnable: {
         it: any;
         key: {
+            cert?: string | undefined;
             kind: any;
             name: string;
             slot: number;
@@ -62,8 +66,6 @@ export function sortItems(plan: any): {
                     host: string;
                 };
             };
-            slot?: undefined;
-            bits?: undefined;
             uid?: undefined;
         } | {
             kind: any;
@@ -72,8 +74,6 @@ export function sortItems(plan: any): {
             derive: {
                 gpg: string;
             };
-            slot?: undefined;
-            bits?: undefined;
         };
     }[];
     refused: {
@@ -82,6 +82,7 @@ export function sortItems(plan: any): {
     }[];
 };
 export function keyOf(key: any): {
+    cert?: string | undefined;
     kind: any;
     name: string;
     slot: number;
@@ -97,8 +98,6 @@ export function keyOf(key: any): {
             host: string;
         };
     };
-    slot?: undefined;
-    bits?: undefined;
     uid?: undefined;
 } | {
     kind: any;
@@ -107,8 +106,6 @@ export function keyOf(key: any): {
     derive: {
         gpg: string;
     };
-    slot?: undefined;
-    bits?: undefined;
 };
 export function reasonOf(plan: any, runnable: any): string;
 export function fingerprintOf(bytes: any): string;
