@@ -183,10 +183,14 @@ function planSigners({ okcrypto, openpgp = null, identity = async () => null }) 
  * @param {(l: (e: any) => void) => () => void} o.subscribe  this plan's data / finish events
  * @param {number} [o.ttlMinutes]
  * @param {(line: string) => void} [o.log]
+ * @param {() => Promise<void> | void} [o.progress]  the budget moved on the key: called after each receipt and once the
+ *   budget is ended - the host's own views of its copy follow it (its plan runner signs straight on the key, so nothing
+ *   else tells them); awaited, its failure only logged
  * -> the end state: 'done' | 'ended' | 'declined' | 'failed'
  */
-async function runPlan({ plan, client, signers, update, subscribe, ttlMinutes = PLAN_LIFETIME_MINUTES, log = () => {} }) {
+async function runPlan({ plan, client, signers, update, subscribe, ttlMinutes = PLAN_LIFETIME_MINUTES, log = () => {}, progress = () => {} }) {
   const told = (u) => update(u).catch((e) => log(`plan ${plan.id}: its update was not taken (${e.message})`));
+  const moved = () => Promise.resolve().then(progress).catch((e) => log(`plan ${plan.id}: its progress was not followed (${e.message})`));
   const { runnable, refused } = sortItems(plan);
   if (refused.length) {
     /* the plan is approved whole or not at all: an item that cannot run fails it before any budget is asked */
@@ -271,6 +275,7 @@ async function runPlan({ plan, client, signers, update, subscribe, ttlMinutes = 
         const code = result.refusal ? 'AGENT_ERROR' : 'OK';
         await budget.receipt(owed, { code, message: `${it.reason} - ${result.refusal ? result.refusal : 'signed'}` });
         receipts.push({ seq: owed.seq, code });
+        await moved();
       }
       results.push(result);
       if (result.refusal) log(`plan ${plan.id}: item ${it.item} - ${result.refusal}`);
@@ -287,6 +292,8 @@ async function runPlan({ plan, client, signers, update, subscribe, ttlMinutes = 
     clearTimeout(deadline);
     unsubscribe();
   }
+  /* the budget's end on the key (its own at the last receipt, or the revoke above) */
+  await moved();
   log(`plan ${plan.id}: ${end}${why ? ` - ${why}` : ''} (${receipts.length} receipt(s))`);
   /* 4. the results, all at once, with the end */
   await told({ state: end, results, receipts, why });

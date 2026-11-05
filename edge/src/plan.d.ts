@@ -10,7 +10,7 @@
  * @param {(line: string) => void} [o.log]
  * -> the end state: 'done' | 'ended' | 'declined' | 'failed'
  */
-export function runPlan({ plan, client, signers, update, subscribe, ttlMinutes, log }: {
+export function runPlan({ plan, client, signers, update, subscribe, ttlMinutes, log, progress }: {
     plan: any;
     client: any;
     signers: any;
@@ -18,6 +18,7 @@ export function runPlan({ plan, client, signers, update, subscribe, ttlMinutes, 
     subscribe: (l: (e: any) => void) => () => void;
     ttlMinutes?: number | undefined;
     log?: ((line: string) => void) | undefined;
+    progress?: (() => Promise<void> | void) | undefined;
 }): Promise<string>;
 export function planSigners({ okcrypto, openpgp, identity }: {
     okcrypto: any;

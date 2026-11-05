@@ -83,7 +83,7 @@ const PLAN = {
   ],
 };
 const run = (plan, edge, transport, r, o = {}) => planLib.runPlan({
-  plan, client: client.createEdgeClient({ edge, channel: host(edge, o) }), signers: o.signers || fakeSigners(transport, o.signed), update: r.update, subscribe: r.subscribe,
+  plan, client: client.createEdgeClient({ edge, channel: host(edge, o) }), signers: o.signers || fakeSigners(transport, o.signed), update: r.update, subscribe: r.subscribe, progress: o.progress,
 });
 async function paidLinks(edge) {
   const h = await edge.head();
@@ -115,6 +115,22 @@ test('a plan: the fingerprints approved (no data yet), then the data, each check
   const links = (await edge.pickup(h.oldest, h.seq - h.oldest + 1)).map((x) => chain.decodeLink(x.link));
   assert.ok(links.some((f) => f.op === codes.OP.GRANT_END), 'the budget ended');
   assert.deepEqual(h.live || [], [], 'nothing left live');
+});
+
+test('the host follows the budget: progress after each receipt and once at its end; a budget its last receipt completed is not revoked again', async () => {
+  const { transport, edge } = await readyKey();
+  const r = room();
+  const seen = [];
+  const revoke = edge.revoke.bind(edge);
+  let revokes = 0;
+  edge.revoke = (id) => { revokes++; return revoke(id); };
+  const end = run(PLAN, edge, transport, r, { progress: async () => { const h = await edge.head(); seen.push(h.live && h.live.length ? 'live' : 'ended'); } });
+  await r.state('running');
+  r.tell({ ev: 'data', item: 1, data: 'notes v1' });
+  r.tell({ ev: 'data', item: 2, data: 'tag v1' });
+  assert.equal(await end, 'done');
+  assert.deepEqual(seen, ['live', 'ended', 'ended'], 'after receipt 1 (still live), receipt 2 (the key completed it), and the end');
+  assert.equal(revokes, 0, 'the key wrote the grant-end at the last receipt - nothing to revoke');
 });
 
 test('data that does not match its approved fingerprint: nothing is signed - not even the items that match - and the budget ends', async () => {

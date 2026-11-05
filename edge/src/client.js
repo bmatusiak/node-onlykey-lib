@@ -301,6 +301,12 @@ function createEdgeClient({ edge, channel, store = null, noteTimeoutMs = 4000 })
        */
       async end() {
         if (state.owed.length) throw fail('EEDGE_OWED', `edge: a receipt is owed for #${state.owed.join(', #')} - receipt it first, then end`);
+        /*
+         * ALREADY ENDED, NOTHING TO ASK (red-key, 2026-11-05: an agent's plan ended its budget after the last receipt had
+         * completed it - the key answered no-such-budget, caught here, but the app's timeline said "ending a budget ...
+         * failed"): the key wrote the grant-end itself at the last receipt (receipt() above), so no revoke goes.
+         */
+        if (state.ended) return;
         return end();
       },
     };
