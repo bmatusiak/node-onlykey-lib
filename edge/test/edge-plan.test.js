@@ -159,7 +159,7 @@ test('a stored RSA slot: the scope names the slot and no identity, the key signs
   const views = [];
   const asked = [];
   const okcrypto = {
-    async sign(slot, data, opts) { asked.push({ slot, length: data.length, expectBytes: opts.expectBytes }); transport.use(data, { slot }); return new Uint8Array(512).fill(5); },
+    async sign(slot, data, opts) { asked.push({ slot, length: data.length, expectBytes: opts.expectBytes, paid: opts.paid }); transport.use(data, { slot }); return new Uint8Array(512).fill(5); },
   };
   const digest = new Uint8Array(64).fill(9);
   const plan = {
@@ -176,7 +176,8 @@ test('a stored RSA slot: the scope names the slot and no identity, the key signs
   r.tell({ ev: 'data', item: 1, data: Buffer.from(digest).toString('base64'), encoding: 'base64' });
   r.tell({ ev: 'data', item: 2, data: Buffer.alloc(64, 8).toString('base64'), encoding: 'base64' });
   assert.equal(await end, 'done');
-  assert.deepEqual(asked, [{ slot: 3, length: 64, expectBytes: 512 }, { slot: 3, length: 64, expectBytes: 512 }]);
+  /* paid: the key self-presses, so the lib says no press (box, 2026-11-04: an unpaid one raised a code no sheet showed) */
+  assert.deepEqual(asked, [{ slot: 3, length: 64, expectBytes: 512, paid: true }, { slot: 3, length: 64, expectBytes: 512, paid: true }]);
   const last = r.updates[r.updates.length - 1];
   assert.equal(Buffer.from(last.results[0].signature, 'base64').length, 512);
   assert.equal((await paidLinks(edge)).length, 2, 'both paid by the budget');

@@ -134,8 +134,16 @@ function reasonOf(plan, runnable) {
  *   okcrypto: the device's okcrypto (okcrypto.agent.sign, okcrypto.sign); openpgp: the lib's fork (src/crypto/pgp) - only for gpg
  *   identity: () => the kept agent identity record, or null
  */
+/*
+ * PAID, so no press is said (box, 2026-11-04: blue-key's RSA signs under a plan's budget - the key paid them and asked
+ * nothing, yet the lib said "press asked: signing - code 6 4 2", the host's sheet inspector found no sheet for it, and
+ * the dry run stopped). Each sign runs inside pay(), after the key took its TX start, as the CLI agent's paid sign
+ * (cli/agent.js). Should the budget be gone by the time the request lands, the key waits for an ordinary press no
+ * one is shown: the sign times out unsigned - never signed without a press.
+ */
+const PAID = { paid: true };
 function planSigners({ okcrypto, openpgp = null, identity = async () => null }) {
-  const agentSign = (derive, message) => okcrypto.agent.sign(derive, message, AGENT_DERIVE);
+  const agentSign = (derive, message) => okcrypto.agent.sign(derive, message, { ...AGENT_DERIVE, ...PAID });
   return {
     async ssh(key, data, pay) {
       const sig = await pay(new Uint8Array([...data, ...identityHash(key.derive)]), () => agentSign(key.derive, data));
@@ -157,7 +165,7 @@ function planSigners({ okcrypto, openpgp = null, identity = async () => null }) 
     async rsa(key, data, pay) {
       if (![32, 48, 64].includes(data.length)) throw fail('EPLAN_RSA', `an rsa item's data is its digest (32, 48 or 64 bytes), not ${data.length} bytes`);
       /* the key pays over SHA-256 of exactly what is submitted (okplugin_edge_primed); the signature is the modulus' length */
-      const sig = await pay(data, () => okcrypto.sign(key.slot, data, { expectBytes: key.bits / 8 }));
+      const sig = await pay(data, () => okcrypto.sign(key.slot, data, { expectBytes: key.bits / 8, ...PAID }));
       if (sig.length !== key.bits / 8) throw fail('EPLAN_RSA', `slot ${key.slot} answered ${sig.length} bytes, not a ${key.bits}-bit signature`);
       return { signature: toBase64(Uint8Array.from(sig)), encoding: 'base64' };
     },

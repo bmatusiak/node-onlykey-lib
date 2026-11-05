@@ -1555,7 +1555,9 @@ function setup(imports, register, config) {
       /* Each poll is a whole ceremony; the firmware-side pacing is chunk.js's. */
       pollIntervalMs = chunk.POLL_INTERVAL_MS,
       /* a read that asks for no press (an agent public key): no challenge event for a sheet to show */
-      quiet = false,
+      quiet: quietRead = false,
+      /* a request a budget pays: the key self-presses - quiet too, as the vendor path's paid (deviceOperation) */
+      paid = false,
       /*
        * THE KEY ASKS INSIDE THE REQUEST (deriveSecret's touch mode): the firmware's derive gate holds the one request
        * open while it waits for the press or code, so the request does not return until someone has pressed. The code
@@ -1573,6 +1575,7 @@ function setup(imports, register, config) {
        */
       raw = false,
     } = opts;
+    const quiet = quietRead || paid;
 
     const payload = raw && !data.length ? new Uint8Array(1) : Uint8Array.from(data);
     if (!payload.length) throw new Error('nothing to sign or decrypt');
